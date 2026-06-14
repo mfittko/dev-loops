@@ -22,6 +22,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { requireOptionValue } from "../_cli-primitives.mjs";
 import { buildDevLoopHandoffEnvelope } from "@pi-dev-loops/core/loop/handoff-envelope";
 import { loadDevLoopConfig } from "@pi-dev-loops/core/config";
+import { createPiAdapter } from "@pi-dev-loops/core/harness";
 
 const USAGE = `Usage: build-handoff-envelope.mjs --input <path>
 Build a deterministic handoff envelope from startup resolver output and settings.
@@ -100,8 +101,9 @@ export function parseBuildHandoffEnvelopeCliArgs(argv) {
 
 export async function buildHandoffEnvelopeCli(
   options,
-  { cwd = process.cwd() } = {},
+  { adapter = createPiAdapter() } = {},
 ) {
+  const cwd = adapter.getCwd();
   // Resolve repo root for config loading (same approach as resolve-dev-loop-startup.mjs)
   let repoRoot = cwd;
   try {
@@ -156,7 +158,7 @@ export async function buildHandoffEnvelopeCli(
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd() } = {},
+  { stdout = process.stdout, stderr = process.stderr, adapter = createPiAdapter() } = {},
 ) {
   let options;
   try {
@@ -173,7 +175,7 @@ export async function runCli(
   }
 
   try {
-    const envelope = await buildHandoffEnvelopeCli(options, { cwd });
+    const envelope = await buildHandoffEnvelopeCli(options, { adapter });
     stdout.write(`${JSON.stringify(envelope)}\n`);
   } catch (err) {
     const msg = formatCliError(err);

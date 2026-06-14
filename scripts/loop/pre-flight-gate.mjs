@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireOptionValue } from "../_cli-primitives.mjs";
+import { createPiAdapter } from "@pi-dev-loops/core/harness";
 import {
   isUnderWorktreePath,
   parseMainWorktreePath,
@@ -150,17 +151,20 @@ export async function runCli(
   {
     stdout = process.stdout,
     stderr = process.stderr,
-    cwd = process.cwd(),
-    env = process.env,
+    adapter = createPiAdapter(),
+    cwd,
+    env,
     gitCommand = "git",
   } = {},
 ) {
+  const effectiveCwd = cwd ?? adapter.getCwd();
+  const effectiveEnv = env ?? adapter.getEnv();
   const options = parsePreFlightGateCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
     return { ok: true, help: true };
   }
-  if ((env[PI_PREFLIGHT_BYPASS_VAR] ?? "").trim() === "1") {
+  if ((effectiveEnv[PI_PREFLIGHT_BYPASS_VAR] ?? "").trim() === "1") {
     const payload = {
       ok: true,
       checks: { worktree: true, branch: "skipped", subagents: "skipped" },
@@ -171,7 +175,7 @@ export async function runCli(
   }
   const checks = { worktree: false, branch: "skipped", subagents: "skipped" };
   const errors = [];
-  const worktreeResult = checkWorktreeIsolation({ cwd, env, gitCommand });
+  const worktreeResult = checkWorktreeIsolation({ cwd: effectiveCwd, env: effectiveEnv, gitCommand });
   checks.worktree = worktreeResult.ok;
   if (!worktreeResult.ok) {
     errors.push({
@@ -181,8 +185,8 @@ export async function runCli(
     });
   }
   const branchResult = checkBranchIdentity({
-    cwd,
-    env,
+    cwd: effectiveCwd,
+    env: effectiveEnv,
     expectedBranch: options.expectedBranch,
     gitCommand,
   });
@@ -195,7 +199,7 @@ export async function runCli(
     });
   }
   const subagentResult = checkSubagentAvailability({
-    env,
+    env: effectiveEnv,
     checkSubagents: options.checkSubagents,
   });
   checks.subagents = subagentResult.status;

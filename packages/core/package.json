@@ -40,7 +40,8 @@
     "./loop/steering": "./src/loop/steering.mjs",
     "./loop/timeout-policy": "./src/loop/timeout-policy.mjs",
     "./loop/tracker-pr-state": "./src/loop/tracker-pr-state.mjs",
-    "./refinement/ac-dod-matrix": "./src/refinement/ac-dod-matrix.mjs"
+    "./refinement/ac-dod-matrix": "./src/refinement/ac-dod-matrix.mjs",
+    "./harness": "./src/harness/index.mjs"
   },
   "bin": {
     "pi-dev-loops-log-bash-exit-1": "./bin/log-bash-exit-1.mjs",

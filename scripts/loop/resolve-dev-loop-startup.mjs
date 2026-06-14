@@ -21,6 +21,7 @@ import {
 import { detectRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
 import { isCopilotLogin } from "@pi-dev-loops/core/github/copilot-helpers";
 import { loadDevLoopConfig, resolveWorkflowConfig } from "../../packages/core/src/config/config.mjs";
+import { createPiAdapter } from "@pi-dev-loops/core/harness";
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
   resolve-dev-loop-startup.mjs --pr <number>
@@ -368,10 +369,12 @@ export function summarizeCanonicalState(bundle) {
       : false,
   };
 }
-export function buildResolveDevLoopStartupResult(input, { env = process.env, cwd = process.cwd(), asyncStartMode = "required" } = {}) {
+export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdapter(), env, cwd, asyncStartMode = "required" } = {}) {
+  const effectiveEnv = env ?? adapter.getEnv();
+  const effectiveCwd = cwd ?? adapter.getCwd();
   try {
     const checkpointText = readFileSync(
-      path.join(cwd, ".pi", "dev-loop-retrospective-checkpoint.json"),
+      path.join(effectiveCwd, ".pi", "dev-loop-retrospective-checkpoint.json"),
       "utf8",
     );
     const checkpoint = JSON.parse(checkpointText);
@@ -408,7 +411,7 @@ export function buildResolveDevLoopStartupResult(input, { env = process.env, cwd
     ? (STRATEGY_ASYNC_DISPATCH[bundle.selectedStrategy] ?? false)
     : false;
   if (requiresAsyncDispatch) {
-    const validation = validateAsyncStartContext({ env, asyncStartMode });
+    const validation = validateAsyncStartContext({ env: effectiveEnv, asyncStartMode });
     if (validation.status === ASYNC_START_STATUS.REJECTED) {
       return buildAsyncStartRejection(validation);
     }
@@ -416,19 +419,19 @@ export function buildResolveDevLoopStartupResult(input, { env = process.env, cwd
   const PI_WORKTREE_BYPASS_VAR = "PI_WORKTREE_BYPASS";
   if (
     strategyKey === "local_implementation" &&
-    (env[PI_WORKTREE_BYPASS_VAR] ?? "").trim() !== "1"
+    (effectiveEnv[PI_WORKTREE_BYPASS_VAR] ?? "").trim() !== "1"
   ) {
     try {
       const worktreeOutput = execFileSync("git", ["worktree", "list"], {
-        cwd,
-        env,
+        cwd: effectiveCwd,
+        env: effectiveEnv,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       });
       const mainPath = parseMainWorktreePath(worktreeOutput);
       const allPaths = parseAllWorktreePaths(worktreeOutput);
-      if (!isUnderWorktreePath(cwd)) {
-        const reason = mainPath !== null && isMainCheckout(cwd, mainPath)
+      if (!isUnderWorktreePath(effectiveCwd)) {
+        const reason = mainPath !== null && isMainCheckout(effectiveCwd, mainPath)
           ? `Local implementation requires worktree isolation. Current directory is the main git checkout (${mainPath}). Create a worktree under tmp/worktrees/<slug>/ and re-run.`
           : "Local implementation requires worktree isolation. Current directory is not under tmp/worktrees/. Create a worktree and re-run.";
         return {
@@ -441,7 +444,7 @@ export function buildResolveDevLoopStartupResult(input, { env = process.env, cwd
           bundle,
         };
       }
-      if (!isListedWorktree(cwd, allPaths)) {
+      if (!isListedWorktree(effectiveCwd, allPaths)) {
         const reason = `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`git worktree add\` and re-run.`;
         return {
           ok: true,
@@ -475,7 +478,8 @@ export function buildResolveDevLoopStartupResult(input, { env = process.env, cwd
     bundle,
   };
 }
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, adapter = createPiAdapter() } = {}) {
+  const sessionCwd = adapter.getCwd();
   const options = parseResolveDevLoopStartupCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
@@ -484,10 +488,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // Resolve repo root to handle subdirectory invocations consistently.
   // buildAutoResolvedInput() also resolves via git rev-parse;
   // using the same root for config loading avoids mismatched roots.
-  let repoRoot = process.cwd();
+  let repoRoot = sessionCwd;
   try {
     repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd: process.cwd(),
+      cwd: sessionCwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
@@ -511,18 +515,18 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   } else if (options.issue !== undefined) {
     input = buildAutoResolvedInput({
       issue: options.issue,
-      cwd: process.cwd(),
+      cwd: sessionCwd,
       targetPreference,
       inputSource,
     });
   } else {
     input = buildAutoResolvedInput({
       pr: options.pr,
-      cwd: process.cwd(),
+      cwd: sessionCwd,
       targetPreference,
     });
   }
-  const result = buildResolveDevLoopStartupResult(input, { asyncStartMode });
+  const result = buildResolveDevLoopStartupResult(input, { asyncStartMode, adapter });
   if (result.ok === false) {
     stderr.write(`${JSON.stringify(result)}\n`);
     process.exitCode = 1;
