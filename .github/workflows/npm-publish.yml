@@ -20,7 +20,10 @@ jobs:
       - name: Verify release commit is on main
         run: |
           git fetch origin main
-          git merge-base --is-ancestor HEAD origin/main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Release tag commit $(git rev-parse HEAD) is not an ancestor of origin/main. Publishing is only allowed from the main branch."
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
