@@ -6,7 +6,7 @@ import type {
   ToolResultEvent,
   UserBashEvent,
   UserBashEventResult,
-} from '@mariozechner/pi-coding-agent';
+} from '@earendil-works/pi-coding-agent';
 
 export const TARGET_REPO_SLUG = 'mfittko/dev-loops';
 export const POST_MERGE_UPDATE_COMMAND = 'pi update git:github.com/mfittko/dev-loops';

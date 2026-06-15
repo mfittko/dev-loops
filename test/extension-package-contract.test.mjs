@@ -11,8 +11,8 @@ test("package metadata exposes the extension entrypoint and root extension test 
   assert.deepEqual(packageJson.pi.extensions, ["./extension/index.ts"]);
   assert.equal(packageJson.bin["dev-loops"], "./cli/index.mjs");
   assert.match(packageJson.engines.node, />=20/);
-  assert.equal(typeof packageJson.peerDependencies["@mariozechner/pi-coding-agent"], "string");
-  assert.equal(typeof packageJson.peerDependencies["@mariozechner/pi-tui"], "string");
+  assert.equal(typeof packageJson.peerDependencies["@earendil-works/pi-coding-agent"], "string");
+  assert.equal(typeof packageJson.peerDependencies["@earendil-works/pi-tui"], "string");
   assert.equal(typeof packageJson.scripts["test:extension"], "string");
   assert.match(packageJson.scripts["test:extension"], /--import tsx/);
   assert.match(packageJson.scripts["test:extension"], /extension-checks/);

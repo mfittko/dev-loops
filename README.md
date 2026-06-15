@@ -158,7 +158,7 @@ See [Extension Documentation](./extension/README.md) for the full command and pa
 - Node `>=20`
 - `gh` installed and authenticated for GitHub/Copilot workflows
 - `pi-subagents` for async workflow assumptions
-- A Pi host that satisfies peer dependencies on `@mariozechner/pi-coding-agent` and `@mariozechner/pi-tui`
+- A Pi host that satisfies peer dependencies on `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`
 
 ## Development
 

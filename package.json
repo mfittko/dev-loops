@@ -50,8 +50,8 @@
     "dev-loops": "./cli/index.mjs"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
@@ -72,7 +72,7 @@
   "dependencies": {
     "mermaid": "11.15.0",
     "zod": "^4.4.3",
-    "@dev-loops/core": "^0.1.0"
+    "@dev-loops/core": "^0.1.1"
   },
   "repository": {
     "type": "git",
@@ -82,7 +82,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "files": [
     "cli/",
     "lib/",
