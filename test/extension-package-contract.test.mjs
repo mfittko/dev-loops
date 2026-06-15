@@ -76,15 +76,9 @@ test("required installed runtime contract docs are bundled once in the shared in
   ];
 
   for (const doc of requiredDocs) {
-    const [sourceBundledCopy, installedBundledCopy] = await Promise.all([
-      readRepo(`skills/docs/${doc}`),
-      readRepo(`skills/docs/${doc}`),
-    ]);
-    assert.equal(
-      installedBundledCopy,
-      sourceBundledCopy,
-      `installed shared docs copy (skills/docs/${doc}) should stay byte-for-byte aligned with skills/docs/${doc}`,
-    );
+    const bundledCopy = await readRepo(`skills/docs/${doc}`);
+    assert.ok(bundledCopy.length > 0, `bundled contract doc skills/docs/${doc} must be present in the installed skills subtree`);
+    assert.doesNotMatch(bundledCopy, /Packaged \/ installed skill use|Packaged \/ installed agent use/i, `skills/docs/${doc} should not restate the shared install contract block`);
     await assert.rejects(stat(fromRepoRoot(`docs/${doc}`)), /ENOENT/);
   }
 
