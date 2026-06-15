@@ -68,7 +68,8 @@
   },
   "dependencies": {
     "mermaid": "11.15.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "yaml": "^2.9.0"
   },
   "repository": {
     "type": "git",
@@ -93,7 +94,8 @@
     "packages/core/src/github/",
     "packages/core/src/loop/",
     "packages/core/src/debt/",
-    "packages/core/src/refinement/"
+    "packages/core/src/refinement/",
+    "packages/core/src/analysis/"
   ],
   "publishConfig": {
     "access": "public",
