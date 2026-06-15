@@ -2,9 +2,9 @@
 import process from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadDevLoopConfig } from "../../packages/core/src/config/config.mjs";
-import { resolveGateConfig } from "../../packages/core/src/config/config.mjs";
-import { resolveGateAngles, resolveReviewerRole } from "../../packages/core/src/config/config.mjs";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { resolveGateConfig } from "@dev-loops/core/config";
+import { resolveGateAngles, resolveReviewerRole } from "@dev-loops/core/config";
 async function run({ stdout = process.stdout, repoRoot = process.cwd() } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const gates = [

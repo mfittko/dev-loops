@@ -61,7 +61,7 @@ The contract separates observable current state (`submittedReviewPresent`, `subm
 For `dev-loops`, the default pre-approval gate before calling a branch/PR
 review-complete, approval-ready, merge-ready, or ready for final handoff uses
 review angles resolved from config (`resolveGateAngles(config, "preApproval")`
-from `@pi-dev-loops/core/config`). Default config ships `dry`, `kiss`, `yagni`.
+from `@dev-loops/core/config`). Default config ships `dry`, `kiss`, `yagni`.
 These are workflow lenses that reviewer
 runs must cover for the change; they do not replace the state machine's supported
 review-angle taxonomy (`correctness`, `tests`, `maintainability`, `security`,

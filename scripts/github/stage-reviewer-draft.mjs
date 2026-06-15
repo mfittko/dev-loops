@@ -4,8 +4,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireOptionValue } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { buildDraftReviewPayload } from "@pi-dev-loops/core/loop/reviewer-loop-state";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { buildDraftReviewPayload } from "@dev-loops/core/loop/reviewer-loop-state";
 const HELP = `Usage: stage-reviewer-draft.mjs --repo <owner/name> --pr <number> --review-file <path> [--local-state-output <path>]
 Stage a pending draft review on a GitHub pull request.
 Options:

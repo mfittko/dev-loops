@@ -1,4 +1,4 @@
-import { tryNormalizeRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { tryNormalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 
 export function escapeHtml(value) {
   return String(value)

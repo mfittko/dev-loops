@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { defineSubcommand, isDirectCliRun } from "@pi-dev-loops/core/cli/subcommand-runner";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { defineSubcommand, isDirectCliRun } from "@dev-loops/core/cli/subcommand-runner";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   replyAndMaybeResolve,
   validateResolutionMessage,

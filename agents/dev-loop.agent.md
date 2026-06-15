@@ -16,7 +16,7 @@ Your job is to provide the callable `dev-loop` public façade and route to the c
 
 ## Handoff envelope mandate (first action)
 
-The agent's first action after resolving authoritative state must be to build the handoff envelope via `buildDevLoopHandoffEnvelope()` from `@pi-dev-loops/core`.
+The agent's first action after resolving authoritative state must be to build the handoff envelope via `buildDevLoopHandoffEnvelope()` from `@dev-loops/core`.
 
 The envelope is the primary handoff artifact — it is derived from resolver output, settings, and gate state, and it determines:
 - `requiredReads` — the canonical ordered list of files to load
@@ -34,7 +34,7 @@ The envelope is the primary handoff artifact — it is derived from resolver out
 
 **The agent must not load skills, route packs, or delegate work before the envelope is built and read.** The derivation contract is [Workflow Handoff Contract](../skills/docs/workflow-handoff-contract.md).
 
-Prose task composition is a fallback only when `buildDevLoopHandoffEnvelope()` is unavailable (missing `@pi-dev-loops/core` package) — the handoff contract in `skills/docs/workflow-handoff-contract.md` applies in that fallback case.
+Prose task composition is a fallback only when `buildDevLoopHandoffEnvelope()` is unavailable (missing `@dev-loops/core` package) — the handoff contract in `skills/docs/workflow-handoff-contract.md` applies in that fallback case.
 
 ## Operating contract
 

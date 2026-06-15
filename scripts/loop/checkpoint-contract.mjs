@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { defineSubcommand, isDirectCliRun } from "@pi-dev-loops/core/cli/subcommand-runner";
+import { defineSubcommand, isDirectCliRun } from "@dev-loops/core/cli/subcommand-runner";
 
 const CHECKPOINT_FILE = ".pi/dev-loop-retrospective-checkpoint.json";
 const ALLOWED_STATES = new Set(["required", "complete", "skipped", "none", "missing"]);

@@ -70,7 +70,7 @@ async function main() {
   let eligible = false;
   try {
     const { loadDevLoopConfig, resolveLightMode } = await import(
-      "../../packages/core/src/config/config.mjs"
+      "@dev-loops/core/config"
     );
     const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
     if (Array.isArray(errors) && errors.length > 0) {

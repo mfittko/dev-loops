@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveGateConfig } from "@pi-dev-loops/core/config";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
 import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
 const USAGE = `Usage: reconcile-draft-gate.mjs --repo <owner/name> --pr <number>

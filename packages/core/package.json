@@ -1,8 +1,8 @@
 {
-  "name": "@pi-dev-loops/core",
-  "private": true,
+  "name": "@dev-loops/core",
+  "version": "0.1.0",
   "type": "module",
-  "description": "Shared deterministic support package for Pi dev-loop skills, repo-local scripts, and GitHub automation.",
+  "description": "Shared deterministic support package for dev-loop skills, repo-local scripts, and GitHub automation.",
   "exports": {
     "./bash-exit-one": "./src/bash-exit-one.mjs",
     "./cli/helpers": "./src/cli/helpers.mjs",
@@ -41,17 +41,35 @@
     "./loop/timeout-policy": "./src/loop/timeout-policy.mjs",
     "./loop/tracker-pr-state": "./src/loop/tracker-pr-state.mjs",
     "./refinement/ac-dod-matrix": "./src/refinement/ac-dod-matrix.mjs",
-    "./harness": "./src/harness/index.mjs"
+    "./harness": "./src/harness/index.mjs",
+    "./loop/worktree-guard": "./src/loop/worktree-guard.mjs",
+    "./loop/tracker-first-loop-state": "./src/loop/tracker-first-loop-state.mjs"
   },
   "bin": {
-    "pi-dev-loops-log-bash-exit-1": "./bin/log-bash-exit-1.mjs",
-    "pi-dev-loops-ensure-phase-files": "./bin/ensure-phase-files.mjs",
-    "pi-dev-loops-parse-review-threads": "./bin/parse-review-threads.mjs",
-    "pi-dev-loops-capture-deep-persona-signals": "./bin/capture-deep-persona-signals.mjs"
+    "dev-loops-log-bash-exit-1": "./bin/log-bash-exit-1.mjs",
+    "dev-loops-ensure-phase-files": "./bin/ensure-phase-files.mjs",
+    "dev-loops-parse-review-threads": "./bin/parse-review-threads.mjs",
+    "dev-loops-capture-deep-persona-signals": "./bin/capture-deep-persona-signals.mjs"
   },
+  "files": [
+    "src/**/*.mjs",
+    "bin/**/*.mjs"
+  ],
   "scripts": {
     "test": "node --test ./test/*.test.mjs"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mfittko/dev-loops.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mfittko/dev-loops/issues"
+  },
+  "homepage": "https://github.com/mfittko/dev-loops#readme",
   "dependencies": {
     "yaml": "^2.9.0",
     "zod": "^4.4.3"

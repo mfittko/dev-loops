@@ -841,7 +841,7 @@ export function resolveGateAngles(config, gate) {
 /**
  * Resolve gate angles dynamically when `dynamicAngles` is enabled in config.
  *
- * Uses diff analysis (from `@pi-dev-loops/core/analysis`) to filter the
+ * Uses diff analysis (from `@dev-loops/core/analysis`) to filter the
  * configured angle list down to only angles relevant to the change set.
  *
  * When `dynamicAngles` is disabled (default), returns the full configured

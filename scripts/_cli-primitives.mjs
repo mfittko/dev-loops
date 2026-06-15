@@ -7,4 +7,4 @@ export {
   parseIssueNumber,
   runChild,
   runCommand,
-} from "@pi-dev-loops/core/cli/primitives";
+} from "@dev-loops/core/cli/primitives";

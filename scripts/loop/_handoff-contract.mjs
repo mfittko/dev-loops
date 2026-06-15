@@ -1,4 +1,4 @@
-import { PR_CHECKPOINT } from "@pi-dev-loops/core/loop/pr-gate-coordination";
+import { PR_CHECKPOINT } from "@dev-loops/core/loop/pr-gate-coordination";
 const HANDOFF_OWNERSHIP = Object.freeze({
   SUBAGENT: "subagent",
   PARENT: "parent",

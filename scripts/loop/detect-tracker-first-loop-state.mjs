@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { execFileSync } from "node:child_process";
-import { interpretTrackerLoopState } from "../../packages/core/src/loop/tracker-first-loop-state.mjs";
+import { interpretTrackerLoopState } from "@dev-loops/core/loop/tracker-first-loop-state";
 function showHelp() {
   process.stdout.write(`Usage: detect-tracker-first-loop-state.mjs --repo <owner/name> --issue <number>
 Detect tracker-first loop state for a GitHub issue.

@@ -18,11 +18,11 @@ import { execFileSync } from "node:child_process";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireOptionValue } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { DebtSignalSchema } from "@pi-dev-loops/core/debt/signal";
-import { clusterSignalsEnriched } from "@pi-dev-loops/core/debt/cluster";
-import { shapeFindings } from "@pi-dev-loops/core/debt/shape";
-import { createRemediationIssue } from "@pi-dev-loops/core/debt/remediation-to-issue";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { DebtSignalSchema } from "@dev-loops/core/debt/signal";
+import { clusterSignalsEnriched } from "@dev-loops/core/debt/cluster";
+import { shapeFindings } from "@dev-loops/core/debt/shape";
+import { createRemediationIssue } from "@dev-loops/core/debt/remediation-to-issue";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 

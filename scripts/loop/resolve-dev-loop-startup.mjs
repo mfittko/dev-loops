@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { resolveAuthoritativeStartupResumeBundle } from "../../packages/core/src/loop/public-dev-loop-routing.mjs";
+import { resolveAuthoritativeStartupResumeBundle } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireOptionValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
@@ -12,16 +12,16 @@ import {
   isMainCheckout,
   parseAllWorktreePaths,
   isListedWorktree,
-} from "../../packages/core/src/loop/worktree-guard.mjs";
+} from "@dev-loops/core/loop/worktree-guard";
 import {
   validateAsyncStartContext,
   buildAsyncStartRejection,
   ASYNC_START_STATUS,
-} from "../../packages/core/src/loop/async-start-contract.mjs";
-import { detectRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { isCopilotLogin } from "@pi-dev-loops/core/github/copilot-helpers";
-import { loadDevLoopConfig, resolveWorkflowConfig } from "../../packages/core/src/config/config.mjs";
-import { createPiAdapter } from "@pi-dev-loops/core/harness";
+} from "@dev-loops/core/loop/async-start-contract";
+import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
+import { loadDevLoopConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { createPiAdapter } from "@dev-loops/core/harness";
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
   resolve-dev-loop-startup.mjs --pr <number>

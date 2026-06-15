@@ -2,7 +2,7 @@
 // post-gate-verdict-fallback.mjs
 //
 // Minimal gate-verdict-comment poster for the fallback path used when the
-// `@pi-dev-loops/core` package is not installed in the consumer repo and the
+// `@dev-loops/core` package is not installed in the consumer repo and the
 // full `scripts/github/upsert-checkpoint-verdict.mjs` helper is therefore
 // unavailable. Posts the same visible comment format as the full helper, but
 // without the full helper's idempotent same-head update, stale-head detection,
@@ -50,7 +50,7 @@ function isValidRepoSlug(repo) {
 const SHA_PATTERN = /^[0-9a-f]{7,64}$/i;
 const USAGE = `Usage: post-gate-verdict-fallback.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>] [--gh-command <path>]
 Minimal fallback poster for draft_gate / pre_approval_gate checkpoint verdict comments.
-Use only when @pi-dev-loops/core is not installed; otherwise prefer scripts/github/upsert-checkpoint-verdict.mjs.
+Use only when @dev-loops/core is not installed; otherwise prefer scripts/github/upsert-checkpoint-verdict.mjs.
 Required:
   --repo <owner/name>
   --pr <number>
@@ -396,11 +396,11 @@ export async function postGateVerdictViaGh({
 export function buildFallbackWarning() {
   return [
     "[post-gate-verdict-fallback] WARNING: fallback mode active.",
-    "The full @pi-dev-loops/core helper (scripts/github/upsert-checkpoint-verdict.mjs) was not available,",
+    "The full @dev-loops/core helper (scripts/github/upsert-checkpoint-verdict.mjs) was not available,",
     "so this comment was posted via the degraded gh-only fallback poster.",
     "Audit trail is degraded: no idempotent same-head update, no stale-head detection,",
     "no gate-coordination validation, no internal-only PR short-circuit, no blocking-severity count enforcement.",
-    "Install @pi-dev-loops/core to restore full gate-comment semantics.",
+    "Install @dev-loops/core to restore full gate-comment semantics.",
   ].join(" ");
 }
 

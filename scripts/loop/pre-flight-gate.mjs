@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireOptionValue } from "../_cli-primitives.mjs";
-import { createPiAdapter } from "@pi-dev-loops/core/harness";
+import { createPiAdapter } from "@dev-loops/core/harness";
 import {
   isUnderWorktreePath,
   parseMainWorktreePath,
@@ -10,7 +10,7 @@ import {
   parseAllWorktreePaths,
   isListedWorktree,
   detectSubagentAvailability,
-} from "../../packages/core/src/loop/worktree-guard.mjs";
+} from "@dev-loops/core/loop/worktree-guard";
 const PI_PREFLIGHT_BYPASS_VAR = "PI_PREFLIGHT_BYPASS";
 const USAGE = `Usage:
   pre-flight-gate.mjs [--expected-branch <name>] [--check-subagents]

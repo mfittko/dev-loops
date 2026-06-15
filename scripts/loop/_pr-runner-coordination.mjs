@@ -1,6 +1,6 @@
 import path from "node:path";
 import process from "node:process";
-import { parseRepoSlugParts } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
 import {
   loadStateFile as loadSharedStateFile,
   saveStateFile as saveSharedStateFile,

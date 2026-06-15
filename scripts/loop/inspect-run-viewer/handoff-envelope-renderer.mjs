@@ -1,7 +1,7 @@
 /**
  * Render the handoff envelope as a structured HTML section for the inspect-run viewer.
  *
- * Depends on the handoff envelope module from @pi-dev-loops/core.
+ * Depends on the handoff envelope module from @dev-loops/core.
  */
 import { escapeHtml } from "./shared.mjs";
 

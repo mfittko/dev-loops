@@ -1,4 +1,4 @@
-import { parseRepoSlugParts } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
 import { inspectRun } from "./inspect-run.mjs";
 import { runChild } from "../_cli-primitives.mjs";
 const ASSIGNED_PR_LIST_CACHE_TTL_MS = 15_000;

@@ -42,7 +42,7 @@ These gates are related but **not interchangeable**.
 
 Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). The reviewer persona for each angle is resolved via `resolveReviewerRole` from the persona registry (`packages/core/src/config/config.mjs`). Consumer repos may override angles and map custom personas via their own config.
 
-Resolve angles at runtime with `resolveGateAngles(config, "draft")` and `resolveGateAngles(config, "preApproval")` from `@pi-dev-loops/core/config`. Do not hardcode angle names in skill procedures or review prompts.
+Resolve angles at runtime with `resolveGateAngles(config, "draft")` and `resolveGateAngles(config, "preApproval")` from `@dev-loops/core/config`. Do not hardcode angle names in skill procedures or review prompts.
 
 | Gate | Boundary it governs | Review angles | What a clean comment authorizes | What it does **not** authorize |
 |---|---|---|---|---|

@@ -5,22 +5,22 @@ import { fileURLToPath } from "node:url";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { readExistingCheckpoint } from "./_checkpoint-io.mjs";
 import { loadCopilotEvidence, loadReviewerEvidence } from "./_loop-evidence.mjs";
-import { interpretOuterLoopState } from "@pi-dev-loops/core/loop/conductor-routing";
+import { interpretOuterLoopState } from "@dev-loops/core/loop/conductor-routing";
 import {
   composeRunInspectionSnapshot,
   deriveRunIdForInspectionTarget,
-} from "@pi-dev-loops/core/loop/run-inspection";
-import { summarizeCopilotLoopIterations } from "@pi-dev-loops/core/loop/copilot-loop-iterations";
+} from "@dev-loops/core/loop/run-inspection";
+import { summarizeCopilotLoopIterations } from "@dev-loops/core/loop/copilot-loop-iterations";
 import {
   classifySafePoint,
   getSteeringStatus,
   normalizeSteeringState,
   resolveEffectiveLoopState,
   STEERING_KIND,
-} from "@pi-dev-loops/core/loop/steering";
+} from "@dev-loops/core/loop/steering";
 import { validateSteeringStateTarget } from "./_steering-state-file.mjs";
 const USAGE = `Usage: inspect-run.mjs --repo <owner/name> --pr <number>
 Read-only run inspection for the Copilot PR outer-loop family.

@@ -12,11 +12,11 @@ import {
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig, resolveWorkflowConfig } from "@pi-dev-loops/core/config";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { buildSnapshotFromPrFacts, interpretLoopState, summarizeLoopInterpretation } from "@pi-dev-loops/core/loop/copilot-loop-state";
-import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@pi-dev-loops/core/loop/pr-gate-coordination";
-import { shouldGuardCopilotReviewRequest } from "../../packages/core/src/loop/pr-gate-coordination.mjs";
+import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { buildSnapshotFromPrFacts, interpretLoopState, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
+import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
 const UNMERGED_GIT_STATUS_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
@@ -232,7 +232,7 @@ async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerge
       reason: `Failed to fetch body for linked issue #${linkedIssue}; refinement status is unknown.`,
     };
   }
-  const { detectIssueRefinementArtifact } = await import("@pi-dev-loops/core/loop/issue-refinement-artifact");
+  const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
   const artifact = detectIssueRefinementArtifact({ body, issueNumber: linkedIssue });
   return {
     status: artifact.hasACs ? "present" : "missing",

@@ -3,8 +3,8 @@
  * CLI wrapper for buildDevLoopHandoffEnvelope().
  *
  * Subagents and shell scripts should call this instead of writing ad-hoc
- * inline Node.js to import from the @pi-dev-loops/core subpath. Using the
- * bare `@pi-dev-loops/core` specifier fails because the package has no
+ * inline Node.js to import from the @dev-loops/core subpath. Using the
+ * bare `@dev-loops/core` specifier fails because the package has no
  * default export — only named subpath exports.
  *
  * Typical usage (pipeline):
@@ -15,13 +15,13 @@
  *   npx dev-loops loop build-envelope --input resolver-output.json
  */
 import { readFile } from "node:fs/promises";
-import { detectRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireOptionValue } from "../_cli-primitives.mjs";
-import { buildDevLoopHandoffEnvelope } from "@pi-dev-loops/core/loop/handoff-envelope";
-import { loadDevLoopConfig } from "@pi-dev-loops/core/config";
-import { createPiAdapter } from "@pi-dev-loops/core/harness";
+import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { createPiAdapter } from "@dev-loops/core/harness";
 
 const USAGE = `Usage: build-handoff-envelope.mjs --input <path>
 Build a deterministic handoff envelope from startup resolver output and settings.

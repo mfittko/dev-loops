@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectLinkedIssuePr } from "../github/detect-linked-issue-pr.mjs";
 import { detectCopilotSessionActivity } from "./detect-copilot-session-activity.mjs";
 const USAGE = `Usage: detect-initial-copilot-pr-state.mjs --repo <owner/name> --issue <number>
