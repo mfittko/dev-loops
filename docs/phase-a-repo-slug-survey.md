@@ -13,21 +13,19 @@ Excluded from this survey:
 
 - **Total tracked files with old slug:** 34
 - **Total old-slug occurrences:** 230
-- **Renamed in Phase B:** 226 occurrences across 31 files
-- **Deferred:** 4 occurrences across 3 files
+- **Renamed in Phase B:** 226 occurrences across 32 files
+- **Deferred:** 4 occurrences across 2 files
 - **Kept (out of scope):** 0 old-slug occurrences
   - `@pi-dev-loops/core` references are excluded from this table; see #766.
 
 | Category            | Occurrences | Files | Action |
 |---|---|---|---|
-| docs                | 47 | 12 | Rename in Phase B |
+| docs                | 46 | 11 | Rename in Phase B |
 | code                | 179 | 18 | Rename in Phase B |
 | tooling config      | 1 | 1 | Rename in Phase B |
 | skill content       | 3 | 1 | Defer to #768 |
 | archive             | 1 | 1 | Defer (historical phase doc) |
-| **total**           | **231** | **33** | |
-
-(The totals line is one more than 230 because `docs/archive/phases/phase-6.md` is counted under both “docs” and “archive”; its action is deferred.)
+| **total**           | **230** | **32** | |
 
 ## Detailed survey table
 
@@ -36,7 +34,7 @@ Excluded from this survey:
 | PLAN.md | 27 | docs | Rename in Phase B |
 | README.md | 55, 146–147 | docs | Rename in Phase B |
 | cli/index.mjs | 212–213, 235 | code | Rename in Phase B |
-| docs/archive/phases/phase-6.md | 13 | docs | Defer (historical phase doc) |
+| docs/archive/phases/phase-6.md | 13 | archive | Defer (historical phase doc) |
 | docs/conductor-routing-contract.md | 26–31 | docs | Rename in Phase B |
 | docs/phases/phase-7.md | 123 | docs | Rename in Phase B |
 | docs/phases/phase-8.md | 168 | docs | Rename in Phase B |
