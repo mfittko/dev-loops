@@ -168,7 +168,7 @@ test("runTreeIntegrityValidator detects orphans, cycles, and depth violations", 
 });
 
 test("verify script returns exit 0 and checker payload in offline JSON mode", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-refine-verify-pass-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-refine-verify-pass-"));
   try {
     const inputPath = await writeFixture(tempDir, "tree.json", buildPassingTreePayload());
     const result = await runVerify(["--input", inputPath, "--json"]);
@@ -185,7 +185,7 @@ test("verify script returns exit 0 and checker payload in offline JSON mode", as
 });
 
 test("verify script returns human-readable failures and exit 1", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-refine-verify-fail-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-refine-verify-fail-"));
   try {
     const failingTree = buildPassingTreePayload();
     failingTree.issues[2].body = `${failingTree.issues[2].body}\nParent: #1`;
@@ -202,7 +202,7 @@ test("verify script returns human-readable failures and exit 1", async () => {
 });
 
 test("dev-loops refine verify routes through CLI", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-cli-refine-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cli-refine-"));
   try {
     const inputPath = await writeFixture(tempDir, "tree.json", buildPassingTreePayload());
     const result = await runCli(["refine", "verify", "--input", inputPath, "--json"]);
@@ -215,7 +215,7 @@ test("dev-loops refine verify routes through CLI", async () => {
 });
 
 test("verify script online mode fetches tree via GitHub API", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-refine-verify-online-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-refine-verify-online-"));
   try {
     const { env } = await writeGhStub(tempDir, [
       {

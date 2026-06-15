@@ -95,7 +95,7 @@ function makeItemNode(itemId, content, status) {
   return { id: itemId, fieldValues, content };
 }
 
-function makeContent(type, number, repo = "mfittko/pi-dev-loops") {
+function makeContent(type, number, repo = "mfittko/dev-loops") {
   const __typename = type === "PR" ? "PullRequest" : "Issue";
   return { __typename, number, repository: { nameWithOwner: repo } };
 }
@@ -113,35 +113,35 @@ describe("move-queue-item", () => {
 
     it("requires --project", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", item: "10", toColumn: "Next Up" }),
+        () => main({ repo: "mfittko/dev-loops", item: "10", toColumn: "Next Up" }),
         /--project is required/,
       );
     });
 
     it("requires --item", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "1", toColumn: "Next Up" }),
+        () => main({ repo: "mfittko/dev-loops", project: "1", toColumn: "Next Up" }),
         /--item is required/,
       );
     });
 
     it("requires --to-column", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "1", item: "10" }),
+        () => main({ repo: "mfittko/dev-loops", project: "1", item: "10" }),
         /--to-column is required/,
       );
     });
 
     it("rejects invalid project format", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "not-a-number", item: "10", toColumn: "Next Up" }),
+        () => main({ repo: "mfittko/dev-loops", project: "not-a-number", item: "10", toColumn: "Next Up" }),
         /--project must be a positive integer or a node ID/,
       );
     });
 
     it("rejects invalid item format", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "1", item: "not-a-number", toColumn: "Next Up" }),
+        () => main({ repo: "mfittko/dev-loops", project: "1", item: "not-a-number", toColumn: "Next Up" }),
         /--item must be a positive integer or an item node ID/,
       );
     });
@@ -159,7 +159,7 @@ describe("move-queue-item", () => {
         { payload: updateItemFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "PVT_proj1", item: "10", toColumn: "Next Up" },
+        { repo: "mfittko/dev-loops", project: "PVT_proj1", item: "10", toColumn: "Next Up" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -170,7 +170,7 @@ describe("move-queue-item", () => {
       const itemNode = {
         id: "PVTI_42",
         fieldValues: { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: "Backlog" }] },
-        content: { __typename: "Issue", number: 10, title: "Test", url: "https://github.com/mfittko/pi-dev-loops/issues/10" },
+        content: { __typename: "Issue", number: 10, title: "Test", url: "https://github.com/mfittko/dev-loops/issues/10" },
       };
       const responses = [
         { payload: userPayload() },
@@ -180,7 +180,7 @@ describe("move-queue-item", () => {
         { payload: updateItemFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: "PVTI_42", toColumn: "In Progress" },
+        { repo: "mfittko/dev-loops", project: "1", item: "PVTI_42", toColumn: "In Progress" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -203,7 +203,7 @@ describe("move-queue-item", () => {
         { payload: updateItemFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+        { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -228,7 +228,7 @@ describe("move-queue-item", () => {
         { payload: updateItemFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: "20", toColumn: "Done" },
+        { repo: "mfittko/dev-loops", project: "1", item: "20", toColumn: "Done" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -253,7 +253,7 @@ describe("move-queue-item", () => {
         // No mutation call expected — unchanged
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+        { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -266,7 +266,7 @@ describe("move-queue-item", () => {
       const itemNode = {
         id: "PVTI_42",
         fieldValues: { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: "Done" }] },
-        content: { __typename: "Issue", number: 10, title: "Test", url: "https://github.com/mfittko/pi-dev-loops/issues/10" },
+        content: { __typename: "Issue", number: 10, title: "Test", url: "https://github.com/mfittko/dev-loops/issues/10" },
       };
       const responses = [
         { payload: userPayload() },
@@ -276,7 +276,7 @@ describe("move-queue-item", () => {
         // No mutation
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: "PVTI_42", toColumn: "Done" },
+        { repo: "mfittko/dev-loops", project: "1", item: "PVTI_42", toColumn: "Done" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -307,7 +307,7 @@ describe("move-queue-item", () => {
           { payload: updateItemFieldResponse() },
         ];
         const result = await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: "10", toColumn: to },
+          { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: to },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.equal(result.ok, true);
@@ -326,7 +326,7 @@ describe("move-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "999", item: "10", toColumn: "Next Up" },
+          { repo: "mfittko/dev-loops", project: "999", item: "10", toColumn: "Next Up" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -343,7 +343,7 @@ describe("move-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+          { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -360,7 +360,7 @@ describe("move-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: "10", toColumn: "Icebox" },
+          { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Icebox" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -379,7 +379,7 @@ describe("move-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: "42", toColumn: "Next Up" },
+          { repo: "mfittko/dev-loops", project: "1", item: "42", toColumn: "Next Up" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -397,7 +397,7 @@ describe("move-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: "PVTI_nonexistent", toColumn: "Next Up" },
+          { repo: "mfittko/dev-loops", project: "1", item: "PVTI_nonexistent", toColumn: "Next Up" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -412,7 +412,7 @@ describe("move-queue-item", () => {
       const responses = [{ error: "gh: authentication required" }];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+          { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -425,7 +425,7 @@ describe("move-queue-item", () => {
       const responses = [{ payload: { errors: [{ message: "Could not resolve" }] } }];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+          { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -467,7 +467,7 @@ describe("move-queue-item", () => {
     it("produces JSON error shape for CLI consumers", async () => {
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: "42", toColumn: "Next Up" },
+          { repo: "mfittko/dev-loops", project: "1", item: "42", toColumn: "Next Up" },
           { env: {}, runChild: mockRunChild([
             { payload: userPayload() },
             { payload: listUserProjectsResponse([EXISTING_PROJECT]) },

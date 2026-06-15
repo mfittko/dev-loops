@@ -60,7 +60,7 @@ test("detectClosingKeyword scans only first MAX_BODY_SCAN_BYTES", () => {
 // --- integration tests for closing-keyword warning ---
 
 test("create-draft-pr --body with closing keyword emits no stderr warning", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-body-keyword-ok-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-body-keyword-ok-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -86,7 +86,7 @@ test("create-draft-pr --body with closing keyword emits no stderr warning", asyn
 });
 
 test("create-draft-pr --body without closing keyword emits stderr warning but exits 0", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-body-no-keyword-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-body-no-keyword-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -112,7 +112,7 @@ test("create-draft-pr --body without closing keyword emits stderr warning but ex
 });
 
 test("create-draft-pr --body-file with closing keyword emits no stderr warning", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-bodyfile-keyword-ok-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-bodyfile-keyword-ok-"));
 
   try {
     const bodyPath = path.join(tempDir, "pr-body.md");
@@ -141,7 +141,7 @@ test("create-draft-pr --body-file with closing keyword emits no stderr warning",
 });
 
 test("create-draft-pr --body-file without closing keyword emits stderr warning but exits 0", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-bodyfile-no-keyword-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-bodyfile-no-keyword-"));
 
   try {
     const bodyPath = path.join(tempDir, "pr-body.md");
@@ -170,7 +170,7 @@ test("create-draft-pr --body-file without closing keyword emits stderr warning b
 });
 
 test("create-draft-pr --body-file with missing file emits stderr warning (non-fatal)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-bodyfile-missing-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-bodyfile-missing-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -266,7 +266,7 @@ test("create-draft-pr --help documents draft-only behavior and --ready rejection
 });
 
 test("create-draft-pr forwards args in order and preserves gh stdout on success", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-success-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-success-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -308,7 +308,7 @@ test("create-draft-pr forwards args in order and preserves gh stdout on success"
 });
 
 test("create-draft-pr preserves an existing --draft without adding another copy", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-existing-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-existing-draft-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -335,7 +335,7 @@ test("create-draft-pr preserves an existing --draft without adding another copy"
 });
 
 test("create-draft-pr appends --draft after --draft=false so draft-first still wins", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-false-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-false-draft-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -358,7 +358,7 @@ test("create-draft-pr appends --draft after --draft=false so draft-first still w
 });
 
 test("create-draft-pr re-appends --draft when a later token disables it", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-reappend-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-reappend-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -381,7 +381,7 @@ test("create-draft-pr re-appends --draft when a later token disables it", async 
 });
 
 test("create-draft-pr treats --draft=true as already supplied and avoids a duplicate", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-true-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-true-draft-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -404,7 +404,7 @@ test("create-draft-pr treats --draft=true as already supplied and avoids a dupli
 });
 
 test("create-draft-pr rejects --ready without invoking gh", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-ready-reject-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-ready-reject-"));
 
   try {
     const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
@@ -423,7 +423,7 @@ test("create-draft-pr rejects --ready without invoking gh", async () => {
 });
 
 test("create-draft-pr preserves gh stdout, stderr, and exit code on failure", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-create-draft-pr-gh-failure-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-gh-failure-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [

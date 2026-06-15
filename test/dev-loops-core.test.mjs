@@ -151,10 +151,10 @@ test("collectDevLoopChecks no longer reports a dev-loop skill readiness check", 
 
 test("parser accepts the bounded inspect lifecycle command family only on the extension surface", () => {
   for (const action of ["open", "resume", "status", "stop", "restart"]) {
-    const parsed = parseDevLoopsCommand(["inspect", action, "--repo", "mfittko/pi-dev-loops"], { surface: "extension" });
+    const parsed = parseDevLoopsCommand(["inspect", action, "--repo", "mfittko/dev-loops"], { surface: "extension" });
     assert.equal(parsed.kind, "inspect_action");
     assert.equal(parsed.action, action);
-    assert.equal(parsed.repo, "mfittko/pi-dev-loops");
+    assert.equal(parsed.repo, "mfittko/dev-loops");
   }
 
   assert.deepEqual(parseDevLoopsCommand(["inspect", "launch"], { surface: "extension" }), {
@@ -203,33 +203,33 @@ test('executor returns a structured inspect-run UI result when repo-root lookup 
 test('normalizeInput handles non-breaking spaces and other unusual whitespace', () => {
   // parseDevLoopsCommand routes through normalizeInput internally
   const parsed = parseDevLoopsCommand(
-    ['inspect', '\u00A0open\u00A0', '--repo', '\u00A0mfittko/pi-dev-loops\u00A0'],
+    ['inspect', '\u00A0open\u00A0', '--repo', '\u00A0mfittko/dev-loops\u00A0'],
     { surface: 'extension' }
   );
   assert.equal(parsed.kind, 'inspect_action');
   assert.equal(parsed.action, 'open');
-  assert.equal(parsed.repo, 'mfittko/pi-dev-loops');
+  assert.equal(parsed.repo, 'mfittko/dev-loops');
 });
 
 test('normalizeInput filters non-primitive array elements', () => {
   const parsed = parseDevLoopsCommand(
-    ['inspect', 'open', { _meta: 'should-be-ignored' }, '--repo', 'mfittko/pi-dev-loops'],
+    ['inspect', 'open', { _meta: 'should-be-ignored' }, '--repo', 'mfittko/dev-loops'],
     { surface: 'extension' }
   );
   assert.equal(parsed.kind, 'inspect_action');
   assert.equal(parsed.action, 'open');
-  assert.equal(parsed.repo, 'mfittko/pi-dev-loops');
+  assert.equal(parsed.repo, 'mfittko/dev-loops');
 });
 
 test('normalizeInput handles mixed whitespace characters', () => {
   // em-space, en-space, thin space, NBSP
   const parsed = parseDevLoopsCommand(
-    ['inspect\u2003open\u2002--repo\u2009mfittko/pi-dev-loops'],
+    ['inspect\u2003open\u2002--repo\u2009mfittko/dev-loops'],
     { surface: 'extension' }
   );
   assert.equal(parsed.kind, 'inspect_action');
   assert.equal(parsed.action, 'open');
-  assert.equal(parsed.repo, 'mfittko/pi-dev-loops');
+  assert.equal(parsed.repo, 'mfittko/dev-loops');
 });
 
 test('executor preserves repoRoot when the inspect-run lifecycle action throws after repo-root lookup succeeds', async () => {

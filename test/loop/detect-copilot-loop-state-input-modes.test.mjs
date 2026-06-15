@@ -18,7 +18,7 @@ import {
   writeJson,
 } from "./detect-copilot-loop-state-test-helpers.mjs";
 test("detect-copilot-loop-state --input interprets a snapshot file and emits state JSON", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-input-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-input-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -48,7 +48,7 @@ test("detect-copilot-loop-state --input interprets a snapshot file and emits sta
 });
 
 test("detect-copilot-loop-state --input routes unresolved threads to unresolved_feedback_present", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-unresolved-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-unresolved-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -71,7 +71,7 @@ test("detect-copilot-loop-state --input routes unresolved threads to unresolved_
 });
 
 test("detect-copilot-loop-state --input routes unavailable status to review_request_unavailable", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-unavailable-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-unavailable-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -94,7 +94,7 @@ test("detect-copilot-loop-state --input routes unavailable status to review_requ
 });
 
 test("detect-copilot-loop-state --input routes already-fixed threads to already_fixed_needs_reply_resolve", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-fixed-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-fixed-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -119,7 +119,7 @@ test("detect-copilot-loop-state --input routes already-fixed threads to already_
 });
 
 test("detect-copilot-loop-state --input re-opens clean exhausted rounds to ready_to_rerequest_review when head changed", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-round-cap-clean-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-clean-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -149,7 +149,7 @@ test("detect-copilot-loop-state --input re-opens clean exhausted rounds to ready
 });
 
 test("detect-copilot-loop-state --input fails closed to round_cap_clean_fallback when current-head review signal is omitted", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-round-cap-clean-missing-head-signal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-clean-missing-head-signal-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -177,7 +177,7 @@ test("detect-copilot-loop-state --input fails closed to round_cap_clean_fallback
 });
 
 test("detect-copilot-loop-state --input keeps clean exhausted rounds on current head at round_cap_clean_fallback", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-round-cap-clean-current-head-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-clean-current-head-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -206,7 +206,7 @@ test("detect-copilot-loop-state --input keeps clean exhausted rounds on current 
 });
 
 test("detect-copilot-loop-state --input routes blocked exhausted rounds to round_cap_reached", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-round-cap-blocked-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-blocked-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -234,7 +234,7 @@ test("detect-copilot-loop-state --input routes blocked exhausted rounds to round
 });
 
 test("detect-copilot-loop-state --input routes failed review request to blocked_needs_user_decision", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-failed-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-failed-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -256,7 +256,7 @@ test("detect-copilot-loop-state --input routes failed review request to blocked_
 });
 
 test("detect-copilot-loop-state --input returns done for merged PR snapshot", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-done-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-done-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -281,7 +281,7 @@ test("detect-copilot-loop-state --input returns done for merged PR snapshot", as
 // ---------------------------------------------------------------------------
 
 test("detect-copilot-loop-state auto-detect accepts successful status-context rollup entries", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-status-context-success-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-status-context-success-"));
 
   try {
     const emptyThreads = JSON.stringify({
@@ -325,7 +325,7 @@ test("detect-copilot-loop-state auto-detect accepts successful status-context ro
 });
 
 test("detect-copilot-loop-state auto-detect returns waiting_for_ci when statusCheckRollup is missing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-auto-missing-rollup-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-auto-missing-rollup-"));
 
   try {
     const emptyThreads = JSON.stringify({
@@ -368,7 +368,7 @@ test("detect-copilot-loop-state auto-detect returns waiting_for_ci when statusCh
 
 
 test("detect-copilot-loop-state auto-detect tracks completed Copilot review rounds in the snapshot", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-auto-round-count-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-auto-round-count-"));
 
   try {
     const { env } = await writeAutoDetectGhStub(tempDir, {
@@ -419,7 +419,7 @@ test("detect-copilot-loop-state auto-detect tracks completed Copilot review roun
 });
 
 test("autoDetectSnapshot uses the default ghCommand when deps omit it", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-auto-detect-default-deps-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-auto-detect-default-deps-"));
 
   try {
     const emptyThreads = JSON.stringify({
@@ -463,7 +463,7 @@ test("autoDetectSnapshot uses the default ghCommand when deps omit it", async ()
 
 
 test("detect-copilot-loop-state auto-detect returns done for merged PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-auto-merged-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-auto-merged-"));
 
   try {
     const { env } = await writeGhStub(tempDir, [
@@ -491,7 +491,7 @@ test("detect-copilot-loop-state auto-detect returns done for merged PR", async (
 });
 
 test("detect-copilot-loop-state auto-detect returns no_pr when gh reports PR not found", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-auto-no-pr-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-auto-no-pr-"));
 
   try {
     const { env } = await writeGhStub(tempDir, [
@@ -515,7 +515,7 @@ test("detect-copilot-loop-state auto-detect returns no_pr when gh reports PR not
 });
 
 test.skip("detect-copilot-loop-state --review-request-status override injects status without re-probing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-override-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-override-"));
 
   try {
     const emptyThreads = JSON.stringify({
@@ -557,7 +557,7 @@ test.skip("detect-copilot-loop-state --review-request-status override injects st
 });
 
 test("detect-copilot-loop-state auto-detect detects CI pending status", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-ci-pending-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-ci-pending-"));
 
   try {
     const emptyThreads = JSON.stringify({
@@ -601,7 +601,7 @@ test("detect-copilot-loop-state auto-detect detects CI pending status", async ()
 });
 
 test("detect-copilot-loop-state auto-detect prioritizes CI failure over pending checks", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-ci-failure-priority-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-ci-failure-priority-"));
 
   try {
     const emptyThreads = JSON.stringify({
@@ -645,7 +645,7 @@ test("detect-copilot-loop-state auto-detect prioritizes CI failure over pending 
 });
 
 test("detect-copilot-loop-state auto-detect fails when the gh stub is missing a scripted invocation", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-gh-budget-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gh-budget-"));
 
   try {
     const { env } = await writeGhStub(tempDir, [
@@ -747,7 +747,7 @@ test("detect-copilot-loop-state --help prints usage and exits 0", async () => {
 });
 
 test("detect-copilot-loop-state reports gh failures deterministically", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-gh-failure-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gh-failure-"));
 
   try {
     const { env } = await writeGhStub(tempDir, [
@@ -772,7 +772,7 @@ test("detect-copilot-loop-state reports gh failures deterministically", async ()
 });
 
 test("detect-copilot-loop-state fails closed when review threads cannot be fetched", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-thread-failure-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-thread-failure-"));
 
   try {
     const { env } = await writeGhStub(tempDir, [

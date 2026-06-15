@@ -1,6 +1,6 @@
 # SPEC: Outer dev-loop queue mode
 
-**Issue:** [#556](https://github.com/mfittko/pi-dev-loops/issues/556)
+**Issue:** [#556](https://github.com/mfittko/dev-loops/issues/556)
 **Status:** Draft — intake refinement
 **Branch:** `issue/556-queue-mode`
 
@@ -101,7 +101,7 @@ When `--parallel` is set:
 
 During any gate review (draft_gate, pre_approval_gate):
 - Detect workflow bugs, contract violations, or tool failures
-- Auto-file issue via `gh issue create --repo mfittko/pi-dev-loops --assignee @me`
+- Auto-file issue via `gh issue create --repo mfittko/dev-loops --assignee @me`
 - Append new issue to end of queue
 - Update `.pi/dev-loop-queue.json`
 

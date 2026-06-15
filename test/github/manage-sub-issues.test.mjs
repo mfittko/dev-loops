@@ -302,7 +302,7 @@ test("computeVerifyResult with --ordered: verified:true when sets match and orde
 // ─── CLI integration tests ────────────────────────────────────────────────────
 
 test("manage-sub-issues list returns sub-issues from API", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-list-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-manage-sub-issues-list-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -334,7 +334,7 @@ test("manage-sub-issues list returns sub-issues from API", async () => {
 });
 
 test("manage-sub-issues list drops entries with unsupported states", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-bad-state-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-manage-sub-issues-bad-state-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -361,7 +361,7 @@ test("manage-sub-issues list drops entries with unsupported states", async () =>
 });
 
 test("manage-sub-issues list returns empty array when no sub-issues", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-empty-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-manage-sub-issues-empty-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -383,7 +383,7 @@ test("manage-sub-issues list returns empty array when no sub-issues", async () =
 });
 
 test("manage-sub-issues add resolves child id and posts to sub_issues endpoint", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-add-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-manage-sub-issues-add-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -422,7 +422,7 @@ test("manage-sub-issues add resolves child id and posts to sub_issues endpoint",
 });
 
 test("manage-sub-issues reorder sets execution order via sequential PATCH calls", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-reorder-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-manage-sub-issues-reorder-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -493,7 +493,7 @@ test("manage-sub-issues reorder sets execution order via sequential PATCH calls"
 
 test("manage-sub-issues reorder fails when a specified issue is not a sub-issue", async () => {
   const tempDir = await mkdtemp(
-    path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-reorder-fail-"),
+    path.join(os.tmpdir(), "dev-loops-manage-sub-issues-reorder-fail-"),
   );
 
   try {
@@ -523,7 +523,7 @@ test("manage-sub-issues reorder fails when a specified issue is not a sub-issue"
 
 test("manage-sub-issues verify returns verified:true when sub-issues match", async () => {
   const tempDir = await mkdtemp(
-    path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-verify-ok-"),
+    path.join(os.tmpdir(), "dev-loops-manage-sub-issues-verify-ok-"),
   );
 
   try {
@@ -556,7 +556,7 @@ test("manage-sub-issues verify returns verified:true when sub-issues match", asy
 
 test("manage-sub-issues verify returns verified:false with missing and unexpected", async () => {
   const tempDir = await mkdtemp(
-    path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-verify-fail-"),
+    path.join(os.tmpdir(), "dev-loops-manage-sub-issues-verify-fail-"),
   );
 
   try {
@@ -588,7 +588,7 @@ test("manage-sub-issues verify returns verified:false with missing and unexpecte
 
 test("manage-sub-issues verify --ordered detects order mismatch", async () => {
   const tempDir = await mkdtemp(
-    path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-verify-order-"),
+    path.join(os.tmpdir(), "dev-loops-manage-sub-issues-verify-order-"),
   );
 
   try {
@@ -641,7 +641,7 @@ test("manage-sub-issues prints usage to stdout and exits 0 for --help", async ()
 
 test("manage-sub-issues add fails when gh returns an error", async () => {
   const tempDir = await mkdtemp(
-    path.join(os.tmpdir(), "pi-dev-loops-manage-sub-issues-add-fail-"),
+    path.join(os.tmpdir(), "dev-loops-manage-sub-issues-add-fail-"),
   );
 
   try {

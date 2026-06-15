@@ -17,12 +17,12 @@ describe("debt-signal schema", () => {
         lineStart: 10,
         lineEnd: 20,
         commitSha: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b",
-        url: "https://github.com/mfittko/pi-dev-loops/blob/main/src/index.mjs",
+        url: "https://github.com/mfittko/dev-loops/blob/main/src/index.mjs",
       },
       severityHint: "high",
       timestamp: validTimestamp,
       rawPayload: { key: "value" },
-      repository: { owner: "mfittko", name: "pi-dev-loops" },
+      repository: { owner: "mfittko", name: "dev-loops" },
       confidence: 0.85,
     };
     const result = DebtSignalSchema.safeParse(input);
@@ -31,7 +31,7 @@ describe("debt-signal schema", () => {
       assert.equal(result.data.id, validUUID);
       assert.equal(result.data.confidence, 0.85);
       assert.deepEqual(result.data.rawPayload, { key: "value" });
-      assert.deepEqual(result.data.repository, { owner: "mfittko", name: "pi-dev-loops" });
+      assert.deepEqual(result.data.repository, { owner: "mfittko", name: "dev-loops" });
     }
   });
 

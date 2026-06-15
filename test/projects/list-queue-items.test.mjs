@@ -114,28 +114,28 @@ describe("list-queue-items", () => {
 
     it("requires --project", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops" }),
+        () => main({ repo: "mfittko/dev-loops" }),
         /--project is required/,
       );
     });
 
     it("rejects invalid project format", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "not-a-number" }),
+        () => main({ repo: "mfittko/dev-loops", project: "not-a-number" }),
         /--project must be a positive integer or a node ID/,
       );
     });
 
     it("rejects negative project number", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "-1" }),
+        () => main({ repo: "mfittko/dev-loops", project: "-1" }),
         /--project must be a positive integer or a node ID/,
       );
     });
 
     it("rejects zero project number", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "0" }),
+        () => main({ repo: "mfittko/dev-loops", project: "0" }),
         /--project must be a positive integer or a node ID/,
       );
     });
@@ -162,7 +162,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse([]) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "PVT_proj1" },
+        { repo: "mfittko/dev-loops", project: "PVT_proj1" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -177,7 +177,7 @@ describe("list-queue-items", () => {
       ];
       // Whitespace-padded number should still parse as integer and find project
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: " 1 " },
+        { repo: "mfittko/dev-loops", project: " 1 " },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -198,7 +198,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse(items) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1" },
+        { repo: "mfittko/dev-loops", project: "1" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -224,7 +224,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse(items) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", column: "Next Up" },
+        { repo: "mfittko/dev-loops", project: "1", column: "Next Up" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -249,7 +249,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse(items) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", column: "Next Up", limit: 1 },
+        { repo: "mfittko/dev-loops", project: "1", column: "Next Up", limit: 1 },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -268,7 +268,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse(items) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1" },
+        { repo: "mfittko/dev-loops", project: "1" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -294,7 +294,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse(items) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1" },
+        { repo: "mfittko/dev-loops", project: "1" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -317,7 +317,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse([]) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1" },
+        { repo: "mfittko/dev-loops", project: "1" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -332,7 +332,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse([]) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "PVT_proj1" },
+        { repo: "mfittko/dev-loops", project: "PVT_proj1" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -391,7 +391,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse([]) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1" },
+        { repo: "mfittko/dev-loops", project: "1" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -406,7 +406,7 @@ describe("list-queue-items", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "42" },
+          { repo: "mfittko/dev-loops", project: "42" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -423,7 +423,7 @@ describe("list-queue-items", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "PVT_nonexistent" },
+          { repo: "mfittko/dev-loops", project: "PVT_nonexistent" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -440,7 +440,7 @@ describe("list-queue-items", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1" },
+          { repo: "mfittko/dev-loops", project: "1" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -458,7 +458,7 @@ describe("list-queue-items", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", column: "Icebox" },
+          { repo: "mfittko/dev-loops", project: "1", column: "Icebox" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -491,7 +491,7 @@ describe("list-queue-items", () => {
       const responses = [{ error: "gh: authentication required" }];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1" },
+          { repo: "mfittko/dev-loops", project: "1" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -507,7 +507,7 @@ describe("list-queue-items", () => {
       }];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1" },
+          { repo: "mfittko/dev-loops", project: "1" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -530,7 +530,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse(items) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1" },
+        { repo: "mfittko/dev-loops", project: "1" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -550,7 +550,7 @@ describe("list-queue-items", () => {
         { payload: getItemsResponse(items) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", column: "Next Up" },
+        { repo: "mfittko/dev-loops", project: "1", column: "Next Up" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -564,7 +564,7 @@ describe("list-queue-items", () => {
       // We can test the error object shape by catching from main()
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "999" },
+          { repo: "mfittko/dev-loops", project: "999" },
           { env: {}, runChild: mockRunChild([
             { payload: userPayload() },
             { payload: listUserProjectsResponse([]) },

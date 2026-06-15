@@ -43,46 +43,46 @@ stdout and structured errors on stderr. All accept `--help` for usage.
 
 ```sh
 # List all items in a project
-dev-loops project list --repo mfittko/pi-dev-loops --project 1
+dev-loops project list --repo mfittko/dev-loops --project 1
 
 # List only items in "Next Up" column
-dev-loops project list --repo mfittko/pi-dev-loops --project 1 --column "Next Up"
+dev-loops project list --repo mfittko/dev-loops --project 1 --column "Next Up"
 
 # Limit to top 5 items
-dev-loops project list --repo mfittko/pi-dev-loops --project 1 --limit 5
+dev-loops project list --repo mfittko/dev-loops --project 1 --limit 5
 ```
 
 ### Add an item to the queue
 
 ```sh
 # Add issue #42 to the Backlog column (default)
-dev-loops project add --repo mfittko/pi-dev-loops --project 1 --item 42
+dev-loops project add --repo mfittko/dev-loops --project 1 --item 42
 
 # Add issue #42 to a specific column
-dev-loops project add --repo mfittko/pi-dev-loops --project 1 --item 42 --status "Next Up"
+dev-loops project add --repo mfittko/dev-loops --project 1 --item 42 --status "Next Up"
 ```
 
 ### Move an item between columns
 
 ```sh
 # Move issue #42 from its current column to In Progress
-dev-loops project move --repo mfittko/pi-dev-loops --project 1 --item 42 --to-column "In Progress"
+dev-loops project move --repo mfittko/dev-loops --project 1 --item 42 --to-column "In Progress"
 
 # Move a project item by its node ID
-dev-loops project move --repo mfittko/pi-dev-loops --project 1 --item "PVTI_..." --to-column "Done"
+dev-loops project move --repo mfittko/dev-loops --project 1 --item "PVTI_..." --to-column "Done"
 ```
 
 ### Reorder items
 
 ```sh
 # Move issue #42 to the top of the column
-dev-loops project reorder --repo mfittko/pi-dev-loops --project 1 --item 42
+dev-loops project reorder --repo mfittko/dev-loops --project 1 --item 42
 
 # Move issue #42 after issue #17
-dev-loops project reorder --repo mfittko/pi-dev-loops --project 1 --item 42 --after 17
+dev-loops project reorder --repo mfittko/dev-loops --project 1 --item 42 --after 17
 
 # Reorder by project item node IDs
-dev-loops project reorder --repo mfittko/pi-dev-loops --project 1 --item "PVTI_abc" --after "PVTI_xyz"
+dev-loops project reorder --repo mfittko/dev-loops --project 1 --item "PVTI_abc" --after "PVTI_xyz"
 ```
 
 ### Typical workflow
@@ -147,11 +147,11 @@ does not continuously sync local state to board state.
 
 - [Projects Queue Contract](./projects-queue-contract.md) — formal board contract
 - [Queue Board Setup](./queue-board-setup.md) — one-time setup guide
-- Issue [#625](https://github.com/mfittko/pi-dev-loops/issues/625) — parent epic
-- Issue [#626](https://github.com/mfittko/pi-dev-loops/issues/626) — queue contract
-- Issue [#627](https://github.com/mfittko/pi-dev-loops/issues/627) — list helper
-- Issue [#628](https://github.com/mfittko/pi-dev-loops/issues/628) — move helper
-- Issue [#629](https://github.com/mfittko/pi-dev-loops/issues/629) — add helper
-- Issue [#630](https://github.com/mfittko/pi-dev-loops/issues/630) — reorder helper
-- Issue [#631](https://github.com/mfittko/pi-dev-loops/issues/631) — this doc
-- Issue [#632](https://github.com/mfittko/pi-dev-loops/issues/632) — board bootstrap
+- Issue [#625](https://github.com/mfittko/dev-loops/issues/625) — parent epic
+- Issue [#626](https://github.com/mfittko/dev-loops/issues/626) — queue contract
+- Issue [#627](https://github.com/mfittko/dev-loops/issues/627) — list helper
+- Issue [#628](https://github.com/mfittko/dev-loops/issues/628) — move helper
+- Issue [#629](https://github.com/mfittko/dev-loops/issues/629) — add helper
+- Issue [#630](https://github.com/mfittko/dev-loops/issues/630) — reorder helper
+- Issue [#631](https://github.com/mfittko/dev-loops/issues/631) — this doc
+- Issue [#632](https://github.com/mfittko/dev-loops/issues/632) — board bootstrap

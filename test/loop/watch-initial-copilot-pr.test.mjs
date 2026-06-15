@@ -626,7 +626,7 @@ test("watchInitialCopilotPr prior_linked_pr_closed_unmerged exits even when time
 
 
 test("watch-initial-copilot-pr returns ready_for_followup via CLI when PR is immediately substantive", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-initial-pr-ready-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-initial-pr-ready-"));
 
   try {
     const env = await writeGhStub(tempDir, [

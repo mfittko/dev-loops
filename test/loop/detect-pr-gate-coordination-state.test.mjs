@@ -79,7 +79,7 @@ test("parseGitStatusConflictFiles parses NUL-delimited porcelain output with det
 });
 
 test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs with clean draft_gate on a different head (one-time boundary)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-state-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-state-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -203,7 +203,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
 });
 
 test("detect-pr-gate-coordination-state flags draft_gate_needed for non-draft PRs with no draft_gate evidence", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-no-draft-evidence-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-no-draft-evidence-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -254,7 +254,7 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed for non-draft PR
 });
 
 test("detect-pr-gate-coordination-state flags draft_gate_needed for converged non-draft PRs with no draft_gate evidence", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-no-draft-evidence-converged-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-no-draft-evidence-converged-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -327,7 +327,7 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed for converged no
 
 
 test("detect-pr-gate-coordination-state flags draft_gate_needed when Copilot round cap is exhausted without draft_gate", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-round-cap-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-round-cap-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -428,7 +428,7 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed when Copilot rou
 });
 
 test("detect-pr-gate-coordination-state auto-detects local-fix-without-reply (#464) when unresolved threads exist on older review commit", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-464-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-464-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -525,7 +525,7 @@ test("detect-pr-gate-coordination-state auto-detects local-fix-without-reply (#4
 });
 
 test("detectPrGateCoordinationState tolerates missing local git binary and falls back to GitHub-only facts", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-missing-git-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-missing-git-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -577,7 +577,7 @@ test("detectPrGateCoordinationState tolerates missing local git binary and falls
 });
 
 test("detect-pr-gate-coordination-state preserves non-conflict mergeStateStatus values in helper output", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-merge-state-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-merge-state-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -643,7 +643,7 @@ test("detect-pr-gate-coordination-state preserves non-conflict mergeStateStatus 
 });
 
 test("detect-pr-gate-coordination-state surfaces conflict_resolution for conflicted PRs and reports conflict files", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-conflict-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-conflict-"));
 
   try {
     const ghEnv = await writeGhStub(tempDir, [
@@ -703,7 +703,7 @@ test("detect-pr-gate-coordination-state surfaces conflict_resolution for conflic
 });
 
 test.skip("detect-pr-gate-coordination-state with --review-mode internal_only skips Copilot review", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-local-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-local-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -791,7 +791,7 @@ test.skip("detect-pr-gate-coordination-state with --review-mode internal_only sk
 
 
 test("pre-approval-gate-detector overrides to pre_approval_gate_needed when never entered", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-never-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-never-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -865,7 +865,7 @@ test("pre-approval-gate-detector overrides to pre_approval_gate_needed when neve
 });
 
 test("detect-pr-gate-coordination-state blocks merge readiness when retrospective gate is enabled without approved retrospective", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-retro-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-retro-"));
 
   try {
     await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
@@ -961,7 +961,7 @@ test("detect-pr-gate-coordination-state blocks merge readiness when retrospectiv
 });
 
 test("detect-pr-gate-coordination-state fails closed when the PR head changes mid-read", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-head-drift-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-head-drift-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1117,7 +1117,7 @@ test("detect-pr-gate-coordination-state leaves refinement=present when linked is
 // ── draft gate round-count reset (#560) ──────────────────────────────────
 
 test("detect-pr-gate-coordination-state resets Copilot round count when draft_gate re-passed on different head", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-round-reset-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-round-reset-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1179,7 +1179,7 @@ test("detect-pr-gate-coordination-state resets Copilot round count when draft_ga
 });
 
 test("detect-pr-gate-coordination-state does NOT reset round count when draft_gate is on same head", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-pr-gate-same-head-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-same-head-"));
 
   try {
     const env = await writeGhStub(tempDir, [

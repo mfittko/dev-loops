@@ -182,7 +182,7 @@ test("parseUpsertCheckpointVerdictCliArgs rejects --force-reason without --force
 });
 
 test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-force-programmatic-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-programmatic-"));
   try {
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
@@ -243,7 +243,7 @@ test("summarizeCheckpointVerdictText keeps failing validation to a concise excer
       "ℹ fail 1",
       "✖ test/github/upsert-checkpoint-verdict.test.mjs",
       "AssertionError: Expected values to be strictly equal: 1 !== 2",
-      "at TestContext.<anonymous> (/tmp/workspace/mfittko/pi-dev-loops/test/github/upsert-checkpoint-verdict.test.mjs:42:10)",
+      "at TestContext.<anonymous> (/tmp/workspace/mfittko/dev-loops/test/github/upsert-checkpoint-verdict.test.mjs:42:10)",
     ].join("\n")),
     "commands: npm test; tests: 46, pass: 45, fail: 1; failure excerpt: test/github/upsert-checkpoint-verdict.test.mjs",
   );
@@ -301,7 +301,7 @@ test("summarizeCheckpointVerdictText does not treat markdown headings as shell c
 });
 
 test("upsert-checkpoint-verdict rejects --force on draft_gate create", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-force-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-draft-"));
   try {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "Tests pass", "--next-action", "Mark ready for review", "--force", "--force-reason", "CI cancelled due to infrastructure"]);
     assert.equal(result.code, 1);
@@ -313,7 +313,7 @@ test("upsert-checkpoint-verdict rejects --force on draft_gate create", async () 
 });
 
 test("upsert-checkpoint-verdict rejects --force on pre_approval_gate create", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-force-preapproval-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-preapproval-"));
   try {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "Tests pass.", "--findings-severity-counts", JSON.stringify({"must-fix":0,"worth-fixing-now":0}), "--next-action", "Approve and merge", "--force", "--force-reason", "CI cancelled due to infrastructure"]);
     assert.equal(result.code, 1);
@@ -330,7 +330,7 @@ test("upsert-checkpoint-verdict keeps CI-blocked gate upserts fail-closed", asyn
     { gate: "pre_approval_gate", isDraft: false, headSha: "abc1234", verdict: "findings_present", findingsSummary: "CI failed", nextAction: "Fix CI and re-run", findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 1 } },
   ];
   for (const scenario of scenarios) {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), `pi-dev-loops-upsert-gate-review-fail-closed-${scenario.gate}-`));
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), `dev-loops-upsert-gate-review-fail-closed-${scenario.gate}-`));
     try {
       const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
         isDraft: scenario.isDraft,
@@ -350,7 +350,7 @@ test("upsert-checkpoint-verdict keeps CI-blocked gate upserts fail-closed", asyn
   }
 });
 test("upsert-checkpoint-verdict --force rejected before update", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-force-update-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-update-"));
   try {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "CI green", "--next-action", "merge", "--force", "--force-reason", "CI cancelled"]);
     assert.equal(result.code, 1);
@@ -362,7 +362,7 @@ test("upsert-checkpoint-verdict --force rejected before update", async () => {
 });
 
 test("upsert-checkpoint-verdict --force rejected before noop", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-force-noop-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-noop-"));
   try {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "Tests pass", "--next-action", "merge", "--force", "--force-reason", "CI cancelled"]);
     assert.equal(result.code, 1);
@@ -374,7 +374,7 @@ test("upsert-checkpoint-verdict --force rejected before noop", async () => {
 });
 
 test("upsert-checkpoint-verdict rejects --force for non-CI pre_approval_gate refusal", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-force-non-ci-preapproval-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-non-ci-preapproval-"));
   try {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234", "--verdict", "findings_present", "--findings-summary", "Some issues", "--next-action", "Fix issues", "--force", "--force-reason", "forced"]);
     assert.equal(result.code, 1);
@@ -386,7 +386,7 @@ test("upsert-checkpoint-verdict rejects --force for non-CI pre_approval_gate ref
 });
 
 test("upsert-checkpoint-verdict rejects --force for draft_gate on non-draft PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-force-non-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-non-draft-"));
   try {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "findings_present", "--findings-summary", "Some issues", "--next-action", "Fix issues", "--force", "--force-reason", "forced"]);
     assert.equal(result.code, 1);
@@ -398,7 +398,7 @@ test("upsert-checkpoint-verdict rejects --force for draft_gate on non-draft PR",
 });
 
 test("upsert-checkpoint-verdict --force rejected before stale-head check", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-force-stale-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-stale-"));
   try {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "n/a", "--next-action", "merge", "--force", "--force-reason", "forced"]);
     assert.equal(result.code, 1);
@@ -410,7 +410,7 @@ test("upsert-checkpoint-verdict --force rejected before stale-head check", async
 });
 
 test("upsert-checkpoint-verdict creates a new comment when no same-head marker exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-create-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-create-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -472,7 +472,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
 });
 
 test("upsert-checkpoint-verdict embeds --findings-file content with preserved newlines", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-findings-file-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-file-"));
 
   try {
     const findingsPath = path.join(tempDir, "findings.md");
@@ -536,7 +536,7 @@ test("upsert-checkpoint-verdict embeds --findings-file content with preserved ne
 });
 
 test("upsert-checkpoint-verdict --findings-file takes precedence over --findings-summary", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-findings-precedence-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-precedence-"));
 
   try {
     const findingsPath = path.join(tempDir, "findings.md");
@@ -596,7 +596,7 @@ test("upsert-checkpoint-verdict --findings-file takes precedence over --findings
 });
 
 test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-clean-no-blocking-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-no-blocking-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -649,7 +649,7 @@ test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict"
 });
 
 test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is still illegal", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-illegal-preapproval-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-illegal-preapproval-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -711,7 +711,7 @@ test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is sti
   }
 
 test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-draft-preapproval-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-draft-preapproval-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -761,7 +761,7 @@ test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft
 });
 
 test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-approval evidence", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-round-cap-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-round-cap-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -853,7 +853,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
 });
 
 test("upsert-checkpoint-verdict truncates verbose findings summary before comment creation", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-verbose-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-verbose-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -940,7 +940,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
 });
 
 test("upsert-checkpoint-verdict suppresses duplicate repost when the current same-head comment already matches", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-noop-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-noop-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1023,7 +1023,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
 });
 
 test("upsert-checkpoint-verdict noop still warns when a stale comment exists on a different head", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-noop-warn-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-noop-warn-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1105,7 +1105,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
 });
 
 test("upsert-checkpoint-verdict updates an incomplete same-head marker in place", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-update-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-update-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1180,7 +1180,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
 });
 
 test("upsert-checkpoint-verdict updates the current same-head marker even when another head has a newer marker", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-current-head-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-current-head-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1271,7 +1271,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
 });
 
 test("upsert-checkpoint-verdict prefers the latest same-head marker when it differs from the older strict summary", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-latest-marker-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-latest-marker-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1361,7 +1361,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
 });
 
 test("upsert-checkpoint-verdict expands an abbreviated current-head SHA before matching same-head markers", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-short-head-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-short-head-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1444,7 +1444,7 @@ test("upsert-checkpoint-verdict expands an abbreviated current-head SHA before m
 });
 
 test("upsert-checkpoint-verdict fails closed when the requested head SHA is stale", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-stale-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-stale-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1489,7 +1489,7 @@ test("upsert-checkpoint-verdict fails closed when the requested head SHA is stal
 });
 
 test("upsert-checkpoint-verdict warns when a gate comment exists on a different head SHA", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-warn-stale-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-warn-stale-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1560,7 +1560,7 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
 });
 
 test("upsert-checkpoint-verdict fails closed when draft_gate is forbidden on a non-draft PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-draft-forbidden-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-draft-forbidden-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1622,7 +1622,7 @@ test("upsert-checkpoint-verdict fails closed when draft_gate is forbidden on a n
 });
 
 test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-severity findings remain", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-blocking-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-blocking-"));
 
   try {
     const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
@@ -1654,7 +1654,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-s
 });
 
 test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity findings remain", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-clean-ok-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-clean-ok-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1693,7 +1693,7 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
 
 
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts is missing and blocking severities are configured", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-missing-counts-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-counts-"));
 
   try {
     const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
@@ -1725,7 +1725,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
 });
 
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts omits a blocking severity", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-missing-key-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-key-"));
 
   try {
     const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
@@ -1756,7 +1756,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
 });
 
 test("upsert-checkpoint-verdict rejects draft_gate when draftGateAlreadySatisfied is true", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-gate-review-already-satisfied-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-already-satisfied-"));
 
   try {
     // Simulate a non-draft PR with an existing clean draft_gate comment
@@ -1808,7 +1808,7 @@ test("upsert-checkpoint-verdict rejects draft_gate when draftGateAlreadySatisfie
 test("upsert-checkpoint-verdict skips Copilot convergence requirement for internal-only PRs", async () => {
   // Root cause 2 fix: when all changed files are internal tooling (scripts/docs/tests/config),
   // the Copilot review cycle is suppressed and pre_approval_gate may be posted directly.
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-internal-only-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-internal-only-"));
 
   try {
     const cleanDraftGateComment = buildGateComment({
@@ -1872,7 +1872,7 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
 test("upsert-checkpoint-verdict performs stale-runner takeover before gate coordination", async () => {
   // Root cause 1 fix: when a previous run owns the coordination file but is stale,
   // the new run takes over ownership rather than being rejected.
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-upsert-stale-takeover-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-stale-takeover-"));
 
   try {
     // Pre-claim ownership with an old timestamp so the runner is considered stale

@@ -77,7 +77,7 @@ function readyPi() {
 
 test("extension clears stale footer status and syncs packaged agents on session start", async () => {
   const previousHome = process.env.HOME;
-  const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-session-home-"));
+  const tempHome = await mkdtemp(path.join(os.tmpdir(), "dev-loops-session-home-"));
   process.env.HOME = tempHome;
 
   try {
@@ -94,7 +94,7 @@ test("extension clears stale footer status and syncs packaged agents on session 
     const { ctx, calls } = createCommandContext();
     await pi.events.get("session_start")({}, ctx);
 
-    assert.deepEqual(calls.statuses, [{ key: "pi-dev-loops", text: undefined }]);
+    assert.deepEqual(calls.statuses, [{ key: "dev-loops", text: undefined }]);
     assert.equal(
       await readFile(path.join(tempHome, ".agents", "dev-loop.agent.md"), "utf8"),
       await readFile(new URL("../.pi/agents/dev-loop.agent.md", import.meta.url), "utf8"),
@@ -111,7 +111,7 @@ test("extension clears stale footer status and syncs packaged agents on session 
 });
 
 test("syncPackagedAgents creates the target directory and only copies .agent.md files", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-agent-sync-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-agent-sync-"));
   const sourceRoot = path.join(tempDir, "source");
   const targetRoot = path.join(tempDir, "target");
 
@@ -133,10 +133,10 @@ test("help is the default action and removed install/update commands fall back t
   await pi.registeredCommands.get("dev-loops").handler("", ctx);
 
   const widget = calls.widgets.at(-1);
-  assert.equal(widget.key, "pi-dev-loops.setup");
+  assert.equal(widget.key, "dev-loops.setup");
   assert.match(widget.lines[0], /dev-loops help/);
   assert(widget.lines.some((line) => /\/dev-loops status/i.test(line)));
-  assert(widget.lines.some((line) => /pi install git:github.com\/mfittko\/pi-dev-loops/i.test(line)));
+  assert(widget.lines.some((line) => /pi install git:github.com\/mfittko\/dev-loops/i.test(line)));
   assert(widget.lines.some((line) => /\/skill:dev-loop/i.test(line)), "help should mention /skill:dev-loop as workflow entry");
   assert(widget.lines.some((line) => /single public entry/i.test(line)), "help should describe dev-loop as single public entry");
   assert.equal(widget.lines.some((line) => /copilot-dev-loop|copilot-autopilot/i.test(line)), false, "help should not surface internal seam names");
@@ -188,7 +188,7 @@ test("status and doctor use the reduced readiness surface", async () => {
   assert(doctorLines.some((line) => /^⚠️ GitHub CLI authenticated/.test(line)));
   assert.equal(doctorLines.some((line) => /Local dev-loop skill discoverable/i.test(line)), false);
   assert.equal(doctorLines.some((line) => /copilot-dev-loop|copilot-autopilot/i.test(line)), false);
-  assert(doctorLines.some((line) => /Skills load via `pi install git:github.com\/mfittko\/pi-dev-loops`/i.test(line)));
+  assert(doctorLines.some((line) => /Skills load via `pi install git:github.com\/mfittko\/dev-loops`/i.test(line)));
 
   const statusContext = createCommandContext();
   await pi.registeredCommands.get("dev-loops").handler("status", statusContext.ctx);
@@ -205,7 +205,7 @@ test("hide still clears the widget and unknown commands fall back to help", asyn
   const hideContext = createCommandContext();
   await pi.registeredCommands.get("dev-loops").handler("hide", hideContext.ctx);
   assert.deepEqual(hideContext.calls.widgets.at(-1), {
-    key: "pi-dev-loops.setup",
+    key: "dev-loops.setup",
     lines: undefined,
     options: undefined,
   });
@@ -223,10 +223,10 @@ test("extension dispatches inspect-run open and surfaces browser warnings withou
     uiLifecycle: {
       async open({ repoRoot, repo }) {
         assert.equal(repoRoot, '/repo/root');
-        assert.equal(repo, 'mfittko/pi-dev-loops');
+        assert.equal(repo, 'mfittko/dev-loops');
         return {
           state: 'running',
-          url: 'http://127.0.0.1:4311/?scope=mfittko%2Fpi-dev-loops',
+          url: 'http://127.0.0.1:4311/?scope=mfittko%2Fdev-loops',
           detail: 'Reused the managed inspect-run viewer.',
           warning: 'browser unavailable',
         };
@@ -236,10 +236,10 @@ test("extension dispatches inspect-run open and surfaces browser warnings withou
   });
 
   const { ctx, calls } = createCommandContext();
-  await pi.registeredCommands.get('dev-loops').handler('inspect open --repo mfittko/pi-dev-loops', ctx);
+  await pi.registeredCommands.get('dev-loops').handler('inspect open --repo mfittko/dev-loops', ctx);
 
   const widget = calls.widgets.at(-1);
-  assert.equal(widget.key, 'pi-dev-loops.setup');
+  assert.equal(widget.key, 'dev-loops.setup');
   assert(widget.lines.some((line) => /inspect open/i.test(line)));
   assert(widget.lines.some((line) => /running/i.test(line)));
   assert(widget.lines.some((line) => /http:\/\/127\.0\.0\.1:4311/i.test(line)));

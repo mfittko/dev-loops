@@ -1,6 +1,6 @@
-# pi-dev-loops Plan
+# dev-loops Plan
 
-`pi-dev-loops` is a shared home for Pi-centered development workflow infrastructure.
+`dev-loops` is a shared home for Pi-centered development workflow infrastructure.
 
 The durable goal is to ship a reusable toolkit for Pi-based local and GitHub-first development loops without letting workflow mechanics drift back into ad hoc markdown or repo-specific shell glue.
 
@@ -24,7 +24,7 @@ Do **not** use `PLAN.md` for one-off issue execution plans, PR-specific checklis
 - For active implementation and release work in this repo, the default routed path should still prefer the GitHub-first internal strategies when practical.
 - The local implementation strategy remains supported when the user explicitly wants local phase-bounded work.
 - GitHub issues are the backlog and GitHub PRs are the main execution trail for remote-loop work.
-- Installing the package with `pi install git:github.com/mfittko/pi-dev-loops` exposes packaged skills through `package.json` `pi.skills`; `/dev-loops install` and `/dev-loops update` are removed — use `pi install` / `pi update` directly.
+- Installing the package with `pi install git:github.com/mfittko/dev-loops` exposes packaged skills through `package.json` `pi.skills`; `/dev-loops install` and `/dev-loops update` are removed — use `pi install` / `pi update` directly.
 
 ## Product intent
 

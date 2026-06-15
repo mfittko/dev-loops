@@ -118,7 +118,7 @@ function linkedPrClosedPayload({ closedPrNumber = 149, closedPrUrl = "https://gi
 }
 
 test("detect-initial-copilot-pr-state returns no_linked_pr when no linked PR exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-none-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-none-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -159,7 +159,7 @@ test("detect-initial-copilot-pr-state returns no_linked_pr when no linked PR exi
 });
 
 test("detect-initial-copilot-pr-state returns waiting_for_initial_copilot_implementation for bootstrap-only Copilot draft", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-bootstrap-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-bootstrap-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -188,7 +188,7 @@ test("detect-initial-copilot-pr-state returns waiting_for_initial_copilot_implem
 });
 
 test("detect-initial-copilot-pr-state returns waiting_for_initial_copilot_implementation for bootstrap-only copilot-swe-agent draft", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-bootstrap-swe-agent-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-bootstrap-swe-agent-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -217,7 +217,7 @@ test("detect-initial-copilot-pr-state returns waiting_for_initial_copilot_implem
 });
 
 test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup for substantive linked draft PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-substantive-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-substantive-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -234,7 +234,7 @@ test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup for s
         stdout: workflowRunsPayload([
           {
             databaseId: 91,
-            name: "Copilot coding for issue mfittko/pi-dev-loops#59",
+            name: "Copilot coding for issue mfittko/dev-loops#59",
             status: "completed",
             conclusion: "success",
             createdAt: "2026-05-21T12:00:00Z",
@@ -254,7 +254,7 @@ test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup for s
 });
 
 test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup when the linked PR has more than one commit", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-multi-commit-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-multi-commit-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -271,7 +271,7 @@ test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup when 
         stdout: workflowRunsPayload([
           {
             databaseId: 91,
-            name: "Copilot coding for issue mfittko/pi-dev-loops#59",
+            name: "Copilot coding for issue mfittko/dev-loops#59",
             status: "completed",
             conclusion: "success",
             createdAt: "2026-05-21T12:00:00Z",
@@ -291,7 +291,7 @@ test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup when 
 });
 
 test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup for a ready-for-review PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-ready-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-ready-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -316,7 +316,7 @@ test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup for a
 });
 
 test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup for non-Copilot draft PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-non-copilot-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-non-copilot-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -341,8 +341,8 @@ test("detect-initial-copilot-pr-state returns linked_pr_ready_for_followup for n
 });
 
 test("detect-initial-copilot-pr-state exits bootstrap wait state when implementation commits land", async () => {
-  const firstDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-transition-a-"));
-  const secondDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-transition-b-"));
+  const firstDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-transition-a-"));
+  const secondDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-transition-b-"));
 
   try {
     const firstEnv = await writeGhStub(firstDir, [
@@ -373,7 +373,7 @@ test("detect-initial-copilot-pr-state exits bootstrap wait state when implementa
         stdout: workflowRunsPayload([
           {
             databaseId: 91,
-            name: "Copilot coding for issue mfittko/pi-dev-loops#59",
+            name: "Copilot coding for issue mfittko/dev-loops#59",
             status: "completed",
             conclusion: "success",
             createdAt: "2026-05-21T12:00:00Z",
@@ -397,7 +397,7 @@ test("detect-initial-copilot-pr-state exits bootstrap wait state when implementa
 });
 
 test("detect-initial-copilot-pr-state falls back to substantive PR heuristics when session activity is idle", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-idle-substantive-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-idle-substantive-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -428,7 +428,7 @@ test("detect-initial-copilot-pr-state falls back to substantive PR heuristics wh
 });
 
 test("detect-initial-copilot-pr-state fails closed when the session-activity probe fails", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-session-failure-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-session-failure-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -460,7 +460,7 @@ test("detect-initial-copilot-pr-state fails closed when the session-activity pro
 });
 
 test("detect-initial-copilot-pr-state returns copilot_session_active while Copilot run is in progress", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-active-session-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-active-session-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -477,7 +477,7 @@ test("detect-initial-copilot-pr-state returns copilot_session_active while Copil
         stdout: workflowRunsPayload([
           {
             databaseId: 123,
-            name: "Addressing comment on PR mfittko/pi-dev-loops#79",
+            name: "Addressing comment on PR mfittko/dev-loops#79",
             status: "in_progress",
             conclusion: "",
             createdAt: "2026-05-21T12:00:00Z",
@@ -502,7 +502,7 @@ test("detect-initial-copilot-pr-state returns copilot_session_active while Copil
 });
 
 test("detect-initial-copilot-pr-state keeps bootstrap wait for approval-gated action_required runs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-action-required-bootstrap-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-action-required-bootstrap-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -519,7 +519,7 @@ test("detect-initial-copilot-pr-state keeps bootstrap wait for approval-gated ac
         stdout: workflowRunsPayload([
           {
             databaseId: 555,
-            name: "Addressing comment on PR mfittko/pi-dev-loops#79",
+            name: "Addressing comment on PR mfittko/dev-loops#79",
             status: "in_progress",
             conclusion: "action_required",
             createdAt: "2026-05-21T12:00:00Z",
@@ -543,7 +543,7 @@ test("detect-initial-copilot-pr-state keeps bootstrap wait for approval-gated ac
 });
 
 test("detect-initial-copilot-pr-state returns prior_linked_pr_closed_unmerged when prior closed PR exists (regression: issue#130/PR#149 shape)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-prior-closed-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-prior-closed-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -584,7 +584,7 @@ test("detect-initial-copilot-pr-state returns prior_linked_pr_closed_unmerged wh
 });
 
 test("detect-initial-copilot-pr-state returns no_linked_pr (not prior_linked_pr_closed_unmerged) when only merged PRs exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-merged-only-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-merged-only-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -607,7 +607,7 @@ test("detect-initial-copilot-pr-state returns no_linked_pr (not prior_linked_pr_
 test("detect-initial-copilot-pr-state returns prior_linked_pr_closed_unmerged state not a healthy wait seam", async () => {
   // Verifies the prior_linked_pr_closed_unmerged state is distinct from no_linked_pr
   // and carries the closed PR's number/url for caller reference.
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-prior-closed-distinct-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-prior-closed-distinct-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -650,7 +650,7 @@ test("detect-initial-copilot-pr-state rejects malformed arguments deterministica
 });
 
 test("detect-initial-copilot-pr-state fails closed when required PR facts are missing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-initial-pr-missing-facts-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-initial-pr-missing-facts-"));
 
   try {
     const env = await writeGhStub(tempDir, [

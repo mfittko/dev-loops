@@ -317,7 +317,7 @@ test("runWatchCycle preserves blocked classification for stop states without inv
 });
 
 test("runWatchCycle integration keeps initial request-review -> waiting_for_copilot_review non-terminal", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-cycle-initial-request-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-initial-request-"));
   let watcherOptions;
 
   try {
@@ -410,7 +410,7 @@ test("runWatchCycle integration keeps initial request-review -> waiting_for_copi
 });
 
 test("runWatchCycle integration keeps re-requested newer-head wait state non-terminal", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-cycle-rerequest-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-rerequest-"));
   let watcherOptions;
 
   try {
@@ -552,7 +552,7 @@ process.exit(97);
 });
 
 test("runWatchCycle integration keeps checks non-blocking with active Copilot workflow run", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-cycle-session-active-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-session-active-"));
   let watcherOptions;
 
   try {
@@ -697,7 +697,7 @@ test("runWatchCycle integration bounds active Copilot workflow waits by the emit
 });
 
 test("runWatchCycle integration keeps the full persistent watch timeout after active Copilot workflow waits", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-cycle-session-active-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-session-active-"));
   let watcherOptions;
 
   try {

@@ -1,13 +1,13 @@
 # Extension scaffold
 
-`pi-dev-loops` ships a lightweight package extension for readiness UX plus one bounded local UI lifecycle seam.
+`dev-loops` ships a lightweight package extension for readiness UX plus one bounded local UI lifecycle seam.
 
 Installing the package exposes two thin wrappers over one shared deterministic core:
 - the Pi extension command family rooted at `/dev-loops`
 - the shell CLI entrypoint `dev-loops`
-- a bounded post-merge helper that queues one `pi update git:github.com/mfittko/pi-dev-loops` after a successful in-session `gh pr merge ...` or `git merge ...` inside this repo and flushes it on `agent_end`
+- a bounded post-merge helper that queues one `pi update git:github.com/mfittko/dev-loops` after a successful in-session `gh pr merge ...` or `git merge ...` inside this repo and flushes it on `agent_end`
 
-Installing the package with `pi install git:github.com/mfittko/pi-dev-loops` exposes the packaged skills through `package.json` `pi.skills`, and the extension syncs packaged agent files (`.pi/agents/*.agent.md`) into `~/.agents/` on `session_start`.
+Installing the package with `pi install git:github.com/mfittko/dev-loops` exposes the packaged skills through `package.json` `pi.skills`, and the extension syncs packaged agent files (`.pi/agents/*.agent.md`) into `~/.agents/` on `session_start`.
 
 ## Command surface
 
@@ -89,9 +89,9 @@ The messaging distinguishes between local loop readiness and remote GitHub/Copil
 
 ## Package install contract for this phase
 
-- `pi install git:github.com/mfittko/pi-dev-loops` is the distribution mechanism for the extension, skills, scripts, packaged agents, and required installed runtime contract docs
-- `pi install -l git:github.com/mfittko/pi-dev-loops` is the project-local replacement for the old `install repo` flow
-- `pi update git:github.com/mfittko/pi-dev-loops` refreshes an installed package
+- `pi install git:github.com/mfittko/dev-loops` is the distribution mechanism for the extension, skills, scripts, packaged agents, and required installed runtime contract docs
+- `pi install -l git:github.com/mfittko/dev-loops` is the project-local replacement for the old `install repo` flow
+- `pi update git:github.com/mfittko/dev-loops` refreshes an installed package
 - source-tree canonical contract docs live under `skills/docs/`; installer/package output must ship this shared docs bundle with the installed skills subtree: [Public Dev Loop Contract](../skills/docs/public-dev-loop-contract.md) and [Retrospective Checkpoint Contract](../skills/docs/retrospective-checkpoint-contract.md)
 - installed skill/runtime guidance must read those bundled shared docs (from installed `skills/<skill>/`, resolve via `../docs/`) instead of assuming a source checkout is present; a missing bundled contract doc is a packaging/installer bug
 - packaged agents are refreshed into `~/.agents/` on each `session_start`

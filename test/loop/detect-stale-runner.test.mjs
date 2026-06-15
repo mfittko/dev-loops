@@ -29,7 +29,7 @@ test("resolveStaleRunnerMaxAgeMs prefers explicit option, then env, then default
 });
 
 test("detectStaleRunner returns no_owner_record when no coordination file exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-"));
 
   try {
     const result = await detectStaleRunner({ repo: "owner/repo", pr: 17, cwd: tempDir });
@@ -44,7 +44,7 @@ test("detectStaleRunner returns no_owner_record when no coordination file exists
 });
 
 test("detectStaleRunner returns fresh_runner when active run is recent", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-"));
 
   try {
     const claimed = await claimRunnerOwnership({
@@ -71,7 +71,7 @@ test("detectStaleRunner returns fresh_runner when active run is recent", async (
 });
 
 test("detectStaleRunner returns stale_runner when active run is older than max age", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-"));
 
   try {
     const claimed = await claimRunnerOwnership({
@@ -102,7 +102,7 @@ test("detectStaleRunner returns stale_runner when active run is older than max a
 });
 
 test("detectStaleRunner returns exit_signal_recorded when an exit signal exists for the active run", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-"));
 
   try {
     const claimed = await claimRunnerOwnership({
@@ -142,7 +142,7 @@ test("detectStaleRunner returns exit_signal_recorded when an exit signal exists 
 });
 
 test("detectStaleRunner ignores exit signals for non-active runs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-"));
 
   try {
     // claim a non-owner exit signal that should be ignored (requireActiveOwner=false bypasses the
@@ -180,7 +180,7 @@ test("detectStaleRunner ignores exit signals for non-active runs", async () => {
 });
 
 test("recordExitSignalForRunner rejects when current run is not the active owner", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-"));
 
   try {
     await claimRunnerOwnership({
@@ -206,7 +206,7 @@ test("recordExitSignalForRunner rejects when current run is not the active owner
 });
 
 test("recordExitSignalForRunner allows non-owner recording when requireActiveOwner is false", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-"));
 
   try {
     await claimRunnerOwnership({
@@ -232,7 +232,7 @@ test("recordExitSignalForRunner allows non-owner recording when requireActiveOwn
 });
 
 test("recordExitSignalForRunner rejects when no coordination file exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-"));
 
   try {
     const result = await recordExitSignalForRunner({

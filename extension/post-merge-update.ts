@@ -8,8 +8,8 @@ import type {
   UserBashEventResult,
 } from '@mariozechner/pi-coding-agent';
 
-export const TARGET_REPO_SLUG = 'mfittko/pi-dev-loops';
-export const POST_MERGE_UPDATE_COMMAND = 'pi update git:github.com/mfittko/pi-dev-loops';
+export const TARGET_REPO_SLUG = 'mfittko/dev-loops';
+export const POST_MERGE_UPDATE_COMMAND = 'pi update git:github.com/mfittko/dev-loops';
 export const PRE_PR_READY_GATE_SCRIPT = 'node scripts/loop/pre-pr-ready-gate.mjs';
 
 const MERGE_COMMAND_TIMEOUT_MS = 15 * 60 * 1000;

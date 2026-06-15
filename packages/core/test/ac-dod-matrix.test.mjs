@@ -35,7 +35,7 @@ const validMatrix = Object.freeze({
       notes: "Pending refiner integration",
     },
   ],
-  source: "https://github.com/mfittko/pi-dev-loops/issues/675",
+  source: "https://github.com/mfittko/dev-loops/issues/675",
   generatedAt: "2026-06-08T12:00:00.000Z",
   isComplete: false,
 });
@@ -272,7 +272,7 @@ test("handoff envelope accepts optional refinementContract field", async () => {
   };
 
   const options = {
-    repoSlug: "mfittko/pi-dev-loops",
+    repoSlug: "mfittko/dev-loops",
     refinementContract: {
       schema: "ac-dod-matrix/v1",
       items: [validItem],
@@ -303,7 +303,7 @@ test("handoff envelope without refinementContract is still valid", async () => {
     },
   };
 
-  const options = { repoSlug: "mfittko/pi-dev-loops" };
+  const options = { repoSlug: "mfittko/dev-loops" };
   const envelope = buildDevLoopHandoffEnvelope(resolverOutput, {}, {}, options);
   const validation = validateHandoffEnvelope(envelope);
 
@@ -325,7 +325,7 @@ test("handoff envelope fails on malformed refinementContract", async () => {
   };
 
   const options = {
-    repoSlug: "mfittko/pi-dev-loops",
+    repoSlug: "mfittko/dev-loops",
     refinementContract: { schema: "wrong/v1", items: [], generatedAt: "bad", isComplete: "nope" },
   };
 
@@ -381,7 +381,7 @@ test("handoff envelope refinementContract validation rejects per-item shape erro
   };
 
   const options = {
-    repoSlug: "mfittko/pi-dev-loops",
+    repoSlug: "mfittko/dev-loops",
     refinementContract: {
       schema: "ac-dod-matrix/v1",
       items: [

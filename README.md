@@ -52,7 +52,7 @@ docker build -t dev-loops .
 Verify the image works with a minimal dev-loop info call:
 
 ```bash
-docker run --rm -e GH_TOKEN="$GH_TOKEN" dev-loops dev-loops loop info --repo mfittko/pi-dev-loops --issue 1
+docker run --rm -e GH_TOKEN="$GH_TOKEN" dev-loops dev-loops loop info --repo mfittko/dev-loops --issue 1
 ```
 
 ### Toolchain verification
@@ -143,8 +143,8 @@ Full details: [Extension Documentation](./extension/README.md) and `.pi/dev-loop
 Install with:
 
 ```bash
-pi install git:github.com/mfittko/pi-dev-loops          # global
-pi install -l git:github.com/mfittko/pi-dev-loops       # project-local
+pi install git:github.com/mfittko/dev-loops          # global
+pi install -l git:github.com/mfittko/dev-loops       # project-local
 ```
 
 Use `npx dev-loops` to run the CLI without installing. After a global `pi install`, the `dev-loops` command is available directly in your shell.

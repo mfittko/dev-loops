@@ -87,7 +87,7 @@ When this skill refers to helper paths such as `scripts/...` or `docs/...`, reso
 
 Use this rule:
 - if the skill is installed as a normalized standalone copy, the required bundled contract docs live under the shared `../docs/` directory next to the installed skill directories; do not assume helper scripts are bundled unless that installed layout actually contains them
-- if you are working in the `pi-dev-loops` source repository, this skill file lives under `skills/copilot-pr-followup/`, so source-repo helper scripts live two levels up at `../../scripts/`, while required bundled contract docs live one level up at `../docs/`
+- if you are working in the `dev-loops` source repository, this skill file lives under `skills/copilot-pr-followup/`, so source-repo helper scripts live two levels up at `../../scripts/`, while required bundled contract docs live one level up at `../docs/`
 - when in doubt, resolve helper paths relative to this [skill file](./SKILL.md) first, then verify the target file exists before running it
 
 Required bundled runtime contract docs for installed copies of this skill:

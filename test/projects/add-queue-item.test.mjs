@@ -138,7 +138,7 @@ function makeItemNode(itemId, content, status) {
 
 function makeContent(type, number) {
   const __typename = type === "PR" ? "PullRequest" : "Issue";
-  return { __typename, number, repository: { nameWithOwner: "mfittko/pi-dev-loops" } };
+  return { __typename, number, repository: { nameWithOwner: "mfittko/dev-loops" } };
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -154,28 +154,28 @@ describe("add-queue-item", () => {
 
     it("requires --project", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", item: 10 }),
+        () => main({ repo: "mfittko/dev-loops", item: 10 }),
         /--project is required/,
       );
     });
 
     it("requires --item", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "1" }),
+        () => main({ repo: "mfittko/dev-loops", project: "1" }),
         /--item is required/,
       );
     });
 
     it("rejects non-integer item", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "1", item: "not-a-number" }),
+        () => main({ repo: "mfittko/dev-loops", project: "1", item: "not-a-number" }),
         /--item is required/,
       );
     });
 
     it("rejects invalid project format", async () => {
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops", project: "not-a-number", item: 10 }),
+        () => main({ repo: "mfittko/dev-loops", project: "not-a-number", item: 10 }),
         /--project must be a positive integer or a node ID/,
       );
     });
@@ -191,7 +191,7 @@ describe("add-queue-item", () => {
         { payload: updateFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "PVT_proj1", item: 10 },
+        { repo: "mfittko/dev-loops", project: "PVT_proj1", item: 10 },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -210,7 +210,7 @@ describe("add-queue-item", () => {
         { payload: updateFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: 10 },
+        { repo: "mfittko/dev-loops", project: "1", item: 10 },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -232,7 +232,7 @@ describe("add-queue-item", () => {
         { payload: updateFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: 20 },
+        { repo: "mfittko/dev-loops", project: "1", item: 20 },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -253,7 +253,7 @@ describe("add-queue-item", () => {
         { payload: updateFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: 10, status: "In Progress" },
+        { repo: "mfittko/dev-loops", project: "1", item: 10, status: "In Progress" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -272,7 +272,7 @@ describe("add-queue-item", () => {
         { payload: updateFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: 10 },
+        { repo: "mfittko/dev-loops", project: "1", item: 10 },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -292,7 +292,7 @@ describe("add-queue-item", () => {
         // No resolve, add, or update calls expected
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: 10 },
+        { repo: "mfittko/dev-loops", project: "1", item: 10 },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -311,7 +311,7 @@ describe("add-queue-item", () => {
         { payload: getItemsByContentResponse([existingItem]) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: 20 },
+        { repo: "mfittko/dev-loops", project: "1", item: 20 },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -333,7 +333,7 @@ describe("add-queue-item", () => {
         { payload: updateFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: 10 },
+        { repo: "mfittko/dev-loops", project: "1", item: 10 },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -349,7 +349,7 @@ describe("add-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "999", item: 10 },
+          { repo: "mfittko/dev-loops", project: "999", item: 10 },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -366,7 +366,7 @@ describe("add-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: 10 },
+          { repo: "mfittko/dev-loops", project: "1", item: 10 },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -383,7 +383,7 @@ describe("add-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: 10, status: "Icebox" },
+          { repo: "mfittko/dev-loops", project: "1", item: 10, status: "Icebox" },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -404,7 +404,7 @@ describe("add-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: 999 },
+          { repo: "mfittko/dev-loops", project: "1", item: 999 },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -426,7 +426,7 @@ describe("add-queue-item", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: 10 },
+          { repo: "mfittko/dev-loops", project: "1", item: 10 },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -441,7 +441,7 @@ describe("add-queue-item", () => {
       const responses = [{ error: "gh: authentication required" }];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: 10 },
+          { repo: "mfittko/dev-loops", project: "1", item: 10 },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -454,7 +454,7 @@ describe("add-queue-item", () => {
       const responses = [{ payload: { errors: [{ message: "Could not resolve" }] } }];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: 10 },
+          { repo: "mfittko/dev-loops", project: "1", item: 10 },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -493,7 +493,7 @@ describe("add-queue-item", () => {
     it("produces JSON error shape for CLI consumers", async () => {
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: "1", item: 999 },
+          { repo: "mfittko/dev-loops", project: "1", item: 999 },
           { env: {}, runChild: mockRunChild([
             { payload: userPayload() },
             { payload: listUserProjectsResponse([EXISTING_PROJECT]) },

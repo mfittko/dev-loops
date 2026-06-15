@@ -718,7 +718,7 @@ test("buildAutoResolvedInput returns warnings array for failed detection", () =>
   const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
   try {
     execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/pi-dev-loops.git"], { cwd: tmp, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({ issue: 999999, cwd: tmp });
     assert.equal(result.intent, "start_issue_locally");
     assert.equal(result.artifactState, "not_applicable");
@@ -737,7 +737,7 @@ test("buildAutoResolvedInput sets linkedPr null when detection fails", () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
   try {
     execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/pi-dev-loops.git"], { cwd: tmp, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({ issue: 999999, cwd: tmp });
     assert.equal(result.currentState.target.linkedPr, null);
     assert.equal(result.issueLinkageResolution, "resolved_no_open_pr");
@@ -750,7 +750,7 @@ test("buildAutoResolvedInput for PR returns pr_followup_start", () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
   try {
     execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/pi-dev-loops.git"], { cwd: tmp, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({ pr: 999999, cwd: tmp });
     assert.equal(result.intent, "continue_on_pr");
     assert.equal(result.loopState, "pr_followup_start");
@@ -765,7 +765,7 @@ test("buildAutoResolvedInput returns valid targetPreference", () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
   try {
     execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/pi-dev-loops.git"], { cwd: tmp, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({ issue: 999999, cwd: tmp });
     assert.ok(
       result.targetPreference === "prefer_local" || result.targetPreference === "prefer_github_first",
@@ -779,7 +779,7 @@ test("buildAutoResolvedInput with local-first tracker source keeps issue-backed 
   const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
   try {
     execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/pi-dev-loops.git"], { cwd: tmp, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({
       issue: 999999,
       cwd: tmp,
@@ -798,7 +798,7 @@ test("buildAutoResolvedInput with local-first phase-doc source uses local_phase 
   const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
   try {
     execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/pi-dev-loops.git"], { cwd: tmp, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({
       issue: 999999,
       cwd: tmp,
@@ -818,7 +818,7 @@ test("runCli --issue uses config inputSource=phase-docs to choose phase-doc loca
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-phase-doc-input-source-"));
   try {
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/pi-dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
     await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
       path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
@@ -849,12 +849,12 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-copilot-author-"));
   try {
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/pi-dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
     // Create the detect-linked-issue-pr script path so the subprocess can resolve
     await mkdir(path.join(tempDir, "scripts", "github"), { recursive: true });
     await writeFile(
       path.join(tempDir, "scripts/github/detect-linked-issue-pr.mjs"),
-      'process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/pi-dev-loops", issue: 735, hasOpenLinkedPr: true, prNumber: 740 }));',
+      'process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/dev-loops", issue: 735, hasOpenLinkedPr: true, prNumber: 740 }));',
       "utf8",
     );
     // Stub gh pr view to return Copilot author
@@ -887,11 +887,11 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-external-author-"));
   try {
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/pi-dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
     await mkdir(path.join(tempDir, "scripts", "github"), { recursive: true });
     await writeFile(
       path.join(tempDir, "scripts/github/detect-linked-issue-pr.mjs"),
-      'process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/pi-dev-loops", issue: 735, hasOpenLinkedPr: true, prNumber: 740 }));',
+      'process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/dev-loops", issue: 735, hasOpenLinkedPr: true, prNumber: 740 }));',
       "utf8",
     );
     const ghStub = await writeGhStubHelper(tempDir, [

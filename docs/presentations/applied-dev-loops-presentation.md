@@ -1,8 +1,8 @@
 ---
 theme: default
 colorSchema: dark
-title: "pi-dev-loops: Applied Process Observability"
-info: How pi-dev-loops eliminates coordination delay in AI-assisted dev workflows
+title: "dev-loops: Applied Process Observability"
+info: How dev-loops eliminates coordination delay in AI-assisted dev workflows
 class: text-left
 transition: slide-left
 mdc: true
@@ -10,7 +10,7 @@ css: ./style.css
 ---
 
 <div class="hero-card">
-  <p class="kicker">pi-dev-loops</p>
+  <p class="kicker">dev-loops</p>
   <h1>Eliminating Coordination Delay in AI-Assisted Dev Workflows</h1>
   <p class="hero-copy">A coordination runtime built on nested state machines. Every handoff is explicit, routed, and observable.</p>
 </div>

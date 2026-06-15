@@ -10,7 +10,7 @@ Phase 7 remains a valid planned second-repo pilot, but it is not the active phas
 
 ## Objective
 
-Prove that `pi-dev-loops` works outside this bootstrap repository in one real second repository through the preferred GitHub-first workflow, using source-loaded consumption only, and capture only the minimum portability fixes and durable decisions needed before broader agent generalization or package-strategy work.
+Prove that `dev-loops` works outside this bootstrap repository in one real second repository through the preferred GitHub-first workflow, using source-loaded consumption only, and capture only the minimum portability fixes and durable decisions needed before broader agent generalization or package-strategy work.
 
 ## Why this phase exists now
 
@@ -120,7 +120,7 @@ This phase exists to answer, in one real non-bootstrap repo:
 - success requires discovery/readiness proof, one bounded non-mutating skill path, and one thin local override
 - success does not require publishing, multi-repo proof, watcher validation, overlay-system design, or broad agent cleanup
 - any downstream customization in this phase should stay thin, local, and explicitly documented rather than generalized prematurely
-- for the Phase 7 portability path, `pi install git:github.com/mfittko/pi-dev-loops` exposes the extension command surface and packaged skills through `package.json` `pi.skills`
+- for the Phase 7 portability path, `pi install git:github.com/mfittko/dev-loops` exposes the extension command surface and packaged skills through `package.json` `pi.skills`
 - `/dev-loops install` and `/dev-loops update` are removed; use `pi install` / `pi update` directly
 - phase refinement for this repo should default to fan-out / fan-in planning with multiple variants before converging on one merged plan
 

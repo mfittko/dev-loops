@@ -102,7 +102,7 @@ test("buildPollDelayMs schedules polls on the requested watch timeline", () => {
 });
 
 test("probe-copilot-review returns idle for a zero-timeout no-change check", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-copilot-idle-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-idle-"));
   const baseline = createActivityPayload();
   try {
     const env = await writeGhStub(tempDir, [{ stdout: JSON.stringify(baseline) + "\n" }]);
@@ -114,7 +114,7 @@ test("probe-copilot-review returns idle for a zero-timeout no-change check", asy
 });
 
 test("probe-copilot-review returns timeout after bounded polling with no fresh Copilot activity", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-copilot-timeout-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-timeout-"));
   try {
     const payload = createActivityPayload();
     const env = await writeGhStub(tempDir, [
@@ -130,7 +130,7 @@ test("probe-copilot-review returns timeout after bounded polling with no fresh C
 });
 
 test("probe-copilot-review rounds up attempt budget so non-divisible timeout still covers full window", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-copilot-round-up-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-round-up-"));
   try {
     const payload = createActivityPayload();
     const env = await writeGhStub(tempDir, [
@@ -146,7 +146,7 @@ test("probe-copilot-review rounds up attempt budget so non-divisible timeout sti
 });
 
 test("probe-copilot-review returns changed for fresh Copilot review-thread comments", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-copilot-thread-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-thread-"));
   const baseline = createActivityPayload({ threads: [createThread("c-1", "reviewer", "Please add a test.")] });
   const changed = createActivityPayload({
     threads: [
@@ -169,7 +169,7 @@ test("probe-copilot-review returns changed for fresh Copilot review-thread comme
 });
 
 test("probe-copilot-review returns changed for fresh Copilot review summaries", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-probe-copilot-review-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-probe-copilot-review-"));
   const baseline = createActivityPayload();
   const changed = createActivityPayload({
     reviews: [createReview("r-1", "copilot-pull-request-reviewer[bot]", "Automated Copilot summary.", "Bot")],
@@ -189,7 +189,7 @@ test("probe-copilot-review returns changed for fresh Copilot review summaries", 
 });
 
 test("probe-copilot-review returns changed for fresh Copilot issue comments", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-copilot-issue-comment-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-issue-comment-"));
   const baseline = createActivityPayload();
   const changed = createActivityPayload({
     issueComments: [createIssueComment("i-1", "Copilot", "Fresh Copilot issue comment.", "Bot")],
@@ -209,7 +209,7 @@ test("probe-copilot-review returns changed for fresh Copilot issue comments", as
 });
 
 test("probe-copilot-review ignores fresh non-Copilot activity", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-copilot-ignore-non-copilot-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-ignore-non-copilot-"));
   const baseline = createActivityPayload();
   const changed = createActivityPayload({
     threads: [createThread("c-1", "reviewer", "Please add a test."), createThread("c-2", "maintainer", "I will handle this comment.")],
@@ -230,7 +230,7 @@ test("probe-copilot-review ignores fresh non-Copilot activity", async () => {
 });
 
 test("probe-copilot-review ignores lookalike non-Copilot logins", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-watch-copilot-lookalike-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-lookalike-"));
   const baseline = createActivityPayload();
   const changed = createActivityPayload({
     threads: [createThread("c-1", "reviewer", "Please add a test."), createThread("c-2", "my-copilot-helper", "This should not count as Copilot.")],

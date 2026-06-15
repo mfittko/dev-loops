@@ -17,7 +17,7 @@ The board provides durable, visible, shared state for queue ordering and item st
 Run the idempotent bootstrap wrapper:
 
 ```sh
-dev-loops project ensure --repo mfittko/pi-dev-loops
+dev-loops project ensure --repo mfittko/dev-loops
 ```
 
 This creates a project named "Dev Loop Queue" (default) under the `mfittko` user:
@@ -40,7 +40,7 @@ Safe to re-run — exits clean if the board already exists.
 #### Custom title
 
 ```sh
-dev-loops project ensure --repo mfittko/pi-dev-loops --title "My Queue"
+dev-loops project ensure --repo mfittko/dev-loops --title "My Queue"
 ```
 
 ### 2. Verify the Status field
@@ -90,7 +90,7 @@ Real boards drift over time. An operator may rename `Next Up` to `Ready`, or `In
 Report drift without mutating (safe default):
 
 ```sh
-dev-loops project ensure --repo mfittko/pi-dev-loops
+dev-loops project ensure --repo mfittko/dev-loops
 ```
 
 When drift is detected, the JSON output includes `repairs.renameCandidates` but leaves existing columns untouched.
@@ -98,7 +98,7 @@ When drift is detected, the JSON output includes `repairs.renameCandidates` but 
 Rename equivalent columns after review:
 
 ```sh
-dev-loops project ensure --repo mfittko/pi-dev-loops --repair-rename
+dev-loops project ensure --repo mfittko/dev-loops --repair-rename
 ```
 
 This renames recognized equivalents (for example `Ready` -> `Next Up`) and adds any still-missing standard columns. It never removes existing columns. Irreconcilable conflicts (for example both `Ready` and `Next` mapping to `Next Up`) are reported in `repairs.conflicts` and no mutation is performed (no renames and no additive column creation).
@@ -130,6 +130,6 @@ The queue board URL and number are discoverable at runtime — no explicit confi
 ## See also
 
 - [Queue mode SPEC](./specs/queue-mode/SPEC.md) — full queue mode specification
-- Issue [#632](https://github.com/mfittko/pi-dev-loops/issues/632) — this setup task
-- Issue [#625](https://github.com/mfittko/pi-dev-loops/issues/625) — parent epic
-- Issue [#631](https://github.com/mfittko/pi-dev-loops/issues/631) — queue workflow documentation
+- Issue [#632](https://github.com/mfittko/dev-loops/issues/632) — this setup task
+- Issue [#625](https://github.com/mfittko/dev-loops/issues/625) — parent epic
+- Issue [#631](https://github.com/mfittko/dev-loops/issues/631) — queue workflow documentation

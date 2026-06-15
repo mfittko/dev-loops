@@ -176,9 +176,9 @@ The only new responsibility is to expose the session’s steerability through th
 
 ---
 
-## Operation-class gating in `pi-dev-loops`
+## Operation-class gating in `dev-loops`
 
-If `pi-subagents` / `pi-intercom` add the runtime hooks, `pi-dev-loops` would map
+If `pi-subagents` / `pi-intercom` add the runtime hooks, `dev-loops` would map
 its routed gates to operation classes.
 
 | Route / phase | Operation class | Notes |
@@ -189,7 +189,7 @@ its routed gates to operation classes.
 | `copilot_pr_followup` round iteration | `edit` | Per-Copilot-review round, before the next gate post. |
 
 This mapping belongs in the route-specific dispatch code that calls `subagent()`,
-so upstream does not need to know about `pi-dev-loops` gates.
+so upstream does not need to know about `dev-loops` gates.
 
 ---
 
@@ -217,7 +217,7 @@ provides.
 ### Other open questions
 
 1. **Who owns the dispatch-side flag?** Should `pi-subagents` declare the
-   `steerable` / `operationClass` API, or should `pi-dev-loops` wrap the call and
+   `steerable` / `operationClass` API, or should `dev-loops` wrap the call and
    re-export a narrower, opinionated surface?
 2. **Implicit vs. declared checkpoints.** Should the runtime insert checkpoints
    automatically around operation-class transitions, or should the subagent code
@@ -233,7 +233,7 @@ provides.
 
 - Opt-in via `steerable: true`.
 - Default behavior of `subagent()` is unchanged.
-- Existing dispatchers in `pi-dev-loops` and other consumers keep atomic
+- Existing dispatchers in `dev-loops` and other consumers keep atomic
   behavior unless they explicitly classify their work as steerable.
 
 ---

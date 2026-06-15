@@ -31,7 +31,7 @@ export function orderedSetupSteps(checks: DevLoopCheck[]): string[] {
   return [
     '1. Use `/skill:dev-loop` to start or continue a dev loop — the single public entry; routing handles the rest.',
     '2. Run `/dev-loops status` whenever you want a concise readiness snapshot.',
-    '3. Use `pi install git:github.com/mfittko/pi-dev-loops` to install the package, or `pi update git:github.com/mfittko/pi-dev-loops` to refresh it.',
+    '3. Use `pi install git:github.com/mfittko/dev-loops` to install the package, or `pi update git:github.com/mfittko/dev-loops` to refresh it.',
   ];
 }
 
@@ -49,7 +49,7 @@ export function buildHelpLines(): string[] {
     '- /dev-loops inspect status [--repo <owner/name>]',
     '- /dev-loops inspect stop [--repo <owner/name>]',
     '- /dev-loops inspect restart [--repo <owner/name>]',
-    'Use `pi install git:github.com/mfittko/pi-dev-loops` to install skills and agents; packaged agents sync into `~/.agents/` on session start.',
+    'Use `pi install git:github.com/mfittko/dev-loops` to install skills and agents; packaged agents sync into `~/.agents/` on session start.',
   ];
 }
 
@@ -73,7 +73,7 @@ export function buildWidgetLines(action: Extract<DevLoopsAction, 'doctor' | 'sta
   return [
     ...lines,
     ...renderCheckLines(checks),
-    'Skills load via `pi install git:github.com/mfittko/pi-dev-loops`; packaged agents sync into `~/.agents/` on session start.',
+    'Skills load via `pi install git:github.com/mfittko/dev-loops`; packaged agents sync into `~/.agents/` on session start.',
   ];
 }
 

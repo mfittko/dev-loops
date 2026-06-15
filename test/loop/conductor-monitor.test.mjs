@@ -192,7 +192,7 @@ async function runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asy
 }
 
 test("conductor-monitor reports queue_complete when no open PRs exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-empty-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-empty-"));
 
   try {
     const env = await writeGhStub(tempDir, [{
@@ -218,7 +218,7 @@ test("conductor-monitor reports queue_complete when no open PRs exist", async ()
 });
 
 test("conductor-monitor --auto-resume keeps queue_complete semantics when no open PRs exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-auto-resume-empty-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-auto-resume-empty-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -248,7 +248,7 @@ test("conductor-monitor --auto-resume keeps queue_complete semantics when no ope
 });
 
 test("conductor-monitor reports gh runtime failures without a usage payload", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-gh-failure-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-gh-failure-"));
 
   try {
     const env = await writeGhStub(tempDir, [{
@@ -271,7 +271,7 @@ test("conductor-monitor reports gh runtime failures without a usage payload", as
 });
 
 test("conductor-monitor fails closed when gh pr list returns non-array JSON", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-invalid-list-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-invalid-list-"));
 
   try {
     const env = await writeGhStub(tempDir, [{
@@ -292,7 +292,7 @@ test("conductor-monitor fails closed when gh pr list returns non-array JSON", as
 });
 
 test("conductor-monitor reports monitoring when open PRs are still in healthy wait states", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-waiting-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-waiting-"));
 
   try {
     const env = await writeGhStub(tempDir, buildGhEntries({
@@ -326,7 +326,7 @@ test("conductor-monitor reports monitoring when open PRs are still in healthy wa
 });
 
 test("conductor-monitor --auto-resume ignores invalid async JSON side artifacts instead of crashing the scan", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-invalid-async-json-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-invalid-async-json-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -350,7 +350,7 @@ test("conductor-monitor --auto-resume ignores invalid async JSON side artifacts 
 });
 
 test("conductor-monitor flags unresolved-feedback PRs as needing attention while preserving pending waits", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-attention-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-attention-"));
   const mixedThreadsFixture = await readFile(mixedThreadsFixturePath, "utf8");
 
   try {
@@ -401,7 +401,7 @@ test("conductor-monitor flags unresolved-feedback PRs as needing attention while
 });
 
 test("conductor-monitor --auto-resume ignores malformed session headers instead of crashing the scan", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-invalid-session-json-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-invalid-session-json-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -432,7 +432,7 @@ test("conductor-monitor --auto-resume ignores malformed session headers instead 
 });
 
 test("conductor-monitor --auto-resume ignores parse-failed artifacts that do not match the live open PR set", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-nonopen-manual-ignore-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-nonopen-manual-ignore-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -468,7 +468,7 @@ test("conductor-monitor --auto-resume ignores parse-failed artifacts that do not
 });
 
 test("conductor-monitor --auto-resume fails closed when an active matching run cannot be proven newer by timestamp", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-indeterminate-active-run-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-indeterminate-active-run-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -509,7 +509,7 @@ test("conductor-monitor --auto-resume fails closed when an active matching run c
 });
 
 test("conductor-monitor --auto-resume preserves artifact run ids that contain underscores", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-underscore-run-id-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-underscore-run-id-"));
   const mixedThreadsFixture = await readFile(mixedThreadsFixturePath, "utf8");
 
   try {
@@ -540,7 +540,7 @@ test("conductor-monitor --auto-resume preserves artifact run ids that contain un
 });
 
 test("conductor-monitor --auto-resume fails closed when run exit state cannot be proven", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-unknown-run-state-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-unknown-run-state-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -567,7 +567,7 @@ test("conductor-monitor --auto-resume fails closed when run exit state cannot be
 });
 
 test("conductor-monitor --auto-resume preserves the stronger failed run state when evidence conflicts", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-run-state-priority-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-run-state-priority-"));
   const mixedThreadsFixture = await readFile(mixedThreadsFixturePath, "utf8");
 
   try {
@@ -608,7 +608,7 @@ test("conductor-monitor --auto-resume preserves the stronger failed run state wh
 });
 
 test("conductor-monitor --auto-resume uses grouped result summaries as the artifactPath when no output artifact exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-grouped-summary-path-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-grouped-summary-path-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -653,7 +653,7 @@ test("conductor-monitor --auto-resume uses grouped result summaries as the artif
 });
 
 test("conductor-monitor --auto-resume reuses grouped result summaries when acceptance reporting drops the output artifact", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-reporting-fallback-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-reporting-fallback-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -721,7 +721,7 @@ test("conductor-monitor --auto-resume reuses grouped result summaries when accep
 });
 
 test("conductor-monitor --auto-resume falls back to deterministic output logs when grouped summaries are absent", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-output-log-fallback-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-output-log-fallback-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -785,7 +785,7 @@ test("conductor-monitor --auto-resume falls back to deterministic output logs wh
 });
 
 test("conductor-monitor --auto-resume fails closed when an active matching run has the same timestamp as the exited candidate", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-same-timestamp-active-run-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-same-timestamp-active-run-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -821,7 +821,7 @@ test("conductor-monitor --auto-resume fails closed when an active matching run h
 });
 
 test("conductor-monitor --auto-resume does not invent a failed run state from meta without an integer exitCode", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-invalid-meta-exitcode-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-invalid-meta-exitcode-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -858,7 +858,7 @@ test("conductor-monitor --auto-resume does not invent a failed run state from me
 });
 
 test("conductor-monitor --auto-resume keeps stale-worktree runs resumable when JSON result evidence is the only surviving artifact", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-stale-worktree-result-json-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-stale-worktree-result-json-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -906,7 +906,7 @@ test("conductor-monitor --auto-resume keeps stale-worktree runs resumable when J
 });
 
 test("conductor-monitor --auto-resume includes a non-zero child index in the resume preview even when only one child matches", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-nonzero-child-index-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-nonzero-child-index-"));
   const mixedThreadsFixture = await readFile(mixedThreadsFixturePath, "utf8");
 
   try {
@@ -938,7 +938,7 @@ test("conductor-monitor --auto-resume includes a non-zero child index in the res
 });
 
 test("conductor-monitor --auto-resume emits a feedback-fix resume plan for an orphaned unresolved-feedback PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-fix-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-fix-"));
   const mixedThreadsFixture = await readFile(mixedThreadsFixturePath, "utf8");
 
   try {
@@ -1009,7 +1009,7 @@ test("conductor-monitor --auto-resume emits a feedback-fix resume plan for an or
 });
 
 test("conductor-monitor --auto-resume fails closed when recorded handoff contract conflicts with resume action", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-handoff-mismatch-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-handoff-mismatch-"));
   const mixedThreadsFixture = await readFile(mixedThreadsFixturePath, "utf8");
 
   try {
@@ -1056,7 +1056,7 @@ test("conductor-monitor --auto-resume fails closed when recorded handoff contrac
 });
 
 test("conductor-monitor --auto-resume emits a final-approval resume plan for an orphaned approval-boundary PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-final-approval-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-final-approval-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -1097,7 +1097,7 @@ test("conductor-monitor --auto-resume emits a final-approval resume plan for an 
 });
 
 test("conductor-monitor --auto-resume emits a merge-authorization resume plan for an orphaned merge-ready PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-merge-auth-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-merge-auth-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -1137,7 +1137,7 @@ test("conductor-monitor --auto-resume emits a merge-authorization resume plan fo
 });
 
 test("conductor-monitor --auto-resume ignores an older completed run when a newer running run matches the same PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-suppressed-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-suppressed-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -1177,7 +1177,7 @@ test("conductor-monitor --auto-resume ignores an older completed run when a newe
 });
 
 test("conductor-monitor --auto-resume fails closed when the output artifact is missing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-missing-artifact-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-missing-artifact-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -1219,7 +1219,7 @@ test("conductor-monitor --auto-resume fails closed when the output artifact is m
 });
 
 test("conductor-monitor --auto-resume fails closed on ambiguous PR identity inside one artifact", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-ambiguous-pr-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-ambiguous-pr-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -1248,7 +1248,7 @@ test("conductor-monitor --auto-resume fails closed on ambiguous PR identity insi
 });
 
 test("conductor-monitor --auto-resume keeps a stale-worktree run resumable when artifact and session evidence are still present", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-stale-worktree-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-stale-worktree-"));
   const mixedThreadsFixture = await readFile(mixedThreadsFixturePath, "utf8");
 
   try {
@@ -1286,7 +1286,7 @@ test("conductor-monitor --auto-resume keeps a stale-worktree run resumable when 
 });
 
 test("conductor-monitor --auto-resume ignores non-dev-loop runs and runs from other repos", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-ignore-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-ignore-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -1321,7 +1321,7 @@ test("conductor-monitor --auto-resume ignores non-dev-loop runs and runs from ot
 });
 
 test("conductor-monitor --auto-resume suppresses orphan alert for healthy PR (no unresolved threads, CI green) with fix/feedback artifact", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-healthy-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-healthy-"));
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
@@ -1362,7 +1362,7 @@ test("conductor-monitor --auto-resume suppresses orphan alert for healthy PR (no
 });
 
 test("conductor-monitor --auto-resume still flags orphan for unhealthy PR (unresolved threads present) with fix/feedback artifact", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-orphan-unhealthy-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-orphan-unhealthy-"));
   const mixedThreadsFixture = await readFile(mixedThreadsFixturePath, "utf8");
 
   try {

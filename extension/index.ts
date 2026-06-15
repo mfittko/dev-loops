@@ -21,8 +21,8 @@ type ExtensionRuntimeOverrides = NonNullable<Parameters<typeof createExtensionCo
   postMergeUpdateHook?: ReturnType<typeof createPostMergeUpdateHook>;
 };
 
-const STATUS_KEY = 'pi-dev-loops';
-const WIDGET_KEY = 'pi-dev-loops.setup';
+const STATUS_KEY = 'dev-loops';
+const WIDGET_KEY = 'dev-loops.setup';
 const PACKAGED_AGENTS_ROOT = new URL('../.pi/agents/', import.meta.url);
 
 export function syncPackagedAgents({

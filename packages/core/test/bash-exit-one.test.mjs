@@ -83,7 +83,7 @@ test("formatBashExitOneRecord formats one jsonl line", () => {
 });
 
 test("appendBashExitOneRecord appends a normalized record to jsonl", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-core-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-core-"));
   const logPath = path.join(tempDir, "bash-exit-1.jsonl");
 
   try {
