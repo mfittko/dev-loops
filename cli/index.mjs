@@ -249,7 +249,7 @@ export function createCliRuntime({
   const effectivePathExt = pathExt ?? adapter.getEnv().PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
   return {
     surface: "cli",
-    cwd,
+    cwd: effectiveCwd,
     async commandExists(command) { return commandExists(command, { searchPath: effectiveSearchPath, platform: effectivePlatform, pathExt: effectivePathExt }); },
     async ghAuthOk() { return spawnResult("gh", ["auth", "status"], { cwd: effectiveCwd }).ok; },
     async insideGitRepo() { return spawnResult("git", ["rev-parse", "--is-inside-work-tree"], { cwd: effectiveCwd }).ok; },
