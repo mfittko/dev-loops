@@ -20,12 +20,12 @@ Excluded from this survey:
 
 | Category            | Occurrences | Files | Action |
 |---|---|---|---|
-| docs                | 46 | 11 | Rename in Phase B |
-| code                | 179 | 18 | Rename in Phase B |
+| docs                | 46 | 10 | Rename in Phase B |
+| code                | 179 | 21 | Rename in Phase B |
 | tooling config      | 1 | 1 | Rename in Phase B |
 | skill content       | 3 | 1 | Defer to #768 |
 | archive             | 1 | 1 | Defer (historical phase doc) |
-| **total**           | **230** | **32** | |
+| **total**           | **230** | **34** | |
 
 ## Detailed survey table
 
