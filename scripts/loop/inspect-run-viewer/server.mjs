@@ -25,9 +25,9 @@ import {
   createInspectionViewerAdapter,
   normalizeInspectionTarget,
 } from "../_inspect-run-viewer-adapter.mjs";
-import { dedupeRepoSlugOptions, repoSlugEquals } from "@pi-dev-loops/core/github/repo-slug";
-import { buildDevLoopHandoffEnvelope } from "@pi-dev-loops/core/loop/handoff-envelope";
-import { loadDevLoopConfig } from "@pi-dev-loops/core/config";
+import { dedupeRepoSlugOptions, repoSlugEquals } from "../../../packages/core/src/github/repo-slug.mjs";
+import { buildDevLoopHandoffEnvelope } from "../../../packages/core/src/loop/handoff-envelope.mjs";
+import { loadDevLoopConfig } from "../../../packages/core/src/config/config.mjs";
 
 const execFile = promisify(execFileCallback);
 

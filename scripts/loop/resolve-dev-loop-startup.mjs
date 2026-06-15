@@ -18,10 +18,10 @@ import {
   buildAsyncStartRejection,
   ASYNC_START_STATUS,
 } from "../../packages/core/src/loop/async-start-contract.mjs";
-import { detectRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { isCopilotLogin } from "@pi-dev-loops/core/github/copilot-helpers";
+import { detectRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
+import { isCopilotLogin } from "../../packages/core/src/github/copilot-helpers.mjs";
 import { loadDevLoopConfig, resolveWorkflowConfig } from "../../packages/core/src/config/config.mjs";
-import { createPiAdapter } from "@pi-dev-loops/core/harness";
+import { createPiAdapter } from "../../packages/core/src/harness/index.mjs";
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
   resolve-dev-loop-startup.mjs --pr <number>

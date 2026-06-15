@@ -9,9 +9,9 @@ import {
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { buildSnapshotFromPrFacts, interpretLoopState } from "@pi-dev-loops/core/loop/copilot-loop-state";
-import { loadDevLoopConfig, resolveRefinement } from "@pi-dev-loops/core/config";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
+import { buildSnapshotFromPrFacts, interpretLoopState } from "../../packages/core/src/loop/copilot-loop-state.mjs";
+import { loadDevLoopConfig, resolveRefinement } from "../../packages/core/src/config/config.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";

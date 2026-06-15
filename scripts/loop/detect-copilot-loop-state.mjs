@@ -13,20 +13,20 @@ import {
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { loadDevLoopConfig, resolveRefinement } from "@pi-dev-loops/core/config";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
+import { loadDevLoopConfig, resolveRefinement } from "../../packages/core/src/config/config.mjs";
 import {
   buildSnapshotFromPrFacts,
   interpretLoopState,
   normalizeSnapshot,
   summarizeLoopInterpretation,
-} from "@pi-dev-loops/core/loop/copilot-loop-state";
+} from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import {
   normalizeStatusCheckRollupContract,
   summarizeHeadScopedCheckRunsSignal,
   normalizeHeadScopedCommitStatus,
   normalizeHeadScopedCiContract,
-} from "@pi-dev-loops/core/loop/copilot-ci-status";
+} from "../../packages/core/src/loop/copilot-ci-status.mjs";
 const USAGE = `Usage:
   detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>
   detect-copilot-loop-state.mjs --input <path>

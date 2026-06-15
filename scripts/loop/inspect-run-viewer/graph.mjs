@@ -7,23 +7,23 @@ import {
 import {
   STATE as COPILOT_STATE,
   TRANSITIONS as COPILOT_TRANSITIONS,
-} from "@pi-dev-loops/core/loop/copilot-loop-state";
+} from "../../../packages/core/src/loop/copilot-loop-state.mjs";
 import {
   OUTER_GRAPH,
   OUTER_STATE,
   OUTER_TERMINAL_STATES,
   OUTER_TRANSITIONS,
-} from "@pi-dev-loops/core/loop/conductor-routing";
+} from "../../../packages/core/src/loop/conductor-routing.mjs";
 import {
   REVIEWER_STATE,
   REVIEWER_TRANSITIONS,
-} from "@pi-dev-loops/core/loop/reviewer-loop-state";
+} from "../../../packages/core/src/loop/reviewer-loop-state.mjs";
 import {
   LIFECYCLE_GRAPH,
   LIFECYCLE_STATE,
   LIFECYCLE_TERMINAL_STATES,
   LIFECYCLE_TRANSITIONS,
-} from "@pi-dev-loops/core/loop/lifecycle-state";
+} from "../../../packages/core/src/loop/lifecycle-state.mjs";
 import {
   escapeHtml,
   formatStateToken,

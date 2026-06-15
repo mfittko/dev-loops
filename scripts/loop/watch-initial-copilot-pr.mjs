@@ -3,13 +3,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireOptionValue } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 import { detectInitialCopilotPrState, LINKED_PR_STATE } from "./detect-initial-copilot-pr-state.mjs";
-import { enforcePersistentInternalWaitTimeout } from "@pi-dev-loops/core/loop/timeout-policy";
+import { enforcePersistentInternalWaitTimeout } from "../../packages/core/src/loop/timeout-policy.mjs";
 import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_FIRST_DURABLE_WAIT_TIMEOUT_MS,
-} from "@pi-dev-loops/core/loop/policy-constants";
+} from "../../packages/core/src/loop/policy-constants.mjs";
 const REMOVED_FLAGS = new Set([
   "--poll-interval-ms",
   "--timeout-ms",

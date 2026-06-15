@@ -12,10 +12,10 @@ import {
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig, resolveWorkflowConfig } from "@pi-dev-loops/core/config";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { buildSnapshotFromPrFacts, interpretLoopState, summarizeLoopInterpretation } from "@pi-dev-loops/core/loop/copilot-loop-state";
-import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@pi-dev-loops/core/loop/pr-gate-coordination";
+import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig, resolveWorkflowConfig } from "../../packages/core/src/config/config.mjs";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
+import { buildSnapshotFromPrFacts, interpretLoopState, summarizeLoopInterpretation } from "../../packages/core/src/loop/copilot-loop-state.mjs";
+import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "../../packages/core/src/loop/pr-gate-coordination.mjs";
 import { shouldGuardCopilotReviewRequest } from "../../packages/core/src/loop/pr-gate-coordination.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
@@ -232,7 +232,7 @@ async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerge
       reason: `Failed to fetch body for linked issue #${linkedIssue}; refinement status is unknown.`,
     };
   }
-  const { detectIssueRefinementArtifact } = await import("@pi-dev-loops/core/loop/issue-refinement-artifact");
+  const { detectIssueRefinementArtifact } = await import("../../packages/core/src/loop/issue-refinement-artifact.mjs");
   const artifact = detectIssueRefinementArtifact({ body, issueNumber: linkedIssue });
   return {
     status: artifact.hasACs ? "present" : "missing",

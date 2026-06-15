@@ -16,7 +16,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { isDirectCliRun } from "@pi-dev-loops/core/cli/helpers";
+import { isDirectCliRun } from "../packages/core/src/cli/helpers.mjs";
 
 export const REPO_WIKI_GIT_URL = "https://github.com/mfittko/repo-wiki.git";
 export const REPO_WIKI_REF = "d7e772e3d702a75896a6f4eec574a4e4e5bfa6dd";

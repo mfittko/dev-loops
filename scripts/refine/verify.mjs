@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireOptionValue } from "../_cli-primitives.mjs";
-import { detectRepoSlug, parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { detectRepoSlug, parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 
 import { isDirectCliRun, loadTreeFromInput, loadTreeOnline } from "./_refine-helpers.mjs";
 import { runProseLinkageDetector } from "./prose-linkage-detector.mjs";

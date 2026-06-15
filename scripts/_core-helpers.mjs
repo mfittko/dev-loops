@@ -6,12 +6,12 @@ export {
   classifyReviewThreadsSignal,
   parseReviewThreads,
   readInput,
-} from "@pi-dev-loops/core/github/review-threads";
+} from "../packages/core/src/github/review-threads.mjs";
 
 export {
   buildPhasePaths,
   readJsonIfExists,
-} from "@pi-dev-loops/core/loop/phase-files";
+} from "../packages/core/src/loop/phase-files.mjs";
 
 export {
   extractReviewCommitSha,
@@ -22,9 +22,9 @@ export {
   summarizeCopilotReviews,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
-} from "@pi-dev-loops/core/github/copilot-helpers";
+} from "../packages/core/src/github/copilot-helpers.mjs";
 
 export {
   buildParseError,
   isDirectCliRun,
-} from "@pi-dev-loops/core/cli/helpers";
+} from "../packages/core/src/cli/helpers.mjs";

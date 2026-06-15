@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireOptionValue } from "../_cli-primitives.mjs";
-import { createPiAdapter } from "@pi-dev-loops/core/harness";
+import { createPiAdapter } from "../../packages/core/src/harness/index.mjs";
 import {
   isUnderWorktreePath,
   parseMainWorktreePath,

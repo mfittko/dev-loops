@@ -13,14 +13,14 @@ import {
   promoteQueuedSteering,
   submitSteering,
   getSteeringStatus,
-} from "@pi-dev-loops/core/loop/steering";
-import { STATE } from "@pi-dev-loops/core/loop/copilot-loop-state";
+} from "../../packages/core/src/loop/steering.mjs";
+import { STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import {
   ACTIVE_STATE_FAMILY,
   deriveRunIdForInspectionTarget,
   SOURCE_MODE,
   TRUST,
-} from "@pi-dev-loops/core/loop/run-inspection";
+} from "../../packages/core/src/loop/run-inspection.mjs";
 import { inspectRun } from "./inspect-run.mjs";
 import {
   defaultStateFilePath,
@@ -32,7 +32,7 @@ import {
 } from "./_steering-state-file.mjs";
 import { formatCliError } from "../_core-helpers.mjs";
 import { requireOptionValue as readSharedOptionValue } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 const SUBMIT_USAGE = `Usage:
   steer-loop.mjs submit --repo <owner/name> --pr <number>
     --kind stop_at_next_safe_gate --directive <text> --seq <n>

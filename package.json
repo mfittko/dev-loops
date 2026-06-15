@@ -87,7 +87,13 @@
     "packages/core/src/cli/",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "packages/core/src/bash-exit-one.mjs",
+    "packages/core/src/config/",
+    "packages/core/src/github/",
+    "packages/core/src/loop/",
+    "packages/core/src/debt/",
+    "packages/core/src/refinement/"
   ],
   "publishConfig": {
     "access": "public",

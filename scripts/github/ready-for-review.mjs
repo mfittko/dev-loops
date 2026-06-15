@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, summarizeGateReviewComments, summarizeGateReviewCommentMarkers } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { loadDevLoopConfig, resolveGateConfig } from "@pi-dev-loops/core/config";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
+import { loadDevLoopConfig, resolveGateConfig } from "../../packages/core/src/config/config.mjs";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number>\nWrapper around gh pr ready that enforces gate-evidence validation.`;
 const parseError = buildParseError(USAGE);

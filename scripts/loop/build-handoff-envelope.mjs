@@ -15,13 +15,13 @@
  *   npx dev-loops loop build-envelope --input resolver-output.json
  */
 import { readFile } from "node:fs/promises";
-import { detectRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { detectRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireOptionValue } from "../_cli-primitives.mjs";
-import { buildDevLoopHandoffEnvelope } from "@pi-dev-loops/core/loop/handoff-envelope";
-import { loadDevLoopConfig } from "@pi-dev-loops/core/config";
-import { createPiAdapter } from "@pi-dev-loops/core/harness";
+import { buildDevLoopHandoffEnvelope } from "../../packages/core/src/loop/handoff-envelope.mjs";
+import { loadDevLoopConfig } from "../../packages/core/src/config/config.mjs";
+import { createPiAdapter } from "../../packages/core/src/harness/index.mjs";
 
 const USAGE = `Usage: build-handoff-envelope.mjs --input <path>
 Build a deterministic handoff envelope from startup resolver output and settings.

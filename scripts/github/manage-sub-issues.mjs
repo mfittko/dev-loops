@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 const USAGE = `Usage: manage-sub-issues.mjs <command> --repo <owner/name> --issue <number> [options]
 Deterministic helper for reading, linking, ordering, and verifying GitHub sub-issue trees.
 Commands:

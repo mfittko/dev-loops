@@ -1,24 +1,24 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, normalizeTimestamp } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { detectRepoSlug, parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { detectRepoSlug, parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 import path from "node:path";
-import { loadDevLoopConfig, resolveRefinement } from "@pi-dev-loops/core/config";
+import { loadDevLoopConfig, resolveRefinement } from "../../packages/core/src/config/config.mjs";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
 import { detectInternalOnly as detectPrInternalOnly } from "./detect-internal-only-pr.mjs";
-import { applyConfirmedReviewRequest, interpretLoopState, NEXT_ACTIONS, STATE, summarizeLoopInterpretation, TRANSITIONS } from "@pi-dev-loops/core/loop/copilot-loop-state";
+import { applyConfirmedReviewRequest, interpretLoopState, NEXT_ACTIONS, STATE, summarizeLoopInterpretation, TRANSITIONS } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import { ensureAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 
 
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
   enforceExternalHealthyWaitTimeout,
-} from "@pi-dev-loops/core/loop/timeout-policy";
+} from "../../packages/core/src/loop/timeout-policy.mjs";
 import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_REVIEW_WAIT_TIMEOUT_MS,
-} from "@pi-dev-loops/core/loop/policy-constants";
+} from "../../packages/core/src/loop/policy-constants.mjs";
 const VALID_WATCH_STATUSES = new Set(["changed", "timeout", "idle"]);
 const REMOVED_FLAGS = new Set([
   "--force-rerequest-review",

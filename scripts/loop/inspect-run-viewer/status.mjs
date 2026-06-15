@@ -1,4 +1,4 @@
-import { OUTER_STATE } from "@pi-dev-loops/core/loop/conductor-routing";
+import { OUTER_STATE } from "../../../packages/core/src/loop/conductor-routing.mjs";
 
 import {
   escapeHtml,

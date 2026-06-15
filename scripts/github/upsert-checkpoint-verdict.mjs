@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig } from "@pi-dev-loops/core/config";
+import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig } from "../../packages/core/src/config/config.mjs";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { truncateText } from "@pi-dev-loops/core/bash-exit-one";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { truncateText } from "../../packages/core/src/bash-exit-one.mjs";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
-import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@pi-dev-loops/core/loop/pr-gate-coordination";
-import { STATE } from "@pi-dev-loops/core/loop/copilot-loop-state";
+import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "../../packages/core/src/loop/pr-gate-coordination.mjs";
+import { STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import { claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";

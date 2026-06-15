@@ -5,11 +5,11 @@ import { autoDetectReviewerSnapshot } from "./detect-reviewer-loop-state.mjs";
 import {
   interpretLoopState,
   normalizeSnapshot as normalizeCopilotSnapshot,
-} from "@pi-dev-loops/core/loop/copilot-loop-state";
+} from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import {
   interpretReviewerLoopState,
   normalizeReviewerSnapshot,
-} from "@pi-dev-loops/core/loop/reviewer-loop-state";
+} from "../../packages/core/src/loop/reviewer-loop-state.mjs";
 export async function loadCopilotEvidence({ repo, pr, copilotInputPath }, { env = process.env, ghCommand = "gh" } = {}) {
   let snapshot;
   if (copilotInputPath !== undefined) {

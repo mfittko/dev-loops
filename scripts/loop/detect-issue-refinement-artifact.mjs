@@ -2,11 +2,11 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 import {
   detectIssueRefinementArtifact,
   REFINEMENT_SOURCE,
-} from "@pi-dev-loops/core/loop/issue-refinement-artifact";
+} from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
 const USAGE = `Usage:
   detect-issue-refinement-artifact.mjs --repo <owner/name> --issue <number>
   detect-issue-refinement-artifact.mjs --input <path>

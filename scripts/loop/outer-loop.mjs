@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, parseJsonText } from "../_core-helpers.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 import {
   buildCheckpointFilePath,
   buildDefaultCheckpointDir,
@@ -17,7 +17,7 @@ import {
   LOOP_FAMILY,
   ROUTING_OUTCOME,
   SOURCE_MODE,
-} from "@pi-dev-loops/core/loop/conductor-routing";
+} from "../../packages/core/src/loop/conductor-routing.mjs";
 import {
   ASYNC_START_STATUS,
   buildAsyncStartRejection,

@@ -7,7 +7,7 @@ import { requireOptionValue } from "../_cli-primitives.mjs";
 import {
   interpretTrackerPrState,
   normalizeTrackerPrSnapshot,
-} from "@pi-dev-loops/core/loop/tracker-pr-state";
+} from "../../packages/core/src/loop/tracker-pr-state.mjs";
 const USAGE = `Usage:
   detect-tracker-pr-state.mjs --input <path>
 Interpret a pre-built tracker-PR snapshot JSON and emit the current lifecycle

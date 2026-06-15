@@ -2,11 +2,11 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "../../packages/core/src/github/repo-slug.mjs";
 import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_REVIEW_WAIT_TIMEOUT_MS,
-} from "@pi-dev-loops/core/loop/policy-constants";
+} from "../../packages/core/src/loop/policy-constants.mjs";
 
 /** Maximum interval between heartbeat outputs during watch delays.
  *  Must be shorter than pi-subagents default needsAttentionAfterMs (60s). */
