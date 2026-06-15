@@ -13,7 +13,7 @@ import {
   DEV_LOOP_CHECK_IDS,
 } from "../lib/dev-loops-core.mjs";
 import { isUsageError, buildCorrectedArgs } from "../packages/core/src/cli/retry-wrapper.mjs";
-import { createPiAdapter } from "@pi-dev-loops/core/harness";
+import { createPiAdapter } from "../packages/core/src/harness/index.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
