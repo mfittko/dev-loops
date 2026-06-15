@@ -14,7 +14,7 @@
  * `.pi/dev-loop-retrospective-checkpoint.json` with `state: "required"`.
  * The marker persists until the retrospective is recorded (`state: "complete"`)
  * or explicitly skipped (`state: "skipped"`). The public dev-loop routing gate
- * (`evaluateRetrospectiveGate` in `@pi-dev-loops/core`) fails closed on the
+ * (`evaluateRetrospectiveGate` in `@dev-loops/core`) fails closed on the
  * next start/resume when this marker shows `state: "required"`.
  *
  * Completing the retrospective:

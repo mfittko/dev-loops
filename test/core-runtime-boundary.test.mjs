@@ -18,7 +18,7 @@ async function* walk(dirUrl) {
   }
 }
 
-test("runtime surfaces use the @pi-dev-loops/core boundary instead of deep packages/core/src imports", async () => {
+test("runtime surfaces use the @dev-loops/core boundary instead of deep packages/core/src imports", async () => {
   const offenders = [];
 
   for (const root of RUNTIME_ROOTS) {

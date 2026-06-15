@@ -2,11 +2,11 @@
 import { readFile } from "node:fs/promises";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   interpretReviewerLoopState,
   normalizeReviewerSnapshot,
-} from "@pi-dev-loops/core/loop/reviewer-loop-state";
+} from "@dev-loops/core/loop/reviewer-loop-state";
 const HELP = `Usage: detect-reviewer-loop-state.mjs [--input <path> | --repo <owner/name> --pr <number>] [--review-requested <true|false>] [--local-state <path>]
 Detect reviewer loop state for a pull request.
 Modes:

@@ -4,7 +4,7 @@ import {
   parsePrNumber,
   requireOptionValue,
 } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   authorMatchesFilter,
   captureParsedReviewThreads,

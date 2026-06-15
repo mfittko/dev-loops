@@ -5,7 +5,7 @@ This document is the canonical bundled contract for deterministic interpretation
 Installed skill/runtime consumers should read this bundled `skills/docs/` copy via [Copilot CI Status Contract](../docs/copilot-ci-status-contract.md) from the relevant skill directory. Repository-local docs may summarize or link this contract, but they should not redefine it.
 
 Implementation surface:
-- `@pi-dev-loops/core/loop/copilot-ci-status`
+- `@dev-loops/core/loop/copilot-ci-status`
 - source file: `packages/core/src/loop/copilot-ci-status.mjs`
 
 ## Entry points

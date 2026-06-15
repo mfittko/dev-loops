@@ -3,7 +3,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireOptionValue, runCommand } from "../_cli-primitives.mjs";
 import {
   isUnderWorktreePath, parseMainWorktreePath, isMainCheckout,
-} from "../../packages/core/src/loop/worktree-guard.mjs";
+} from "@dev-loops/core/loop/worktree-guard";
 
 const USAGE = `Usage:
   pre-commit-branch-guard.mjs --expected-branch <name> [--require-worktree] [--block-main-checkout]

@@ -7,7 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { isDirectCliRun } from "@pi-dev-loops/core/cli/helpers";
+import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
 
 // Pinned to the latest published release at the time this slice was opened.
 // Bump deliberately when the consumer repo wants to adopt a newer release.

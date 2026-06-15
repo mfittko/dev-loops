@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { defineSubcommand } from "@pi-dev-loops/core/cli/subcommand-runner";
+import { defineSubcommand } from "@dev-loops/core/cli/subcommand-runner";
 
 test("defineSubcommand creates parser with auto-usage", () => {
   const sub = defineSubcommand({

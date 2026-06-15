@@ -6,10 +6,10 @@ import {
   isDirectCliRun,
   parseJsonText,
 } from "../_core-helpers.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectPrGateCoordinationState } from "./detect-pr-gate-coordination-state.mjs";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
-import { PR_CHECKPOINT_ACTION } from "@pi-dev-loops/core/loop/pr-gate-coordination";
+import { PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import {
   SUBAGENT_ACTIONS as SHARED_SUBAGENT_ACTIONS,
   buildHandoffContractForConductorAction,

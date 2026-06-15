@@ -5,14 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { runChild, requireOptionValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import {
   buildHandoffContractForResumeAction,
   compareHandoffContracts,
   parseRecordedHandoffContract,
 } from "./_handoff-contract.mjs";
-import { interpretLoopState, summarizeLoopInterpretation } from "@pi-dev-loops/core/loop/copilot-loop-state";
+import { interpretLoopState, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 const USAGE = `Usage: conductor-monitor.mjs --repo <owner/name> [--auto-resume]
 Aggregate Copilot-loop status across all open PRs in one repo.
 Required:

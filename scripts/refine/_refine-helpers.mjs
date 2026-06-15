@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { detectRepoSlug, parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 
 export const FORBIDDEN_PROSE_PATTERNS = [
   /Child of #/iu,

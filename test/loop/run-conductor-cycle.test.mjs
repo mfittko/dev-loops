@@ -16,7 +16,7 @@ import {
   runConductorCycle,
   parseCliArgs,
 } from "../../scripts/loop/run-conductor-cycle.mjs";
-import { PR_CHECKPOINT_ACTION, PR_CHECKPOINT } from "@pi-dev-loops/core/loop/pr-gate-coordination";
+import { PR_CHECKPOINT_ACTION, PR_CHECKPOINT } from "@dev-loops/core/loop/pr-gate-coordination";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/run-conductor-cycle.mjs");

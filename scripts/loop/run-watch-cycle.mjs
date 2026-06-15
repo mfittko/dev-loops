@@ -2,15 +2,15 @@
 import { spawn } from "node:child_process";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
-import { DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION } from "@pi-dev-loops/core/loop/public-dev-loop-routing";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { watchCopilotReview } from "../github/probe-copilot-review.mjs";
 import { runHandoff } from "./copilot-pr-handoff.mjs";
 import { detectCopilotSessionActivity } from "./detect-copilot-session-activity.mjs";
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
   enforceExternalHealthyWaitTimeout,
-} from "@pi-dev-loops/core/loop/timeout-policy";
+} from "@dev-loops/core/loop/timeout-policy";
 const REMOVED_FLAGS = new Set([
   "--force-rerequest-review",
   "--probe-only",

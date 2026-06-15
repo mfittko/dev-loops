@@ -3,13 +3,13 @@ import { runConductorCycle } from "./run-conductor-cycle.mjs";
 import { runConductorMonitor } from "./conductor-monitor.mjs";
 import { requireOptionValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   loadDevLoopConfig,
   resolveWorkflowConfig,
   resolveAutonomyStopAt,
   resolveGateConfig,
-} from "@pi-dev-loops/core/config";
+} from "@dev-loops/core/config";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 const USAGE = `Usage: conductor.mjs --repo <owner/name> [--auto-resume] [--cycle-only] [--monitor-only] [--require-retrospective]

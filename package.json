@@ -70,7 +70,8 @@
   },
   "dependencies": {
     "mermaid": "11.15.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@dev-loops/core": "^0.1.0"
   },
   "repository": {
     "type": "git",
@@ -79,5 +80,6 @@
   "bugs": {
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
-  "homepage": "https://github.com/mfittko/dev-loops#readme"
+  "homepage": "https://github.com/mfittko/dev-loops#readme",
+  "version": "0.1.0"
 }

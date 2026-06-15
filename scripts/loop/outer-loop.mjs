@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, parseJsonText } from "../_core-helpers.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   buildCheckpointFilePath,
   buildDefaultCheckpointDir,
@@ -17,13 +17,13 @@ import {
   LOOP_FAMILY,
   ROUTING_OUTCOME,
   SOURCE_MODE,
-} from "@pi-dev-loops/core/loop/conductor-routing";
+} from "@dev-loops/core/loop/conductor-routing";
 import {
   ASYNC_START_STATUS,
   buildAsyncStartRejection,
   validateAsyncStartContext,
-} from "../../packages/core/src/loop/async-start-contract.mjs";
-import { loadDevLoopConfig, resolveConductorModel, resolveAutonomyStopAt, resolveWorkflowConfig } from "../../packages/core/src/config/config.mjs";
+} from "@dev-loops/core/loop/async-start-contract";
+import { loadDevLoopConfig, resolveConductorModel, resolveAutonomyStopAt, resolveWorkflowConfig } from "@dev-loops/core/config";
 const USAGE = `Usage: outer-loop.mjs --repo <owner/name> --pr <number>
 Thin outer-loop wrapper for the Copilot PR remediation loop.
 Detects current PR state from both the Copilot inner loop and the reviewer

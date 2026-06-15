@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { parseRepoSlugParts } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
 const STATE_FILE_LOCK_TIMEOUT_MS = 5000;
 const STATE_FILE_LOCK_RETRY_MS = 50;
 function normalizeRepoSlug(repo) {

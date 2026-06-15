@@ -7,7 +7,7 @@ import {
   INBOX_STATE_FILTER_PRESETS,
   INBOX_UPDATED_FILTER_PRESETS,
 } from "./constants.mjs";
-import { dedupeRepoSlugOptions, repoSlugEquals } from "@pi-dev-loops/core/github/repo-slug";
+import { dedupeRepoSlugOptions, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import {
   escapeHtml,
   formatStateToken,

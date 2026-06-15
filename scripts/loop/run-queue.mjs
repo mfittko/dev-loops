@@ -14,10 +14,10 @@
  */
 
 import { fileURLToPath } from "node:url";
-import { runQueue, DEFAULT_QUEUE_DRIVER_OPTIONS } from "../../packages/core/src/loop/queue-driver.mjs";
-import { computeParallelSchedule } from "../../packages/core/src/loop/queue-parallel.mjs";
-import { readQueue } from "../../packages/core/src/loop/queue-state.mjs";
-import { parsePositiveInteger } from "../../packages/core/src/cli/primitives.mjs";
+import { runQueue, DEFAULT_QUEUE_DRIVER_OPTIONS } from "@dev-loops/core/loop/queue-driver";
+import { computeParallelSchedule } from "@dev-loops/core/loop/queue-parallel";
+import { readQueue } from "@dev-loops/core/loop/queue-state";
+import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 

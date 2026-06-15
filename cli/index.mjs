@@ -12,8 +12,8 @@ import {
   summarizeChecks,
   DEV_LOOP_CHECK_IDS,
 } from "../lib/dev-loops-core.mjs";
-import { isUsageError, buildCorrectedArgs } from "../packages/core/src/cli/retry-wrapper.mjs";
-import { createPiAdapter } from "@pi-dev-loops/core/harness";
+import { isUsageError, buildCorrectedArgs } from "@dev-loops/core/cli/retry-wrapper";
+import { createPiAdapter } from "@dev-loops/core/harness";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 

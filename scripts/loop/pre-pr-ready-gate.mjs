@@ -8,7 +8,7 @@ import {
   summarizeGateReviewCommentMarkers,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 
 const USAGE = `Usage:
   pre-pr-ready-gate.mjs --repo <owner/name> --pr <number>

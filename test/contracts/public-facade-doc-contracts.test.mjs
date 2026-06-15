@@ -137,7 +137,7 @@ test("repo docs define dev-loop as the public façade and keep internal routed l
   assert.doesNotMatch(extensionReadme, /\/skill:copilot-dev-loop|\/skill:copilot-autopilot/i, "extension README should not surface internal seam names as readiness choices");
 
   assert.match(devLoopSkill, /authoritative contract is \[Public Dev Loop Contract\]\(\.\.\/docs\/public-dev-loop-contract\.md\)/i);
-  assert.match(devLoopSkill, /@pi-dev-loops\/core\/loop\/public-dev-loop-routing/i);
+  assert.match(devLoopSkill, /@dev-loops\/core\/loop\/public-dev-loop-routing/i);
   assert.match(devLoopSkill, /summary/i);
 
   assert.match(copilotFollowupSkill, /canonical internal/i, "skills/copilot-pr-followup/SKILL.md should preserve canonical-internal framing");
