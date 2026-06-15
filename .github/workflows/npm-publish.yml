@@ -11,8 +11,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
