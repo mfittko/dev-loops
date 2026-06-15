@@ -11,8 +11,8 @@ Excluded from this survey:
 
 ## Summary
 
-- **Total tracked files with old slug:** 34
-- **Total old-slug occurrences:** 230
+- **Total tracked files with old slug:** 34 (measured on `origin/main` at `42598ec`; does not include this survey doc)
+- **Total old-slug occurrences:** 230 (measured on `origin/main` at `42598ec`; does not include this survey doc)
 - **Renamed in Phase B:** 226 occurrences across 32 files
 - **Deferred:** 4 occurrences across 2 files
 - **Kept (out of scope):** 0 old-slug occurrences
@@ -34,7 +34,7 @@ Excluded from this survey:
 | PLAN.md | 27 | docs | Rename in Phase B |
 | README.md | 55, 146–147 | docs | Rename in Phase B |
 | cli/index.mjs | 212–213, 235 | code | Rename in Phase B |
-| docs/archive/phases/phase-6.md | 13 | archive | Defer (historical phase doc) |
+| docs/archive/phases/phase-6.md | 13 | archive | Defer (historical phase doc) — must be explicitly excluded from #786 AC2 zero-hits verification or renamed in Phase B |
 | docs/conductor-routing-contract.md | 26–31 | docs | Rename in Phase B |
 | docs/phases/phase-7.md | 123 | docs | Rename in Phase B |
 | docs/phases/phase-8.md | 168 | docs | Rename in Phase B |
@@ -96,7 +96,7 @@ This is the explicit checklist the Phase B PR (#786) will execute.
 - [ ] After edits run `npm run verify` and confirm green.
 - [ ] Do **NOT** edit `@pi-dev-loops/core` package references — #766.
 - [ ] Do **NOT** edit `skills/docs/tracker-first-loop-state.md` — #768.
-- [ ] Do **NOT** edit `docs/archive/phases/phase-6.md` unless explicitly requested.
+- [ ] Decide whether to rename `docs/archive/phases/phase-6.md` in Phase B. If it stays deferred, add it to the explicit exclusion list for the #786 AC2 zero-hits verification.
 - [ ] Replace only the exact repo slug `mfittko/pi-dev-loops`; do not bulk-replace the bare substring `pi-dev-loops` (it appears inside `@pi-dev-loops/core` identifiers, which are out of scope).
 
 ## Operator setup — GitHub Settings rename
