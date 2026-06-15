@@ -99,7 +99,7 @@ test("loadInternalPathPatterns returns shipped defaults when no config found", (
 });
 
 test("loadInternalPathPatterns loads flat array from --config path (settings.yaml)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "internalPathPatterns:\n  - \"^src/\"\n  - \"^lib/\"\n");
@@ -111,7 +111,7 @@ test("loadInternalPathPatterns loads flat array from --config path (settings.yam
 });
 
 test("loadInternalPathPatterns falls back to defaults on invalid config", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "garbage: [[[");
@@ -123,7 +123,7 @@ test("loadInternalPathPatterns falls back to defaults on invalid config", async 
 });
 
 test("loadInternalPathPatterns falls back to defaults on empty patterns array", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "internalPathPatterns: []\n");
@@ -135,7 +135,7 @@ test("loadInternalPathPatterns falls back to defaults on empty patterns array", 
 });
 
 test("loadInternalPathPatterns falls back to defaults on whitespace-only patterns", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "internalPathPatterns:\n  - \"   \"\n  - \"\"\n");
@@ -147,7 +147,7 @@ test("loadInternalPathPatterns falls back to defaults on whitespace-only pattern
 });
 
 test("loadInternalPathPatterns skips missing internalPathPatterns key", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "gates:\n  draft:\n    requireCi: false\n");
@@ -163,7 +163,7 @@ test("loadInternalPathPatterns skips missing internalPathPatterns key", async ()
 // ---------------------------------------------------------------------------
 
 test("loadInternalPathPatterns auto-detects overrides.yaml via spawned process", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     await mkdir(path.join(tempDir, ".git"));
     const piDir = path.join(tempDir, ".pi", "dev-loop");
@@ -186,7 +186,7 @@ test("loadInternalPathPatterns auto-detects overrides.yaml via spawned process",
 });
 
 test("loadInternalPathPatterns prefers settings.yaml over overrides.yaml via spawned process", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     await mkdir(path.join(tempDir, ".git"));
     const piDir = path.join(tempDir, ".pi", "dev-loop");
@@ -214,7 +214,7 @@ test("loadInternalPathPatterns prefers settings.yaml over overrides.yaml via spa
 // ---------------------------------------------------------------------------
 
 test("tryLoadFromFile returns patterns from valid config", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "internalPathPatterns:\n  - \"^a/\"\n  - \"^b/\"\n");
@@ -226,7 +226,7 @@ test("tryLoadFromFile returns patterns from valid config", async () => {
 });
 
 test("tryLoadFromFile returns null for invalid YAML", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "invalid.yaml");
     await writeFile(configPath, "::: bad yaml");
@@ -237,7 +237,7 @@ test("tryLoadFromFile returns null for invalid YAML", async () => {
 });
 
 test("tryLoadFromFile returns null for empty patterns array", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "internalPathPatterns: []\n");
@@ -248,7 +248,7 @@ test("tryLoadFromFile returns null for empty patterns array", async () => {
 });
 
 test("tryLoadFromFile trims whitespace from patterns", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "internalPathPatterns:\n  - \"  ^src/  \"\n  - \"^lib/\"\n");
@@ -281,7 +281,7 @@ test("buildPatternMatchers skips invalid regex", () => {
 // ---------------------------------------------------------------------------
 
 test("detect-internal-only-pr returns internalOnly=true for scripts+test changes", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const env = await writeGhStub(tempDir, [
       {
@@ -302,7 +302,7 @@ test("detect-internal-only-pr returns internalOnly=true for scripts+test changes
 });
 
 test("detect-internal-only-pr returns internalOnly=false for consumer-facing changes", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const env = await writeGhStub(tempDir, [
       {
@@ -322,7 +322,7 @@ test("detect-internal-only-pr returns internalOnly=false for consumer-facing cha
 });
 
 test("detect-internal-only-pr returns internalOnly=false for mixed changes", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const env = await writeGhStub(tempDir, [
       {
@@ -341,7 +341,7 @@ test("detect-internal-only-pr returns internalOnly=false for mixed changes", asy
 });
 
 test("detect-internal-only-pr returns internalOnly=false for empty file list", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const env = await writeGhStub(tempDir, [
       {
@@ -361,7 +361,7 @@ test("detect-internal-only-pr returns internalOnly=false for empty file list", a
 });
 
 test("detect-internal-only-pr returns internalOnly=true for docs-only changes", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const env = await writeGhStub(tempDir, [
       {
@@ -380,7 +380,7 @@ test("detect-internal-only-pr returns internalOnly=true for docs-only changes", 
 });
 
 test("detect-internal-only-pr returns internalOnly=true for .pi config changes", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const env = await writeGhStub(tempDir, [
       {
@@ -399,7 +399,7 @@ test("detect-internal-only-pr returns internalOnly=true for .pi config changes",
 });
 
 test("detect-internal-only-pr detects non-matching unknown paths as consumer-facing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const env = await writeGhStub(tempDir, [
       {
@@ -419,7 +419,7 @@ test("detect-internal-only-pr detects non-matching unknown paths as consumer-fac
 });
 
 test("detect-internal-only-pr respects --config with custom patterns (flat array)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "internalPathPatterns:\n  - \"^custom/\"\n  - \"^tools/\"\n");
@@ -440,7 +440,7 @@ test("detect-internal-only-pr respects --config with custom patterns (flat array
 });
 
 test("detect-internal-only-pr with --config detects non-matching file as consumer-facing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     const configPath = path.join(tempDir, "settings.yaml");
     await writeFile(configPath, "internalPathPatterns:\n  - \"^custom/\"\n");

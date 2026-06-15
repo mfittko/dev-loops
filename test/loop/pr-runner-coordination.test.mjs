@@ -15,7 +15,7 @@ import {
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
 
 test("runner coordination claims empty PR ownership and refreshes same run", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-runner-coordination-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
   try {
     const claimed = await claimRunnerOwnership({
@@ -49,7 +49,7 @@ test("runner coordination claims empty PR ownership and refreshes same run", asy
 });
 
 test("runner coordination fails closed for second claim and allows explicit takeover", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-runner-coordination-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
   try {
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir, now: "2026-06-05T08:00:00.000Z" });
@@ -82,7 +82,7 @@ test("runner coordination fails closed for second claim and allows explicit take
 });
 
 test("runner coordination pre-merge assert requires existing owner record for async runs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-runner-coordination-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
   try {
     const missing = await assertRunnerOwnership({
@@ -111,7 +111,7 @@ test("runner coordination pre-merge assert requires existing owner record for as
 });
 
 test("runner coordination release clears active owner", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-runner-coordination-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
   try {
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });
@@ -127,7 +127,7 @@ test("runner coordination release clears active owner", async () => {
 });
 
 test("pr-runner-coordination CLI facade returns machine-readable conflicts", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-runner-coordination-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
   try {
     const filePath = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, tempDir);
@@ -148,7 +148,7 @@ test("pr-runner-coordination CLI facade returns machine-readable conflicts", asy
 
 
 test("ensureAsyncRunnerOwnership auto-claims when no file exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-runner-coordination-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
   try {
     const result = await ensureAsyncRunnerOwnership({
@@ -167,7 +167,7 @@ test("ensureAsyncRunnerOwnership auto-claims when no file exists", async () => {
 });
 
 test("ensureAsyncRunnerOwnership auto-claims after release when no active owner remains", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-runner-coordination-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
   try {
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });

@@ -129,7 +129,7 @@ test("extractSentences handles ~~~ fenced blocks", () => {
 });
 
 test("scanSkills detects cross-file duplicates", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-rules-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-rules-"));
   try {
     const skillsDir = await writeSkillsDir(tempDir, {
       "doc-a/SKILL.md": "You must always run tests before pushing changes to main.",
@@ -152,7 +152,7 @@ test("scanSkills detects cross-file duplicates", async () => {
 });
 
 test("scanSkills reports no duplicates when clean", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-rules-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-rules-"));
   try {
     const skillsDir = await writeSkillsDir(tempDir, {
       "doc-a/SKILL.md": "You must run tests before pushing changes to the branch.",
@@ -168,7 +168,7 @@ test("scanSkills reports no duplicates when clean", async () => {
 });
 
 test("scanSkills detects duplicate across three files", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-rules-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-rules-"));
   try {
     const skillsDir = await writeSkillsDir(tempDir, {
       "doc-a/SKILL.md": "You must always run tests before pushing to main.",
@@ -187,7 +187,7 @@ test("scanSkills detects duplicate across three files", async () => {
 });
 
 test("scanSkills ignores same-file duplicates", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-rules-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-rules-"));
   try {
     const skillsDir = await writeSkillsDir(tempDir, {
       "doc-a/SKILL.md": "You must run tests before pushing. You must run tests before pushing.",
@@ -203,7 +203,7 @@ test("scanSkills ignores same-file duplicates", async () => {
 });
 
 test("scanSkills handles empty skills tree", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-rules-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-rules-"));
   try {
     const skillsDir = path.join(tempDir, "skills");
     await mkdir(skillsDir, { recursive: true });
@@ -218,7 +218,7 @@ test("scanSkills handles empty skills tree", async () => {
 });
 
 test("scanSkills detects duplicate when non-canonical file restates canonical rule", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-rules-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-rules-"));
   try {
     const skillsDir = await writeSkillsDir(tempDir, {
       "docs/copilot-loop-operations.md": "You must run tests before every push to main and also verify the build output is correct.",
@@ -235,7 +235,7 @@ test("scanSkills detects duplicate when non-canonical file restates canonical ru
 });
 
 test("scanSkills suppresses duplicates when all occurrences are canonical", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-rules-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-rules-"));
   try {
     const skillsDir = await writeSkillsDir(tempDir, {
       "docs/copilot-loop-operations.md": "You must run tests before every push to main and also verify the build output is correct.",
@@ -253,7 +253,7 @@ test("scanSkills suppresses duplicates when all occurrences are canonical", asyn
 
 
 test("scanSkills excludes known intentional duplicates", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-rules-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-rules-"));
   try {
     // This sentence is in the KNOWN_INTENTIONAL_DUPLICATES set,
     // so cross-file duplication should be suppressed.
@@ -271,7 +271,7 @@ test("scanSkills excludes known intentional duplicates", async () => {
 });
 
 test("collectMarkdownFiles finds markdown files recursively", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-rules-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-rules-"));
   try {
     const skillsDir = await writeSkillsDir(tempDir, {
       "SKILL.md": "root",

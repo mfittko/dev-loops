@@ -15,7 +15,7 @@ function runScript(args = [], opts = {}) {
 }
 
 test("verify-fresh-review-context exits 0 on first run (fresh context)", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-verify-fresh-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
     const result = runScript([], { cwd: tmpDir });
@@ -30,7 +30,7 @@ test("verify-fresh-review-context exits 0 on first run (fresh context)", async (
 });
 
 test("verify-fresh-review-context exits 1 when sentinel already exists", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-verify-fresh-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
     await writeFile(
@@ -56,7 +56,7 @@ test("verify-fresh-review-context --help prints usage and exits 0", async () => 
 });
 
 test("verify-fresh-review-context creates tmp dir if needed", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-verify-fresh-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     const result = runScript([], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
@@ -68,7 +68,7 @@ test("verify-fresh-review-context creates tmp dir if needed", async () => {
 });
 
 test("verify-fresh-review-context second run in same dir detects contamination", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-verify-fresh-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
     const r1 = runScript([], { cwd: tmpDir });
@@ -84,7 +84,7 @@ test("verify-fresh-review-context second run in same dir detects contamination",
 });
 
 test("verify-fresh-review-context --scope isolates parallel reviewers in same CWD", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-verify-fresh-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
 
@@ -101,7 +101,7 @@ test("verify-fresh-review-context --scope isolates parallel reviewers in same CW
 });
 
 test("verify-fresh-review-context --scope re-run with same scope detects contamination", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-verify-fresh-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
 
@@ -134,7 +134,7 @@ test("verify-fresh-review-context --scope rejects values with slashes", async ()
 
 test("verify-fresh-review-context --scope with missing value fails closed", async () => {
   // --scope followed by another flag or nothing
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-verify-fresh-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
     const result = runScript(["--scope"], { cwd: tmpDir });

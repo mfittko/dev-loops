@@ -28,7 +28,7 @@ function createReviewThreadsPayload(threads) {
 const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true, logCalls: true });
 
 test("reply-resolve-review-thread posts a reply then resolves the thread", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-thread-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-thread-"));
   const bodyFile = path.join(tempDir, "reply.md");
   await writeFile(bodyFile, "Fixed in 93cd7f8. Added the missing symlinked-ancestor guard and coverage.\n", "utf8");
 
@@ -86,7 +86,7 @@ test("reply-resolve-review-thread posts a reply then resolves the thread", async
 });
 
 test("reply-resolve-review-thread rejects thin replies without commit SHA or dismissal reason", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-thin-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-thin-"));
   const bodyFile = path.join(tempDir, "reply.md");
   await writeFile(bodyFile, "Acknowledged.\n", "utf8");
 
@@ -107,7 +107,7 @@ test("reply-resolve-review-thread rejects thin replies without commit SHA or dis
 });
 
 test("reply-resolve-review-thread rejects pure-numeric tokens that are not commit SHAs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-numeric-sha-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-numeric-sha-"));
   const bodyFile = path.join(tempDir, "reply.md");
   // "1234567" matches the 7-40 hex-char regex but contains no hex letters; must not bypass the check
   await writeFile(bodyFile, "1234567\n", "utf8");
@@ -169,7 +169,7 @@ test("reply-resolve-review-thread rejects malformed arguments and empty body fil
   assert.equal(badRepoParsed.ok, false);
   assert.match(badRepoParsed.error, /repo|slug|owner/i);
 
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-empty-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-empty-"));
   const emptyBody = path.join(tempDir, "empty.md");
   await writeFile(emptyBody, "   \n", "utf8");
 
@@ -198,7 +198,7 @@ test("reply-resolve-review-thread rejects malformed arguments and empty body fil
 });
 
 test("reply-resolve-review-thread preserves leading whitespace in the reply body payload", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-whitespace-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-whitespace-"));
   const bodyFile = path.join(tempDir, "reply.md");
   await writeFile(bodyFile, "  indented line with enough text to pass resolution contract\n", "utf8");
 
@@ -241,7 +241,7 @@ test("reply-resolve-review-thread preserves leading whitespace in the reply body
 });
 
 test("reply-resolve-review-thread reports reply and resolve failures deterministically", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-failure-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-failure-"));
   const bodyFile = path.join(tempDir, "reply.md");
   await writeFile(bodyFile, "Resolved in 93cd7f8.\n", "utf8");
 
@@ -342,7 +342,7 @@ test("reply-resolve-review-thread reports reply and resolve failures determinist
 });
 
 test("reply-resolve-review-thread fails closed before mutating when comment and thread do not match", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-mismatch-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-mismatch-"));
   const bodyFile = path.join(tempDir, "reply.md");
   await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
 
@@ -391,7 +391,7 @@ test("reply-resolve-review-thread fails closed before mutating when comment and 
 });
 
 test("reply-resolve-review-thread fails closed before mutating when the target thread is missing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-missing-thread-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-missing-thread-"));
   const bodyFile = path.join(tempDir, "reply.md");
   await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
 
@@ -431,7 +431,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target t
 });
 
 test("reply-resolve-review-thread fails closed before mutating when the target comment is missing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-missing-comment-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-missing-comment-"));
   const bodyFile = path.join(tempDir, "reply.md");
   await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
 
@@ -471,7 +471,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target c
 });
 
 test("reply-resolve-review-thread fails closed before mutating when the validation snapshot is malformed", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-malformed-snapshot-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-malformed-snapshot-"));
   const bodyFile = path.join(tempDir, "reply.md");
   await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
 

@@ -149,7 +149,7 @@ test("copilot-pr-handoff --repo auto-detected from git remote when omitted", asy
 });
 
 test("copilot-pr-handoff requests review and emits watch action for pr_ready_no_feedback", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-watch-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-watch-"));
 
   try {
     const { env } = await writeGhStubHelper(tempDir, [
@@ -229,7 +229,7 @@ test("copilot-pr-handoff requests review and emits watch action for pr_ready_no_
 // ---------------------------------------------------------------------------
 
 test("copilot-pr-handoff emits watch action when Copilot is already requested", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-already-requested-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-already-requested-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -270,7 +270,7 @@ test("copilot-pr-handoff emits watch action when Copilot is already requested", 
 });
 
 test("copilot-pr-handoff treats watch timeout with pending requested review as non-terminal", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-timeout-pending-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-timeout-pending-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -308,7 +308,7 @@ test("copilot-pr-handoff treats watch timeout with pending requested review as n
 });
 
 test("copilot-pr-handoff does not request review when checks have not materialized on the first-request path", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-no-checks-first-request-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-no-checks-first-request-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -351,7 +351,7 @@ test("copilot-pr-handoff does not request review when checks have not materializ
 });
 
 test("copilot-pr-handoff does not request review when statusCheckRollup is missing on the first-request path", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-missing-rollup-first-request-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-missing-rollup-first-request-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -393,7 +393,7 @@ test("copilot-pr-handoff does not request review when statusCheckRollup is missi
 });
 
 test("copilot-pr-handoff reports draft reset as ready-state reentry requirement", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-draft-reentry-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-draft-reentry-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -437,7 +437,7 @@ test("copilot-pr-handoff reports draft reset as ready-state reentry requirement"
 // ---------------------------------------------------------------------------
 
 test("copilot-pr-handoff emits stop action when Copilot review is unavailable", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-unavailable-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-unavailable-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -512,7 +512,7 @@ test("copilot-pr-handoff emits stop action when Copilot review is unavailable", 
 // ---------------------------------------------------------------------------
 
 test("copilot-pr-handoff emits watch action when 422 but Copilot is in requested_reviewers", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-422-in-progress-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-422-in-progress-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -584,7 +584,7 @@ test("copilot-pr-handoff emits watch action when 422 but Copilot is in requested
 });
 
 test("copilot-pr-handoff emits watch action when 422 but Copilot has a pending review in progress", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-422-pending-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-422-pending-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -656,7 +656,7 @@ test("copilot-pr-handoff emits watch action when 422 but Copilot has a pending r
 });
 
 test("copilot-pr-handoff treats stale pending Copilot review on an older commit plus no checks as waiting_for_ci", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-422-stale-pending-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-422-stale-pending-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -712,7 +712,7 @@ test("copilot-pr-handoff treats stale pending Copilot review on an older commit 
 });
 
 test("copilot-pr-handoff still re-requests review when a stale pending Copilot review exists on an older commit and CI is green", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-stale-pending-success-rerequest-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-stale-pending-success-rerequest-"));
 
   try {
     const ghPath = path.join(tempDir, "gh");
@@ -838,7 +838,7 @@ process.exit(97);
 });
 
 test("copilot-pr-handoff treats stale requested_reviewers as clean convergence after current-head review", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-current-head-review-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-current-head-review-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -899,7 +899,7 @@ test("copilot-pr-handoff treats stale requested_reviewers as clean convergence a
 });
 
 test("copilot-pr-handoff classifies watch timeout plus stale requested_reviewers as clean-converged", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-timeout-clean-converged-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-timeout-clean-converged-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -958,7 +958,7 @@ test("copilot-pr-handoff classifies watch timeout plus stale requested_reviewers
 });
 
 test("copilot-pr-handoff preserves copilotReviewPresent=false for an initial request with no prior review", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-initial-request-preserves-review-presence-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-initial-request-preserves-review-presence-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1024,7 +1024,7 @@ test("copilot-pr-handoff preserves copilotReviewPresent=false for an initial req
 });
 
 test("copilot-pr-handoff auto re-requests when a newer head has no submitted Copilot review yet", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-reenabled-after-head-change-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-reenabled-after-head-change-"));
 
   try {
     const ghPath = path.join(tempDir, "gh");
@@ -1138,7 +1138,7 @@ process.exit(97);
 });
 
 test("copilot-pr-handoff rejects --force-rerequest-review as a removed policy flag (standalone)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-force-rerequest-rejected-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-force-rerequest-rejected-"));
   try {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"]);
     assert.equal(result.code, 1);
@@ -1150,7 +1150,7 @@ test("copilot-pr-handoff rejects --force-rerequest-review as a removed policy fl
 });
 
 test("copilot-pr-handoff does not re-request review when checks have not materialized on the re-request path", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-no-checks-rerequest-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-no-checks-rerequest-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1201,7 +1201,7 @@ test("copilot-pr-handoff does not re-request review when checks have not materia
 });
 
 test("copilot-pr-handoff keeps same-head suppression (no force flag)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-no-force-rerequest-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-no-force-rerequest-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1253,7 +1253,7 @@ test("copilot-pr-handoff keeps same-head suppression (no force flag)", async () 
 });
 
 test("copilot-pr-handoff re-requests at round cap when new commits land after resolved comments", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-round-cap-rerequest-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-round-cap-rerequest-"));
 
   try {
     const { env } = await writeGhStubHelper(tempDir, [
@@ -1399,7 +1399,7 @@ test("copilot-pr-handoff re-requests at round cap when new commits land after re
 // ---------------------------------------------------------------------------
 
 test("copilot-pr-handoff emits fix action when unresolved threads exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-fix-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-fix-"));
 
   const unresolvedThreads = JSON.stringify({
     data: {
@@ -1469,7 +1469,7 @@ test("copilot-pr-handoff emits fix action when unresolved threads exist", async 
 });
 
 test("copilot-pr-handoff classifies watch timeout with refreshed unresolved thread as unresolved feedback", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-timeout-unresolved-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-timeout-unresolved-"));
 
   const unresolvedThreads = JSON.stringify({
     data: {
@@ -1557,7 +1557,7 @@ test("copilot-pr-handoff classifies watch timeout with refreshed unresolved thre
 // ---------------------------------------------------------------------------
 
 test("copilot-pr-handoff emits stop action when no PR exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-no-pr-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-no-pr-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1589,7 +1589,7 @@ test("copilot-pr-handoff emits stop action when no PR exists", async () => {
 // ---------------------------------------------------------------------------
 
 test("copilot-pr-handoff emits stop action for merged PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-merged-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-merged-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1621,7 +1621,7 @@ test("copilot-pr-handoff emits stop action for merged PR", async () => {
 });
 
 test("copilot-pr-handoff classifies watch timeout with CI still pending as non-terminal pending", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-timeout-ci-pending-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-timeout-ci-pending-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -1681,7 +1681,7 @@ test("copilot-pr-handoff classifies watch timeout with CI still pending as non-t
 
 
 test("copilot-pr-handoff stops cleanly when another run already owns the PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-ownership-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-ownership-"));
 
   try {
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-active", cwd: tempDir });
@@ -1713,7 +1713,7 @@ test("copilot-pr-handoff stops cleanly when another run already owns the PR", as
 // ---------------------------------------------------------------------------
 
 test("detectRecentHumanComments detects human comment after last bot comment", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-detect-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-detect-"));
 
   try {
     const { detectRecentHumanComments } = await import("../../scripts/loop/copilot-pr-handoff.mjs");
@@ -1754,7 +1754,7 @@ test("detectRecentHumanComments detects human comment after last bot comment", a
 });
 
 test("detectRecentHumanComments does not pause when human comment is before bot", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-before-bot-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-before-bot-"));
 
   try {
     const { detectRecentHumanComments } = await import("../../scripts/loop/copilot-pr-handoff.mjs");
@@ -1791,7 +1791,7 @@ test("detectRecentHumanComments does not pause when human comment is before bot"
 });
 
 test("detectRecentHumanComments skips gate-pattern human comments", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-gate-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-gate-"));
 
   try {
     const { detectRecentHumanComments } = await import("../../scripts/loop/copilot-pr-handoff.mjs");
@@ -1828,7 +1828,7 @@ test("detectRecentHumanComments skips gate-pattern human comments", async () => 
 });
 
 test("detectRecentHumanComments skips Gate review: format gate comments", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-gate-format-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-gate-format-"));
 
   try {
     const { detectRecentHumanComments } = await import("../../scripts/loop/copilot-pr-handoff.mjs");
@@ -1865,7 +1865,7 @@ test("detectRecentHumanComments skips Gate review: format gate comments", async 
 });
 
 test("detectRecentHumanComments returns false when only bots commented", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-bots-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-bots-"));
 
   try {
     const { detectRecentHumanComments } = await import("../../scripts/loop/copilot-pr-handoff.mjs");
@@ -1902,7 +1902,7 @@ test("detectRecentHumanComments returns false when only bots commented", async (
 });
 
 test("detectRecentHumanComments returns false when no bot baseline exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-no-baseline-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-no-baseline-"));
 
   try {
     const { detectRecentHumanComments } = await import("../../scripts/loop/copilot-pr-handoff.mjs");
@@ -1933,7 +1933,7 @@ test("detectRecentHumanComments returns false when no bot baseline exists", asyn
 });
 
 test("detectRecentHumanComments detects multiple human comments after last bot", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-multi-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-multi-"));
 
   try {
     const { detectRecentHumanComments } = await import("../../scripts/loop/copilot-pr-handoff.mjs");
@@ -1979,7 +1979,7 @@ test("detectRecentHumanComments detects multiple human comments after last bot",
 });
 
 test("copilot-pr-handoff skips human comment check when PI_SUBAGENT_RUN_ID not set", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-skip-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-skip-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -2016,7 +2016,7 @@ test("copilot-pr-handoff skips human comment check when PI_SUBAGENT_RUN_ID not s
 
 
 test("copilot-pr-handoff runs human comment check when PI_SUBAGENT_RUN_ID is set", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-active-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-active-"));
 
   try {
     const HUMAN_COMMENT = JSON.stringify({
@@ -2076,7 +2076,7 @@ test("copilot-pr-handoff runs human comment check when PI_SUBAGENT_RUN_ID is set
 });
 
 test("copilot-pr-handoff stops when human comment check fails with non-zero exit", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-fetch-fail-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-fetch-fail-"));
 
   try {
     const BOT_COMMENT = JSON.stringify({
@@ -2151,7 +2151,7 @@ test("copilot-pr-handoff stops when human comment check fails with non-zero exit
 });
 
 test("copilot-pr-handoff stops when human comment check fails with invalid JSON", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-human-parse-fail-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-parse-fail-"));
 
   try {
     const { env } = await writeGhStubHelper(tempDir, [
@@ -2220,7 +2220,7 @@ test("copilot-pr-handoff stops when human comment check fails with invalid JSON"
 // ---------------------------------------------------------------------------
 
 test("copilot-pr-handoff skips Copilot request for internal-only PR and emits fix action for pre-approval gate", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-internal-"));
   try {
     // Use claims mode so the internal detection call can interleave with normal flow
     const { env: rawEnv } = await writeGhStubHelper(tempDir, [
@@ -2253,7 +2253,7 @@ test("copilot-pr-handoff skips Copilot request for internal-only PR and emits fi
 });
 
 test("copilot-pr-handoff does not skip Copilot for consumer-facing PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-not-internal-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-not-internal-"));
   try {
     let env = await writeGhStub(tempDir, [
       // detect: pr view (autoDetectSnapshot first call)
@@ -2288,7 +2288,7 @@ test("copilot-pr-handoff does not skip Copilot for consumer-facing PR", async ()
 });
 
 test("copilot-pr-handoff skips internal detection when GH_SEQUENCE_PATH is set (stub mode)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-handoff-stubmode-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-stubmode-"));
   try {
     let env = await writeGhStub(tempDir, [
       // detect: pr view (autoDetectSnapshot first call)

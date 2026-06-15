@@ -400,5 +400,5 @@ back to positional arguments as described in the queue mode specification.
 
 - [Queue Board Setup](./queue-board-setup.md) — one-time setup guide
 - [Queue Mode SPEC](./specs/queue-mode/SPEC.md) — full queue mode specification
-- Issue [#625](https://github.com/mfittko/pi-dev-loops/issues/625) — parent epic
-- Issue [#626](https://github.com/mfittko/pi-dev-loops/issues/626) — this contract refinement
+- Issue [#625](https://github.com/mfittko/dev-loops/issues/625) — parent epic
+- Issue [#626](https://github.com/mfittko/dev-loops/issues/626) — this contract refinement

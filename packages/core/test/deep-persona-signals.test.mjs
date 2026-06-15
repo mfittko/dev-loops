@@ -19,7 +19,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = join(__dirname, "fixtures", "github", "review-threads", "deep-persona-threads.json");
 
-const PR_META = { prNumber: "412", prUrl: "https://github.com/mfittko/pi-dev-loops/pull/412" };
+const PR_META = { prNumber: "412", prUrl: "https://github.com/mfittko/dev-loops/pull/412" };
 
 // ============================================================================
 // Helpers
@@ -211,7 +211,7 @@ describe("deep-persona signal extraction", () => {
       const meta = firstSignal.rawPayload?.metadata;
       assert.ok(meta, "metadata should exist in rawPayload");
       assert.equal(meta.prNumber, "412");
-      assert.equal(meta.prUrl, "https://github.com/mfittko/pi-dev-loops/pull/412");
+      assert.equal(meta.prUrl, "https://github.com/mfittko/dev-loops/pull/412");
       assert.ok(typeof meta.commentId === "string");
       assert.ok(typeof meta.threadId === "string");
       assert.ok(typeof meta.isResolved === "boolean");

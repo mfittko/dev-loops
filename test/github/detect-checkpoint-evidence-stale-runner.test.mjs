@@ -69,7 +69,7 @@ async function writeGhStub(tempDir) {
 }
 
 test("detect-checkpoint-evidence fails closed when active runner is stale", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-ckpt-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-ckpt-"));
 
   try {
     await claimRunnerOwnership({
@@ -102,7 +102,7 @@ test("detect-checkpoint-evidence fails closed when active runner is stale", asyn
 });
 
 test("detect-checkpoint-evidence fails closed when active runner has an exit signal", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-ckpt-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-ckpt-"));
 
   try {
     await claimRunnerOwnership({
@@ -140,7 +140,7 @@ test("detect-checkpoint-evidence fails closed when active runner has an exit sig
 });
 
 test("detect-checkpoint-evidence includes staleRunner and staleRunnerCheck in successful output", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stale-runner-ckpt-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-ckpt-"));
 
   try {
     const env = await writeGhStub(tempDir);

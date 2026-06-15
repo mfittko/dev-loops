@@ -156,7 +156,7 @@ test("buildPhasePaths returns deterministic project-relative paths", () => {
 });
 
 test("ensurePhaseFiles writes manifest and index files with merged patch data", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-phase-files-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-phase-files-"));
 
   try {
     const first = await ensurePhaseFiles(tempDir, "phase-0", {
@@ -210,7 +210,7 @@ test("parseCliArgs rejects missing phase, missing option values, and unknown arg
 });
 
 test("ensure-phase-files CLI emits stable machine-readable success output", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-phase-files-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-phase-files-cli-"));
   const cliPath = path.resolve("packages/core/bin/ensure-phase-files.mjs");
 
   try {

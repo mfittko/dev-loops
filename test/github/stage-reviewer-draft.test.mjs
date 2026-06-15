@@ -15,7 +15,7 @@ const writeJson = writeJsonHelper;
 const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, entries, { logCalls: true });
 
 test("stage-reviewer-draft posts a deterministic pending review and writes local state", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stage-reviewer-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stage-reviewer-draft-"));
 
   try {
     const reviewFile = path.join(tempDir, "merged-review.json");
@@ -88,7 +88,7 @@ test("stage-reviewer-draft posts a deterministic pending review and writes local
 });
 
 test("stage-reviewer-draft merges into an existing local state file", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stage-reviewer-state-merge-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stage-reviewer-state-merge-"));
 
   try {
     const reviewFile = path.join(tempDir, "merged-review.json");
@@ -140,7 +140,7 @@ test("stage-reviewer-draft merges into an existing local state file", async () =
 
 
 test("stage-reviewer-draft reports localStatePath as null when no output path is requested", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stage-reviewer-null-local-state-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stage-reviewer-null-local-state-"));
 
   try {
     const reviewFile = path.join(tempDir, "merged-review.json");
@@ -183,7 +183,7 @@ test("stage-reviewer-draft rejects malformed arguments and missing headSha deter
     error: "Staging a reviewer draft requires --repo <owner/name>, --pr <number>, and --review-file <path>",
   });
 
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stage-reviewer-bad-review-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stage-reviewer-bad-review-"));
   try {
     const reviewFile = path.join(tempDir, "merged-review.json");
     await writeJson(reviewFile, {
@@ -212,7 +212,7 @@ test("stage-reviewer-draft rejects malformed arguments and missing headSha deter
 });
 
 test("stage-reviewer-draft reports gh failures deterministically", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stage-reviewer-gh-fail-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stage-reviewer-gh-fail-"));
 
   try {
     const reviewFile = path.join(tempDir, "merged-review.json");
@@ -253,7 +253,7 @@ test("stage-reviewer-draft reports gh failures deterministically", async () => {
 
 
 test("stage-reviewer-draft rejects malformed success payloads from gh deterministically", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-stage-reviewer-bad-success-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stage-reviewer-bad-success-"));
 
   try {
     const reviewFile = path.join(tempDir, "merged-review.json");

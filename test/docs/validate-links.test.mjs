@@ -10,7 +10,7 @@ import { formatBrokenLinkReport, validateMarkdownLinks } from "../../scripts/doc
 const scriptPath = path.resolve("scripts/docs/validate-links.mjs");
 
 async function createRepo(files) {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-validate-links-"));
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-validate-links-"));
 
   for (const [relativePath, content] of Object.entries(files)) {
     const absolutePath = path.join(repoRoot, relativePath);

@@ -116,7 +116,7 @@ test("rejects --pr without value", async () => {
 });
 
 test("fails when PR is not in draft state", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-ready-not-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-not-draft-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -150,7 +150,7 @@ test("fails when PR is not in draft state", async () => {
 });
 
 test("fails when draft_gate evidence is missing (fail-closed)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-ready-no-gate-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-no-gate-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -185,7 +185,7 @@ test("fails when draft_gate evidence is missing (fail-closed)", async () => {
 });
 
 test("fails when CI is blocked", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-ready-ci-blocked-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-ci-blocked-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -224,7 +224,7 @@ test("fails when CI is blocked", async () => {
 });
 
 test("succeeds when draft gate evidence exists and CI is green", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-ready-success-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-success-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -290,7 +290,7 @@ test("succeeds when draft gate evidence exists and CI is green", async () => {
 });
 
 test.skip("--skip-gate-check allows transition without gate evidence", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-ready-skip-gate-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-skip-gate-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -333,7 +333,7 @@ test.skip("--skip-gate-check allows transition without gate evidence", async () 
 });
 
 test("fails when draft_gate marker does not match current head SHA", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-ready-mismatch-head-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-mismatch-head-"));
 
   try {
     // PR head is a NEW commit pushed after the gate was run
@@ -391,7 +391,7 @@ test("fails when draft_gate marker does not match current head SHA", async () =>
 });
 
 test("succeeds when gate comment has abbreviated SHA matching full PR head SHA", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-ready-abbrev-sha-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-abbrev-sha-"));
 
   try {
     // GitHub reports full 40-char SHA; gate comment may record abbreviated 7+ char SHA

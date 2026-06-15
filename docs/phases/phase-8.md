@@ -165,5 +165,5 @@ This means angles are lenses first, optionally backed by dedicated agent persona
 
 ## Links
 
-- GitHub issue: [#286](https://github.com/mfittko/pi-dev-loops/issues/286)
+- GitHub issue: [#286](https://github.com/mfittko/dev-loops/issues/286)
 - Local execution artifacts will live under `tmp/phases/phase-8/`

@@ -3,7 +3,7 @@
 ## Purpose and scope
 
 This document is the canonical repo-level owner for local worktree usage guidance in
-`pi-dev-loops`.
+`dev-loops`.
 
 Use it to keep local mutation work isolated, predictable, and easy to clean up.
 This guidance covers where worktrees live, when to create or reuse them, how to

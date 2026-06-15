@@ -201,7 +201,7 @@ node <resolved-skill-scripts>/github/manage-sub-issues.mjs list \
 Do **not** re-implement sub-issue management ad hoc or bypass `manage-sub-issues.mjs`.
 Do **not** maintain a body checklist that duplicates the sub-issue tree.
 
-For the full `manage-sub-issues.mjs` contract, use [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md) when working in the `pi-dev-loops` source repository. That contract is a source-repo reference, not part of the bundled installed skill-doc surface. For installed or normalized skill copies, inspect the target repository docs/source directly instead of assuming a bundled shared-doc copy exists.
+For the full `manage-sub-issues.mjs` contract, use [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md) when working in the `dev-loops` source repository. That contract is a source-repo reference, not part of the bundled installed skill-doc surface. For installed or normalized skill copies, inspect the target repository docs/source directly instead of assuming a bundled shared-doc copy exists.
 
 When an existing sub-issue tree needs **scope alignment, AC/DoD contracts, and delegation boundary refinement** across all levels (parent → children → grandchildren), use the [Epic Tree Refinement Procedure](./epic-tree-refinement-procedure.md) — it owns the deterministic depth-first, top-down-then-bottom-up refinement protocol.
 

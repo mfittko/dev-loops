@@ -18,7 +18,7 @@ function syntheticSignal(id, opts = {}) {
       description: opts.description || "Auto-generated synthetic signal",
       metadata: {
         prNumber: "88",
-        prUrl: "https://github.com/mfittko/pi-dev-loops/pull/88",
+        prUrl: "https://github.com/mfittko/dev-loops/pull/88",
         commentId: `comment-${id}`,
         category: opts.signalKind || "file_size",
       },

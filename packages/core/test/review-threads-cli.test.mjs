@@ -59,7 +59,7 @@ test("parse-review-threads CLI emits stable machine-readable success output", as
 });
 
 test("parse-review-threads CLI reports invalid JSON deterministically", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-review-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-review-cli-"));
   const invalidPath = path.join(tempDir, "invalid.json");
 
   try {

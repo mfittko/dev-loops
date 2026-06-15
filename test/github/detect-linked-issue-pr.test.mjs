@@ -61,7 +61,7 @@ function crossNode({ createdAt, number, state = "OPEN", repo = "owner/repo", url
 }
 
 test("detect-linked-issue-pr paginates and applies deterministic event-type priority", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-linked-pr-page-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-page-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -109,7 +109,7 @@ test("detect-linked-issue-pr paginates and applies deterministic event-type prio
 });
 
 test("detect-linked-issue-pr matches same-repo linked PRs case-insensitively", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-linked-pr-case-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-case-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -147,7 +147,7 @@ test("detect-linked-issue-pr matches same-repo linked PRs case-insensitively", a
 });
 
 test("detect-linked-issue-pr tests fail fast on unexpected extra gh calls", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-linked-pr-overcall-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-overcall-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -174,7 +174,7 @@ test("detect-linked-issue-pr tests fail fast on unexpected extra gh calls", asyn
 });
 
 test("detect-linked-issue-pr filters cross-repo/closed candidates and picks newest createdAt within event type", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-linked-pr-filter-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-filter-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -216,7 +216,7 @@ test("detect-linked-issue-pr filters cross-repo/closed candidates and picks newe
 });
 
 test("detect-linked-issue-pr returns no match when no open same-repo linked PR exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-linked-pr-none-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-none-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -254,7 +254,7 @@ test("detect-linked-issue-pr returns no match when no open same-repo linked PR e
 });
 
 test("detect-linked-issue-pr detects prior closed-unmerged same-repo PR when no open PR exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-linked-pr-closed-unmerged-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-closed-unmerged-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -291,7 +291,7 @@ test("detect-linked-issue-pr detects prior closed-unmerged same-repo PR when no 
 });
 
 test("detect-linked-issue-pr does not surface merged same-repo PR as prior closed-unmerged", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-linked-pr-merged-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-merged-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -328,7 +328,7 @@ test("detect-linked-issue-pr does not surface merged same-repo PR as prior close
 });
 
 test("detect-linked-issue-pr selects most recent closed-unmerged PR when multiple exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-linked-pr-multi-closed-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-multi-closed-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -358,7 +358,7 @@ test("detect-linked-issue-pr selects most recent closed-unmerged PR when multipl
 });
 
 test("detect-linked-issue-pr open PR takes precedence and closed-unmerged fields are absent", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-linked-pr-open-wins-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-open-wins-"));
 
   try {
     const env = await writeGhStub(tempDir, [

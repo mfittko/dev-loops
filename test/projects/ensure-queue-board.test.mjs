@@ -150,7 +150,7 @@ describe("ensure-queue-board", () => {
         },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops" },
+        { repo: "mfittko/dev-loops" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -201,7 +201,7 @@ describe("ensure-queue-board", () => {
         },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", title: "My Queue" },
+        { repo: "mfittko/dev-loops", title: "My Queue" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -218,7 +218,7 @@ describe("ensure-queue-board", () => {
         { payload: getFieldsResponse([STATUS_FIELD]) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", project: 1 },
+        { repo: "mfittko/dev-loops", project: 1 },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -232,7 +232,7 @@ describe("ensure-queue-board", () => {
       ];
       try {
         await main(
-          { repo: "mfittko/pi-dev-loops", project: 999 },
+          { repo: "mfittko/dev-loops", project: 999 },
           { env: {}, runChild: mockRunChild(responses) },
         );
         assert.fail("should have thrown");
@@ -262,11 +262,11 @@ describe("ensure-queue-board", () => {
         },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", linkRepo: "mfittko/pi-dev-loops" },
+        { repo: "mfittko/dev-loops", linkRepo: "mfittko/dev-loops" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
-      assert.equal(result.project.linkedRepo, "mfittko/pi-dev-loops");
+      assert.equal(result.project.linkedRepo, "mfittko/dev-loops");
       assert.equal(result.project.statusFieldId, "PVTSSF_new");
     });
 
@@ -279,17 +279,17 @@ describe("ensure-queue-board", () => {
         { payload: linkRepoResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", linkRepo: "mfittko/pi-dev-loops" },
+        { repo: "mfittko/dev-loops", linkRepo: "mfittko/dev-loops" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
-      assert.equal(result.project.linkedRepo, "mfittko/pi-dev-loops");
+      assert.equal(result.project.linkedRepo, "mfittko/dev-loops");
     });
 
     it("validates link-repo format", async () => {
       await assert.rejects(
         () => main({
-          repo: "mfittko/pi-dev-loops",
+          repo: "mfittko/dev-loops",
           linkRepo: "not-a-repo",
         }),
         /owner\/name/,
@@ -312,7 +312,7 @@ describe("ensure-queue-board", () => {
         { payload: updateFieldResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops" },
+        { repo: "mfittko/dev-loops" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -343,7 +343,7 @@ describe("ensure-queue-board", () => {
         { payload: updateFieldResponse(expectedOptions) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops" },
+        { repo: "mfittko/dev-loops" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -367,12 +367,12 @@ describe("ensure-queue-board", () => {
         { payload: linkRepoResponse() },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops", linkRepo: "mfittko/pi-dev-loops" },
+        { repo: "mfittko/dev-loops", linkRepo: "mfittko/dev-loops" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
       assert.equal(result.project.statusFieldId, "PVTSSF_partial");
-      assert.equal(result.project.linkedRepo, "mfittko/pi-dev-loops");
+      assert.equal(result.project.linkedRepo, "mfittko/dev-loops");
     });
   });
 
@@ -440,7 +440,7 @@ describe("ensure-queue-board", () => {
         { payload: getFieldsResponse([STATUS_FIELD]) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops" },
+        { repo: "mfittko/dev-loops" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -460,7 +460,7 @@ describe("ensure-queue-board", () => {
         },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops" },
+        { repo: "mfittko/dev-loops" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -498,7 +498,7 @@ describe("ensure-queue-board", () => {
         { payload: getFieldsResponse([STATUS_FIELD]) },
       ];
       const result = await main(
-        { repo: "mfittko/pi-dev-loops" },
+        { repo: "mfittko/dev-loops" },
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
@@ -526,7 +526,7 @@ describe("ensure-queue-board", () => {
     it("throws on GraphQL API error", async () => {
       const responses = [{ error: "gh: authentication required" }];
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
+        () => main({ repo: "mfittko/dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
         /gh api graphql failed/,
       );
     });
@@ -536,7 +536,7 @@ describe("ensure-queue-board", () => {
         payload: { errors: [{ message: "Could not resolve to a User" }] },
       }];
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
+        () => main({ repo: "mfittko/dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
         /GraphQL errors/,
       );
     });
@@ -547,7 +547,7 @@ describe("ensure-queue-board", () => {
         { payload: noOrgPayload() },
       ];
       await assert.rejects(
-        () => main({ repo: "mfittko/pi-dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
+        () => main({ repo: "mfittko/dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
         /Could not resolve owner ID/,
       );
     });
@@ -570,7 +570,7 @@ describe("ensure-queue-board", () => {
       ];
       await assert.rejects(
         () => main(
-          { repo: "mfittko/pi-dev-loops", linkRepo: "nonexistent/repo" },
+          { repo: "mfittko/dev-loops", linkRepo: "nonexistent/repo" },
           { env: {}, runChild: mockRunChild(responses) },
         ),
         /Could not resolve repository ID/,
@@ -691,7 +691,7 @@ describe("rename/reconcile drift", () => {
 
   it("reports empty repairs when all standard columns are present", async () => {
     const result = await main(
-      { repo: "mfittko/pi-dev-loops" },
+      { repo: "mfittko/dev-loops" },
       { env: {}, runChild: mockRunChild(NO_DRIFT_RESPONSES()) },
     );
     assert.equal(result.ok, true);
@@ -712,7 +712,7 @@ describe("rename/reconcile drift", () => {
       { payload: getFieldsResponse([RENAMED_FIELD]) },
     ];
     const result = await main(
-      { repo: "mfittko/pi-dev-loops" },
+      { repo: "mfittko/dev-loops" },
       { env: {}, runChild: mockRunChild(responses) },
     );
     assert.equal(result.ok, true);
@@ -736,7 +736,7 @@ describe("rename/reconcile drift", () => {
       { payload: updateFieldResponse(expectedOptions) },
     ];
     const result = await main(
-      { repo: "mfittko/pi-dev-loops", repairRename: true },
+      { repo: "mfittko/dev-loops", repairRename: true },
       { env: {}, runChild: mockRunChild(responses) },
     );
     assert.equal(result.ok, true);
@@ -763,7 +763,7 @@ describe("rename/reconcile drift", () => {
       { payload: getFieldsResponse([conflictField]) },
     ];
     const result = await main(
-      { repo: "mfittko/pi-dev-loops", repairRename: true },
+      { repo: "mfittko/dev-loops", repairRename: true },
       { env: {}, runChild: mockRunChild(responses) },
     );
     assert.equal(result.ok, true);
@@ -794,7 +794,7 @@ describe("rename/reconcile drift", () => {
       { payload: updateFieldResponse(expectedOptions) },
     ];
     const result = await main(
-      { repo: "mfittko/pi-dev-loops", repairRename: true },
+      { repo: "mfittko/dev-loops", repairRename: true },
       { env: {}, runChild: mockRunChild(responses) },
     );
     assert.equal(result.ok, true);
@@ -822,7 +822,7 @@ describe("rename conflict when standard already exists", () => {
       { payload: getFieldsResponse([duplicateStandardField]) },
     ];
     const result = await main(
-      { repo: "mfittko/pi-dev-loops", repairRename: true },
+      { repo: "mfittko/dev-loops", repairRename: true },
       { env: {}, runChild: mockRunChild(responses) },
     );
     assert.equal(result.ok, true);
@@ -849,7 +849,7 @@ describe("rename conflict when standard already exists", () => {
       },
     ];
     const result = await main(
-      { repo: "mfittko/pi-dev-loops" },
+      { repo: "mfittko/dev-loops" },
       { env: {}, runChild: mockRunChild(responses) },
     );
     assert.equal(result.ok, true);

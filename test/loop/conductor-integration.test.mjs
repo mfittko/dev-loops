@@ -18,7 +18,7 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, opt
  * Write a minimal .pi/dev-loop/settings.yaml and return cleanup helper.
  */
 async function setupConfigDir(requireRetrospective = false, extraSettings = {}) {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-config-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-config-"));
   const configDir = path.join(tempDir, ".pi", "dev-loop");
   await mkdir(configDir, { recursive: true });
 
@@ -282,7 +282,7 @@ test("runConductor degrades gracefully with monitor-only", async () => {
 // ---------------------------------------------------------------------------
 
 test("conductor --cycle-only CLI reports empty queue when no open PRs exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-cycle-only-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-cycle-only-"));
 
   try {
     const { env } = await writeGhStubHelper(tempDir, [{
@@ -307,7 +307,7 @@ test("conductor --cycle-only CLI reports empty queue when no open PRs exist", as
 });
 
 test("conductor --monitor-only CLI reports queue_complete when no open PRs exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-monitor-only-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-only-"));
 
   try {
     const { env } = await writeGhStubHelper(tempDir, [{
@@ -331,7 +331,7 @@ test("conductor --monitor-only CLI reports queue_complete when no open PRs exist
 
 test("conductor --require-retrospective CLI blocks when checkpoint is pending", async () => {
   const { repoRoot, cleanup } = await setupConfigDir(false);
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-require-retro-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-require-retro-"));
 
   try {
     const piDir = path.join(repoRoot, ".pi");
@@ -364,7 +364,7 @@ test("conductor --require-retrospective CLI blocks when checkpoint is pending", 
 });
 
 test("conductor CLI with both cycle and monitor uses repeat-last for sequential gh calls", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-conductor-both-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-both-"));
 
   try {
     const { env } = await writeGhStubHelper(tempDir, [{

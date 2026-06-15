@@ -87,7 +87,7 @@ test("reply-resolve-review-threads rejects malformed arguments and conflicting o
 });
 
 test("reply-resolve-review-threads replies to matching unresolved threads without resolving by default", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-threads-reply-only-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-reply-only-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -188,7 +188,7 @@ test("reply-resolve-review-threads replies to matching unresolved threads withou
 });
 
 test("reply-resolve-review-threads resolves matched threads and verifies they stay resolved", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-threads-resolve-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-resolve-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -286,7 +286,7 @@ test("reply-resolve-review-threads resolves matched threads and verifies they st
 });
 
 test("reply-resolve-review-threads chooses the newest matching author-authored comment as the reply target", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-threads-newest-comment-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-newest-comment-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -325,7 +325,7 @@ test("reply-resolve-review-threads chooses the newest matching author-authored c
 });
 
 test("reply-resolve-review-threads returns deterministic success when nothing matches", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-threads-noop-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-noop-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -369,7 +369,7 @@ test("reply-resolve-review-threads returns deterministic success when nothing ma
 });
 
 test("reply-resolve-review-threads fails closed on malformed capture payloads", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-threads-bad-payload-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-bad-payload-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -395,7 +395,7 @@ test("reply-resolve-review-threads fails closed on malformed capture payloads", 
 });
 
 test("reply-resolve-review-threads stops on reply failure and reports partial progress", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-threads-partial-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-partial-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -459,7 +459,7 @@ test("reply-resolve-review-threads stops on reply failure and reports partial pr
 });
 
 test("reply-resolve-review-threads fails closed when post-resolve verification still finds targeted unresolved threads", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-threads-verify-fail-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-verify-fail-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -527,7 +527,7 @@ test("reply-resolve-review-threads fails closed when post-resolve verification s
 });
 
 test("reply-resolve-review-threads preserves leading whitespace and newlines from stdin", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-threads-stdin-whitespace-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-stdin-whitespace-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -560,7 +560,7 @@ test("reply-resolve-review-threads preserves leading whitespace and newlines fro
 });
 
 test("reply-resolve-review-threads preserves leading whitespace from --message", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reply-resolve-threads-message-whitespace-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-message-whitespace-"));
 
   try {
     const gh = await writeGhStub(tempDir, [

@@ -1,6 +1,6 @@
 # PR lifecycle contract
 
-This document defines the deterministic **family-local PR lifecycle contract** for the GitHub/Copilot workflow family in `pi-dev-loops`.
+This document defines the deterministic **family-local PR lifecycle contract** for the GitHub/Copilot workflow family in `dev-loops`.
 
 The canonical contract lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree.
 

@@ -16,7 +16,7 @@ async function writeGhStub(tempDir, entries) {
 }
 
 test("detect-copilot-session-activity reports active when matching run is in progress", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-session-active-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-session-active-"));
 
   try {
     const env = await writeGhStub(tempDir, [{
@@ -45,7 +45,7 @@ test("detect-copilot-session-activity reports active when matching run is in pro
 });
 
 test("detect-copilot-session-activity prefers the newest matching run over older active runs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-session-newest-wins-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-session-newest-wins-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -84,7 +84,7 @@ test("detect-copilot-session-activity prefers the newest matching run over older
 });
 
 test("detect-copilot-session-activity reports concluded when latest matching run completed", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-session-concluded-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-session-concluded-"));
 
   try {
     const env = await writeGhStub(tempDir, [{
@@ -119,7 +119,7 @@ test("detect-copilot-session-activity reports concluded when latest matching run
 });
 
 test("detect-copilot-session-activity treats approval-gated action_required runs as concluded", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-session-action-required-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-session-action-required-"));
 
   try {
     const env = await writeGhStub(tempDir, [{
@@ -148,7 +148,7 @@ test("detect-copilot-session-activity treats approval-gated action_required runs
 });
 
 test("detect-copilot-session-activity treats status=action_required as concluded even without a conclusion", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-session-status-action-required-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-session-status-action-required-"));
 
   try {
     const env = await writeGhStub(tempDir, [{
@@ -179,7 +179,7 @@ test("detect-copilot-session-activity treats status=action_required as concluded
 });
 
 test("detect-copilot-session-activity reports idle when no matching run names exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-session-idle-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-session-idle-"));
 
   try {
     const env = await writeGhStub(tempDir, [{
@@ -206,7 +206,7 @@ test("detect-copilot-session-activity reports idle when no matching run names ex
 });
 
 test("detect-copilot-session-activity reports idle when branch has no runs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-detect-session-empty-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-session-empty-"));
 
   try {
     const env = await writeGhStub(tempDir, [{

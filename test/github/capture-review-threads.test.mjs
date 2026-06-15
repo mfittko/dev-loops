@@ -55,7 +55,7 @@ test("capture-review-threads reads review-thread JSON from stdin", async () => {
 });
 
 test("capture-review-threads writes identical JSON to --output", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-capture-review-threads-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-capture-review-threads-"));
   const outputPath = path.join(tempDir, "review-threads.json");
 
   try {
@@ -75,7 +75,7 @@ test("capture-review-threads writes identical JSON to --output", async () => {
 });
 
 test("capture-review-threads supports live gh capture only with explicit --repo and --pr", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-capture-review-live-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-capture-review-live-"));
 
   try {
     const fixtureText = await readFile(fixturePath, "utf8");
@@ -105,7 +105,7 @@ test("capture-review-threads supports live gh capture only with explicit --repo 
 });
 
 test("capture-review-threads exposes numeric comment database ids in normalized live output", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-capture-review-database-id-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-capture-review-database-id-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -211,7 +211,7 @@ test("capture-review-threads rejects malformed live-argument combinations determ
 });
 
 test("capture-review-threads reports gh failures deterministically", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-capture-review-gh-failure-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-capture-review-gh-failure-"));
 
   try {
     const gh = await writeGhStub(tempDir, [

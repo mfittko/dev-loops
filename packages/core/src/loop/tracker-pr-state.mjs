@@ -25,7 +25,7 @@
  * Source-of-truth ownership:
  * - Tracker:        work-item identity, planning hierarchy, and tracker-native state
  * - GitHub:         PR lifecycle, review state, CI/check results, and merge facts
- * - pi-dev-loops:   projection and sync logic only; never the canonical owner of
+ * - dev-loops:   projection and sync logic only; never the canonical owner of
  *                   business fields
  */
 

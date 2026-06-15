@@ -85,7 +85,7 @@ test("reconcile-draft-gate --help describes the script as optional manual recove
 });
 
 test("reconcile-draft-gate fails closed when visible draft_gate evidence already exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-visible-evidence-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-visible-evidence-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -124,7 +124,7 @@ test("reconcile-draft-gate fails closed when visible draft_gate evidence already
 });
 
 test("reconcile-draft-gate blocks while CI is still pending", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-pending-ci-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-pending-ci-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -161,7 +161,7 @@ test("reconcile-draft-gate blocks while CI is still pending", async () => {
 });
 
 test("reconcile-draft-gate treats failing gh pr checks JSON output as blocked even on exit code 1", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-failing-ci-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-failing-ci-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -198,7 +198,7 @@ test("reconcile-draft-gate treats failing gh pr checks JSON output as blocked ev
 });
 
 test("reconcile-draft-gate surfaces gh pr checks stderr when exit code 1 has no JSON payload", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-failing-ci-no-json-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-failing-ci-no-json-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -233,7 +233,7 @@ test("reconcile-draft-gate surfaces gh pr checks stderr when exit code 1 has no 
 });
 
 test("reconcile-draft-gate blocks when no CI checks are reported", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-no-ci-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-no-ci-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -267,7 +267,7 @@ test("reconcile-draft-gate blocks when no CI checks are reported", async () => {
 });
 
 test("reconcile-draft-gate skips CI checks when config disables draft requireCi", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-config-skip-ci-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-config-skip-ci-"));
 
   try {
     await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
@@ -364,7 +364,7 @@ test("reconcile-draft-gate skips CI checks when config disables draft requireCi"
 });
 
 test("reconcile-draft-gate skips the draft conversion mutation when the PR is already draft", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-already-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-already-draft-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -451,7 +451,7 @@ test("reconcile-draft-gate skips the draft conversion mutation when the PR is al
 });
 
 test("reconcile-draft-gate does not mark ready when upsert throws and the PR was already draft", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-already-draft-upsert-failure-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-already-draft-upsert-failure-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -524,7 +524,7 @@ test("reconcile-draft-gate does not mark ready when upsert throws and the PR was
 });
 
 test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throws after converting to draft", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-upsert-failure-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-upsert-failure-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -606,7 +606,7 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
 });
 
 test("reconcile-draft-gate converts to draft, posts clean evidence, and marks ready when CI is green", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reconcile-draft-gate-success-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-success-"));
 
   try {
     const env = await writeGhStub(tempDir, [

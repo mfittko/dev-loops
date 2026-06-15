@@ -8,7 +8,7 @@ Other repo docs may summarize or link this contract, but they should not redefin
 
 ## Two-tier model
 
-pi-dev-loops supports two mutually exclusive artifact authority modes. Every work item must originate from exactly one authoritative artifact — a GitHub issue or a persisted markdown plan file. No work may originate from a PR or direct local change unless explicitly requested.
+dev-loops supports two mutually exclusive artifact authority modes. Every work item must originate from exactly one authoritative artifact — a GitHub issue or a persisted markdown plan file. No work may originate from a PR or direct local change unless explicitly requested.
 
 ### Tracker-first (default)
 
@@ -73,7 +73,7 @@ The `inputSource.default` key disambiguates local-first startup:
 - `tracker` (default): local agent implements from the GitHub issue body; the issue is canonical spec
 - `phase-docs`: local agent implements from persisted phase docs; no tracker issue required
 
-These keys are already defined in `.pi/dev-loop/defaults.yaml` (shipped with pi-dev-loops) and may be overridden in `.devloops` (per-repo).
+These keys are already defined in `.pi/dev-loop/defaults.yaml` (shipped with dev-loops) and may be overridden in `.devloops` (per-repo).
 
 ### Defaults resolution
 
@@ -87,15 +87,15 @@ These are not valid artifact authority mode selectors:
 - Free-form string values — fail closed
 - Omitting `strategy.default` entirely — defaults to `github-first` from the shipped defaults
 
-## pi-dev-loops own mode
+## dev-loops own mode
 
-pi-dev-loops is **tracker-first (opted in, GitHub backend).**
+dev-loops is **tracker-first (opted in, GitHub backend).**
 
 - **Mode:** Tracker-first
 - **Settings:** `.pi/dev-loop/defaults.yaml` sets `strategy.default: github-first`
 - **Artifact authority:** GitHub issues are the canonical spec for all work in this repository
 - **No local-planning override:** This repo does not opt out to local-planning mode
-- **Why tracker-first:** All work in this repo originates from GitHub issues. The public dev-loop contract, Copilot follow-up state machines, and gate pipeline all assume issues are the primary artifact. Self-improvement work on pi-dev-loops itself follows the same tracker-first contract.
+- **Why tracker-first:** All work in this repo originates from GitHub issues. The public dev-loop contract, Copilot follow-up state machines, and gate pipeline all assume issues are the primary artifact. Self-improvement work on dev-loops itself follows the same tracker-first contract.
 
 ## Relationship to other docs
 

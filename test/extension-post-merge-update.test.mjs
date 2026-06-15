@@ -50,12 +50,12 @@ function createPiDouble() {
 }
 
 test("normalizeGitHubRepoSlug recognizes GitHub remote variants", () => {
-  assert.equal(normalizeGitHubRepoSlug("git@github.com:mfittko/pi-dev-loops.git"), TARGET_REPO_SLUG);
-  assert.equal(normalizeGitHubRepoSlug("https://github.com/mfittko/pi-dev-loops.git"), TARGET_REPO_SLUG);
-  assert.equal(normalizeGitHubRepoSlug("git@github.com:Mfittko/Pi-Dev-Loops.git"), TARGET_REPO_SLUG);
-  assert.equal(normalizeGitHubRepoSlug("ssh://git@github.com/mfittko/pi-dev-loops.git"), TARGET_REPO_SLUG);
-  assert.equal(normalizeGitHubRepoSlug("git:github.com/mfittko/pi-dev-loops"), TARGET_REPO_SLUG);
-  assert.equal(normalizeGitHubRepoSlug("https://gitlab.com/mfittko/pi-dev-loops.git"), null);
+  assert.equal(normalizeGitHubRepoSlug("git@github.com:mfittko/dev-loops.git"), TARGET_REPO_SLUG);
+  assert.equal(normalizeGitHubRepoSlug("https://github.com/mfittko/dev-loops.git"), TARGET_REPO_SLUG);
+  assert.equal(normalizeGitHubRepoSlug("git@github.com:Mfittko/Dev-Loops.git"), TARGET_REPO_SLUG);
+  assert.equal(normalizeGitHubRepoSlug("ssh://git@github.com/mfittko/dev-loops.git"), TARGET_REPO_SLUG);
+  assert.equal(normalizeGitHubRepoSlug("git:github.com/mfittko/dev-loops"), TARGET_REPO_SLUG);
+  assert.equal(normalizeGitHubRepoSlug("https://gitlab.com/mfittko/dev-loops.git"), null);
 });
 
 test("isMergeCapableCommand only matches bounded merge commands", () => {
@@ -263,7 +263,7 @@ test("killed post-merge updates surface a clear warning message", async () => {
 
 test("session_start resets post-merge hook state and extension registers lifecycle listeners", async () => {
   const previousHome = process.env.HOME;
-  const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-post-merge-home-"));
+  const tempHome = await mkdtemp(path.join(os.tmpdir(), "dev-loops-post-merge-home-"));
   process.env.HOME = tempHome;
 
   try {
@@ -300,7 +300,7 @@ test("session_start resets post-merge hook state and extension registers lifecyc
 test("isGhPrReadyCommand matches gh pr ready variants", () => {
   assert.equal(isGhPrReadyCommand("gh pr ready"), true);
   assert.equal(isGhPrReadyCommand("gh pr ready 42"), true);
-  assert.equal(isGhPrReadyCommand("gh pr ready 42 --repo mfittko/pi-dev-loops"), true);
+  assert.equal(isGhPrReadyCommand("gh pr ready 42 --repo mfittko/dev-loops"), true);
   assert.equal(isGhPrReadyCommand("gh pr ready --help"), false);
   assert.equal(isGhPrReadyCommand("gh pr ready -h"), false);
   assert.equal(isGhPrReadyCommand("gh pr ready 42 --help"), false);
@@ -317,8 +317,8 @@ test("isGhPrReadyCommand matches gh pr ready variants", () => {
 test("extractPrNumberFromGhPrReady extracts the PR number", () => {
   assert.equal(extractPrNumberFromGhPrReady("gh pr ready 42"), 42);
   assert.equal(extractPrNumberFromGhPrReady("gh pr ready 123"), 123);
-  assert.equal(extractPrNumberFromGhPrReady("gh pr ready 42 --repo mfittko/pi-dev-loops"), 42);
-  assert.equal(extractPrNumberFromGhPrReady("gh pr ready --repo mfittko/pi-dev-loops 42"), 42);
+  assert.equal(extractPrNumberFromGhPrReady("gh pr ready 42 --repo mfittko/dev-loops"), 42);
+  assert.equal(extractPrNumberFromGhPrReady("gh pr ready --repo mfittko/dev-loops 42"), 42);
   assert.equal(extractPrNumberFromGhPrReady("gh pr ready -r other/repo 42"), 42);
   assert.equal(extractPrNumberFromGhPrReady("gh pr ready --REPO other/repo 42"), 42);
   assert.equal(extractPrNumberFromGhPrReady("gh pr ready 42abc"), null);

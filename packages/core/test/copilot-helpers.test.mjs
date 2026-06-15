@@ -288,7 +288,7 @@ test("summarizeGateReviewCommentMarkers prefers structured over lenient when bot
 test("parseGateReviewCommentMarkerBody lenient SHA ignores github comment URLs", () => {
   // "head e284c2e341" matched by context-based parser; URL #issuecomment-4615274563 ignored
   const body = "pre_approval_gate for head e284c2e341: all clear!\n\n" +
-    "See https://github.com/mfittko/pi-dev-loops/pull/450#issuecomment-4615274563 for details.";
+    "See https://github.com/mfittko/dev-loops/pull/450#issuecomment-4615274563 for details.";
   const result = parseGateReviewCommentMarkerBody(body);
   assert.notEqual(result, null);
   assert.equal(result.gate, "pre_approval_gate");

@@ -15,7 +15,7 @@ as the authoritative source for:
 - Copilot follow-up loop: `detect-copilot-loop-state.mjs` from the resolved skill scripts directory
 - reviewer-side PR review loop: `detect-reviewer-loop-state.mjs` from the resolved skill scripts directory
 
-Resolve those helper paths from the skill asset layout described by the main skill. In the `pi-dev-loops`
+Resolve those helper paths from the skill asset layout described by the main skill. In the `dev-loops`
 source repository the skill scripts directory is `../../scripts/` relative to `skills/copilot-pr-followup/SKILL.md`; in normalized
 installed copies it may instead be `scripts/` inside the installed skill directory when that layout bundles the helper scripts.
 
@@ -27,7 +27,7 @@ Use the machines to answer:
 
 Each machine captures an observable snapshot from GitHub facts (plus explicit bounded local loop
 metadata when required) and interprets it into exactly one current state plus allowed next
-transitions. In the `pi-dev-loops` source repository, the supporting source-authority references are [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md) and [Reviewer Loop State Graph](../../docs/reviewer-loop-state-graph.md) under `../../docs/` relative to `skills/copilot-pr-followup/SKILL.md`. Treat those links as source-repo references, not bundled installed-skill docs.
+transitions. In the `dev-loops` source repository, the supporting source-authority references are [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md) and [Reviewer Loop State Graph](../../docs/reviewer-loop-state-graph.md) under `../../docs/` relative to `skills/copilot-pr-followup/SKILL.md`. Treat those links as source-repo references, not bundled installed-skill docs.
 
 For tracker-first MVP `story -> PR -> tracker sync` work, the source-repo reference is [Tracker-First Story-to-PR Contract](../../docs/tracker-story-pr-contract.md). That source doc inherits source-of-truth ownership, the required work item <-> PR link, and reverse-sync semantics from `#21`; it only adds the mutually exclusive workflow-family states and post-merge sync-verification states for this narrower MVP slice.
 

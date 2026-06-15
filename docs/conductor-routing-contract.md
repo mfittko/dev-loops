@@ -23,12 +23,12 @@ pre-computed outer-loop action. It is the routing authority, not a remapper.
 
 | Contract / Issue | Relationship |
 |---|---|
-| [#28 — conductor umbrella](https://github.com/mfittko/pi-dev-loops/issues/28) | Parent umbrella |
-| [#32 — ownership/idempotency](https://github.com/mfittko/pi-dev-loops/issues/32) | **Historical**: designed the ownership model; the `conductor-ownership.mjs` module was retired during deslop cleanup (issue #319). `ownershipState` remains as an optional external input. |
-| [#26 — family-local PR lifecycle contract](https://github.com/mfittko/pi-dev-loops/issues/26) / [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) | **Upstream**: provides family-local PR lifecycle semantics; the concrete `copilotState` and `reviewerState` inputs still come from the existing copilot/reviewer state machines, and this contract consumes them without redefining their semantics |
-| [#34 — request/watch helper contract](https://github.com/mfittko/pi-dev-loops/issues/34) | **Adjacent**: defines Copilot request/watch semantics inside the copilot loop family; this contract decides _which family_ gets control |
-| [#48 — visible PR projection](https://github.com/mfittko/pi-dev-loops/issues/48) | **Downstream**: routing decisions may drive PR projection artifacts |
-| [#57/#58/#59 — inspection/viewer/steering](https://github.com/mfittko/pi-dev-loops/issues/57) | **Adjacent**: read-only inspection surfaces; this contract defines routing policy, not operator UX |
+| [#28 — conductor umbrella](https://github.com/mfittko/dev-loops/issues/28) | Parent umbrella |
+| [#32 — ownership/idempotency](https://github.com/mfittko/dev-loops/issues/32) | **Historical**: designed the ownership model; the `conductor-ownership.mjs` module was retired during deslop cleanup (issue #319). `ownershipState` remains as an optional external input. |
+| [#26 — family-local PR lifecycle contract](https://github.com/mfittko/dev-loops/issues/26) / [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) | **Upstream**: provides family-local PR lifecycle semantics; the concrete `copilotState` and `reviewerState` inputs still come from the existing copilot/reviewer state machines, and this contract consumes them without redefining their semantics |
+| [#34 — request/watch helper contract](https://github.com/mfittko/dev-loops/issues/34) | **Adjacent**: defines Copilot request/watch semantics inside the copilot loop family; this contract decides _which family_ gets control |
+| [#48 — visible PR projection](https://github.com/mfittko/dev-loops/issues/48) | **Downstream**: routing decisions may drive PR projection artifacts |
+| [#57/#58/#59 — inspection/viewer/steering](https://github.com/mfittko/dev-loops/issues/57) | **Adjacent**: read-only inspection surfaces; this contract defines routing policy, not operator UX |
 
 ## Boundary
 

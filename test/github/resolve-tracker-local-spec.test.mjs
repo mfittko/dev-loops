@@ -54,7 +54,7 @@ test("parseResolveTrackerLocalSpecCliArgs rejects mixed issue-url and repo/issue
 });
 
 test("resolve-tracker-local-spec resolves repo and issue inputs through gh issue view", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-resolve-tracker-local-spec-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-resolve-tracker-local-spec-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -93,7 +93,7 @@ test("resolve-tracker-local-spec resolves repo and issue inputs through gh issue
 });
 
 test("resolve-tracker-local-spec accepts GitHub issue URLs as input", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-resolve-tracker-local-spec-url-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-resolve-tracker-local-spec-url-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -144,7 +144,7 @@ test("resolve-tracker-local-spec reports usage errors with usage payload", async
 
 
 test("resolve-tracker-local-spec normalizes repo slug in gh call and output", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-resolve-tracker-local-spec-normalize-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-resolve-tracker-local-spec-normalize-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -174,7 +174,7 @@ test("resolve-tracker-local-spec normalizes repo slug in gh call and output", as
   }
 });
 test("resolve-tracker-local-spec reports gh failures without usage for runtime errors", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-resolve-tracker-local-spec-ghfail-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-resolve-tracker-local-spec-ghfail-"));
 
   try {
     const env = await writeGhStub(tempDir, [

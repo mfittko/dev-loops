@@ -97,7 +97,7 @@ function getProjectItemResponse(itemId, itemContent) {
             __typename: "Issue",
             number: 630,
             title: "Test Issue",
-            url: "https://github.com/mfittko/pi-dev-loops/issues/630",
+            url: "https://github.com/mfittko/dev-loops/issues/630",
           },
         },
       },
@@ -119,7 +119,7 @@ function makeItemContent(ref, typename, repo) {
   return {
     __typename: typename || "Issue",
     number: ref,
-    repository: { nameWithOwner: repo || "mfittko/pi-dev-loops" },
+    repository: { nameWithOwner: repo || "mfittko/dev-loops" },
   };
 }
 
@@ -163,7 +163,7 @@ describe("reorder-queue-item — move to top (no --after)", () => {
     };
 
     const result = await main(
-      { repo: "mfittko/pi-dev-loops", project: "1", item: "630" },
+      { repo: "mfittko/dev-loops", project: "1", item: "630" },
       { runChild: wrapped },
     );
 
@@ -203,7 +203,7 @@ describe("reorder-queue-item — move to top (no --after)", () => {
     };
 
     const result = await main(
-      { repo: "mfittko/pi-dev-loops", project: "1", item: "PVTI_item_x" },
+      { repo: "mfittko/dev-loops", project: "1", item: "PVTI_item_x" },
       { runChild: wrapped },
     );
 
@@ -237,7 +237,7 @@ describe("reorder-queue-item — move after another item", () => {
     };
 
     const result = await main(
-      { repo: "mfittko/pi-dev-loops", project: "1", item: "630", after: "625" },
+      { repo: "mfittko/dev-loops", project: "1", item: "630", after: "625" },
       { runChild: wrapped },
     );
 
@@ -262,7 +262,7 @@ describe("reorder-queue-item — move after another item", () => {
 
     await assert.rejects(
       () => main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: "630", after: "999" },
+        { repo: "mfittko/dev-loops", project: "1", item: "630", after: "999" },
         { runChild },
       ),
       (err) => err.code === "ITEM_NOT_FOUND",
@@ -280,7 +280,7 @@ describe("reorder-queue-item — move after another item", () => {
 
     await assert.rejects(
       () => main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: "630", after: "630" },
+        { repo: "mfittko/dev-loops", project: "1", item: "630", after: "630" },
         { runChild },
       ),
       (err) => err.message.includes("itself"),
@@ -299,7 +299,7 @@ describe("reorder-queue-item — error handling", () => {
 
     await assert.rejects(
       () => main(
-        { repo: "mfittko/pi-dev-loops", project: "1", item: "999" },
+        { repo: "mfittko/dev-loops", project: "1", item: "999" },
         { runChild },
       ),
       (err) => err.code === "ITEM_NOT_FOUND",
@@ -315,7 +315,7 @@ describe("reorder-queue-item — error handling", () => {
 
     await assert.rejects(
       () => main(
-        { repo: "mfittko/pi-dev-loops", project: "99", item: "630" },
+        { repo: "mfittko/dev-loops", project: "99", item: "630" },
         { runChild },
       ),
       (err) => err.code === "PROJECT_NOT_FOUND",
@@ -342,7 +342,7 @@ describe("reorder-queue-item — mutation input construction", () => {
     };
 
     await main(
-      { repo: "mfittko/pi-dev-loops", project: "1", item: "630" },
+      { repo: "mfittko/dev-loops", project: "1", item: "630" },
       { runChild: wrapped },
     );
 
@@ -372,7 +372,7 @@ describe("reorder-queue-item — mutation input construction", () => {
     };
 
     await main(
-      { repo: "mfittko/pi-dev-loops", project: "1", item: "630", after: "PVTI_item_625" },
+      { repo: "mfittko/dev-loops", project: "1", item: "630", after: "PVTI_item_625" },
       { runChild: wrapped },
     );
 

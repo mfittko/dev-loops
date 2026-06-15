@@ -1,7 +1,7 @@
 # Sub-Issue Tree Contract
 
 This document defines the deterministic pattern for epic/umbrella issue decomposition using
-GitHub sub-issues in `pi-dev-loops`.
+GitHub sub-issues in `dev-loops`.
 
 ## Purpose
 
@@ -61,7 +61,7 @@ node <resolved-skill-scripts>/github/manage-sub-issues.mjs <command> \
   --repo <owner/name> --issue <parent-number> [options]
 ```
 
-In the `pi-dev-loops` source repository the scripts directory is `scripts/` from the repo root.
+In the `dev-loops` source repository the scripts directory is `scripts/` from the repo root.
 In normalized installed skill copies it may be `scripts/` inside the installed skill directory.
 
 ### List sub-issues

@@ -15,7 +15,7 @@ const writeJson = writeJsonHelper;
 const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, entries, { overflowMessageMode: "generic" });
 
 test("detect-reviewer-loop-state --input returns correct states for planning/running/merge snapshots", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reviewer-state-detect-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-state-detect-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -53,7 +53,7 @@ test("detect-reviewer-loop-state --input returns correct states for planning/run
 });
 
 test("detect-reviewer-loop-state --input distinguishes draft lifecycle and invalidation", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reviewer-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-draft-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -92,7 +92,7 @@ test("detect-reviewer-loop-state --input distinguishes draft lifecycle and inval
 });
 
 test("detect-reviewer-loop-state --input treats submitted review as handoff and re-request as new pass", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reviewer-rerequest-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-rerequest-"));
 
   try {
     const snapshotPath = path.join(tempDir, "snapshot.json");
@@ -134,7 +134,7 @@ test("detect-reviewer-loop-state --input treats submitted review as handoff and 
 });
 
 test.skip("detect-reviewer-loop-state auto-detect returns review_requested when reviewer is requested", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reviewer-auto-requested-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-requested-"));
 
   try {
     const { env } = await writeGhStub(tempDir, [
@@ -178,7 +178,7 @@ test.skip("detect-reviewer-loop-state auto-detect returns review_requested when 
 });
 
 test.skip("detect-reviewer-loop-state auto-detect returns waiting_for_user_submit for current-head draft review", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reviewer-auto-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-draft-"));
 
   try {
     const localStatePath = path.join(tempDir, "local-state.json");
@@ -230,7 +230,7 @@ test.skip("detect-reviewer-loop-state auto-detect returns waiting_for_user_submi
 
 
 test.skip("detect-reviewer-loop-state auto-detect treats missing local state as empty metadata", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reviewer-auto-missing-local-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-missing-local-"));
 
   try {
     const missingLocalStatePath = path.join(tempDir, "missing-state.json");
@@ -272,7 +272,7 @@ test.skip("detect-reviewer-loop-state auto-detect treats missing local state as 
 
 
 test.skip("detect-reviewer-loop-state auto-detect keeps fresh pending review ahead of historical submitted review", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reviewer-auto-rereview-draft-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-rereview-draft-"));
 
   try {
     const localStatePath = path.join(tempDir, "local-state.json");
@@ -332,7 +332,7 @@ test.skip("detect-reviewer-loop-state auto-detect keeps fresh pending review ahe
 });
 
 test.skip("detect-reviewer-loop-state auto-detect marks stale draft as review_invalidated", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reviewer-auto-invalidated-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-invalidated-"));
 
   try {
     const { env } = await writeGhStub(tempDir, [
@@ -364,7 +364,7 @@ test.skip("detect-reviewer-loop-state auto-detect marks stale draft as review_in
 });
 
 test("detect-reviewer-loop-state auto-detect fails when gh stub call budget is exceeded", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-dev-loops-reviewer-auto-budget-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-budget-"));
 
   try {
     const { env } = await writeGhStub(tempDir, [

@@ -1920,7 +1920,7 @@ describe("shipped defaults docs and deep angle wiring", () => {
         assert.equal(role.persona, "review", `${angle} should use review persona`);
         assert.equal(role.fallback, false, `${angle} should resolve from persona registry`);
         assert.equal(role.prompt, result.config.personas[angle].prompt, `${angle} prompt should come from config`);
-        assert.doesNotMatch(role.prompt, /mfittko\/pi-dev-loops|issue #?\d+|tmp\/investigation|uncategorized-clusters/i, `${angle} prompt should stay repo-agnostic`);
+        assert.doesNotMatch(role.prompt, /mfittko\/dev-loops|issue #?\d+|tmp\/investigation|uncategorized-clusters/i, `${angle} prompt should stay repo-agnostic`);
       }
 
       assert.match(result.config.personas["contract-surface"].prompt, /schema fields, state\/sentinel names, runtime values, tests, and CLI output agree/i);

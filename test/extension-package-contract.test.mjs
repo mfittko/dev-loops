@@ -35,9 +35,9 @@ test("extension README documents the supported command, install, and verificatio
   }
 
   for (const installPattern of [
-    /pi install git:github.com\/mfittko\/pi-dev-loops/i,
-    /pi install -l git:github.com\/mfittko\/pi-dev-loops/i,
-    /pi update git:github.com\/mfittko\/pi-dev-loops/i,
+    /pi install git:github.com\/mfittko\/dev-loops/i,
+    /pi install -l git:github.com\/mfittko\/dev-loops/i,
+    /pi update git:github.com\/mfittko\/dev-loops/i,
   ]) {
     assert.match(readme, installPattern);
   }
