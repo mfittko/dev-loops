@@ -63,7 +63,10 @@
       "./extension/index.ts"
     ],
     "skills": [
-      ".pi/skills"
+      "skills"
+    ],
+    "agents": [
+      "agents"
     ]
   },
   "dependencies": {
@@ -84,6 +87,10 @@
     "cli/",
     "lib/",
     "scripts/",
+    "extension/",
+    "skills/",
+    "agents/",
+    ".pi/dev-loop/defaults.yaml",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

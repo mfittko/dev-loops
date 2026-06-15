@@ -20,7 +20,8 @@ test("package metadata exposes the extension entrypoint and root extension test 
   assert.match(packageJson.scripts["test:extension"], /extension-command-contract/);
   assert.match(packageJson.scripts["test:extension"], /extension-package-contract/);
   assert.equal(packageJson.dependencies.mermaid, "11.15.0");
-  assert.deepEqual(packageJson.pi.skills, [".pi/skills"]);
+  assert.deepEqual(packageJson.pi.skills, ["skills"]);
+  assert.deepEqual(packageJson.pi.agents, ["agents"]);
 });
 
 test("extension README documents the supported command, install, and verification surfaces without exposing internal workflow seams", async () => {
@@ -46,7 +47,7 @@ test("extension README documents the supported command, install, and verificatio
     /Node[^\n]*>=20/i,
     /source-loaded/i,
     /package\.json` `pi\.skills`/i,
-    /\.pi\/agents\/\*\.agent\.md/i,
+    /agents\/\*\.agent\.md/i,
     /~\/\.agents/i,
     /single public workflow entry/i,
     /npm run verify/i,
@@ -77,12 +78,12 @@ test("required installed runtime contract docs are bundled once in the shared in
   for (const doc of requiredDocs) {
     const [sourceBundledCopy, installedBundledCopy] = await Promise.all([
       readRepo(`skills/docs/${doc}`),
-      readRepo(`.pi/skills/docs/${doc}`),
+      readRepo(`skills/docs/${doc}`),
     ]);
     assert.equal(
       installedBundledCopy,
       sourceBundledCopy,
-      `installed shared docs copy (.pi dev alias: .pi/skills/docs/${doc}) should stay byte-for-byte aligned with skills/docs/${doc}`,
+      `installed shared docs copy (skills/docs/${doc}) should stay byte-for-byte aligned with skills/docs/${doc}`,
     );
     await assert.rejects(stat(fromRepoRoot(`docs/${doc}`)), /ENOENT/);
   }

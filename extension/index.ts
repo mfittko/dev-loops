@@ -23,7 +23,7 @@ type ExtensionRuntimeOverrides = NonNullable<Parameters<typeof createExtensionCo
 
 const STATUS_KEY = 'dev-loops';
 const WIDGET_KEY = 'dev-loops.setup';
-const PACKAGED_AGENTS_ROOT = new URL('../.pi/agents/', import.meta.url);
+const PACKAGED_AGENTS_ROOT = new URL('../agents/', import.meta.url);
 
 export function syncPackagedAgents({
   sourceRoot = fileURLToPath(PACKAGED_AGENTS_ROOT),

@@ -20,8 +20,8 @@ async function readCopilotFollowupSurface() {
 
 test("installed skill guidance owns packaging guarantees and contract docs stay contract-focused", async () => {
   const [devLoopSkill, copilotFollowupSkill, publicContract, retrospectiveContract] = await Promise.all([
-    readRepo(".pi/skills/dev-loop/SKILL.md"),
-    readRepo(".pi/skills/copilot-pr-followup/SKILL.md"),
+    readRepo("skills/dev-loop/SKILL.md"),
+    readRepo("skills/copilot-pr-followup/SKILL.md"),
     readRepo("skills/docs/public-dev-loop-contract.md"),
     readRepo("skills/docs/retrospective-checkpoint-contract.md"),
   ]);

@@ -7,7 +7,7 @@ Installing the package exposes two thin wrappers over one shared deterministic c
 - the shell CLI entrypoint `dev-loops`
 - a bounded post-merge helper that queues one `pi update git:github.com/mfittko/dev-loops` after a successful in-session `gh pr merge ...` or `git merge ...` inside this repo and flushes it on `agent_end`
 
-Installing the package with `pi install git:github.com/mfittko/dev-loops` exposes the packaged skills through `package.json` `pi.skills`, and the extension syncs packaged agent files (`.pi/agents/*.agent.md`) into `~/.agents/` on `session_start`.
+Installing the package with `pi install git:github.com/mfittko/dev-loops` exposes the packaged skills through `package.json` `pi.skills`, and the extension syncs packaged agent files (`agents/*.agent.md`) into `~/.agents/` on `session_start`.
 
 ## Command surface
 
@@ -196,7 +196,7 @@ workflow:
 
 1. Add the angle name to `gates.draft.angles` or `gates.preApproval.angles`
 2. Add a `personas.<angle>` entry with a `persona` agent name and a `prompt` instruction
-3. Create the corresponding `Agent file` (`.pi/agents/<persona>.agent.md`) if using a new persona
+3. Create the corresponding `Agent file` (`agents/<persona>.agent.md`) if using a new persona
 4. Optionally set a per-angle model override via `models.roles.<angle>`
 
 ### Config format
@@ -211,9 +211,9 @@ Current Phase 3+ contract:
 - Node runtime floor: `>=20` (from `package.json`)
 - Pi host expectations are documented from current peer dependencies rather than a tested pinned Pi version range
 - the extension is source-loaded from `./extension/index.ts` through `package.json` `pi.extensions`
-- the package exposes `.pi/skills` through `package.json` `pi.skills` for install-based global skill loading
+- the package exposes `skills` through `package.json` `pi.skills` for install-based global skill loading
 - the shell CLI is exposed through `package.json` `bin.dev-loops`
-- the extension syncs packaged agent files (`.pi/agents/*.agent.md`) into `~/.agents/` on `session_start` so user-level agents are available outside this repo
+- the extension syncs packaged agent files (`agents/*.agent.md`) into `~/.agents/` on `session_start` so user-level agents are available outside this repo
 - package install/update happens through `pi install` / `pi update`
 - this phase does not yet claim a specific supported `gh` version; it only checks `gh` presence and authentication state
 - this phase does not require a separate compiled build or `dist/` pipeline
