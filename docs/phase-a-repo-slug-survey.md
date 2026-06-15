@@ -1,6 +1,6 @@
 # Phase A — Repo rename prep survey
 
-Issue: [#788](https://github.com/mfittko/pi-dev-loops/issues/788)  
+Issue: #788  
 Goal: prepare the repository rename `mfittko/pi-dev-loops` → `mfittko/dev-loops` without performing the actual file edits.  
 This document inventories tracked files that still reference the **old repo slug** and categorizes each reference so Phase B can apply the edits safely.
 
@@ -97,6 +97,7 @@ This is the explicit checklist the Phase B PR (#786) will execute.
 - [ ] Do **NOT** edit `@pi-dev-loops/core` package references — #766.
 - [ ] Do **NOT** edit `skills/docs/tracker-first-loop-state.md` — #768.
 - [ ] Do **NOT** edit `docs/archive/phases/phase-6.md` unless explicitly requested.
+- [ ] Replace only the exact repo slug `mfittko/pi-dev-loops`; do not bulk-replace the bare substring `pi-dev-loops` (it appears inside `@pi-dev-loops/core` identifiers, which are out of scope).
 
 ## Operator setup — GitHub Settings rename
 
