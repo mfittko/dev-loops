@@ -15,7 +15,6 @@
  *   npx dev-loops loop build-envelope --input resolver-output.json
  */
 import { readFile } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
 import { detectRepoSlug } from "@pi-dev-loops/core/github/repo-slug";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
@@ -103,16 +102,9 @@ export async function buildHandoffEnvelopeCli(
   options,
   { adapter = createPiAdapter() } = {},
 ) {
+  // Resolve repo root via the adapter so envelope construction stays harness-agnostic.
   const cwd = adapter.getCwd();
-  // Resolve repo root for config loading (same approach as resolve-dev-loop-startup.mjs)
-  let repoRoot = cwd;
-  try {
-    repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  } catch { /* keep cwd */ }
+  const repoRoot = adapter.getRepoRoot();
 
   // Load resolver output from file
   const inputPath = path.resolve(cwd, options.inputPath);

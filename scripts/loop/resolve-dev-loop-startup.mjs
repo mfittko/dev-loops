@@ -485,17 +485,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     stdout.write(`${USAGE}\n`);
     return;
   }
-  // Resolve repo root to handle subdirectory invocations consistently.
-  // buildAutoResolvedInput() also resolves via git rev-parse;
-  // using the same root for config loading avoids mismatched roots.
-  let repoRoot = sessionCwd;
-  try {
-    repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd: sessionCwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch { /* keep cwd */ }
+  // Resolve repo root via the adapter so the CLI stays harness-agnostic.
+  const repoRoot = adapter.getRepoRoot();
   const { config: devLoopConfig, errors: configErrors = [] } = await loadDevLoopConfig({ repoRoot });
   const asyncStartMode = configErrors.length === 0
     ? resolveWorkflowConfig(devLoopConfig, "asyncStartMode")
