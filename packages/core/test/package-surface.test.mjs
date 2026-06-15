@@ -31,6 +31,7 @@ test("packages/core exports the sanctioned runtime boundary and de-exports unuse
   assert.equal(packageJson.exports["./cli/primitives"], "./src/cli/primitives.mjs");
   assert.equal(packageJson.exports["./cli/helpers"], "./src/cli/helpers.mjs");
   assert.equal(packageJson.exports["./cli/subcommand-runner"], "./src/cli/subcommand-runner.mjs");
+  assert.equal(packageJson.exports["./harness"], "./src/harness/index.mjs");
 
   assert.equal(packageJson.exports["./loop/conductor-ownership"], undefined);
   assert.equal(packageJson.exports["./loop/conductor-pr-projection"], undefined);

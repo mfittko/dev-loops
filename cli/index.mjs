@@ -13,6 +13,7 @@ import {
   DEV_LOOP_CHECK_IDS,
 } from "../lib/dev-loops-core.mjs";
 import { isUsageError, buildCorrectedArgs } from "../packages/core/src/cli/retry-wrapper.mjs";
+import { createPiAdapter } from "@pi-dev-loops/core/harness";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -238,17 +239,22 @@ function orderedCliSetupSteps(checks) {
 function writeLines(stream, lines) { stream.write(`${lines.join("\n")}\n`); }
 
 export function createCliRuntime({
-  cwd = process.cwd(), searchPath = process.env.PATH ?? "",
-  platform = process.platform, pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
+  adapter = createPiAdapter(),
+  cwd, searchPath,
+  platform, pathExt,
 } = {}) {
+  const effectiveCwd = cwd ?? adapter.getCwd();
+  const effectiveSearchPath = searchPath ?? adapter.getEnv().PATH ?? "";
+  const effectivePlatform = platform ?? process.platform;
+  const effectivePathExt = pathExt ?? adapter.getEnv().PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
   return {
     surface: "cli",
-    cwd,
-    async commandExists(command) { return commandExists(command, { searchPath, platform, pathExt }); },
-    async ghAuthOk() { return spawnResult("gh", ["auth", "status"], { cwd }).ok; },
-    async insideGitRepo() { return spawnResult("git", ["rev-parse", "--is-inside-work-tree"], { cwd }).ok; },
+    cwd: effectiveCwd,
+    async commandExists(command) { return commandExists(command, { searchPath: effectiveSearchPath, platform: effectivePlatform, pathExt: effectivePathExt }); },
+    async ghAuthOk() { return spawnResult("gh", ["auth", "status"], { cwd: effectiveCwd }).ok; },
+    async insideGitRepo() { return spawnResult("git", ["rev-parse", "--is-inside-work-tree"], { cwd: effectiveCwd }).ok; },
     async getSubagentAvailability() {
-      const ok = await commandExists("subagent", { searchPath, platform, pathExt });
+      const ok = await commandExists("subagent", { searchPath: effectiveSearchPath, platform: effectivePlatform, pathExt: effectivePathExt });
       return { ok, availableDetail: "`subagent` command is available.", unavailableDetail: "Install or enable subagent support so `subagent` is available." };
     },
   };
@@ -345,7 +351,7 @@ export async function runCli({
       return result.status ?? (result.signal ? 1 : result.error ? 1 : 0);
     }
     case "action": {
-      const activeRuntime = runtime ?? createCliRuntime({ cwd });
+      const activeRuntime = runtime ?? createCliRuntime({ adapter: createPiAdapter({ cwd }), cwd });
       const result = await executeDevLoopsCommand({ input: argv, surface: "cli", runtime: activeRuntime, stdout });
       switch (result.kind) {
         case "help": { writeLines(stdout, buildCliHelpLines()); return 0; }
