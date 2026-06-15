@@ -1,6 +1,5 @@
 {
   "name": "dev-loops",
-  "private": true,
   "license": "MIT",
   "type": "module",
   "description": "Shared Pi workflow infrastructure for reusable local and remote development loops",
@@ -29,7 +28,6 @@
     "test:dev-loop": "node --test --test-reporter ./test/failure-summary-reporter.mjs skills/dev-loop/scripts/dev-mode-context.test.mjs skills/dev-loop/scripts/render-template.test.mjs skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs",
     "test:playwright:viewer": "playwright test -c playwright.inspect-run-viewer.config.mjs",
     "test:docs": "node scripts/docs/validate-links.mjs && node scripts/docs/validate-no-duplicate-rules.mjs",
-    "postinstall": "chmod +x cli/index.mjs && ln -sf ../../cli/index.mjs node_modules/.bin/dev-loops",
     "repo-wiki": "node scripts/repo-wiki.mjs",
     "repo-wiki:bootstrap": "node scripts/repo-wiki.mjs scan --repo . && node scripts/repo-wiki.mjs plan --repo . && node scripts/repo-wiki.mjs compile --repo .",
     "repo-wiki:scan": "node scripts/repo-wiki.mjs scan --repo .",
@@ -65,7 +63,10 @@
       "./extension/index.ts"
     ],
     "skills": [
-      ".pi/skills"
+      "skills"
+    ],
+    "agents": [
+      "agents"
     ]
   },
   "dependencies": {
@@ -81,5 +82,22 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "files": [
+    "cli/",
+    "lib/",
+    "scripts/",
+    "extension/",
+    "skills/",
+    "agents/",
+    ".pi/dev-loop/defaults.yaml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "AGENTS.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

@@ -97,7 +97,7 @@ test("extension clears stale footer status and syncs packaged agents on session 
     assert.deepEqual(calls.statuses, [{ key: "dev-loops", text: undefined }]);
     assert.equal(
       await readFile(path.join(tempHome, ".agents", "dev-loop.agent.md"), "utf8"),
-      await readFile(new URL("../.pi/agents/dev-loop.agent.md", import.meta.url), "utf8"),
+      await readFile(new URL("../agents/dev-loop.agent.md", import.meta.url), "utf8"),
     );
     assert.equal(await readFile(path.join(tempHome, ".agents", "keep.txt"), "utf8"), "keep me\n");
     await access(path.join(tempHome, ".agents", "developer.agent.md"));
