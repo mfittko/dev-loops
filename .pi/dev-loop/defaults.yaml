@@ -92,7 +92,7 @@ workflow:
 # as `refiner` may also live here so consuming repos can customize prompt text.
 # Consumers can add custom angles or reusable persona prompts.
 # Each entry:
-#   persona      — agent persona name (must exist in .pi/agents/)
+#   persona      — agent persona name (must exist in agents/)
 #   prompt       — focused instruction for the agent
 #   defaultModel — optional model override (null = use persona default)
 personas:

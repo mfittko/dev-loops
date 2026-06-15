@@ -93,7 +93,8 @@
     ".pi/dev-loop/defaults.yaml",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "AGENTS.md"
   ],
   "publishConfig": {
     "access": "public",
