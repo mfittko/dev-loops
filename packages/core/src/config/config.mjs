@@ -505,7 +505,7 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
 
   if (data === null) {
     if (options.warnOnMissing) {
-      warnings.push(`Committed ${layer} config not found (tried .yaml, .yml, and .json), falling back to previously merged defaults`);
+      warnings.push(`${layer} config not found (tried .yaml, .yml, and .json), falling back to previously merged defaults`);
     }
     return merged;
   }
