@@ -15,12 +15,20 @@ import {
 } from "../../scripts/repo-wiki.mjs";
 
 test("parseCliArgs defaults to help passthrough when no args are given", () => {
-  assert.deepEqual(parseCliArgs([]), { passthroughArgs: ["--help"] });
+  assert.deepEqual(parseCliArgs([]), { source: "npm",
+    prepareOnly: false,
+    passthroughArgs: ["--help"]
+  });
 });
 
 test("parseCliArgs preserves explicit --help and forwards arbitrary repo-wiki args", () => {
-  assert.deepEqual(parseCliArgs(["--help"]), { passthroughArgs: ["--help"] });
+  assert.deepEqual(parseCliArgs(["--help"]), { source: "npm",
+    prepareOnly: false,
+    passthroughArgs: ["--help"]
+  });
   assert.deepEqual(parseCliArgs(["scan", "--repo", "."]), {
+    source: "npm",
+    prepareOnly: false,
     passthroughArgs: ["scan", "--repo", "."],
   });
 });
