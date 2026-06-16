@@ -1980,7 +1980,7 @@ describe("shipped defaults docs and deep angle wiring", () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-D2-cluster-prompts-"));
     try {
       const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
-      const sourceDefaults = await readFile(path.join(repoRoot, ".pi", "dev-loop", "defaults.yaml"), "utf8");
+      const sourceDefaults = await readFile(path.join(repoRoot, "packages", "core", "src", "config", "extension-defaults.yaml"), "utf8");
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "defaults.yaml"), sourceDefaults);
@@ -2022,7 +2022,7 @@ describe("shipped defaults docs and deep angle wiring", () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-D1-"));
     try {
       const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
-      const sourceDefaults = await readFile(path.join(repoRoot, ".pi", "dev-loop", "defaults.yaml"), "utf8");
+      const sourceDefaults = await readFile(path.join(repoRoot, "packages", "core", "src", "config", "extension-defaults.yaml"), "utf8");
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "defaults.yaml"), sourceDefaults);
@@ -2056,7 +2056,7 @@ describe("shipped defaults docs and deep angle wiring", () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-D3-"));
     try {
       const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
-      const sourceDefaults = await readFile(path.join(repoRoot, ".pi", "dev-loop", "defaults.yaml"), "utf8");
+      const sourceDefaults = await readFile(path.join(repoRoot, "packages", "core", "src", "config", "extension-defaults.yaml"), "utf8");
       const sourceSettings = await readFile(path.join(repoRoot, ".devloops"), "utf8");
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
@@ -2094,7 +2094,7 @@ describe("shipped defaults docs and deep angle wiring", () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-D4-"));
     try {
       const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
-      const sourceDefaults = await readFile(path.join(repoRoot, ".pi", "dev-loop", "defaults.yaml"), "utf8");
+      const sourceDefaults = await readFile(path.join(repoRoot, "packages", "core", "src", "config", "extension-defaults.yaml"), "utf8");
       const sourceSettings = await readFile(path.join(repoRoot, ".devloops"), "utf8");
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
