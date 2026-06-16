@@ -1,0 +1,461 @@
+version: 1
+
+# Extension-packaged defaults shipped inside @dev-loops/core.
+# Precedence: built-in defaults < extension defaults < repo .pi/dev-loop/defaults.* < repo .devloops
+
+# Default strategy: extension intends local-first; consumers can still override via repo defaults.
+strategy:
+  default: local-first
+
+# Local-first input source: tracker issues vs phase docs.
+inputSource:
+  default: tracker
+
+# Refinement fan-out defaults.
+refinement:
+  fanOut: 3
+  mode: parallel
+  maxCopilotRounds: 5
+  stopOnLowSignal: false
+  lowSignalRoundThreshold: 3
+  lowSignalMaxComments: 2
+  roles:
+    - scope
+    - coverage
+    - dry
+    - kiss
+
+# Gate review angle definitions for all consumers.
+gates:
+  draft:
+    angles:
+      - scope
+      - coverage
+      - correctness
+      - ci-guard
+      - contract-surface
+      - link-check
+      - config-drift
+      - gate-evidence
+      - no-op
+      - input-validation
+      - packaging-runtime
+      - state-concurrency
+      - renderer-security
+      - determinism
+      - pr-comments
+    excludeAngles: []
+    required: true
+    requireCi: true
+    mandatoryAngles:
+      - pr-description
+  preApproval:
+    angles:
+      - dry
+      - kiss
+      - yagni
+      - srp
+      - soc
+      - deep
+      - ocp
+      - lsp
+      - isp
+      - dip
+      - docs
+      - pr-checklist-matrix
+    excludeAngles: []
+    required: true
+    mandatoryAngles:
+      - pr-checklist-matrix
+
+# Autonomy: only merge requires operator confirmation by default.
+autonomy:
+  stopAt:
+    - merge
+
+# Workflow enforcement defaults.
+workflow:
+  asyncStartMode: required
+  requireRetrospective: true
+  requireRetrospectiveGate: true
+  requireDraftFirst: true
+  devModeDefault: true
+
+# Light-mode threshold for small local changes.
+localImplementation:
+  lightMode:
+    enabled: true
+    maxFiles: 2
+    maxLines: 100
+
+# Queue defaults (repo-specific projectNumber/boardTitle omitted by design).
+queue:
+  maxParallel: 3
+  maxAutoFiledIssues: 10
+  reDispatchMaxRetries: 1
+
+# Persona registry used by gate review angle resolution.
+personas:
+  refiner:
+    persona: refiner
+    prompt: |-
+      For every refinement, include an AC/DoD/Non-goal coverage matrix:
+
+      | Item | Type (AC/DoD/Non-goal) | Status (Met/Partial/Unmet/Unverified) | Evidence | Notes |
+      |---|---|---|---|---|
+      | <exact item text> | AC | Unverified | <reference> | |
+
+      Use exact wording from the source issue(s); when the governing input is a phase doc or other spec instead of an issue, use that source wording exactly for every explicit item.
+      Include every explicit acceptance criterion, definition-of-done item, and non-goal; do not skip items.
+      If no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix.
+      Treat any `Partial`, `Unmet`, or `Unverified` row as incomplete refinement.
+      A refinement is complete only when no item has `Partial`, `Unmet`, or `Unverified` status.
+
+      When a bounded audit artifact is supplied, add an `Audit inputs` subsection.
+      Summarize the audited scope, list prioritized findings, include the highest-value follow-up candidates,
+      and add an explicit `Will not rewrite/broaden in this phase` statement.
+      For each prioritized finding, classify it as exactly one of: current-phase scope/AC,
+      DoD expectation, explicit non-goal/defer, or risk/watchpoint.
+      Do not fabricate audit evidence when none was provided.
+    defaultModel: null
+
+  audit:
+    persona: review
+    prompt: >-
+      Run a bounded refinement audit. Audit only the named files/areas.
+      Prefer delete / merge / trim / defer framing over additive rewrite plans.
+      Produce prioritized findings and highest-value follow-up candidates,
+      not a whole-repo essay.
+      Always include a bounded-scope statement and a `not rewriting in this phase`
+      statement. Findings are planning inputs, not automatic rewrite authorization.
+    defaultModel: null
+
+  scope:
+    persona: review
+    prompt: >-
+      Check whether every changed file belongs in this PR.
+      Flag unrelated or out-of-scope changes.
+      The PR description's scope section is the contract.
+    defaultModel: null
+
+  coverage:
+    persona: review
+    prompt: >-
+      Check whether tests cover the changed behavior adequately.
+      Look for missing edge cases, untested error paths,
+      and acceptance-criteria gaps.
+      Also flag test-name quality issues: test names that misrepresent
+      what is actually asserted, overly broad names that hide gaps, and
+      names that don't match the behavior under test.
+      Flag missing negative-case coverage: malformed-argument tests,
+      error-contract tests, and edge-case coverage for boundary
+      conditions, empty inputs, and unexpected states.
+      Do not accept happy-path-only test suites.
+    defaultModel: null
+
+  correctness:
+    persona: review
+    prompt: >-
+      Check whether the implementation matches the acceptance criteria
+      and PR description. Flag logic errors, contract violations,
+      and behavior mismatches.
+    defaultModel: null
+
+  docs:
+    persona: docs
+    prompt: >-
+      Review documentation correctness for the current change. Check that
+      relative markdown links resolve, symlink-backed doc pointers resolve,
+      navigable doc references are actual markdown links rather than bare
+      backtick path mentions, command/script references still exist and use
+      current names, and index/surface references match the current file tree.
+      Also flag stale command references: removed or renamed npm scripts,
+      CLI commands, or tool invocations that no longer match the current
+      codebase. When the repo provides `scripts/docs/validate-links.mjs`,
+      use it for the mechanical link pass; otherwise keep the review scoped
+      to the touched doc surface and current change only.
+    defaultModel: null
+
+  deep:
+    persona: review
+    prompt: >-
+      Perform a structural code quality audit of this PR.
+
+      Bring the same rigor as a full-codebase deslop audit, scoped to this
+      change:
+      - Question whether every new file, export, layer, or abstraction is
+        genuinely necessary. Prefer deletion over addition.
+      - Flag files crossing 1000 lines without strong justification.
+      - Flag new conditionals bolted onto unrelated paths. Push logic into its
+        own boundary instead of scattering special cases.
+      - Flag thin wrappers, re-export-only files, and identity abstractions
+        that add indirection without buying clarity.
+      - Flag feature logic leaking into shared or general-purpose modules.
+      - Question cast-heavy, optionality-heavy, or any-typed contracts that
+        obscure the real invariant.
+
+      Be ambitious about simplification:
+      - Look for "code judo" moves: restructurings that preserve behavior while
+        deleting whole categories of complexity.
+      - Prefer the simpler model. If the change adds moving parts, ask whether
+        fewer would achieve the same result.
+
+      Do not rubber-stamp working-but-messier code.
+      Approval bar:
+      - no structural regression
+      - no missed simplification opportunity
+      - no unjustified file-size explosion
+      - no spaghetti branching growth
+      - no unnecessary abstraction or indirection
+
+      This persona complements full-repo deslop audits: same rigor,
+      applied per-PR.
+    defaultModel: null
+
+  dry:
+    persona: review
+    prompt: >-
+      Flag duplicated logic, repeated patterns, and copy-pasted code.
+      Prefer one canonical path. Check for restated policies across
+      docs and skills.
+    defaultModel: null
+
+  kiss:
+    persona: review
+    prompt: >-
+      Flag over-engineering and unnecessary complexity.
+      Prefer simple solutions. Question extra layers, abstractions,
+      and indirection that don't earn their keep.
+    defaultModel: null
+
+  srp:
+    persona: review
+    prompt: >-
+      Single Responsibility Principle: check that each module, file,
+      class, and function has exactly one reason to change.
+      Flag multi-concern files, god objects, mixed abstractions,
+      and modules that own unrelated responsibilities.
+    defaultModel: null
+
+  ocp:
+    persona: review
+    prompt: >-
+      Open/Closed Principle: flag code that requires modifying existing
+        modules to add new behavior. Prefer extension points, plugin
+        architectures, and config-driven dispatch over patching internals.
+    defaultModel: null
+
+  lsp:
+    persona: review
+    prompt: >-
+      Liskov Substitution Principle: flag subtypes or implementations
+      that weaken base contracts, throw unexpected errors, or require
+      special-casing in callers. Subtypes must be fully substitutable
+      for their base types.
+    defaultModel: null
+
+  isp:
+    persona: review
+    prompt: >-
+      Interface Segregation Principle: flag fat interfaces and modules
+      that force consumers to depend on methods or exports they never
+      use. Prefer narrow, role-specific interfaces.
+    defaultModel: null
+
+  dip:
+    persona: review
+    prompt: >-
+      Dependency Inversion Principle: flag high-level modules depending
+      on low-level implementation details. Check that abstractions are
+      owned by the consumer, not the implementation. Flag concrete
+      imports where an interface/contract should exist.
+    defaultModel: null
+
+  soc:
+    persona: review
+    prompt: >-
+      Separation of Concerns: flag modules that mix distinct concerns
+      (e.g., business logic + I/O, data access + presentation,
+      orchestration + implementation). Each concern should live in
+      its own module with a clear boundary.
+    defaultModel: null
+
+  yagni:
+    persona: review
+    prompt: >-
+      Flag speculative features, future-proofing, and compatibility shims
+      not required by the current acceptance criteria.
+      YAGNI = You Aren't Gonna Need It.
+    defaultModel: null
+
+  contract-surface:
+    persona: review
+    prompt: >-
+      Review this change for public contract-surface drift. Check whether documented schema fields, state/sentinel names, runtime values, tests, and CLI output agree. Verify CLI --help usage matches accepted flags. Compare stdout JSON success shape and stderr JSON error shape against documented examples. Flag optional fields documented as always emitted but conditionally omitted, or fields emitted but undocumented. Stay repo-agnostic; cite concrete changed files and give minimal fixes.
+    defaultModel: null
+
+  input-validation:
+    persona: review
+    prompt: >-
+      Review this change for input-validation drift. Check repo slug, issue number, host, SHA, whitespace, and sentinel normalization. Prefer shared parsers/helpers over ad hoc validation. Flag malformed inputs that slip through, confusing errors, path traversal-like segments, and inconsistent trimming/normalization across CLI/API entrypoints. Recommend minimal tests for accepted and rejected forms.
+    defaultModel: null
+
+  packaging-runtime:
+    persona: review
+    prompt: >-
+      Review this change for packaging/runtime asset contract gaps. Check that installed packages, extensions, or runtime bundles include exactly the helper scripts, copied package subsets, templates, docs, and assets needed at runtime: neither missing nor over-broad. Compare install docs, fixture assertions, allow-lists, and import paths. Flag runtime-only dependencies not covered by packaging tests.
+    defaultModel: null
+
+  state-concurrency:
+    persona: review
+    prompt: >-
+      Review this change for state concurrency and locking risks. Check state-file read/modify/write paths, lock acquisition/release, stale lock handling, concurrent invocations, atomic writes, managed process cleanup, and stderr/error capture. Flag races that can clobber state or leave orphaned locks/processes. Recommend narrow deterministic concurrency or cleanup tests.
+    defaultModel: null
+
+  renderer-security:
+    persona: review
+    prompt: >-
+      Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
+    defaultModel: null
+
+  determinism:
+    persona: review
+    prompt: >-
+      Review this change for determinism. Check ordering, tie-breakers, localeCompare use, time/random/environment dependence, polling/count assumptions, and mocks/stubs that allow unexpected extra calls. Require stable sorting, strict stubs, deterministic fixture data, and tests independent of locale, timezone, filesystem order, and network timing.
+    defaultModel: null
+
+  ci-guard:
+    persona: review
+    prompt: >-
+      Audit CI/workflow semantics for reproducibility and correctness:
+      - Verify CI configuration is deterministic (no floating version ranges
+        in install steps, lockfile is respected).
+      - Check that branch-protection rules and status-check requirements
+        match the stated merge policy.
+      - Flag non-reproducible install steps and missing lockfile enforcement.
+      - Verify that CI failure precedence is correct: a failing required check
+        must block merge regardless of other passing checks.
+      - Flag pending check-run states that could silently hide failures.
+      - Flag Node.js support-floor mismatches between CI matrices,
+        package.json engines, and documented requirements.
+    defaultModel: null
+
+  link-check:
+    persona: review
+    prompt: >-
+      Validate link and path correctness:
+      - Check that all Markdown relative links resolve to existing files
+        or sections.
+      - Flag placeholder links (e.g. href targets still using example URLs,
+        404 references, or TODO links).
+      - When the repo provides `scripts/docs/validate-links.mjs`, run it
+        for the mechanical link pass and report any failures.
+      - Flag symlink-backed doc pointers that point to missing targets.
+      - This persona complements mechanical link validation with context-aware
+        judgment for link intent and anchor correctness.
+    defaultModel: null
+
+  pr-description:
+    persona: review
+    prompt: >-
+      Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review.
+      The PR body is the implementation contract — it must have:
+      - A Summary section explaining what changed and why
+      - A Scope and context section defining the boundary of the change
+      - A File-by-file changes section listing every touched file and what changed in it
+      - An Acceptance criteria section with the linked issue acceptance criteria
+      - A Definition of done section
+      - A Non-goals section
+      - A Validation command section describing exactly how to verify the change
+      - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target
+      Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a worth-fixing-now finding.
+      Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a worth-fixing-now finding.
+      Flag PRs where the body is a single sentence or lacks any of these sections.
+      Do not block on formatting preferences other than checkbox correctness.
+    defaultModel: null
+
+  pr-checklist-matrix:
+    persona: review
+    prompt: >-
+      Verify before approval that the PR checklist and AC/DoD/non-goals matrix are complete.
+      - Every PR checkbox (`- [ ]`) must be checked. If any box is unchecked, flag it as a blocking finding.
+      - The PR body must contain an AC/DoD/non-goals matrix that maps each acceptance criterion
+        to its definition-of-done item(s) and lists explicit non-goals.
+      - The matrix must have a markdown table with at least a header row and one content row.
+      - Flag the matrix as incomplete if any acceptance criterion, definition-of-done item, or non-goal is missing.
+    defaultModel: null
+
+  pr-comments:
+    persona: review
+    prompt: >-
+      Scan PR comments for unresolved issues before declaring the gate clean.
+      Check all PR comments and review threads for:
+      - Comments from the repository owner or collaborators that point out
+        implementation bugs, logic errors, contract violations, or security
+        issues
+      - Unresolved review threads that raise implementation concerns
+      Flag any unresolved comment that identifies a concrete implementation
+      problem as a blocking finding (severity: must-fix or worth-fixing-now).
+      Do not flag:
+      - Resolved threads
+      - Style nits, formatting suggestions, or cosmetic feedback
+      - Comments from non-collaborators or bots
+      - Outdated comments that were already addressed in a later commit
+      If no unresolved implementation concerns exist, return clean.
+  config-drift:
+    persona: review
+    prompt: >-
+      Cross-check config, schema, and documentation for contract drift:
+      - Verify that configuration files (.pi/dev-loop/settings.yaml,
+        package.json, CI workflows, skill manifests) agree on canonical
+        status tokens, support floors, and required flags.
+      - Flag any instance where two sources of truth disagree about the
+        supported contract (e.g. one doc says a flag is required, another
+        says it's optional).
+      - Check that the engines.node field matches CI matrix and any
+        documented Node.js support floor.
+      - Flag inconsistencies within a single doc that could confuse
+        consumers (e.g. one section says "default: true" and another
+        section implies the opposite).
+    defaultModel: null
+
+  gate-evidence:
+    persona: review
+    prompt: >-
+      Verify that required workflow checkpoint evidence is present and valid:
+      - Check that the draft checkpoint verdict comment exists. While the PR is
+        still draft, it must also reference the current head SHA. After the PR
+        leaves draft, the `draft_gate` checkpoint verdict comment is a one-time transition record
+        and head-SHA matching no longer applies.
+      - Check that the pre-approval checkpoint verdict comment exists when the PR
+        is in a ready/merge state.
+      - Flag any PR that transitions to ready/merge states without visible
+        checkpoint evidence for the current head.
+      - When draft-first enforcement is configured, verify that a draft-gate
+        comment was posted before the PR was marked ready.
+      - This persona is opt-in for the draft gate (uncomment to add).
+        On first PR it checks for any checkpoint evidence (not only draft_gate since
+        no prior gate exists).
+    defaultModel: null
+
+  no-op:
+    persona: review
+    prompt: >-
+      Flag workflow or tool invocations that are effectively no-ops:
+      - Check that shell commands and tool calls actually affect output,
+        state, or exit behavior rather than discarding their effect.
+      - Flag tool invocations that look successful but pass arguments in
+        a way that produces no meaningful change.
+      - Flag commands whose output is generated but never consumed.
+      - Flag patterns where a tool is called in a loop but only the last
+        iteration's result is used (or none at all).
+    defaultModel: null
+
+# Internal path patterns for internal-only PR detection.
+internalPathPatterns:
+  - "^scripts/"
+  - "^docs/"
+  - "^skills/docs/"
+  - "^\\.pi/"
+  - "^\\.github/"
+  - "^test/"

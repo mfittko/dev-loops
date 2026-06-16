@@ -53,6 +53,7 @@
   },
   "files": [
     "src/**/*.mjs",
+    "src/**/*.yaml",
     "bin/**/*.mjs"
   ],
   "scripts": {

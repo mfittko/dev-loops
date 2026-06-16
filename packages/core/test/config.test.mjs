@@ -738,7 +738,7 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      assert.equal(result.config.strategy.default, "github-first");
+      assert.equal(result.config.strategy.default, "local-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -767,7 +767,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L14: both files invalid — still returns built-in defaults", async () => {
+  test("L14: both files invalid — still returns extension defaults", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L14-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -778,7 +778,7 @@ describe("loader — graceful degradation", () => {
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       assert.equal(result.config.version, 1);
-      assert.equal(result.config.strategy.default, "github-first");
+      assert.equal(result.config.strategy.default, "local-first");
       assert.ok(result.errors.length >= 2, "should have errors for both files");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -823,7 +823,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L17: defaults.json with only version: 1 — all families from built-in", async () => {
+  test("L17: defaults.json with only version: 1 — all families from extension defaults", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L17-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -832,7 +832,7 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      assert.equal(result.config.strategy.default, "github-first");
+      assert.equal(result.config.strategy.default, "local-first");
       assert.equal(result.config.refinement.fanOut, 3);
       assert.equal(result.config.refinement.mode, "parallel");
       assert.deepEqual(result.config.autonomy.stopAt, ["merge"]);
@@ -1047,6 +1047,91 @@ describe("loader — precedence", () => {
         requireDraftFirst: false,
         devModeDefault: true,
       });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ============================================================================
+// Extension defaults precedence tests (E1–E4)
+// ============================================================================
+
+describe("extension defaults", () => {
+  test("E1: extension defaults are loaded from the installed package", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-E1-"));
+    try {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      // Extension defaults intend local-first; built-in defaults are github-first.
+      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.workflow.requireDraftFirst, true);
+      assert.equal(result.config.localImplementation.lightMode.enabled, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("E2: repo .pi/dev-loop/defaults.* overrides extension defaults", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-E2-"));
+    try {
+      const piDir = path.join(tmpDir, ".pi", "dev-loop");
+      await mkdir(piDir, { recursive: true });
+      await writeFile(
+        path.join(piDir, "defaults.yaml"),
+        "version: 1\nstrategy:\n  default: github-first\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.equal(result.config.strategy.default, "github-first");
+      // Workflow still comes from extension defaults because repo defaults did not set it.
+      assert.equal(result.config.workflow.requireDraftFirst, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("E3: .devloops overrides extension defaults", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-E3-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\nstrategy:\n  default: github-first\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.equal(result.config.strategy.default, "github-first");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("E4: extension defaults merge from a mock extension directory", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-E4-"));
+    try {
+      const extDir = path.join(tmpDir, "mock-extension");
+      await mkdir(extDir, { recursive: true });
+      await writeFile(
+        path.join(extDir, "extension-defaults.yaml"),
+        [
+          "version: 1",
+          "strategy:",
+          "  default: local-first",
+          "refinement:",
+          "  fanOut: 7",
+          "  mode: sequential",
+        ].join("\n"),
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({
+        repoRoot: tmpDir,
+        extensionDefaultsBasePath: path.join(extDir, "extension-defaults"),
+      });
+      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.refinement.fanOut, 7);
+      assert.equal(result.config.refinement.mode, "sequential");
+      // Missing keys still fall through to built-in defaults.
+      assert.equal(result.config.refinement.maxCopilotRounds, 5);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
