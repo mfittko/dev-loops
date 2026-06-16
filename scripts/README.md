@@ -45,7 +45,7 @@ Failure behavior:
 
 ### `scripts/github/capture-review-threads.mjs`
 
-Capture and normalize PR review-thread JSON.
+Capture and normalize PR review-thread JSON from all reviewers.
 
 Supported inputs:
 - `--input <path>`
@@ -54,6 +54,9 @@ Supported inputs:
 
 Optional:
 - `--output <path>` writes the same success JSON emitted on stdout
+
+Contract:
+- live capture loads review threads from all reviewers; no author filter is applied
 
 Success output shape:
 - `{ "ok": true, "source": { ... }, "summary": { ... }, "threads": [...], "comments": [...] }`
@@ -280,7 +283,7 @@ Required:
 - `--pr <number>`
 
 Optional:
-- `--author <login>` (default `Copilot`)
+- `--author <login>` (default `all`)
 - exactly one message source: `--message <text>` or stdin
 - `--resolve`
 
@@ -294,7 +297,7 @@ Contract:
 - zero-match runs are deterministic no-ops with success JSON
 
 Success output shape:
-- `{ "ok": true, "repo": "owner/name", "pr": 17, "author": "Copilot", "resolve": true|false, "matchedThreadCount": 2, "repliedThreadCount": 2, "resolvedThreadCount": 2, "skippedThreadCount": 1, "results": [{ "threadId": "...", "commentId": 123, "replyId": 456, "replyUrl": "...", "resolved": true }] }`
+- `{ "ok": true, "repo": "owner/name", "pr": 17, "author": "all", "resolve": true|false, "matchedThreadCount": 2, "repliedThreadCount": 2, "resolvedThreadCount": 2, "skippedThreadCount": 1, "results": [{ "threadId": "...", "commentId": 123, "replyId": 456, "replyUrl": "...", "resolved": true }] }`
 
 Failure behavior:
 - malformed arguments, empty/conflicting message input, malformed thread snapshots, unexpected `gh` failures, reply failures, resolve failures, and failed post-resolve verification emit `{ "ok": false, "error": "..." }` on stderr and exit non-zero

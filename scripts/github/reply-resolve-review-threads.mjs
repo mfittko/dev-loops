@@ -17,11 +17,11 @@ Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
 Optional:
-  --author <login>      Match threads containing a comment from this author (default: Copilot)
+  --author <login>      Match threads containing a comment from this author (default: all)
   --message <text>      Reply body text; provide exactly one message source via --message or stdin
   --resolve             Resolve each matched thread after the reply succeeds
 Output (stdout, JSON):
-  { "ok": true, "repo": "owner/name", "pr": 17, "author": "Copilot", "resolve": true,
+  { "ok": true, "repo": "owner/name", "pr": 17, "author": "all", "resolve": true,
     "matchedThreadCount": 2, "repliedThreadCount": 2, "resolvedThreadCount": 2,
     "skippedThreadCount": 1, "results": [{ ... }] }
 Error output (stderr, JSON):
@@ -39,7 +39,7 @@ export function parseReplyResolveThreadsCliArgs(argv) {
     help: false,
     repo: undefined,
     pr: undefined,
-    author: "Copilot",
+    author: "all",
     message: undefined,
     resolve: false,
   };

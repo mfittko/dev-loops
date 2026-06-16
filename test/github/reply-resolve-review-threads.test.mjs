@@ -35,7 +35,7 @@ test("parseReplyResolveThreadsCliArgs sets defaults and parses optional flags", 
       help: false,
       repo: "owner/repo",
       pr: 17,
-      author: "Copilot",
+      author: "all",
       message: undefined,
       resolve: false,
     },
@@ -146,7 +146,7 @@ test("reply-resolve-review-threads replies to matching unresolved threads withou
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--author", "Copilot", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -257,7 +257,7 @@ test("reply-resolve-review-threads resolves matched threads and verifies they st
       ok: true,
       repo: "owner/repo",
       pr: 17,
-      author: "Copilot",
+      author: "all",
       resolve: true,
       matchedThreadCount: 2,
       repliedThreadCount: 2,
@@ -355,7 +355,7 @@ test("reply-resolve-review-threads returns deterministic success when nothing ma
       ok: true,
       repo: "owner/repo",
       pr: 17,
-      author: "Copilot",
+      author: "all",
       resolve: false,
       matchedThreadCount: 0,
       repliedThreadCount: 0,
@@ -437,7 +437,7 @@ test("reply-resolve-review-threads stops on reply failure and reports partial pr
     assert.deepEqual(parsed.partialProgress, {
       repo: "owner/repo",
       pr: 17,
-      author: "Copilot",
+      author: "all",
       resolve: false,
       matchedThreadCount: 2,
       repliedThreadCount: 1,
@@ -504,7 +504,7 @@ test("reply-resolve-review-threads fails closed when post-resolve verification s
     assert.deepEqual(parsed.partialProgress, {
       repo: "owner/repo",
       pr: 17,
-      author: "Copilot",
+      author: "all",
       resolve: true,
       matchedThreadCount: 1,
       repliedThreadCount: 1,
@@ -587,6 +587,160 @@ test("reply-resolve-review-threads preserves leading whitespace from --message",
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads defaults to all reviewers and processes mixed human + Copilot threads", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-mixed-all-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: {
+              nodes: [
+                { id: "PRRC_node_101", databaseId: 101, body: "copilot note", author: { login: "Copilot", __typename: "Bot" } },
+              ],
+            },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: {
+              nodes: [
+                { id: "PRRC_node_201", databaseId: 201, body: "human review note", author: { login: "reviewer", __typename: "User" } },
+              ],
+            },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/101/replies", "--input", "-"],
+        stdout: '{"id":1101,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1101"}\n',
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/201/replies", "--input", "-"],
+        stdout: '{"id":1102,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1102"}\n',
+      },
+    ]);
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.author, "all");
+    assert.equal(parsed.matchedThreadCount, 2);
+    assert.equal(parsed.skippedThreadCount, 0);
+    assert.deepEqual(parsed.results.map((r) => r.commentId).sort(), [101, 201]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads filters to human-only unresolved threads with explicit --author", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-human-only-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: {
+              nodes: [
+                { id: "PRRC_node_201", databaseId: 201, body: "human note", author: { login: "reviewer", __typename: "User" } },
+              ],
+            },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: {
+              nodes: [
+                { id: "PRRC_node_101", databaseId: 101, body: "copilot note", author: { login: "Copilot", __typename: "Bot" } },
+              ],
+            },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/201/replies", "--input", "-"],
+        stdout: '{"id":1201,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1201"}\n',
+      },
+    ]);
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--author", "reviewer", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.author, "reviewer");
+    assert.equal(parsed.matchedThreadCount, 1);
+    assert.equal(parsed.skippedThreadCount, 1);
+    assert.deepEqual(parsed.results.map((r) => r.commentId), [201]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads skips resolved human threads by default", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-human-resolved-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: true,
+            comments: {
+              nodes: [
+                { id: "PRRC_node_201", databaseId: 201, body: "human resolved note", author: { login: "reviewer", __typename: "User" } },
+              ],
+            },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: {
+              nodes: [
+                { id: "PRRC_node_101", databaseId: 101, body: "copilot note", author: { login: "Copilot", __typename: "Bot" } },
+              ],
+            },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/101/replies", "--input", "-"],
+        stdout: '{"id":1301,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1301"}\n',
+      },
+    ]);
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.author, "all");
+    assert.equal(parsed.matchedThreadCount, 1);
+    assert.equal(parsed.skippedThreadCount, 0);
+    assert.deepEqual(parsed.results.map((r) => r.commentId), [101]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

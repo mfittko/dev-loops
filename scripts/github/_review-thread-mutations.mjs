@@ -207,6 +207,9 @@ export function authorMatchesFilter(commentAuthorLogin, authorFilter) {
   if (normalizedLogin.length === 0 || normalizedFilter.length === 0) {
     return false;
   }
+  if (normalizedFilter.toLowerCase() === "all") {
+    return true;
+  }
   if (normalizedFilter.toLowerCase() === "copilot") {
     return isCopilotLogin(normalizedLogin) || normalizedLogin.toLowerCase() === "copilot";
   }
