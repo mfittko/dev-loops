@@ -173,26 +173,45 @@ Full details: [Extension Documentation](./extension/README.md) and `.pi/dev-loop
 
 ## Package surface
 
-The `dev-loops` package ships both a standalone CLI and a Pi extension.
-
-**CLI:**
-
-```bash
-npm install -g dev-loops        # global
-dev-loops --help
-```
-
-Or use `npx dev-loops` to run without installing.
+The `dev-loops` package ships both a standalone CLI and a Pi extension. Consumer repos should prefer pinned Pi package installs; global npm installs are optional, not part of the Pi runtime contract.
 
 **Pi extension:**
 
 ```bash
-pi install npm:dev-loops        # from npm registry
-pi install git:github.com/mfittko/dev-loops          # from git
-pi install -l git:github.com/mfittko/dev-loops       # project-local from git
+pi install npm:dev-loops@<version>                         # global, pinned npm package
+pi install -l npm:dev-loops@<version>                      # project-local, pinned npm package
+pi install git:github.com/mfittko/dev-loops@<tag-or-sha>   # global, pinned git ref
+pi install -l git:github.com/mfittko/dev-loops@<tag-or-sha> # project-local, pinned git ref
 ```
 
-After a global install, the `dev-loops` command is available directly in your shell.
+Project-local installs write to `.pi/settings.json`; after the project is trusted, Pi auto-installs missing packages on startup. Install `pi-subagents` the same way when the repo depends on async loop behavior.
+
+Inside Pi, use `dev-loop` as the single public skill/agent entrypoint:
+
+```js
+subagent({
+  agent: "dev-loop",
+  task: "Start dev loop on issue 123 in owner/repo..."
+})
+```
+
+Do not call internal routed skills such as `local-implementation`, `copilot-pr-followup`, or `final-approval` directly; `dev-loop` selects them from the current GitHub/repo state.
+
+The `/dev-loops` command surface is for readiness and configuration UX:
+
+```bash
+/dev-loops status
+/dev-loops doctor
+/dev-loops gates
+```
+
+**CLI:**
+
+```bash
+npx dev-loops@<version> gates
+```
+
+Use `npm install -g dev-loops` only if you want the shell command available outside Pi.
 
 The package exposes the `/dev-loops` extension command surface, the `dev-loops` shell CLI, and packaged skills from `package.json` `pi.skills`.
 
