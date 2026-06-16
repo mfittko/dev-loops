@@ -57,7 +57,7 @@ test("refiner agent defines the approved phase-refinement contract", async () =>
 
 
 test("defaults config exposes a customizable refiner coverage-matrix prompt", async () => {
-  const content = await readRepo(".pi/dev-loop/defaults.yaml");
+  const content = await readRepo("packages/core/src/config/extension-defaults.yaml");
 
   assertMatchesAll(content, [
     /personas:\n  refiner:\n    persona: refiner/m,
@@ -67,7 +67,7 @@ test("defaults config exposes a customizable refiner coverage-matrix prompt", as
     /Include every explicit acceptance criterion, definition-of-done item, and non-goal; do not skip items/i,
     /If no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix/i,
     /A refinement is complete only when no item has `Partial`, `Unmet`, or `Unverified` status/i,
-  ], ".pi/dev-loop/defaults.yaml");
+  ], "packages/core/src/config/extension-defaults.yaml");
 });
 
 test("local-implementation skill uses the refiner for phase planning and delegates RFC decisions to the parent session", async () => {
@@ -231,7 +231,7 @@ test("AGENTS stays compact and resolver-first", async () => {
 test("refinement docs and prompts wire the optional audit handoff into the refiner chain", async () => {
   const [refinerAgent, defaultsConfig, localImplementationSkill, issueIntakeDoc] = await Promise.all([
     readRepo("agents/refiner.agent.md"),
-    readRepo(".pi/dev-loop/defaults.yaml"),
+    readRepo("packages/core/src/config/extension-defaults.yaml"),
     readRepo("skills/local-implementation/SKILL.md"),
     readRepo("skills/docs/issue-intake-procedure.md"),
   ]);
@@ -254,7 +254,7 @@ test("refinement docs and prompts wire the optional audit handoff into the refin
     /do not fabricate audit evidence when none was provided/i,
     /\n  audit:\n    persona: review/i,
     /audit only the named files\/areas/i,
-  ], ".pi/dev-loop/defaults.yaml");
+  ], "packages/core/src/config/extension-defaults.yaml");
 
   assertMatchesAll(localImplementationSkill, [
     /run one bounded audit before variant fan-out/i,
