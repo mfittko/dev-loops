@@ -815,6 +815,145 @@ test("buildPreMergeGateCheck passes with zero unresolved threads", () => {
   assert.deepEqual(result.failures, []);
 });
 
+test("detect-checkpoint-evidence fails pre-merge with unresolved human review threads", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-human-unresolved-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: '{"headRefOid":"abc1234"}\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: JSON.stringify([
+          {
+            id: 90,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: bcd5678",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            updated_at: "2026-05-29T21:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-90",
+          },
+          {
+            id: 91,
+            body: [
+              "Gate review: pre_approval_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: await final human approval",
+            ].join("\n"),
+            updated_at: "2026-05-29T22:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+          },
+        ]) + "\n",
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: JSON.stringify({
+          data: { repository: { pullRequest: { reviewThreads: { nodes: [
+            {
+              id: "t-human",
+              isResolved: false,
+              comments: {
+                nodes: [
+                  { id: "c-human", databaseId: 5001, body: "human reviewer concern", author: { login: "reviewer", __typename: "User" } },
+                ],
+              },
+            },
+          ] } } } }
+        }) + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /Pre-merge gate evidence check failed/i);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("unresolved review threads present")),
+      "expected unresolved thread failure for human-authored thread in " + JSON.stringify(payload.preMergeGateCheck.failures)
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-checkpoint-evidence passes pre-merge when all human review threads are resolved", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-human-resolved-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: '{"headRefOid":"abc1234"}\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: JSON.stringify([
+          {
+            id: 90,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: bcd5678",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            updated_at: "2026-05-29T21:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-90",
+          },
+          {
+            id: 91,
+            body: [
+              "Gate review: pre_approval_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: await final human approval",
+            ].join("\n"),
+            updated_at: "2026-05-29T22:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+          },
+        ]) + "\n",
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: JSON.stringify({
+          data: { repository: { pullRequest: { reviewThreads: { nodes: [
+            {
+              id: "t-human",
+              isResolved: true,
+              comments: {
+                nodes: [
+                  { id: "c-human", databaseId: 5001, body: "human reviewer concern", author: { login: "reviewer", __typename: "User" } },
+                ],
+              },
+            },
+          ] } } } }
+        }) + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.preMergeGateCheck.ok, true);
+    assert.deepEqual(payload.preMergeGateCheck.failures, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 
 test("detect-checkpoint-evidence fails closed when async run no longer owns the PR", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-checkpoint-evidence-ownership-"));
