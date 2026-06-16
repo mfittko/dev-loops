@@ -101,6 +101,8 @@ function runNpxInvocation({
   return run(command, args, { cwd, env, stdio: "inherit", allowNonZero: true });
 }
 
+const VALID_REPO_WIKI_SOURCES = new Set(["npm", "local"]);
+
 export function parseCliArgs(argv) {
   const args = Array.isArray(argv) ? [...argv] : [];
   const { values } = parseArgs({
@@ -113,6 +115,9 @@ export function parseCliArgs(argv) {
 
   const sourceEnv = process.env.REPO_WIKI_SOURCE;
   const source = values.source || sourceEnv || "npm";
+  if (!VALID_REPO_WIKI_SOURCES.has(source)) {
+    throw new Error(`Unknown repo-wiki source "${source}". Valid sources: npm, local`);
+  }
 
   const passthroughArgs = [];
   for (let i = 0; i < args.length; i++) {
@@ -125,12 +130,11 @@ export function parseCliArgs(argv) {
     passthroughArgs.push(a);
   }
 
-  const firstPositional = passthroughArgs.find(a => !a.startsWith("-"));
-  if (firstPositional === undefined || firstPositional === "help") {
+  if (passthroughArgs.length === 0 || passthroughArgs[0] === "help" || passthroughArgs[0] === "--help" || passthroughArgs[0] === "-h") {
     return { source, prepareOnly: false, passthroughArgs: ["--help"] };
   }
 
-  if (firstPositional === "prepare") {
+  if (passthroughArgs[0] === "prepare") {
     return { source, prepareOnly: true, passthroughArgs: [] };
   }
 

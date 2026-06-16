@@ -28,19 +28,24 @@ function parseError(message) {
 }
 
 function parseCliArgs(argv) {
-  const { values } = parseArgs({
-    args: argv,
-    options: {
-      repo: { type: "string" },
-      pr: { type: "string" },
-      "comment-id": { type: "string" },
-      "thread-id": { type: "string" },
-      "body-file": { type: "string" },
-      help: { type: "boolean", short: "h" },
-    },
-    strict: true,
-    allowPositionals: false,
-  });
+  let values;
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      options: {
+        repo: { type: "string" },
+        pr: { type: "string" },
+        "comment-id": { type: "string" },
+        "thread-id": { type: "string" },
+        "body-file": { type: "string" },
+        help: { type: "boolean", short: "h" },
+      },
+      strict: true,
+      allowPositionals: false,
+    }));
+  } catch (err) {
+    throw parseError(err instanceof Error ? err.message : String(err));
+  }
 
   if (values.help) {
     return { help: true };

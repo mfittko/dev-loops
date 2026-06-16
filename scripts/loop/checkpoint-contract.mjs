@@ -34,17 +34,22 @@ export function buildRetrospectiveCheckpointPayload({ state, notes = null, reaso
 }
 
 function parseCliArgs(argv) {
-  const { values } = parseArgs({
-    args: argv,
-    options: {
-      state: { type: "string" },
-      notes: { type: "string" },
-      reason: { type: "string" },
-      help: { type: "boolean", short: "h" },
-    },
-    strict: true,
-    allowPositionals: false,
-  });
+  let values;
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      options: {
+        state: { type: "string" },
+        notes: { type: "string" },
+        reason: { type: "string" },
+        help: { type: "boolean", short: "h" },
+      },
+      strict: true,
+      allowPositionals: false,
+    }));
+  } catch (err) {
+    throw parseError(err instanceof Error ? err.message : String(err));
+  }
 
   if (values.help) {
     return { help: true };

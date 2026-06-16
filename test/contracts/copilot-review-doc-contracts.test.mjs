@@ -388,7 +388,7 @@ test("new See Also markdown links resolve from docs files", async () => {
     }
   }
 });
-test("docs index separates active docs, archived history, and presentations", async () => {
+test("docs index separates active docs and presentations", async () => {
   const content = await readRepo("docs/index.md");
   assert.match(content, /Start here/i);
   assert.match(content, /phases\/phase-8\.md/i);
