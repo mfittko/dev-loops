@@ -3,7 +3,8 @@
 // npm package (default) or a pinned local source checkout when --source local or
 // REPO_WIKI_SOURCE=local is set.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdir, readFile, writeFile } from "node:fs";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -106,7 +107,6 @@ export function parseCliArgs(argv) {
     args,
     options: {
       source: { type: "string" },
-      help: { type: "boolean", short: "h" },
     },
     strict: false,
   });
@@ -122,15 +122,15 @@ export function parseCliArgs(argv) {
       continue;
     }
     if (a.startsWith("--source=")) continue;
-    if (a === "--help" || a === "-h") continue;
     passthroughArgs.push(a);
   }
 
-  if (passthroughArgs.length === 0 || values.help) {
+  const firstPositional = passthroughArgs.find(a => !a.startsWith("-"));
+  if (firstPositional === undefined || firstPositional === "help") {
     return { source, prepareOnly: false, passthroughArgs: ["--help"] };
   }
 
-  if (passthroughArgs[0] === "prepare") {
+  if (firstPositional === "prepare") {
     return { source, prepareOnly: true, passthroughArgs: [] };
   }
 

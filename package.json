@@ -37,7 +37,7 @@
     "repo-wiki:lint": "node scripts/repo-wiki.mjs lint --repo .",
     "repo-wiki:search": "node scripts/repo-wiki.mjs search --repo .",
     "repo-wiki:init": "node scripts/repo-wiki.mjs init --repo .",
-    "repo-wiki:prepare": "node scripts/repo-wiki-local.mjs prepare",
+    "repo-wiki:prepare": "node scripts/repo-wiki.mjs --source local prepare",
     "repo-wiki:local": "node scripts/repo-wiki.mjs --source local",
     "repo-wiki:local-prepare": "node scripts/repo-wiki.mjs --source local prepare"
   },
