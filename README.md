@@ -30,6 +30,39 @@ Use **`dev-loop`** as the single public workflow entrypoint:
 
 The `dev-loop` entrypoint resolves authoritative state, picks the correct internal strategy, and routes work deterministically. Users never need to choose internal strategy names. See the canonical shorthand example mapping in the [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md).
 
+## Install from npm
+
+### CLI only
+
+```bash
+npm install -g dev-loops        # global install
+dev-loops --help                # verify
+```
+
+Or run directly without installing:
+
+```bash
+npx dev-loops --help
+```
+
+### Pi extension
+
+To use `/dev-loops` inside Pi:
+
+```bash
+pi install npm:dev-loops        # global Pi extension
+dev-loops --help
+```
+
+You can also install from git:
+
+```bash
+pi install git:github.com/mfittko/dev-loops    # global
+pi install -l git:github.com/mfittko/dev-loops # project-local
+```
+
+The CLI requires Node `>=20` and a GitHub-authenticated `gh` CLI for repository workflows. See [Requirements](#requirements).
+
 ## Docker
 
 A deterministic container image with all required tooling for dev-loop operation.
@@ -140,14 +173,45 @@ Full details: [Extension Documentation](./extension/README.md) and `.pi/dev-loop
 
 ## Package surface
 
-Install with:
+The `dev-loops` package ships both a standalone CLI and a Pi extension. Consumer repos should prefer pinned Pi package installs; global npm installs are optional, not part of the Pi runtime contract.
+
+**Pi extension:**
 
 ```bash
-pi install git:github.com/mfittko/dev-loops          # global
-pi install -l git:github.com/mfittko/dev-loops       # project-local
+pi install npm:dev-loops@<version>                         # global, pinned npm package
+pi install -l npm:dev-loops@<version>                      # project-local, pinned npm package
+pi install git:github.com/mfittko/dev-loops@<tag-or-sha>   # global, pinned git ref
+pi install -l git:github.com/mfittko/dev-loops@<tag-or-sha> # project-local, pinned git ref
 ```
 
-Use `npx dev-loops` to run the CLI without installing. After a global `pi install`, the `dev-loops` command is available directly in your shell.
+Project-local installs write to `.pi/settings.json`; after the project is trusted, Pi auto-installs missing packages on startup. Install `pi-subagents` the same way when the repo depends on async loop behavior.
+
+Inside Pi, use `dev-loop` as the single public skill/agent entrypoint:
+
+```js
+subagent({
+  agent: "dev-loop",
+  task: "Start dev loop on issue 123 in owner/repo..."
+})
+```
+
+Do not call internal routed skills such as `local-implementation`, `copilot-pr-followup`, or `final-approval` directly; `dev-loop` selects them from the current GitHub/repo state.
+
+The `/dev-loops` command surface is for readiness and configuration UX:
+
+```bash
+/dev-loops status
+/dev-loops doctor
+/dev-loops gates
+```
+
+**CLI:**
+
+```bash
+npx dev-loops@<version> gates
+```
+
+Use `npm install -g dev-loops` only if you want the shell command available outside Pi.
 
 The package exposes the `/dev-loops` extension command surface, the `dev-loops` shell CLI, and packaged skills from `package.json` `pi.skills`.
 
