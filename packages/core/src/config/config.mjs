@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 // ============================================================================
@@ -302,11 +303,25 @@ export function resolveReviewerRole(config, angle) {
  * @typedef {object} ConfigLoadError
  * @property {string} path - Human-readable file path or layer name
  * @property {string} message - Error description
- * @property {"defaults"|"settings"|"merged"} layer - Which config layer failed
+ * @property {"defaults"|"settings"|"extensionDefaults"|"merged"} layer - Which config layer failed
  */
 
 // ============================================================================
 // Helpers
+
+/**
+ * Resolve the base path (without extension) for extension-packaged defaults.
+ * In normal use the file lives next to config.mjs inside the installed package.
+ * Tests can override this via `options.extensionDefaultsBasePath`.
+ * @param {{ extensionDefaultsBasePath?: string }} [options]
+ * @returns {string}
+ */
+function resolveExtensionDefaultsPath(options = {}) {
+  if (options.extensionDefaultsBasePath) return options.extensionDefaultsBasePath;
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(moduleDir, "extension-defaults");
+}
+
 // ============================================================================
 
 /**
@@ -523,11 +538,12 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
 /**
  * @typedef {object} LoadOptions
  * @property {string} [repoRoot] - Path to repository root (default: process.cwd())
+ * @property {string} [extensionDefaultsBasePath] - Base path (no extension) to extension defaults; overrides the package-relative default
  */
 
 /**
  * Load the dev-loop configuration with full precedence:
- *   settings.(yaml|yml|json) > legacy overrides.(yaml|yml|json) > defaults.(yaml|yml|json) > built-in defaults
+ *   settings.(yaml|yml|json) > legacy overrides.(yaml|yml|json) > repo .pi/dev-loop/defaults.(yaml|yml|json) > extension defaults > built-in defaults
  *
  * Never throws for config-related problems.
  * Returns built-in defaults even when all files are missing or broken.
@@ -548,6 +564,8 @@ export async function loadDevLoopConfig(options = {}) {
   const errors = [];
 
   let merged = { ...BUILT_IN_DEFAULTS };
+  merged = await applyLayer(merged, resolveExtensionDefaultsPath(options), "extensionDefaults", warnings, errors);
+
 
   merged = await applyLayer(merged, defaultsPath, "defaults", warnings, errors, {
     warnOnMissing: true,
