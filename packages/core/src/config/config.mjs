@@ -564,7 +564,7 @@ export async function loadDevLoopConfig(options = {}) {
   const errors = [];
 
   let merged = { ...BUILT_IN_DEFAULTS };
-  merged = await applyLayer(merged, resolveExtensionDefaultsPath(options), "extensionDefaults", warnings, errors);
+  merged = await applyLayer(merged, resolveExtensionDefaultsPath(options), "extensionDefaults", warnings, errors, { warnOnMissing: true });
 
 
   merged = await applyLayer(merged, defaultsPath, "defaults", warnings, errors, {

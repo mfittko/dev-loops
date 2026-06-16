@@ -767,7 +767,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L14: both files invalid — still returns built-in defaults", async () => {
+  test("L14: both files invalid — still returns extension defaults", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L14-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -823,7 +823,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L17: defaults.json with only version: 1 — all families from built-in", async () => {
+  test("L17: defaults.json with only version: 1 — all families from extension defaults", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L17-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1109,10 +1109,10 @@ describe("extension defaults", () => {
   test("E4: extension defaults merge from a mock extension directory", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-E4-"));
     try {
-      const extDir = path.join(tmpDir, "mock-extension", ".pi", "dev-loop");
+      const extDir = path.join(tmpDir, "mock-extension");
       await mkdir(extDir, { recursive: true });
       await writeFile(
-        path.join(extDir, "defaults.yaml"),
+        path.join(extDir, "extension-defaults.yaml"),
         [
           "version: 1",
           "strategy:",
@@ -1125,7 +1125,7 @@ describe("extension defaults", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({
         repoRoot: tmpDir,
-        extensionDefaultsBasePath: path.join(extDir, "defaults"),
+        extensionDefaultsBasePath: path.join(extDir, "extension-defaults"),
       });
       assert.equal(result.config.strategy.default, "local-first");
       assert.equal(result.config.refinement.fanOut, 7);
