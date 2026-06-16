@@ -505,7 +505,7 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
 
   if (data === null) {
     if (options.warnOnMissing) {
-      warnings.push(`Committed ${layer} config not found (tried .yaml, .yml, and .json), using built-in defaults`);
+      warnings.push(`Committed ${layer} config not found (tried .yaml, .yml, and .json), falling back to previously merged defaults`);
     }
     return merged;
   }
@@ -546,7 +546,7 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
  *   settings.(yaml|yml|json) > legacy overrides.(yaml|yml|json) > repo .pi/dev-loop/defaults.(yaml|yml|json) > extension defaults > built-in defaults
  *
  * Never throws for config-related problems.
- * Returns built-in defaults even when all files are missing or broken.
+ * Returns extension defaults (with built-in defaults as the final fallback) even when all repo-local config files are missing or broken.
  *
  * @param {LoadOptions} [options]
  * @returns {Promise<LoadResult>}
