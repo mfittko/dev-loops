@@ -8,7 +8,6 @@
     "./cli/helpers": "./src/cli/helpers.mjs",
     "./cli/primitives": "./src/cli/primitives.mjs",
     "./cli/retry-wrapper": "./src/cli/retry-wrapper.mjs",
-    "./cli/subcommand-runner": "./src/cli/subcommand-runner.mjs",
     "./config": "./src/config/config.mjs",
     "./debt/cluster": "./src/debt/cluster.mjs",
     "./debt/finding": "./src/debt/debt-finding.mjs",

@@ -1,10 +1,27 @@
 #!/usr/bin/env node
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { defineSubcommand, isDirectCliRun } from "@dev-loops/core/cli/subcommand-runner";
+import process from "node:process";
+import { parseArgs } from "node:util";
+import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
 
 const CHECKPOINT_FILE = ".pi/dev-loop-retrospective-checkpoint.json";
 const ALLOWED_STATES = new Set(["required", "complete", "skipped", "none", "missing"]);
+
+const USAGE = `Usage: dev-loops checkpoint-contract --state <state> [--notes <text>] [--reason <text>]
+
+Write .pi/dev-loop-retrospective-checkpoint.json using the retrospective contract format.
+
+Required:
+  --state <state>          Checkpoint state (required, complete, skipped, none, missing)
+
+Optional:
+  --notes <text>           Required when --state is complete
+  --reason <text>          Required when --state is skipped`;
+
+function parseError(message) {
+  return Object.assign(new Error(message), { usage: USAGE });
+}
 
 export function buildRetrospectiveCheckpointPayload({ state, notes = null, reason = null }, now = new Date()) {
   const timestamp = now.toISOString();
@@ -16,34 +33,61 @@ export function buildRetrospectiveCheckpointPayload({ state, notes = null, reaso
   throw new Error(`Unsupported state: ${state}`);
 }
 
-const { runAsScript } = defineSubcommand({
-  name: "checkpoint-contract --state <state>",
-  description: "Write .pi/dev-loop-retrospective-checkpoint.json using the retrospective contract format.",
-  options: [
-    { flag: "--state", type: "string", required: true, choices: [...ALLOWED_STATES],
-      description: "Checkpoint state (required, complete, skipped, none, missing)" },
-    { flag: "--notes", type: "string", description: "Required when --state is complete" },
-    { flag: "--reason", type: "string", description: "Required when --state is skipped" },
-  ],
-  async run({ state, notes, reason }, { args: _args, usage }) {
-    if (!ALLOWED_STATES.has(state)) {
-      throw Object.assign(new Error(`Invalid --state: "${state}". Allowed: ${[...ALLOWED_STATES].join(", ")}.`), { usage });
-    }
-    if (state === "complete" && !notes) {
-      throw Object.assign(new Error('state "complete" requires --notes'), { usage });
-    }
-    if (state === "skipped" && !reason) {
-      throw Object.assign(new Error('state "skipped" requires --reason'), { usage });
-    }
+function parseCliArgs(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      state: { type: "string" },
+      notes: { type: "string" },
+      reason: { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
 
-    const cwd = process.cwd();
-    const payload = buildRetrospectiveCheckpointPayload({ state, notes, reason });
-    const checkpointPath = path.join(cwd, CHECKPOINT_FILE);
-    await mkdir(path.dirname(checkpointPath), { recursive: true });
-    await writeFile(checkpointPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    process.stdout.write(JSON.stringify({ ok: true, path: CHECKPOINT_FILE, checkpoint: payload }) + "\n");
+  if (values.help) {
+    return { help: true };
+  }
+
+  if (!values.state) throw parseError("Missing required option: --state");
+  const state = values.state;
+  if (!ALLOWED_STATES.has(state)) {
+    throw parseError(`--state must be one of: ${[...ALLOWED_STATES].join(", ")}`);
+  }
+  if (state === "complete" && !values.notes) {
+    throw parseError('state "complete" requires --notes');
+  }
+  if (state === "skipped" && !values.reason) {
+    throw parseError('state "skipped" requires --reason');
+  }
+
+  return { state, notes: values.notes ?? null, reason: values.reason ?? null };
+}
+
+async function run(argv) {
+  const parsed = parseCliArgs(argv);
+  if (parsed.help) {
+    process.stdout.write(`${USAGE}\n`);
     return 0;
-  },
-});
+  }
 
-if (isDirectCliRun(import.meta.url)) { runAsScript(); }
+  const { state, notes, reason } = parsed;
+  const payload = buildRetrospectiveCheckpointPayload({ state, notes, reason });
+  const checkpointPath = path.join(process.cwd(), CHECKPOINT_FILE);
+  await mkdir(path.dirname(checkpointPath), { recursive: true });
+  await writeFile(checkpointPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  process.stdout.write(JSON.stringify({ ok: true, path: CHECKPOINT_FILE, checkpoint: payload }) + "\n");
+  return 0;
+}
+
+if (isDirectCliRun(import.meta.url)) {
+  run(process.argv.slice(2)).then(
+    (code) => { process.exitCode = typeof code === "number" ? code : 0; },
+    (error) => {
+      const usage = error instanceof Error && typeof error.usage === "string" ? error.usage : undefined;
+      process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), ...(usage && { usage }) })}\n`);
+      process.exitCode = 1;
+    },
+  );
+}
