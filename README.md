@@ -30,6 +30,39 @@ Use **`dev-loop`** as the single public workflow entrypoint:
 
 The `dev-loop` entrypoint resolves authoritative state, picks the correct internal strategy, and routes work deterministically. Users never need to choose internal strategy names. See the canonical shorthand example mapping in the [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md).
 
+## Install from npm
+
+### CLI only
+
+```bash
+npm install -g dev-loops        # global install
+dev-loops --help                # verify
+```
+
+Or run directly without installing:
+
+```bash
+npx dev-loops --help
+```
+
+### Pi extension
+
+To use `/dev-loops` inside Pi:
+
+```bash
+pi install npm:dev-loops        # global Pi extension
+dev-loops --help
+```
+
+You can also install from git:
+
+```bash
+pi install git:github.com/mfittko/dev-loops    # global
+pi install -l git:github.com/mfittko/dev-loops # project-local
+```
+
+The CLI requires Node `>=20` and a GitHub-authenticated `gh` CLI for repository workflows. See [Requirements](#requirements).
+
 ## Docker
 
 A deterministic container image with all required tooling for dev-loop operation.
@@ -140,14 +173,26 @@ Full details: [Extension Documentation](./extension/README.md) and `.pi/dev-loop
 
 ## Package surface
 
-Install with:
+The `dev-loops` package ships both a standalone CLI and a Pi extension.
+
+**CLI:**
 
 ```bash
-pi install git:github.com/mfittko/dev-loops          # global
-pi install -l git:github.com/mfittko/dev-loops       # project-local
+npm install -g dev-loops        # global
+dev-loops --help
 ```
 
-Use `npx dev-loops` to run the CLI without installing. After a global `pi install`, the `dev-loops` command is available directly in your shell.
+Or use `npx dev-loops` to run without installing.
+
+**Pi extension:**
+
+```bash
+pi install npm:dev-loops        # from npm registry
+pi install git:github.com/mfittko/dev-loops          # from git
+pi install -l git:github.com/mfittko/dev-loops       # project-local from git
+```
+
+After a global install, the `dev-loops` command is available directly in your shell.
 
 The package exposes the `/dev-loops` extension command surface, the `dev-loops` shell CLI, and packaged skills from `package.json` `pi.skills`.
 
