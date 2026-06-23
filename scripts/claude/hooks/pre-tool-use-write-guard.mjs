@@ -5,7 +5,7 @@
  * Makes the main-agent read-only boundary (main-agent-contract.md) mechanical under Claude:
  * denies a Write/Edit whose target is inside the repo working tree AND not gitignored when the
  * call originates from the MAIN agent, and allows it inside the dev-loop subagent context (CA2
- * `DEVLOOPS_RUN_ID`, or a Claude `agent_id`). Strict enforcement is opt-in via
+ * `DEVLOOPS_RUN_ID`, or Claude `agent_type === "dev-loop"`). Strict enforcement is opt-in via
  * `DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open) so enabling the harness does not
  * retroactively break a repo's own interactive dev.
  */

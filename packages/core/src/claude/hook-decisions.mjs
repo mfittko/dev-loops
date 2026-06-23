@@ -122,8 +122,8 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
   return {
     decision: "deny",
     reason:
-      `Main-agent read-only boundary: refusing to mutate repo-tracked path "${filePath}". ` +
+      `Main-agent read-only boundary: refusing to mutate repository path "${filePath}". ` +
       "All repository mutations must flow through the dev-loop subagent. " +
-      "See main-agent-contract.md.",
+      "See skills/docs/main-agent-contract.md.",
   };
 }
