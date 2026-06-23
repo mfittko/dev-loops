@@ -207,6 +207,30 @@ test("repo-resolution failures are swallowed so the hook stays best-effort", asy
   assert.equal(hook.getState().pendingPostMergeUpdate, false);
 });
 
+test("malformed or foreign-harness events pass through safely without throwing", async () => {
+  let resolveCalls = 0;
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => {
+      resolveCalls += 1;
+      return { repoRoot: cwd, repoSlug: TARGET_REPO_SLUG };
+    },
+    runCommand: async () => ({ code: 0, stdout: "", stderr: "", killed: false }),
+  });
+  const { ctx } = createUiCalls();
+
+  // onUserBash: missing/typed-wrong command and null event must return undefined (pass through).
+  assert.equal(await hook.onUserBash({}, ctx), undefined);
+  assert.equal(await hook.onUserBash({ command: 123 }, ctx), undefined);
+  assert.equal(await hook.onUserBash(null, ctx), undefined);
+
+  // onToolResult: null/empty events must not throw and must not queue an update.
+  await hook.onToolResult(null, ctx);
+  await hook.onToolResult({}, ctx);
+
+  assert.equal(resolveCalls, 0, "malformed events must not even reach repo resolution");
+  assert.equal(hook.getState().pendingPostMergeUpdate, false);
+});
+
 test("multiple merge signals in one turn still run only one update", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({

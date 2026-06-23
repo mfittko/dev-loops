@@ -18,7 +18,19 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)))
 
 const SCAN_DIRS = ["extension", "packages/core/src/harness"];
 const ALLOWED = new Set([path.join("extension", "pi-extension-adapter.ts")]);
-const PI_IMPORT_RE = /from\s+['"]@earendil-works\/pi-[^'"]+['"]|import\(['"]@earendil-works\/pi-/;
+
+// Detect a real ESM import of `@earendil-works/pi-*`, covering all three forms:
+//   static:       import ... from '@earendil-works/pi-x'
+//   side-effect:  import '@earendil-works/pi-x'
+//   dynamic:      import('@earendil-works/pi-x')
+// Requires the `import`/`from` keyword immediately before the specifier so prose mentions
+// of the module name in comments/strings are not false positives.
+const PI_STATIC_OR_SIDE_EFFECT_RE = /\b(?:from|import)\s+['"]@earendil-works\/pi-[^'"]+['"]/;
+const PI_DYNAMIC_RE = /\bimport\(\s*['"]@earendil-works\/pi-/;
+
+function importsPiHarness(content) {
+  return PI_STATIC_OR_SIDE_EFFECT_RE.test(content) || PI_DYNAMIC_RE.test(content);
+}
 
 async function collectSourceFiles(dir) {
   const abs = path.join(repoRoot, dir);
@@ -48,7 +60,7 @@ test("within the neutral extension runtime + core harness, only pi-extension-ada
   for (const rel of files) {
     if (ALLOWED.has(rel)) continue;
     const content = await readFile(path.join(repoRoot, rel), "utf8");
-    if (PI_IMPORT_RE.test(content)) {
+    if (importsPiHarness(content)) {
       offenders.push(rel);
     }
   }
@@ -58,6 +70,17 @@ test("within the neutral extension runtime + core harness, only pi-extension-ada
     [],
     `These modules import @earendil-works/pi-* outside the dedicated Pi adapter: ${offenders.join(", ")}`,
   );
+});
+
+test("importsPiHarness detects static, side-effect, and dynamic Pi imports without prose false positives", () => {
+  assert.equal(importsPiHarness("import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';"), true);
+  assert.equal(importsPiHarness('import { x } from "@earendil-works/pi-tui";'), true);
+  assert.equal(importsPiHarness("import '@earendil-works/pi-coding-agent';"), true, "side-effect import must be caught");
+  assert.equal(importsPiHarness('import "@earendil-works/pi-coding-agent";'), true);
+  assert.equal(importsPiHarness("await import('@earendil-works/pi-coding-agent');"), true, "dynamic import must be caught");
+  // Prose mentions must NOT trip the detector.
+  assert.equal(importsPiHarness("// No `@earendil-works/pi-*` import lives here."), false);
+  assert.equal(importsPiHarness("a string with @earendil-works/pi-coding-agent in it"), false);
 });
 
 test("the dedicated Pi adapter module still owns the Pi import", async () => {

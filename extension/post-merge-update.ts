@@ -72,8 +72,8 @@ function buildFailureSummary(result: Pick<RunCommandResult, 'stdout' | 'stderr' 
       : (typeof result.code === 'number' ? `exit code ${result.code}` : 'exit code unavailable'));
 }
 
-function getBashCommandFromToolResult(event: ToolResultLike): string | null {
-  if (event.toolName !== 'bash') {
+function getBashCommandFromToolResult(event: ToolResultLike | null | undefined): string | null {
+  if (!event || event.toolName !== 'bash') {
     return null;
   }
   const command = event.input?.command;
@@ -355,6 +355,11 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
 
     async onUserBash(rawEvent: unknown, _ctx?: HarnessContext): Promise<UserBashResultLike | undefined> {
       const event = rawEvent as UserBashLike;
+      // The seam forwards events as `unknown`; a malformed/foreign-harness event must pass
+      // through untouched rather than crash the handler (downstream calls .trim() on command).
+      if (!event || typeof event.command !== 'string') {
+        return undefined;
+      }
       // Intercept gh pr ready before any other checks
       if (isGhPrReadyCommand(event.command)) {
         // Check if the command explicitly targets a different repo via -R/--repo
