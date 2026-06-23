@@ -1,12 +1,17 @@
-import type {
-  AgentEndEvent,
-  ExecResult,
-  ExtensionAPI,
-  ExtensionContext,
-  ToolResultEvent,
-  UserBashEvent,
-  UserBashEventResult,
-} from '@earendil-works/pi-coding-agent';
+import type { ExtensionHarnessAdapter, HarnessContext, HarnessExecResult } from './harness-types.ts';
+
+// Neutral event shapes the post-merge hook reads. The harness adapter forwards the
+// harness-native event object through unchanged; these capture only the fields used here.
+type ToolResultLike = { toolName?: string; input?: { command?: unknown } | null; isError?: boolean };
+type UserBashLike = { command: string; cwd: string };
+type UserBashResultLike = {
+  result: {
+    output: string;
+    exitCode: number | undefined;
+    cancelled: boolean;
+    truncated: boolean;
+  };
+};
 
 export const TARGET_REPO_SLUG = 'mfittko/dev-loops';
 export const POST_MERGE_UPDATE_COMMAND = 'pi update git:github.com/mfittko/dev-loops';
@@ -31,7 +36,7 @@ type RunCommandArgs = {
   timeout?: number;
 };
 
-type RunCommandResult = ExecResult;
+type RunCommandResult = HarnessExecResult;
 
 type PostMergeUpdateHookState = {
   pendingPostMergeUpdate: boolean;
@@ -40,6 +45,7 @@ type PostMergeUpdateHookState = {
 };
 
 type CreatePostMergeUpdateHookOptions = {
+  exec?: ExtensionHarnessAdapter['exec'];
   resolveRepoContext?: (cwd: string) => Promise<RepoContext>;
   runCommand?: (args: RunCommandArgs) => Promise<RunCommandResult>;
 };
@@ -66,7 +72,7 @@ function buildFailureSummary(result: Pick<RunCommandResult, 'stdout' | 'stderr' 
       : (typeof result.code === 'number' ? `exit code ${result.code}` : 'exit code unavailable'));
 }
 
-function getBashCommandFromToolResult(event: ToolResultEvent): string | null {
+function getBashCommandFromToolResult(event: ToolResultLike): string | null {
   if (event.toolName !== 'bash') {
     return null;
   }
@@ -74,14 +80,14 @@ function getBashCommandFromToolResult(event: ToolResultEvent): string | null {
   return typeof command === 'string' ? command : null;
 }
 
-function notify(ctx: ExtensionContext, message: string, level: 'info' | 'warning' | 'error' = 'info'): void {
+function notify(ctx: Pick<HarnessContext, 'hasUI' | 'ui'>, message: string, level: 'info' | 'warning' | 'error' = 'info'): void {
   if (ctx.hasUI) {
     ctx.ui.notify(message, level);
   }
 }
 
-async function defaultResolveRepoContext(pi: ExtensionAPI, cwd: string): Promise<RepoContext> {
-  const rootResult = await pi.exec('bash', ['-lc', 'git rev-parse --show-toplevel'], {
+async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<RepoContext> {
+  const rootResult = await exec('git rev-parse --show-toplevel', {
     cwd,
     timeout: REPO_RESOLUTION_TIMEOUT_MS,
   });
@@ -94,7 +100,7 @@ async function defaultResolveRepoContext(pi: ExtensionAPI, cwd: string): Promise
     return { repoRoot: null, repoSlug: null };
   }
 
-  const remoteResult = await pi.exec('bash', ['-lc', 'git config --get remote.origin.url'], {
+  const remoteResult = await exec('git config --get remote.origin.url', {
     cwd: repoRoot,
     timeout: REPO_RESOLUTION_TIMEOUT_MS,
   });
@@ -104,12 +110,12 @@ async function defaultResolveRepoContext(pi: ExtensionAPI, cwd: string): Promise
 
   return {
     repoRoot,
-    repoSlug: normalizeGitHubRepoSlug(remoteResult.stdout),
+    repoSlug: normalizeGitHubRepoSlug(remoteResult.stdout ?? ''),
   };
 }
 
-async function defaultRunCommand(pi: ExtensionAPI, args: RunCommandArgs): Promise<RunCommandResult> {
-  return pi.exec('bash', ['-lc', args.command], {
+async function defaultRunCommand(exec: ExtensionHarnessAdapter['exec'], args: RunCommandArgs): Promise<RunCommandResult> {
+  return exec(args.command, {
     cwd: args.cwd,
     timeout: args.timeout,
   });
@@ -303,21 +309,16 @@ export function extractRepoFlagFromGhPrReady(command: string): string | null {
   return null;
 }
 
-export function createPostMergeUpdateHook(
-  piOrOptions: ExtensionAPI | CreatePostMergeUpdateHookOptions,
-  maybeOptions: CreatePostMergeUpdateHookOptions = {},
-) {
-  const hasPiExec = typeof (piOrOptions as ExtensionAPI)?.exec === 'function';
-  const pi = hasPiExec ? piOrOptions as ExtensionAPI : null;
-  const options = hasPiExec ? maybeOptions : (piOrOptions as CreatePostMergeUpdateHookOptions);
+export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOptions = {}) {
+  const exec = options.exec ?? null;
 
   const resolveRepoContext = options.resolveRepoContext
-    ?? (pi ? ((cwd: string) => defaultResolveRepoContext(pi, cwd)) : null);
+    ?? (exec ? ((cwd: string) => defaultResolveRepoContext(exec, cwd)) : null);
   const runCommand = options.runCommand
-    ?? (pi ? ((args: RunCommandArgs) => defaultRunCommand(pi, args)) : null);
+    ?? (exec ? ((args: RunCommandArgs) => defaultRunCommand(exec, args)) : null);
 
   if (!resolveRepoContext || !runCommand) {
-    throw new Error('createPostMergeUpdateHook requires an ExtensionAPI or explicit resolveRepoContext/runCommand overrides.');
+    throw new Error('createPostMergeUpdateHook requires an `exec` function or explicit resolveRepoContext/runCommand overrides.');
   }
 
   const state: PostMergeUpdateHookState = {
@@ -341,15 +342,15 @@ export function createPostMergeUpdateHook(
       reset();
     },
 
-    async onToolResult(event: Pick<ToolResultEvent, 'toolName' | 'input' | 'isError'>, ctx: Pick<ExtensionContext, 'cwd'>): Promise<void> {
-      const command = getBashCommandFromToolResult(event as ToolResultEvent);
+    async onToolResult(event: ToolResultLike, ctx: Pick<HarnessContext, 'cwd'>): Promise<void> {
+      const command = getBashCommandFromToolResult(event);
       if (!command || event.isError) {
         return;
       }
       await queueIfEligible(state, resolveRepoContext, command, ctx.cwd);
     },
 
-    async onUserBash(event: Pick<UserBashEvent, 'command' | 'cwd'>, _ctx?: ExtensionContext): Promise<UserBashEventResult | undefined> {
+    async onUserBash(event: UserBashLike, _ctx?: HarnessContext): Promise<UserBashResultLike | undefined> {
       // Intercept gh pr ready before any other checks
       if (isGhPrReadyCommand(event.command)) {
         // Check if the command explicitly targets a different repo via -R/--repo
@@ -477,13 +478,13 @@ export function createPostMergeUpdateHook(
       }
     },
 
-    async onAgentEnd(_event: AgentEndEvent, ctx: Pick<ExtensionContext, 'cwd' | 'hasUI' | 'ui'>): Promise<void> {
+    async onAgentEnd(_event: unknown, ctx: Pick<HarnessContext, 'cwd' | 'hasUI' | 'ui'>): Promise<void> {
       if (!state.pendingPostMergeUpdate || state.updateInFlight) {
         return;
       }
 
       state.updateInFlight = true;
-      notify(ctx as ExtensionContext, `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
+      notify(ctx, `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
 
       try {
         const result = await runCommand({
@@ -493,17 +494,17 @@ export function createPostMergeUpdateHook(
         });
 
         if (result.code === 0 && !result.killed) {
-          notify(ctx as ExtensionContext, `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
+          notify(ctx, `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
         } else {
           notify(
-            ctx as ExtensionContext,
+            ctx,
             `Post-merge update failed (warning only): ${buildFailureSummary(result)}`,
             'warning',
           );
         }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        notify(ctx as ExtensionContext, `Post-merge update failed (warning only): ${detail}`, 'warning');
+        notify(ctx, `Post-merge update failed (warning only): ${detail}`, 'warning');
       } finally {
         reset();
       }

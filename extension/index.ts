@@ -2,11 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 import { executeDevLoopsCommand } from '../lib/dev-loops-core.mjs';
 import { createExtensionCoreRuntime } from './checks.ts';
 import { createPostMergeUpdateHook } from './post-merge-update.ts';
+import { createPiExtensionAdapter, type ExtensionAPI } from './pi-extension-adapter.ts';
 import {
   buildHelpLines,
   buildInspectLines,
@@ -45,9 +45,11 @@ export function syncPackagedAgents({
 }
 
 export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOverrides = {}) {
-  const postMergeUpdateHook = runtimeOverrides.postMergeUpdateHook ?? createPostMergeUpdateHook(pi);
+  // Wrap the Pi harness at the entry boundary; everything below talks to the neutral seam.
+  const adapter = createPiExtensionAdapter(pi);
+  const postMergeUpdateHook = runtimeOverrides.postMergeUpdateHook ?? createPostMergeUpdateHook({ exec: adapter.exec });
 
-  pi.on('session_start', async (_event, ctx) => {
+  adapter.on('session_start', async (_event, ctx) => {
     postMergeUpdateHook.onSessionStart();
     try {
       syncPackagedAgents();
@@ -57,25 +59,25 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 
-  pi.on('tool_result', async (event, ctx) => {
-    await postMergeUpdateHook.onToolResult(event, ctx);
+  adapter.on('tool_result', async (event, ctx) => {
+    await postMergeUpdateHook.onToolResult(event as Parameters<typeof postMergeUpdateHook.onToolResult>[0], ctx);
   });
 
-  pi.on('user_bash', async (event, ctx) => {
-    return postMergeUpdateHook.onUserBash(event, ctx);
+  adapter.on('user_bash', async (event, ctx) => {
+    return postMergeUpdateHook.onUserBash(event as Parameters<typeof postMergeUpdateHook.onUserBash>[0], ctx);
   });
 
-  pi.on('agent_end', async (event, ctx) => {
+  adapter.on('agent_end', async (event, ctx) => {
     await postMergeUpdateHook.onAgentEnd(event, ctx);
   });
 
-  pi.registerCommand('dev-loops', {
+  adapter.registerCommand('dev-loops', {
     description: 'Manage dev-loops readiness and inspect-run local UI lifecycle: /dev-loops [help|status|doctor|gates|hide|inspect ...]',
     handler: async (args, ctx) => {
       const result = await executeDevLoopsCommand({
         input: args,
         surface: 'extension',
-        runtime: createExtensionCoreRuntime(pi, runtimeOverrides),
+        runtime: createExtensionCoreRuntime(adapter, runtimeOverrides),
       });
 
       switch (result.kind) {

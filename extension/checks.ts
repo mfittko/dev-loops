@@ -1,7 +1,6 @@
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-
 import { collectDevLoopChecks as collectSharedDevLoopChecks, DEV_LOOP_CHECK_IDS } from '../lib/dev-loops-core.mjs';
 import { createInspectRunViewerLifecycleManager } from '../scripts/loop/inspect-run-viewer/managed-instance.mjs';
+import type { ExtensionHarnessAdapter } from './harness-types.ts';
 
 export type DevLoopCheckId = (typeof DEV_LOOP_CHECK_IDS)[number];
 
@@ -12,45 +11,35 @@ export type DevLoopCheck = {
   detail: string;
 };
 
-async function commandExists(pi: ExtensionAPI, command: string): Promise<boolean> {
+async function commandExists(adapter: ExtensionHarnessAdapter, command: string): Promise<boolean> {
   try {
-    const result = await pi.exec('bash', ['-lc', `command -v ${command} >/dev/null 2>&1`], {
-      timeout: 5_000,
-    });
+    const result = await adapter.exec(`command -v ${command} >/dev/null 2>&1`, { timeout: 5_000 });
     return result.code === 0;
   } catch {
     return false;
   }
 }
 
-async function ghAuthOk(pi: ExtensionAPI): Promise<boolean> {
+async function ghAuthOk(adapter: ExtensionHarnessAdapter): Promise<boolean> {
   try {
-    const result = await pi.exec('bash', ['-lc', 'gh auth status >/dev/null 2>&1'], {
-      timeout: 10_000,
-    });
+    const result = await adapter.exec('gh auth status >/dev/null 2>&1', { timeout: 10_000 });
     return result.code === 0;
   } catch {
     return false;
   }
 }
 
-async function insideGitRepo(pi: ExtensionAPI): Promise<boolean> {
+async function insideGitRepo(adapter: ExtensionHarnessAdapter): Promise<boolean> {
   try {
-    const result = await pi.exec(
-      'bash',
-      ['-lc', 'git rev-parse --is-inside-work-tree >/dev/null 2>&1'],
-      { timeout: 5_000 },
-    );
+    const result = await adapter.exec('git rev-parse --is-inside-work-tree >/dev/null 2>&1', { timeout: 5_000 });
     return result.code === 0;
   } catch {
     return false;
   }
 }
 
-async function getRepoRoot(pi: ExtensionAPI): Promise<string> {
-  const result = await pi.exec('bash', ['-lc', 'git rev-parse --show-toplevel'], {
-    timeout: 10_000,
-  });
+async function getRepoRoot(adapter: ExtensionHarnessAdapter): Promise<string> {
+  const result = await adapter.exec('git rev-parse --show-toplevel', { timeout: 10_000 });
   if (result.code !== 0) {
     throw new Error('Open Pi inside a git repository before using `/dev-loops inspect`.');
   }
@@ -62,7 +51,7 @@ async function getRepoRoot(pi: ExtensionAPI): Promise<string> {
 }
 
 export function createExtensionCoreRuntime(
-  pi: ExtensionAPI,
+  adapter: ExtensionHarnessAdapter,
   {
     uiLifecycle = createInspectRunViewerLifecycleManager(),
     getRepoRoot: getRepoRootOverride,
@@ -73,13 +62,13 @@ export function createExtensionCoreRuntime(
 ) {
   return {
     surface: 'extension' as const,
-    commandExists: (command: string) => commandExists(pi, command),
-    ghAuthOk: () => ghAuthOk(pi),
-    insideGitRepo: () => insideGitRepo(pi),
-    getRepoRoot: () => (getRepoRootOverride ? getRepoRootOverride() : getRepoRoot(pi)),
+    commandExists: (command: string) => commandExists(adapter, command),
+    ghAuthOk: () => ghAuthOk(adapter),
+    insideGitRepo: () => insideGitRepo(adapter),
+    getRepoRoot: () => (getRepoRootOverride ? getRepoRootOverride() : getRepoRoot(adapter)),
     uiLifecycle,
     async getSubagentAvailability() {
-      const ok = await commandExists(pi, 'subagent');
+      const ok = await commandExists(adapter, 'subagent');
       return {
         ok,
         availableDetail: '`subagent` command is available.',
@@ -89,6 +78,6 @@ export function createExtensionCoreRuntime(
   };
 }
 
-export async function collectDevLoopChecks(pi: ExtensionAPI): Promise<DevLoopCheck[]> {
-  return collectSharedDevLoopChecks(createExtensionCoreRuntime(pi));
+export async function collectDevLoopChecks(adapter: ExtensionHarnessAdapter): Promise<DevLoopCheck[]> {
+  return collectSharedDevLoopChecks(createExtensionCoreRuntime(adapter));
 }
