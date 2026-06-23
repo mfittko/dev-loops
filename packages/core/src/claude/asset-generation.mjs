@@ -7,8 +7,9 @@
  * Pi→Claude tool-name mapping (confirmed against Claude Code docs):
  *   read→Read, search→Grep+Glob, execute→Bash, bash→Bash, edit→Edit, write→Write,
  *   agent→Agent, subagent→Agent, todo→TodoWrite, review_loop→Agent (the review subagent).
- * `subagent`/`review_loop` appear only in frontmatter (never invoked by name in bodies),
- * so no body rewriting is required.
+ * Only the frontmatter *tool lists* are rewritten; bodies are copied verbatim. Any prose
+ * mentions of Pi tool names (e.g. a sentence like "tools: [subagent]") are preserved as-is —
+ * neutralizing Pi-specific body prose is harness-neutrality work owned by #774, not this slice.
  *
  * Frontmatter handling:
  * - Agents keep name/description/tools (comma-separated, per Claude's agent format) and drop

@@ -63,15 +63,18 @@ export function writeAssets(assets, { repoRoot = process.cwd() } = {}) {
 /** List committed generated-asset files currently on disk (repo-relative, posix separators). */
 function listExistingAssetFiles(repoRoot) {
   const found = [];
+  // Sort directory entries so orphan detection (and --check output) is deterministic
+  // across filesystems/OSes — this backs a byte-stable no-drift contract.
   const agentsDir = path.join(repoRoot, ".claude", "agents");
   if (fs.existsSync(agentsDir)) {
-    for (const entry of fs.readdirSync(agentsDir)) {
+    for (const entry of fs.readdirSync(agentsDir).sort()) {
       if (entry.endsWith(".md")) found.push(`.claude/agents/${entry}`);
     }
   }
   const skillsDir = path.join(repoRoot, ".claude", "skills");
   if (fs.existsSync(skillsDir)) {
-    for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+    const dirs = fs.readdirSync(skillsDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of dirs) {
       if (!entry.isDirectory()) continue;
       const skillFile = path.join(skillsDir, entry.name, "SKILL.md");
       if (fs.existsSync(skillFile)) found.push(`.claude/skills/${entry.name}/SKILL.md`);
