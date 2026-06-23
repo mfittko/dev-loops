@@ -60,14 +60,44 @@ export function writeAssets(assets, { repoRoot = process.cwd() } = {}) {
   return assets.map((a) => a.target);
 }
 
-/** Compare generated assets against the committed tree. Returns drifted targets. */
+/** List committed generated-asset files currently on disk (repo-relative, posix separators). */
+function listExistingAssetFiles(repoRoot) {
+  const found = [];
+  const agentsDir = path.join(repoRoot, ".claude", "agents");
+  if (fs.existsSync(agentsDir)) {
+    for (const entry of fs.readdirSync(agentsDir)) {
+      if (entry.endsWith(".md")) found.push(`.claude/agents/${entry}`);
+    }
+  }
+  const skillsDir = path.join(repoRoot, ".claude", "skills");
+  if (fs.existsSync(skillsDir)) {
+    for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const skillFile = path.join(skillsDir, entry.name, "SKILL.md");
+      if (fs.existsSync(skillFile)) found.push(`.claude/skills/${entry.name}/SKILL.md`);
+    }
+  }
+  return found;
+}
+
+/**
+ * Compare generated assets against the committed tree. Returns drifted targets, covering both
+ * missing/out-of-date generated files AND orphaned committed files no longer produced by a
+ * source (e.g. after a source agent/skill is renamed or removed).
+ */
 export function checkAssets(assets, { repoRoot = process.cwd() } = {}) {
   const drifted = [];
+  const expected = new Set(assets.map((a) => a.target));
   for (const { target, content } of assets) {
     const abs = path.join(repoRoot, target);
     const current = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
     if (current !== content) {
       drifted.push({ target, reason: current === null ? "missing" : "out-of-date" });
+    }
+  }
+  for (const existing of listExistingAssetFiles(repoRoot)) {
+    if (!expected.has(existing)) {
+      drifted.push({ target: existing, reason: "orphaned" });
     }
   }
   return drifted;
@@ -76,7 +106,15 @@ export function checkAssets(assets, { repoRoot = process.cwd() } = {}) {
 function main(argv) {
   const check = argv.includes("--check");
   const rootIdx = argv.indexOf("--repo-root");
-  const repoRoot = rootIdx !== -1 ? argv[rootIdx + 1] : process.cwd();
+  let repoRoot = process.cwd();
+  if (rootIdx !== -1) {
+    const value = argv[rootIdx + 1];
+    if (typeof value !== "string" || value.length === 0 || value.startsWith("--")) {
+      process.stderr.write(JSON.stringify({ ok: false, error: "--repo-root requires a path value" }) + "\n");
+      process.exit(1);
+    }
+    repoRoot = value;
+  }
 
   const assets = collectGeneratedAssets({ repoRoot });
 
