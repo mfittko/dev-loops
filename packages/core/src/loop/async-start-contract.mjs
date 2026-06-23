@@ -2,7 +2,7 @@
  * Async-start contract enforcement for the dev-loop startup path.
  *
  * This module enforces the requirement that dev-loop execution scripts
- * (outer-loop, watch-cycle, etc.) must run within a visible Pi-managed async
+ * (outer-loop, watch-cycle, etc.) must run within a visible harness-managed async
  * context rather than as detached local processes (nohup, disowned shell jobs,
  * tmux/screen sessions, ad hoc while/sleep loops, etc.).
  *
@@ -44,13 +44,13 @@ export const ASYNC_START_MODE = Object.freeze({
 
 /** Async-start validation result status values. */
 export const ASYNC_START_STATUS = Object.freeze({
-  /** A valid Pi-managed async context was detected. */
+  /** A valid harness-managed async context was detected. */
   VALID: "valid",
   /** The workflow explicitly allows non-async startup for this context. */
   ALLOWED: "allowed",
   /** The check was skipped because the caller is in snapshot/test mode. */
   SNAPSHOT_MODE: "snapshot_mode",
-  /** No Pi-managed async context was detected; fail closed. */
+  /** No harness-managed async context was detected; fail closed. */
   REJECTED: "rejected",
 });
 
@@ -59,7 +59,7 @@ export const ASYNC_START_STATUS = Object.freeze({
 // ---------------------------------------------------------------------------
 
 /**
- * Validate that the current execution context is a visible Pi-managed async run.
+ * Validate that the current execution context is a visible harness-managed async run.
  *
  * Returns a result object describing whether the check passed, was allowed by
  * config, or was rejected. Callers should treat `rejected` as a hard stop.
@@ -139,7 +139,7 @@ export function validateAsyncStartContext({
       status: ASYNC_START_STATUS.REJECTED,
       reason:
         "Detected detached local background execution; detached/local fallback is diagnostic-only " +
-        "and does not satisfy the async-start contract. Restart via Pi-managed async mode. " +
+        "and does not satisfy the async-start contract. Restart via harness-managed async mode. " +
         "Any relaxed posture must come from repository-maintained workflow policy.",
       detectedMarker: null,
     };

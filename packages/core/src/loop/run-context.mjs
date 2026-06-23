@@ -88,7 +88,8 @@ export function runContextPath(root) {
  * @param {object} params
  * @param {string} params.runId
  * @param {string} params.root
- * @param {string} [params.mintedAt] - ISO timestamp; pass explicitly for determinism.
+ * @param {string} [params.mintedAt] - ISO timestamp; defaults to now. Tests pass a fixed
+ *   value for determinism; real runs get a useful inspection/recovery timestamp.
  * @param {typeof import("node:fs")} [params.fs]
  * @returns {string} The path written.
  */
@@ -100,7 +101,7 @@ export function writeRunContext({ runId, root, mintedAt, fs = fsDefault }) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const payload = {
     runId: runId.trim(),
-    mintedAt: mintedAt ?? null,
+    mintedAt: mintedAt ?? new Date().toISOString(),
   };
   fs.writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return file;

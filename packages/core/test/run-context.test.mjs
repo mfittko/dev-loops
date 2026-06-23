@@ -73,6 +73,14 @@ test("writeRunContext/readRunContext roundtrip under .pi/", () => {
   assert.deepEqual(read, { runId: "devloops-1", mintedAt: "2026-01-01T00:00:00Z" });
 });
 
+test("writeRunContext defaults mintedAt to an ISO timestamp when not supplied", () => {
+  const root = makeTempRoot();
+  writeRunContext({ runId: "devloops-default-ts", root });
+  const read = readRunContext({ root });
+  assert.equal(read.runId, "devloops-default-ts");
+  assert.match(read.mintedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+});
+
 test("readRunContext returns null when absent or malformed", () => {
   const root = makeTempRoot();
   assert.equal(readRunContext({ root }), null);
