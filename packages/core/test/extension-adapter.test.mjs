@@ -44,6 +44,13 @@ test("claude adapter exec normalizes a non-zero exit without throwing", async ()
   assert.equal(result.killed, false);
 });
 
+test("claude adapter exec reports killed with undefined code on timeout", async () => {
+  const adapter = createClaudeExtensionAdapter();
+  const result = await adapter.exec("sleep 5", { timeout: 50 });
+  assert.equal(result.killed, true);
+  assert.equal(result.code, undefined);
+});
+
 test("claude adapter exec honors cwd", async () => {
   const adapter = createClaudeExtensionAdapter();
   const result = await adapter.exec("pwd", { cwd: "/tmp" });

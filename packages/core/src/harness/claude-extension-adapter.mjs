@@ -48,11 +48,14 @@ export function createClaudeExtensionAdapter({
         },
         (error, stdout, stderr) => {
           if (error) {
+            // Match the documented HarnessExecResult contract: `code` is undefined when
+            // the process was killed (e.g. timeout), mirroring the Pi adapter's shape.
+            const killed = Boolean(error.killed);
             resolve({
-              code: typeof error.code === "number" ? error.code : 1,
+              code: killed ? undefined : (typeof error.code === "number" ? error.code : 1),
               stdout: stdout ?? "",
               stderr: stderr ?? "",
-              killed: Boolean(error.killed),
+              killed,
             });
             return;
           }
