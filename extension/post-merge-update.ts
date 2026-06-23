@@ -1,4 +1,25 @@
 import type { ExtensionHarnessAdapter, HarnessContext, HarnessExecResult } from './harness-types.ts';
+import {
+  TARGET_REPO_SLUG,
+  trimToNull,
+  normalizeGitHubRepoSlug,
+  isMergeCapableCommand,
+  isGhPrReadyCommand,
+  extractPrNumberFromGhPrReady,
+  extractRepoFlagFromGhPrReady,
+} from '@dev-loops/core/loop/bash-command-classify';
+
+// The bash-command classifiers now live in `@dev-loops/core/loop/bash-command-classify` so the
+// Pi extension and the Claude Code Bash hook share one source of truth. Re-export them here so
+// existing importers (and tests) that reference them from this module keep resolving.
+export {
+  TARGET_REPO_SLUG,
+  normalizeGitHubRepoSlug,
+  isMergeCapableCommand,
+  isGhPrReadyCommand,
+  extractPrNumberFromGhPrReady,
+  extractRepoFlagFromGhPrReady,
+};
 
 // Neutral event shapes the post-merge hook reads. The harness adapter forwards the
 // harness-native event object through unchanged; these capture only the fields used here.
@@ -13,7 +34,6 @@ type UserBashResultLike = {
   };
 };
 
-export const TARGET_REPO_SLUG = 'mfittko/dev-loops';
 export const POST_MERGE_UPDATE_COMMAND = 'pi update git:github.com/mfittko/dev-loops';
 export const PRE_PR_READY_GATE_SCRIPT = 'node scripts/loop/pre-pr-ready-gate.mjs';
 
@@ -21,9 +41,6 @@ const MERGE_COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
 const POST_MERGE_UPDATE_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_RESOLUTION_TIMEOUT_MS = 5_000;
 const PR_READY_GATE_TIMEOUT_MS = 30_000;
-
-// Flags known to take a value argument for gh pr ready (not boolean flags)
-const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
 
 type RepoContext = {
   repoRoot: string | null;
@@ -49,11 +66,6 @@ type CreatePostMergeUpdateHookOptions = {
   resolveRepoContext?: (cwd: string) => Promise<RepoContext>;
   runCommand?: (args: RunCommandArgs) => Promise<RunCommandResult>;
 };
-
-function trimToNull(value: string | null | undefined): string | null {
-  const trimmed = `${value ?? ''}`.trim();
-  return trimmed ? trimmed : null;
-}
 
 function buildShellOutput(result: Pick<RunCommandResult, 'stdout' | 'stderr'>): string {
   const stdout = `${result.stdout ?? ''}`.trimEnd();
@@ -165,149 +177,6 @@ async function queueIfEligible(
   return true;
 }
 
-export function normalizeGitHubRepoSlug(remoteUrl: string): string | null {
-  const normalized = trimToNull(remoteUrl);
-  if (!normalized) {
-    return null;
-  }
-
-  const patterns = [
-    /^git@github\.com:([^\s]+?)(?:\.git)?$/i,
-    /^https:\/\/github\.com\/([^\s]+?)(?:\.git)?$/i,
-    /^ssh:\/\/git@github\.com\/([^\s]+?)(?:\.git)?$/i,
-    /^git:github\.com\/([^\s]+?)(?:\.git)?$/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    if (!match) {
-      continue;
-    }
-    return trimToNull(match[1])?.toLowerCase() ?? null;
-  }
-
-  return null;
-}
-
-function isGhPrMergeCommand(segment: string): boolean {
-  if (!/^gh\s+pr\s+merge(?:\s|$)/i.test(segment)) {
-    return false;
-  }
-
-  const remainder = segment.replace(/^gh\s+pr\s+merge(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return true;
-  }
-
-  const firstArg = remainder.match(/^(\S+)/)?.[1]?.toLowerCase() ?? '';
-  return !['--help', '-h'].includes(firstArg);
-}
-
-function isGitMergeCompletionCommand(segment: string): boolean {
-  if (!/^git\s+merge(?:\s|$)/i.test(segment)) {
-    return false;
-  }
-
-  const remainder = segment.replace(/^git\s+merge(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return true;
-  }
-
-  const firstArg = remainder.match(/^(\S+)/)?.[1]?.toLowerCase() ?? '';
-  return !['--abort', '--continue', '--quit', '--help', '-h'].includes(firstArg);
-}
-
-export function isMergeCapableCommand(command: string): boolean {
-  const normalized = command.trim();
-  if (!normalized) {
-    return false;
-  }
-
-  return normalized
-    .split(/\s*(?:&&|\|\||;|\|)\s*/)
-    .some((segment) => isGhPrMergeCommand(segment) || isGitMergeCompletionCommand(segment));
-}
-
-function firstShellSegment(command: string): string {
-  return command.trim().split(/\s*(?:&&|\|\||;|\|)\s*/)[0]?.trim() ?? '';
-}
-
-export function isGhPrReadyCommand(command: string): boolean {
-  const segment = firstShellSegment(command);
-  if (!segment || !/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
-    return false;
-  }
-
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return true;
-  }
-  // Block interception if --help or -h appears anywhere in the arguments
-  const args = remainder.split(/\s+/).map(a => a.toLowerCase());
-  return !args.includes('--help') && !args.includes('-h');
-}
-
-export function extractPrNumberFromGhPrReady(command: string): number | null {
-  const segment = firstShellSegment(command);
-  if (!/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
-    return null;
-  }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return null;
-  }
-  // Skip flags (--flag or --flag=value)
-  const tokens = remainder.split(/\s+/);
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith('-')) {
-      // Only skip the next token for flags known to take a value argument
-      const flagName = token.replace(/=.*$/, '').toLowerCase();
-      if (!token.includes('=') && FLAGS_THAT_TAKE_VALUE.has(flagName)) {
-        i++; // skip next token (the flag value)
-      }
-      continue;
-    }
-    if (/^\d+$/.test(token)) {
-      const num = Number(token);
-      if (num > 0) {
-        return num;
-      }
-    }
-    // Non-numeric non-flag token — not a PR number
-    return null;
-  }
-  return null;
-}
-
-export function extractRepoFlagFromGhPrReady(command: string): string | null {
-  const segment = firstShellSegment(command);
-  if (!/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
-    return null;
-  }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return null;
-  }
-  const tokens = remainder.split(/\s+/);
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    const lower = token.toLowerCase();
-    if (lower === '-r' || lower === '--repo') {
-      // Next token is the repo slug value
-      if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
-        return tokens[i + 1];
-      }
-    }
-    // Handle --repo=value and -R=value
-    const repoEqMatch = token.match(/^(?:--repo|-R)=(.+)$/i);
-    if (repoEqMatch) {
-      return repoEqMatch[1];
-    }
-
-  }
-  return null;
-}
 
 export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOptions = {}) {
   const exec = options.exec ?? null;

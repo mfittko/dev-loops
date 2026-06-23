@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
+const hooksDir = path.join(repoRoot, "scripts", "claude", "hooks");
+
+function runHook(script, payload, env = {}) {
+  const res = spawnSync("node", [path.join(hooksDir, script)], {
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+    env: { ...process.env, DEVLOOPS_RUN_ID: undefined, PI_SUBAGENT_RUN_ID: undefined, ...env },
+  });
+  let json = null;
+  try {
+    json = res.stdout.trim() ? JSON.parse(res.stdout) : null;
+  } catch {
+    json = null;
+  }
+  return { code: res.status, stdout: res.stdout, json };
+}
+
+test(".claude/settings.json is valid JSON and wires the three dev-loop hooks", () => {
+  const raw = fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8");
+  const settings = JSON.parse(raw);
+  const pre = settings.hooks.PreToolUse;
+  const post = settings.hooks.PostToolUse;
+
+  const bashGate = pre.find((h) => h.matcher === "Bash");
+  const writeGuard = pre.find((h) => h.matcher === "Edit|Write");
+  const postMerge = post.find((h) => h.matcher === "Bash");
+
+  assert.match(bashGate.hooks[0].command, /pre-tool-use-bash-gate\.mjs/);
+  assert.match(writeGuard.hooks[0].command, /pre-tool-use-write-guard\.mjs/);
+  assert.match(postMerge.hooks[0].command, /post-tool-use-merge\.mjs/);
+});
+
+test("the three hook scripts exist", () => {
+  for (const script of ["pre-tool-use-bash-gate.mjs", "pre-tool-use-write-guard.mjs", "post-tool-use-merge.mjs"]) {
+    assert.ok(fs.existsSync(path.join(hooksDir, script)), `missing hook script ${script}`);
+  }
+});
+
+test("bash-gate hook passes through non-gh-pr-ready commands", () => {
+  const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+    tool_name: "Bash",
+    tool_input: { command: "npm test" },
+    cwd: repoRoot,
+  });
+  assert.equal(code, 0);
+  assert.equal(json, null, "no deny output for an allowed command");
+});
+
+test("write-guard hook fails open when enforcement is disabled (default)", () => {
+  const { code, json } = runHook("pre-tool-use-write-guard.mjs", {
+    tool_name: "Write",
+    tool_input: { file_path: path.join(repoRoot, "package.json") },
+    cwd: repoRoot,
+  });
+  assert.equal(code, 0);
+  assert.equal(json, null, "no deny when DEVLOOPS_MAIN_AGENT_READONLY is unset");
+});
+
+test("write-guard hook denies a main-agent repo mutation under strict enforcement", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-write-guard.mjs",
+    { tool_name: "Write", tool_input: { file_path: path.join(repoRoot, "package.json") }, cwd: repoRoot },
+    { DEVLOOPS_MAIN_AGENT_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured decision");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /Main-agent read-only boundary/);
+});
+
+test("write-guard hook allows a dev-loop subagent (run id) mutation under strict enforcement", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-write-guard.mjs",
+    { tool_name: "Write", tool_input: { file_path: path.join(repoRoot, "package.json") }, cwd: repoRoot },
+    { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_RUN_ID: "devloops-test" },
+  );
+  assert.equal(code, 0);
+  assert.equal(json, null, "subagent run-id context must be allowed");
+});
+
+test("write-guard hook allows a gitignored path under strict enforcement", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-write-guard.mjs",
+    { tool_name: "Write", tool_input: { file_path: path.join(repoRoot, "tmp", "scratch.txt") }, cwd: repoRoot },
+    { DEVLOOPS_MAIN_AGENT_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.equal(json, null, "gitignored tmp/ path must be allowed");
+});
