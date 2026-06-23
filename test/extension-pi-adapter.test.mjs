@@ -24,6 +24,14 @@ function createPiDouble() {
   };
 }
 
+test("pi adapter is validated and frozen via the shared factory", () => {
+  const adapter = createPiExtensionAdapter(createPiDouble());
+  assert.equal(typeof adapter.exec, "function");
+  assert.equal(typeof adapter.on, "function");
+  assert.equal(typeof adapter.registerCommand, "function");
+  assert.throws(() => { adapter.exec = () => {}; }, TypeError);
+});
+
 test("pi adapter exec maps a command string to pi.exec('bash', ['-lc', cmd], opts)", async () => {
   const pi = createPiDouble();
   const adapter = createPiExtensionAdapter(pi);

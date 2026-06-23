@@ -49,7 +49,7 @@ export function createClaudeExtensionAdapter({
         (error, stdout, stderr) => {
           if (error) {
             // Match the documented HarnessExecResult contract: `code` is undefined when
-            // the process was killed (e.g. timeout), mirroring the Pi adapter's shape.
+            // the process was killed (e.g. timeout). Consumers branch on `killed` first.
             const killed = Boolean(error.killed);
             resolve({
               code: killed ? undefined : (typeof error.code === "number" ? error.code : 1),
@@ -89,12 +89,14 @@ export function createClaudeExtensionAdapter({
     },
   });
 
-  return {
+  // Freeze the composite so the validated interface guarantee from the factory carries
+  // through to the returned object (which also exposes the #773 dispatch registries).
+  return Object.freeze({
     exec: adapter.exec,
     on: adapter.on,
     registerCommand: adapter.registerCommand,
     listeners,
     commands,
     makeContext,
-  };
+  });
 }

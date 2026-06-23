@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   createExtensionHarnessAdapter,
-  isExtensionHarnessAdapter,
   createClaudeExtensionAdapter,
 } from "../src/harness/index.mjs";
 
@@ -21,12 +20,12 @@ test("createExtensionHarnessAdapter freezes the returned adapter", () => {
   assert.throws(() => { adapter.exec = () => {}; }, TypeError);
 });
 
-test("isExtensionHarnessAdapter recognizes complete adapters", () => {
+test("claude adapter exposes the interface methods and is frozen", () => {
   const adapter = createClaudeExtensionAdapter();
-  assert.equal(isExtensionHarnessAdapter(adapter), true);
-  assert.equal(isExtensionHarnessAdapter({ exec: () => {} }), false);
-  assert.equal(isExtensionHarnessAdapter(null), false);
-  assert.equal(isExtensionHarnessAdapter("adapter"), false);
+  assert.equal(typeof adapter.exec, "function");
+  assert.equal(typeof adapter.on, "function");
+  assert.equal(typeof adapter.registerCommand, "function");
+  assert.throws(() => { adapter.exec = () => {}; }, TypeError);
 });
 
 test("claude adapter exec runs a real command and normalizes success", async () => {

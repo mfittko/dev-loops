@@ -39,7 +39,7 @@
  *
  * @typedef {Object} ExtensionHarnessAdapter
  * @property {(command: string, options?: HarnessExecOptions) => Promise<HarnessExecResult>} exec
- * @property {(event: HarnessLifecycleEvent, handler: (event: any, ctx: HarnessContext) => unknown) => void} on
+ * @property {(event: HarnessLifecycleEvent, handler: (event: unknown, ctx: HarnessContext) => unknown) => void} on
  * @property {(name: string, config: HarnessCommandConfig) => void} registerCommand
  */
 
@@ -67,17 +67,4 @@ export function createExtensionHarnessAdapter(impl) {
     on: impl.on,
     registerCommand: impl.registerCommand,
   });
-}
-
-/**
- * Type guard for extension-surface adapter values.
- *
- * @param {*} value
- * @returns {value is ExtensionHarnessAdapter}
- */
-export function isExtensionHarnessAdapter(value) {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  return REQUIRED_METHODS.every((method) => typeof value[method] === "function");
 }

@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 
+import { createExtensionHarnessAdapter } from '@dev-loops/core/harness';
+
 // Re-exported so the rest of the extension can name the Pi entry type without importing
 // `@earendil-works/pi-*` directly — this module owns that import boundary.
 export type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -36,7 +38,9 @@ export function toHarnessContext(ctx: Partial<ExtensionContext> | undefined): Ha
 }
 
 export function createPiExtensionAdapter(pi: ExtensionAPI): ExtensionHarnessAdapter {
-  return {
+  // Route through the shared factory so the Pi adapter gets the same validation + freeze
+  // guarantee as the Claude adapter (symmetric construction across harnesses).
+  return createExtensionHarnessAdapter({
     async exec(command: string, options: HarnessExecOptions = {}) {
       return pi.exec('bash', ['-lc', command], {
         cwd: options.cwd,
@@ -56,5 +60,5 @@ export function createPiExtensionAdapter(pi: ExtensionAPI): ExtensionHarnessAdap
           config.handler(args, toHarnessContext(piCtx))) as never,
       });
     },
-  };
+  }) as ExtensionHarnessAdapter;
 }
