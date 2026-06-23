@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { collectDevLoopChecks } from "../extension/checks.ts";
+import { createPiExtensionAdapter } from "../extension/pi-extension-adapter.ts";
 import { renderCheckLines, summarizeChecks } from "../lib/dev-loops-core.mjs";
 
 function createFakePi({ commandResults = new Map(), tools = [], commands = [] } = {}) {
@@ -25,9 +26,15 @@ function createFakePi({ commandResults = new Map(), tools = [], commands = [] } 
   };
 }
 
+// collectDevLoopChecks now consumes the neutral extension adapter; wrap the Pi double
+// through the Pi adapter so the de-facto command->result mapping is exercised end to end.
+function createFakeAdapter(options) {
+  return createPiExtensionAdapter(createFakePi(options));
+}
+
 test("collectDevLoopChecks returns stable ordering and pass/fail detail", async () => {
   const checks = await collectDevLoopChecks(
-    createFakePi({
+    createFakeAdapter({
       commandResults: new Map([
         ["command -v gh >/dev/null 2>&1", 0],
         ["gh auth status >/dev/null 2>&1", 0],
@@ -51,14 +58,15 @@ test("collectDevLoopChecks returns stable ordering and pass/fail detail", async 
 });
 
 test("collectDevLoopChecks distinguishes missing gh from missing gh auth", async () => {
-  const missingGhChecks = await collectDevLoopChecks(createFakePi());
+  const missingGhChecks = await collectDevLoopChecks(
+    createFakeAdapter());
   assert.equal(missingGhChecks[0].ok, false);
   assert.match(missingGhChecks[0].detail, /Install GitHub CLI/);
   assert.equal(missingGhChecks[1].ok, false);
   assert.equal(missingGhChecks[1].detail, "GitHub CLI is not installed yet.");
 
   const missingAuthChecks = await collectDevLoopChecks(
-    createFakePi({
+    createFakeAdapter({
       commandResults: new Map([
         ["command -v gh >/dev/null 2>&1", 0],
         ["gh auth status >/dev/null 2>&1", 1],
@@ -72,7 +80,7 @@ test("collectDevLoopChecks distinguishes missing gh from missing gh auth", async
 
 test("collectDevLoopChecks uses subagent command availability for discoverability checks", async () => {
   const checks = await collectDevLoopChecks(
-    createFakePi({
+    createFakeAdapter({
       commandResults: new Map([["command -v subagent >/dev/null 2>&1", 0]]),
     }),
   );
