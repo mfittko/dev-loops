@@ -37,17 +37,6 @@ export const TOOL_NAME_MAP = Object.freeze({
   review_loop: ["Agent"],
 });
 
-/** Pi-only agent frontmatter fields with no faithful Claude agent equivalent (dropped). */
-export const DROPPED_AGENT_FIELDS = Object.freeze([
-  "argument-hint",
-  "systemPromptMode",
-  "inheritProjectContext",
-  "inheritSkills",
-  "maxSubagentDepth",
-  "user-invocable",
-  "tools",
-]);
-
 const GENERATED_NOTE = (source) =>
   `<!-- GENERATED from ${source} by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->`;
 
@@ -82,12 +71,18 @@ export function mapTools(tools) {
  * @param {string} raw
  * @returns {{ frontmatter: Record<string, unknown>, body: string }}
  */
-export function splitFrontmatter(raw) {
+export function splitFrontmatter(raw, source) {
+  const where = source ? ` (${source})` : "";
   const match = String(raw).match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!match) {
-    throw new Error("source file is missing a leading YAML frontmatter block");
+    throw new Error(`source file is missing a leading YAML frontmatter block${where}`);
   }
-  const frontmatter = parseYaml(match[1]) ?? {};
+  let frontmatter;
+  try {
+    frontmatter = parseYaml(match[1]) ?? {};
+  } catch (error) {
+    throw new Error(`failed to parse YAML frontmatter${where}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return { frontmatter, body: match[2] };
 }
 
@@ -108,7 +103,7 @@ function normalizeToolList(value) {
  * @returns {string} Full generated file content.
  */
 export function transformAgent({ source, raw }) {
-  const { frontmatter, body } = splitFrontmatter(raw);
+  const { frontmatter, body } = splitFrontmatter(raw, source);
   const tools = mapTools(normalizeToolList(frontmatter.tools));
 
   const lines = ["---"];
@@ -131,7 +126,7 @@ export function transformAgent({ source, raw }) {
  * @returns {string} Full generated file content.
  */
 export function transformSkill({ source, raw }) {
-  const { frontmatter, body } = splitFrontmatter(raw);
+  const { frontmatter, body } = splitFrontmatter(raw, source);
   const tools = mapTools(normalizeToolList(frontmatter["allowed-tools"]));
 
   const lines = ["---"];
