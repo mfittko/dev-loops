@@ -60,15 +60,20 @@ directly.
 ## Enforcement posture
 
 - Under **Pi**, this contract is enforced by convention and review.
-- Under **Claude Code**, it is enforced **mechanically** by a `PreToolUse` Write/Edit hook
-  (`scripts/claude/hooks/pre-tool-use-write-guard.mjs`, wired in `.claude/settings.json`): a
-  Write/Edit whose target is inside the repo working tree and not gitignored is **denied** when
-  it originates from the main agent, and allowed only inside the `dev-loop` subagent context
-  (detected via the neutral `DEVLOOPS_RUN_ID` run-id contract, or the dev-loop `agent_type` —
-  a generic subagent is not authorized).
+- Under **Claude Code**, the **Edit/Write tool** path is enforced **mechanically** by a
+  `PreToolUse` Write/Edit hook (`scripts/claude/hooks/pre-tool-use-write-guard.mjs`, wired in
+  `.claude/settings.json`): a Write/Edit whose target is inside the repo working tree and not
+  gitignored is **denied** when it originates from the main agent, and allowed only inside the
+  `dev-loop` subagent context (detected via the neutral `DEVLOOPS_RUN_ID` run-id contract, or
+  the dev-loop `agent_type` — a generic subagent is not authorized).
   Strict enforcement is opt-in via `DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open) so
   adopting the harness does not retroactively break a repo's own interactive dev; full run-id
   propagation into the Claude subagent context completes with the headless/agent wiring.
+- **Scope of mechanical enforcement:** the hook covers the Edit and Write tools. Bash-driven
+  repo mutations the contract also forbids (`git commit`/`git push`/branch creation, in-place
+  edits like `sed -i`, shell redirection `> file` / `tee`) run through the Bash tool and remain
+  **convention-enforced** for now; the only Bash command the gate hook blocks is the ungated
+  `gh pr ready`. Tightening Bash-mutation coverage is possible follow-up.
 - A companion `PreToolUse` Bash hook reproduces the `gh pr ready` draft-gate guard.
 - A `dev-loop` async subagent should still reject delegation attempts that bypass the contract.
 
