@@ -86,9 +86,16 @@ test("decideWriteGuard allows the dev-loop subagent context via the CA2 run id",
   );
 });
 
-test("decideWriteGuard allows when a Claude subagent agent_id is present", () => {
+test("decideWriteGuard allows the dev-loop subagent via agent_type", () => {
   assert.equal(
-    decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentId: "subagent-42" }).decision,
+    decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType: "dev-loop" }).decision,
     "allow",
   );
+});
+
+test("decideWriteGuard denies a generic (non-dev-loop) subagent — no bypass via arbitrary agents", () => {
+  for (const agentType of ["Explore", "Plan", "general-purpose", "developer"]) {
+    const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType });
+    assert.equal(d.decision, "deny", `agent_type ${agentType} must not bypass the boundary`);
+  }
 });

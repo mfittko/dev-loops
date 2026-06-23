@@ -26,6 +26,13 @@ import {
 const ALLOW = Object.freeze({ decision: "allow" });
 
 /**
+ * The agent type (Claude `agent_type` / the canonical agent name) that owns repo mutations.
+ * Only this subagent — not arbitrary subagents (Explore, Plan, generic Task agents) — may
+ * bypass the main-agent read-only boundary.
+ */
+export const DEV_LOOP_AGENT_TYPE = "dev-loop";
+
+/**
  * Decide whether a PreToolUse Bash command must be blocked by the draft-gate boundary.
  *
  * Mirrors the Pi extension's `onUserBash`: the only blocked case is `gh pr ready` for the
@@ -84,29 +91,32 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
  * Decide whether a PreToolUse Write/Edit must be blocked by the main-agent read-only boundary.
  *
  * Denies a mutation whose target is inside the repo working tree AND not gitignored, when the
- * call originates from the MAIN agent (no dev-loop run id and no subagent id). Allows it inside
- * the dev-loop subagent context (CA2 run id present, or a Claude `agent_id` present), and for
- * non-repo / gitignored paths. Strict enforcement is opt-in via `enforce` (the hook derives
- * this from `DEVLOOPS_MAIN_AGENT_READONLY=1`) so adopting the harness does not retroactively
- * break a repo's own interactive dev; default is fail-open.
+ * call originates from the MAIN agent. Allows it only inside the *dev-loop* subagent context:
+ * the CA2 run id (`DEVLOOPS_RUN_ID`) is present, or the Claude `agent_type` is the dev-loop
+ * agent. A generic subagent (Explore, Plan, an arbitrary Task agent) is NOT authorized — the
+ * contract requires mutations to flow through the dev-loop subagent specifically. Non-repo /
+ * gitignored paths are always allowed. Strict enforcement is opt-in via `enforce` (the hook
+ * derives it from `DEVLOOPS_MAIN_AGENT_READONLY=1`) so adopting the harness does not
+ * retroactively break a repo's own interactive dev; default is fail-open.
  *
  * @param {Object} params
  * @param {string} params.filePath - Target file path.
  * @param {boolean} params.isRepoMutation - True if inside the repo working tree AND not gitignored.
  * @param {boolean} [params.enforce] - Strict mode (DEVLOOPS_MAIN_AGENT_READONLY=1).
  * @param {Record<string,string|undefined>} [params.env] - Environment (for the CA2 run id).
- * @param {string|null} [params.agentId] - Claude subagent id from the hook payload, if any.
+ * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload, if any.
  * @returns {HookDecision}
  */
-export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, env = {}, agentId = null }) {
+export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, env = {}, agentType = null }) {
   if (!enforce) {
     return ALLOW; // strict enforcement not enabled — fail open
   }
   if (!isRepoMutation) {
     return ALLOW; // non-repo or gitignored path (e.g. /tmp, tmp/) — allowed by the contract
   }
-  // Delegated (dev-loop subagent) context: CA2 run id or a Claude subagent id present.
-  if (resolveRunId(env) || (typeof agentId === "string" && agentId.trim().length > 0)) {
+  // Authorized only inside the dev-loop subagent context: CA2 run id, or the dev-loop agent
+  // type. Any other subagent type is treated like the main agent and denied.
+  if (resolveRunId(env) || agentType === DEV_LOOP_AGENT_TYPE) {
     return ALLOW;
   }
   return {

@@ -46,12 +46,15 @@ let gateError = null;
 if (repoSlug === TARGET_REPO_SLUG) {
   const pr = extractPrNumberFromGhPrReady(command);
   if (pr !== null && repoRoot) {
+    // The gate guard script is overridable for deterministic testing (stub instead of the
+    // network-touching real guard); defaults to the bundled pre-pr-ready-gate.
+    const gateScript =
+      process.env.DEVLOOPS_PRE_PR_READY_GATE_SCRIPT || path.join(repoRoot, "scripts/loop/pre-pr-ready-gate.mjs");
     try {
-      execFileSync(
-        "node",
-        [path.join(repoRoot, "scripts/loop/pre-pr-ready-gate.mjs"), "--repo", repoSlug, "--pr", String(pr)],
-        { cwd: repoRoot, stdio: ["ignore", "ignore", "pipe"] },
-      );
+      execFileSync("node", [gateScript, "--repo", repoSlug, "--pr", String(pr)], {
+        cwd: repoRoot,
+        stdio: ["ignore", "ignore", "pipe"],
+      });
       gatePassed = true;
     } catch (error) {
       // Exit 1 from the guard = no clean draft_gate evidence (gatePassed stays false).

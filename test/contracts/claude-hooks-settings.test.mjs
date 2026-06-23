@@ -54,6 +54,44 @@ test("bash-gate hook passes through non-gh-pr-ready commands", () => {
   assert.equal(json, null, "no deny output for an allowed command");
 });
 
+test("bash-gate hook denies an ungated gh pr ready in the target repo (e2e, stubbed guard)", () => {
+  // Stub the gate guard to exit 1 (no clean draft_gate evidence) so the spawn + deny wiring is
+  // exercised deterministically without touching the network.
+  const stub = path.join(repoRoot, "tmp", `gate-stub-deny-${process.pid}.mjs`);
+  fs.mkdirSync(path.dirname(stub), { recursive: true });
+  fs.writeFileSync(stub, "process.exit(1);\n", "utf8");
+  try {
+    const { code, json } = runHook(
+      "pre-tool-use-bash-gate.mjs",
+      { tool_name: "Bash", tool_input: { command: "gh pr ready 999999" }, cwd: repoRoot },
+      { DEVLOOPS_PRE_PR_READY_GATE_SCRIPT: stub },
+    );
+    assert.equal(code, 0);
+    assert.ok(json, "expected a structured decision");
+    assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(json.hookSpecificOutput.permissionDecisionReason, /draft_gate/);
+  } finally {
+    fs.rmSync(stub, { force: true });
+  }
+});
+
+test("bash-gate hook allows gh pr ready when the (stubbed) draft gate passes", () => {
+  const stub = path.join(repoRoot, "tmp", `gate-stub-pass-${process.pid}.mjs`);
+  fs.mkdirSync(path.dirname(stub), { recursive: true });
+  fs.writeFileSync(stub, "process.exit(0);\n", "utf8");
+  try {
+    const { code, json } = runHook(
+      "pre-tool-use-bash-gate.mjs",
+      { tool_name: "Bash", tool_input: { command: "gh pr ready 999999" }, cwd: repoRoot },
+      { DEVLOOPS_PRE_PR_READY_GATE_SCRIPT: stub },
+    );
+    assert.equal(code, 0);
+    assert.equal(json, null, "gate-passed ready must be allowed");
+  } finally {
+    fs.rmSync(stub, { force: true });
+  }
+});
+
 test("write-guard hook fails open when enforcement is disabled (default)", () => {
   const { code, json } = runHook("pre-tool-use-write-guard.mjs", {
     tool_name: "Write",

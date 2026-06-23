@@ -24,7 +24,9 @@ if (typeof filePath !== "string" || !filePath) {
 
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 const enforce = process.env.DEVLOOPS_MAIN_AGENT_READONLY === "1";
-const agentId = typeof input?.agent_id === "string" ? input.agent_id : null;
+// Claude exposes `agent_type` (the agent name) only inside a subagent. Only the dev-loop
+// subagent is authorized to mutate — a generic subagent must not bypass the boundary.
+const agentType = typeof input?.agent_type === "string" ? input.agent_type : null;
 
 // Repo mutation = inside the repo working tree AND not gitignored.
 let isRepoMutation = false;
@@ -46,7 +48,7 @@ try {
   isRepoMutation = false; // not a git repo / path outside any repo
 }
 
-const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: process.env, agentId });
+const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: process.env, agentType });
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
 }
