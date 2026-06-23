@@ -3,6 +3,7 @@ import process from "node:process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { resolveRunId as resolveEnvRunId } from "@dev-loops/core/loop/run-context";
 import {
   assertRunnerOwnership,
   claimRunnerOwnership,
@@ -81,9 +82,7 @@ function parseCliArgs(argv) {
 function resolveRunId(explicitRunId, env) {
   return typeof explicitRunId === "string" && explicitRunId.trim().length > 0
     ? explicitRunId.trim()
-    : (typeof env?.PI_SUBAGENT_RUN_ID === "string" && env.PI_SUBAGENT_RUN_ID.trim().length > 0
-      ? env.PI_SUBAGENT_RUN_ID.trim()
-      : null);
+    : resolveEnvRunId(env);
 }
 export async function runPrRunnerCoordination(options, { env = process.env, cwd = process.cwd() } = {}) {
   if (options.command === "status") {

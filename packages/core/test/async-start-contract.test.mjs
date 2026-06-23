@@ -17,7 +17,7 @@ test("validateAsyncStartContext: rejects when no Pi context markers are present"
   const result = validateAsyncStartContext({ env: {} });
   assert.equal(result.status, ASYNC_START_STATUS.REJECTED);
   assert.equal(result.detectedMarker, null);
-  assert.ok(result.reason.includes("No Pi-managed async context detected"));
+  assert.ok(result.reason.includes("No async context detected"));
 });
 
 test("validateAsyncStartContext: rejects when markers are empty strings", () => {
@@ -44,11 +44,25 @@ test("validateAsyncStartContext: rejects when markers are whitespace-only", () =
 // validateAsyncStartContext: valid (Pi-managed context detected)
 // ---------------------------------------------------------------------------
 
-test("validateAsyncStartContext: valid when PI_SUBAGENT_RUN_ID is set", () => {
+test("validateAsyncStartContext: valid when PI_SUBAGENT_RUN_ID is set (alias)", () => {
   const env = { PI_SUBAGENT_RUN_ID: "run-abc123" };
   const result = validateAsyncStartContext({ env });
   assert.equal(result.status, ASYNC_START_STATUS.VALID);
   assert.equal(result.detectedMarker, "PI_SUBAGENT_RUN_ID");
+});
+
+test("validateAsyncStartContext: valid when the neutral DEVLOOPS_RUN_ID is set", () => {
+  const env = { DEVLOOPS_RUN_ID: "devloops-run-1" };
+  const result = validateAsyncStartContext({ env });
+  assert.equal(result.status, ASYNC_START_STATUS.VALID);
+  assert.equal(result.detectedMarker, "DEVLOOPS_RUN_ID");
+});
+
+test("validateAsyncStartContext: neutral marker wins when both are set", () => {
+  const env = { DEVLOOPS_RUN_ID: "devloops-run-1", PI_SUBAGENT_RUN_ID: "pi-run" };
+  const result = validateAsyncStartContext({ env });
+  assert.equal(result.status, ASYNC_START_STATUS.VALID);
+  assert.equal(result.detectedMarker, "DEVLOOPS_RUN_ID");
 });
 
 test("validateAsyncStartContext: rejects when only PI_SESSION_ID is set without a run id", () => {
@@ -135,7 +149,7 @@ test("buildAsyncStartRejection: builds error payload from rejected validation", 
   const rejection = buildAsyncStartRejection(validation);
   assert.equal(rejection.ok, false);
   assert.equal(rejection.asyncStartContract, "rejected");
-  assert.ok(rejection.error.includes("No Pi-managed async context detected"));
+  assert.ok(rejection.error.includes("No async context detected"));
 });
 
 // ---------------------------------------------------------------------------
@@ -144,7 +158,9 @@ test("buildAsyncStartRejection: builds error payload from rejected validation", 
 
 test("PI_ASYNC_CONTEXT_MARKERS contains expected markers", () => {
   assert.ok(PI_ASYNC_CONTEXT_MARKERS.includes("PI_SUBAGENT_RUN_ID"));
-  assert.equal(PI_ASYNC_CONTEXT_MARKERS.length, 1);
+  assert.ok(PI_ASYNC_CONTEXT_MARKERS.includes("DEVLOOPS_RUN_ID"));
+  assert.equal(PI_ASYNC_CONTEXT_MARKERS.length, 2);
+  assert.equal(PI_ASYNC_CONTEXT_MARKERS[0], "DEVLOOPS_RUN_ID", "neutral marker must be first (precedence)");
 });
 
 test("ASYNC_START_MODE has all expected values", () => {

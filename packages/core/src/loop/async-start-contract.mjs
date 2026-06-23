@@ -6,13 +6,14 @@
  * context rather than as detached local processes (nohup, disowned shell jobs,
  * tmux/screen sessions, ad hoc while/sleep loops, etc.).
  *
- * The enforcement seam is a startup check that verifies the presence of a
- * Pi async context marker. When the marker is absent, the check fails closed
+ * The enforcement seam is a startup check that verifies the presence of an
+ * async context marker. When the marker is absent, the check fails closed
  * and returns a machine-readable rejection rather than silently proceeding.
  *
- * Pi-managed async context markers (required when workflow.asyncStartMode is
- * `required`):
- * - PI_SUBAGENT_RUN_ID env var (set by Pi subagent framework for inspectable async runs)
+ * Async context markers (required when workflow.asyncStartMode is `required`),
+ * neutral-first — see `@dev-loops/core/loop/run-context`:
+ * - DEVLOOPS_RUN_ID env var (neutral, harness-agnostic)
+ * - PI_SUBAGENT_RUN_ID env var (Pi subagent framework; retained as a compatibility alias)
  *
  * Allowed modes:
  * - workflow.asyncStartMode: required | allowed
@@ -22,14 +23,18 @@
  * This module is intentionally pure and side-effect free.
  */
 
+import { RUN_ID_MARKERS } from "./run-context.mjs";
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Environment variable names that indicate a Pi-managed async context. */
-export const PI_ASYNC_CONTEXT_MARKERS = Object.freeze([
-  "PI_SUBAGENT_RUN_ID",
-]);
+/**
+ * Environment variable names that indicate an async context, neutral-first.
+ * Sourced from the shared run-context contract so the markers stay in one place.
+ * The historical name is kept for back-compat; it now includes DEVLOOPS_RUN_ID.
+ */
+export const PI_ASYNC_CONTEXT_MARKERS = RUN_ID_MARKERS;
 
 /** Supported workflow async-start modes. */
 export const ASYNC_START_MODE = Object.freeze({
@@ -123,8 +128,8 @@ export function validateAsyncStartContext({
       status: ASYNC_START_STATUS.REJECTED,
       reason:
         `Detected ${sessionOnlyMarker}, but GitHub-first async-start requires a visible ` +
-        "Pi-managed subagent run id for inspectable startup/resume evidence. " +
-        "Set PI_SUBAGENT_RUN_ID to proceed. Any exception must come from repository-maintained workflow policy.",
+        "subagent run id for inspectable startup/resume evidence. " +
+        "Set DEVLOOPS_RUN_ID (or the PI_SUBAGENT_RUN_ID alias) to proceed. Any exception must come from repository-maintained workflow policy.",
       detectedMarker: null,
     };
   }
@@ -144,10 +149,11 @@ export function validateAsyncStartContext({
   return {
     status: ASYNC_START_STATUS.REJECTED,
     reason:
-      "No Pi-managed async context detected. " +
-      "The dev-loop must run within a visible Pi async subagent session, " +
+      "No async context detected. " +
+      "The dev-loop must run within a visible async subagent session, " +
       "not as a detached local process. " +
-      `Set ${PI_ASYNC_CONTEXT_MARKERS[0]} to proceed. Repository-maintained workflow policy controls any exceptions.`,
+      `Set ${PI_ASYNC_CONTEXT_MARKERS[0]} (or the PI_SUBAGENT_RUN_ID alias) to proceed. ` +
+      "Repository-maintained workflow policy controls any exceptions.",
     detectedMarker: null,
   };
 }

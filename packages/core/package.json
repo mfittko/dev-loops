@@ -32,6 +32,7 @@
     "./loop/policy-constants": "./src/loop/policy-constants.mjs",
     "./loop/pr-gate-coordination": "./src/loop/pr-gate-coordination.mjs",
     "./loop/public-dev-loop-routing": "./src/loop/public-dev-loop-routing.mjs",
+    "./loop/run-context": "./src/loop/run-context.mjs",
     "./loop/queue-driver": "./src/loop/queue-driver.mjs",
     "./loop/queue-parallel": "./src/loop/queue-parallel.mjs",
     "./loop/queue-state": "./src/loop/queue-state.mjs",
