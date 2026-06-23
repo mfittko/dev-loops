@@ -60,11 +60,11 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   });
 
   adapter.on('tool_result', async (event, ctx) => {
-    await postMergeUpdateHook.onToolResult(event as Parameters<typeof postMergeUpdateHook.onToolResult>[0], ctx);
+    await postMergeUpdateHook.onToolResult(event, ctx);
   });
 
   adapter.on('user_bash', async (event, ctx) => {
-    return postMergeUpdateHook.onUserBash(event as Parameters<typeof postMergeUpdateHook.onUserBash>[0], ctx);
+    return postMergeUpdateHook.onUserBash(event, ctx);
   });
 
   adapter.on('agent_end', async (event, ctx) => {

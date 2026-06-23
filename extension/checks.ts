@@ -41,7 +41,7 @@ async function insideGitRepo(adapter: ExtensionHarnessAdapter): Promise<boolean>
 async function getRepoRoot(adapter: ExtensionHarnessAdapter): Promise<string> {
   const result = await adapter.exec('git rev-parse --show-toplevel', { timeout: 10_000 });
   if (result.code !== 0) {
-    throw new Error('Open Pi inside a git repository before using `/dev-loops inspect`.');
+    throw new Error('Open this session inside a git repository before using `/dev-loops inspect`.');
   }
   const repoRoot = `${result.stdout ?? ''}`.trim();
   if (!repoRoot) {

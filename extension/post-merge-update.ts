@@ -342,7 +342,10 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
       reset();
     },
 
-    async onToolResult(event: ToolResultLike, ctx: Pick<HarnessContext, 'cwd'>): Promise<void> {
+    async onToolResult(rawEvent: unknown, ctx: Pick<HarnessContext, 'cwd'>): Promise<void> {
+      // Harness events arrive as `unknown` across the neutral seam; narrow here, at the
+      // single place that knows which fields this hook reads.
+      const event = rawEvent as ToolResultLike;
       const command = getBashCommandFromToolResult(event);
       if (!command || event.isError) {
         return;
@@ -350,7 +353,8 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
       await queueIfEligible(state, resolveRepoContext, command, ctx.cwd);
     },
 
-    async onUserBash(event: UserBashLike, _ctx?: HarnessContext): Promise<UserBashResultLike | undefined> {
+    async onUserBash(rawEvent: unknown, _ctx?: HarnessContext): Promise<UserBashResultLike | undefined> {
+      const event = rawEvent as UserBashLike;
       // Intercept gh pr ready before any other checks
       if (isGhPrReadyCommand(event.command)) {
         // Check if the command explicitly targets a different repo via -R/--repo

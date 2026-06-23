@@ -4,9 +4,15 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// CA1 (#770) import boundary: only the dedicated Pi adapter module may import
-// `@earendil-works/pi-*`. Every other extension / core-harness source must talk to the
-// neutral seam. peerDependencies in package.json are not source imports and are exempt.
+// CA1 (#770) import boundary. The seam this slice introduces covers the *neutral extension
+// runtime* (`extension/`) and the *core harness* (`packages/core/src/harness`): within those
+// trees only the dedicated Pi adapter module (`extension/pi-extension-adapter.ts`) may import
+// `@earendil-works/pi-*`. Everything else there must talk to the neutral seam.
+//
+// Out of scope by design: `.pi/extensions/` holds standalone Pi-native extensions (e.g.
+// `dev-loop-behavioral-review.ts`) that are inherently coupled to the Pi harness and are not
+// part of the neutral runtime — they are intentionally NOT covered by this boundary.
+// peerDependencies in package.json are not source imports and are exempt.
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
@@ -34,7 +40,7 @@ async function collectSourceFiles(dir) {
   return out;
 }
 
-test("only pi-extension-adapter.ts imports @earendil-works/pi-*", async () => {
+test("within the neutral extension runtime + core harness, only pi-extension-adapter.ts imports @earendil-works/pi-*", async () => {
   const files = (await Promise.all(SCAN_DIRS.map(collectSourceFiles))).flat();
   assert.ok(files.length > 0, "expected to scan some source files");
 
@@ -57,4 +63,17 @@ test("only pi-extension-adapter.ts imports @earendil-works/pi-*", async () => {
 test("the dedicated Pi adapter module still owns the Pi import", async () => {
   const content = await readFile(path.join(repoRoot, "extension/pi-extension-adapter.ts"), "utf8");
   assert.match(content, /@earendil-works\/pi-coding-agent/);
+});
+
+test("`.pi/extensions/` is a Pi-native surface intentionally outside this boundary", async () => {
+  // Documents the known exemption so a reader does not mistake the scoped boundary above
+  // for a repo-wide one. This standalone Pi extension legitimately imports the Pi harness.
+  const piNativeExtension = path.join(repoRoot, ".pi/extensions/dev-loop-behavioral-review.ts");
+  const content = await readFile(piNativeExtension, "utf8").catch(() => null);
+  if (content === null) return; // tolerate absence in trimmed/published trees
+  assert.match(content, /@earendil-works\/pi-coding-agent/, "expected the documented Pi-native extension to import Pi");
+  assert.ok(
+    !SCAN_DIRS.some((dir) => path.join(repoRoot, ".pi/extensions/dev-loop-behavioral-review.ts").startsWith(path.join(repoRoot, dir) + path.sep)),
+    ".pi/extensions/ must remain outside the scanned trees",
+  );
 });
