@@ -216,11 +216,16 @@ test("detectSubagentAvailability: true when the neutral DEVLOOPS_SUBAGENT_AVAILA
   assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "1" } }), true);
 });
 
-test("detectSubagentAvailability: true when either neutral or alias is set", () => {
+test("detectSubagentAvailability: explicit neutral '0' wins over the Pi alias (precedence)", () => {
   assert.equal(
     detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "0", PI_SUBAGENT_AVAILABLE: "1" } }),
-    true,
+    false,
   );
+});
+
+test("detectSubagentAvailability: falls back to the Pi alias only when the neutral var is unset/blank", () => {
+  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "", PI_SUBAGENT_AVAILABLE: "1" } }), true);
+  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "  ", PI_SUBAGENT_AVAILABLE: "1" } }), true);
 });
 
 test("detectSubagentAvailability: false when PI_SUBAGENT_AVAILABLE is not set", () => {

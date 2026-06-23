@@ -20,9 +20,9 @@ Optional:
                         Override the staleness threshold (default 30 minutes,
                         or $PI_DEV_LOOP_STALE_RUNNER_MAX_AGE_MS).
   --run-id <id>         Override the active run id (default: read from
-                        PI_SUBAGENT_RUN_ID). When supplied, the detector
-                        additionally verifies the current run id is still
-                        the active owner.
+                        DEVLOOPS_RUN_ID, falling back to the PI_SUBAGENT_RUN_ID
+                        alias). When supplied, the detector additionally verifies
+                        the current run id is still the active owner.
 Output (stdout, JSON; always includes staleRunnerCheck):
   {
     "ok": true,

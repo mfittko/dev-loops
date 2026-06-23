@@ -143,13 +143,20 @@ export const SUBAGENT_AVAILABLE_VARS = Object.freeze([
  *
  * This is an env-var-based heuristic, consistent with other bypass/availability
  * patterns in the repo. It is intentionally simple — the gate's subagent check
- * is advisory (fails-open) and never hard-blocks on subagent absence. The neutral
- * `DEVLOOPS_SUBAGENT_AVAILABLE` is honored first; `PI_SUBAGENT_AVAILABLE` remains a
- * backward-compatible alias.
+ * is advisory (fails-open) and never hard-blocks on subagent absence. Precedence is
+ * neutral-first: the first var that is *set* (non-blank) is authoritative — so an explicit
+ * `DEVLOOPS_SUBAGENT_AVAILABLE=0` is respected even when `PI_SUBAGENT_AVAILABLE=1`. The Pi
+ * alias is only consulted when the neutral var is unset/blank.
  *
  * @param {{ env?: Record<string, string | undefined> }} [options]
  * @returns {boolean}
  */
 export function detectSubagentAvailability({ env = process.env } = {}) {
-  return SUBAGENT_AVAILABLE_VARS.some((name) => (env[name] ?? "").trim() === "1");
+  for (const name of SUBAGENT_AVAILABLE_VARS) {
+    const raw = (env[name] ?? "").trim();
+    if (raw.length > 0) {
+      return raw === "1";
+    }
+  }
+  return false;
 }

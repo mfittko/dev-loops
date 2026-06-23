@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -16,6 +16,20 @@ import {
   readRunContext,
   ensureRunId,
 } from "../src/loop/run-context.mjs";
+
+// Track temp dirs and clean them up after the suite so CI does not accumulate /tmp entries.
+const tempRoots = [];
+function makeTempRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "run-ctx-"));
+  tempRoots.push(root);
+  return root;
+}
+
+after(() => {
+  for (const root of tempRoots) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("RUN_ID_MARKERS lists the neutral var first, Pi alias second", () => {
   assert.deepEqual(RUN_ID_MARKERS, ["DEVLOOPS_RUN_ID", "PI_SUBAGENT_RUN_ID"]);
@@ -50,7 +64,7 @@ test("runContextEnv sets only the neutral var", () => {
 });
 
 test("writeRunContext/readRunContext roundtrip under .pi/", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "run-ctx-"));
+  const root = makeTempRoot();
   const written = writeRunContext({ runId: "devloops-1", root, mintedAt: "2026-01-01T00:00:00Z" });
   assert.equal(written, runContextPath(root));
   assert.equal(written, path.join(root, ".pi", "dev-loop-run-context.json"));
@@ -60,7 +74,7 @@ test("writeRunContext/readRunContext roundtrip under .pi/", () => {
 });
 
 test("readRunContext returns null when absent or malformed", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "run-ctx-"));
+  const root = makeTempRoot();
   assert.equal(readRunContext({ root }), null);
   fs.mkdirSync(path.join(root, ".pi"), { recursive: true });
   fs.writeFileSync(runContextPath(root), "not json", "utf8");
@@ -68,12 +82,12 @@ test("readRunContext returns null when absent or malformed", () => {
 });
 
 test("writeRunContext rejects an empty run id", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "run-ctx-"));
+  const root = makeTempRoot();
   assert.throws(() => writeRunContext({ runId: "", root }), /non-empty string/);
 });
 
 test("ensureRunId reuses an existing env run id without minting or writing", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "run-ctx-"));
+  const root = makeTempRoot();
   const result = ensureRunId({ env: { PI_SUBAGENT_RUN_ID: "pi-existing" }, root });
   assert.deepEqual(result, { runId: "pi-existing", minted: false, statePath: null });
   // No state file should be written when reusing.
@@ -81,7 +95,7 @@ test("ensureRunId reuses an existing env run id without minting or writing", () 
 });
 
 test("ensureRunId mints and persists when no run id is present", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "run-ctx-"));
+  const root = makeTempRoot();
   const result = ensureRunId({ env: {}, root, mintedAt: "2026-02-02T00:00:00Z" });
   assert.equal(result.minted, true);
   assert.match(result.runId, /^devloops-/);
