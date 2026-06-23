@@ -166,6 +166,42 @@ test("ensureAsyncRunnerOwnership auto-claims when no file exists", async () => {
   }
 });
 
+test("ensureAsyncRunnerOwnership resolves the neutral DEVLOOPS_RUN_ID end-to-end", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 19,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "devloops-run-1" },
+      claimIfMissing: true,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "claimed_new");
+    assert.equal(result.activeRun.runId, "devloops-run-1");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ensureAsyncRunnerOwnership prefers DEVLOOPS_RUN_ID over the PI_SUBAGENT_RUN_ID alias", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 20,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "devloops-win", PI_SUBAGENT_RUN_ID: "pi-lose" },
+      claimIfMissing: true,
+    });
+    assert.equal(result.activeRun.runId, "devloops-win");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("ensureAsyncRunnerOwnership auto-claims after release when no active owner remains", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 

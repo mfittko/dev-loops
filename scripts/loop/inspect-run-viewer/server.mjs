@@ -27,6 +27,7 @@ import {
 } from "../_inspect-run-viewer-adapter.mjs";
 import { dedupeRepoSlugOptions, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
+import { runContextEnv } from "@dev-loops/core/loop/run-context";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 
 const execFile = promisify(execFileCallback);
@@ -100,7 +101,7 @@ async function runResolverForTarget(target, { repoRoot = process.cwd() } = {}) {
     throw new Error("Cannot resolve handoff envelope: target repo is required");
   }
   const args = ["scripts/loop/resolve-dev-loop-startup.mjs", "--pr", String(target.pr)];
-  const env = { ...process.env, PI_SUBAGENT_RUN_ID: "viewer-operator-tool" };
+  const env = { ...process.env, ...runContextEnv("viewer-operator-tool") };
   const { stdout, stderr } = await execFile("node", args, { cwd: repoRoot, timeout: 30000, env });
   try {
     return JSON.parse(stdout);

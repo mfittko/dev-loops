@@ -138,7 +138,7 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
     const parsed = JSON.parse(result.stderr);
     assert.equal(parsed.ok, false);
     assert.equal(parsed.asyncStartContract, "rejected");
-    assert.ok(parsed.error.includes("Pi-managed async context"));
+    assert.ok(parsed.error.includes("async context"));
   });
 });
 

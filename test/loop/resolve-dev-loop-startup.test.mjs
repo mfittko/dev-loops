@@ -479,7 +479,7 @@ test("buildResolveDevLoopStartupResult rejects async-required strategy without P
 
   assert.equal(result.ok, false);
   assert.equal(result.asyncStartContract, "rejected");
-  assert.ok(result.error.includes("Pi-managed async context"));
+  assert.ok(result.error.includes("async context"));
 });
 
 test("buildResolveDevLoopStartupResult allows async-required strategy with PI_SUBAGENT_RUN_ID", () => {

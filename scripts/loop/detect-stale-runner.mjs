@@ -3,6 +3,7 @@ import process from "node:process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { resolveRunId as resolveEnvRunId } from "@dev-loops/core/loop/run-context";
 import {
   detectStaleRunner,
   STALE_RUNNER_ERROR,
@@ -19,9 +20,9 @@ Optional:
                         Override the staleness threshold (default 30 minutes,
                         or $PI_DEV_LOOP_STALE_RUNNER_MAX_AGE_MS).
   --run-id <id>         Override the active run id (default: read from
-                        PI_SUBAGENT_RUN_ID). When supplied, the detector
-                        additionally verifies the current run id is still
-                        the active owner.
+                        DEVLOOPS_RUN_ID, falling back to the PI_SUBAGENT_RUN_ID
+                        alias). When supplied, the detector additionally verifies
+                        the current run id is still the active owner.
 Output (stdout, JSON; always includes staleRunnerCheck):
   {
     "ok": true,
@@ -100,10 +101,7 @@ function resolveRunId(explicitRunId, env) {
   if (typeof explicitRunId === "string" && explicitRunId.trim().length > 0) {
     return explicitRunId.trim();
   }
-  if (typeof env?.PI_SUBAGENT_RUN_ID === "string" && env.PI_SUBAGENT_RUN_ID.trim().length > 0) {
-    return env.PI_SUBAGENT_RUN_ID.trim();
-  }
-  return null;
+  return resolveEnvRunId(env);
 }
 function buildStaleRunnerCheck(detection) {
   if (detection.status === "no_owner_record") {

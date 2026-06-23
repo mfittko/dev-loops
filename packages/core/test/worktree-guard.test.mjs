@@ -208,8 +208,24 @@ test("isListedWorktree: false when cwd is under a non-worktree directory", () =>
 // detectSubagentAvailability
 // ---------------------------------------------------------------------------
 
-test("detectSubagentAvailability: true when PI_SUBAGENT_AVAILABLE=1", () => {
+test("detectSubagentAvailability: true when PI_SUBAGENT_AVAILABLE=1 (alias)", () => {
   assert.equal(detectSubagentAvailability({ env: { PI_SUBAGENT_AVAILABLE: "1" } }), true);
+});
+
+test("detectSubagentAvailability: true when the neutral DEVLOOPS_SUBAGENT_AVAILABLE=1", () => {
+  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "1" } }), true);
+});
+
+test("detectSubagentAvailability: explicit neutral '0' wins over the Pi alias (precedence)", () => {
+  assert.equal(
+    detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "0", PI_SUBAGENT_AVAILABLE: "1" } }),
+    false,
+  );
+});
+
+test("detectSubagentAvailability: falls back to the Pi alias only when the neutral var is unset/blank", () => {
+  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "", PI_SUBAGENT_AVAILABLE: "1" } }), true);
+  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "  ", PI_SUBAGENT_AVAILABLE: "1" } }), true);
 });
 
 test("detectSubagentAvailability: false when PI_SUBAGENT_AVAILABLE is not set", () => {

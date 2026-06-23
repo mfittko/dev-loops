@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireOptionValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { runContextEnv } from "@dev-loops/core/loop/run-context";
 
 // REPO_ROOT resolves to the git repo root (scripts/loop/info.mjs → scripts/ → repo/)
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)), "..");
@@ -186,12 +187,12 @@ function buildPrInfo(prNumber, repo, cwd) {
 function buildIssueInfo(issueNumber, repo, cwd) {
   const issueData = ghJson(["issue", "view", String(issueNumber), "--repo", repo, "--json", "number,title,body,state,labels,assignees,milestone,url"], cwd);
   
-  // Run startup resolver with synthetic PI_SUBAGENT_RUN_ID to avoid
+  // Run startup resolver with a synthetic neutral run id to avoid
   // async-start contract rejection for GitHub-first issue routes.
   let startupBundle = null;
   try {
     const startupScript = path.join(REPO_ROOT, "scripts/loop/resolve-dev-loop-startup.mjs");
-    const env = { ...process.env, PI_SUBAGENT_RUN_ID: "info-readonly-placeholder" };
+    const env = { ...process.env, ...runContextEnv("info-readonly-placeholder") };
     const raw = execFileSync(process.execPath, [startupScript, "--issue", String(issueNumber)], {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env,
     });
