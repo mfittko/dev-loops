@@ -53,7 +53,7 @@ export function resolveRunId(env = process.env) {
 /**
  * Mint a fresh neutral run id.
  *
- * @returns {string} e.g. "devloops-3f2c…"
+ * @returns {string} `devloops-<uuid>` (e.g. "devloops-3f2c1e84-...-9a0b")
  */
 export function mintRunId() {
   return `devloops-${crypto.randomUUID()}`;
