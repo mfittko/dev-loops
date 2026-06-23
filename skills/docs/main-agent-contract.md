@@ -64,8 +64,8 @@ directly.
   (`scripts/claude/hooks/pre-tool-use-write-guard.mjs`, wired in `.claude/settings.json`): a
   Write/Edit whose target is inside the repo working tree and not gitignored is **denied** when
   it originates from the main agent, and allowed only inside the `dev-loop` subagent context
-  (detected via the neutral `DEVLOOPS_RUN_ID` run-id contract, or Claude `agent_type ===
-  "dev-loop"` — a generic subagent is not authorized).
+  (detected via the neutral `DEVLOOPS_RUN_ID` run-id contract, or the dev-loop `agent_type` —
+  a generic subagent is not authorized).
   Strict enforcement is opt-in via `DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open) so
   adopting the harness does not retroactively break a repo's own interactive dev; full run-id
   propagation into the Claude subagent context completes with the headless/agent wiring.

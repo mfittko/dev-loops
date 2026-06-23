@@ -14,9 +14,12 @@ test("TARGET_REPO_SLUG is the dev-loops repo", () => {
   assert.equal(TARGET_REPO_SLUG, "mfittko/dev-loops");
 });
 
-test("normalizeGitHubRepoSlug handles ssh/https/git/git+ssh forms", () => {
+test("normalizeGitHubRepoSlug handles ssh/https/http/git/git+ssh forms", () => {
   assert.equal(normalizeGitHubRepoSlug("git@github.com:mfittko/dev-loops.git"), "mfittko/dev-loops");
   assert.equal(normalizeGitHubRepoSlug("https://github.com/mfittko/dev-loops"), "mfittko/dev-loops");
+  assert.equal(normalizeGitHubRepoSlug("http://github.com/mfittko/dev-loops.git"), "mfittko/dev-loops");
+  assert.equal(normalizeGitHubRepoSlug("git://github.com/mfittko/dev-loops.git"), "mfittko/dev-loops");
+  assert.equal(normalizeGitHubRepoSlug("ssh://git@github.com/mfittko/dev-loops.git"), "mfittko/dev-loops");
   assert.equal(normalizeGitHubRepoSlug("git:github.com/MFITTKO/Dev-Loops"), "mfittko/dev-loops");
   assert.equal(normalizeGitHubRepoSlug("not a url"), null);
 });

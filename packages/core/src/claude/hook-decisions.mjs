@@ -56,8 +56,8 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   if (explicitRepo && explicitRepo.toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
     return ALLOW;
   }
-  // Only gate within the target repo.
-  if (repoSlug !== TARGET_REPO_SLUG) {
+  // Only gate within the target repo (case-insensitive — callers may pass an un-lowercased slug).
+  if ((repoSlug ?? "").toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
     return ALLOW;
   }
 

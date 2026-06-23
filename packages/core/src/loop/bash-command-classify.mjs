@@ -33,8 +33,9 @@ export function normalizeGitHubRepoSlug(remoteUrl) {
 
   const patterns = [
     /^git@github\.com:([^\s]+?)(?:\.git)?$/i,
-    /^https:\/\/github\.com\/([^\s]+?)(?:\.git)?$/i,
+    /^https?:\/\/github\.com\/([^\s]+?)(?:\.git)?$/i,
     /^ssh:\/\/git@github\.com\/([^\s]+?)(?:\.git)?$/i,
+    /^git:\/\/github\.com\/([^\s]+?)(?:\.git)?$/i,
     /^git:github\.com\/([^\s]+?)(?:\.git)?$/i,
   ];
 
