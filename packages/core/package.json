@@ -10,6 +10,7 @@
     "./cli/retry-wrapper": "./src/cli/retry-wrapper.mjs",
     "./cli/subcommand-runner": "./src/cli/subcommand-runner.mjs",
     "./claude/asset-generation": "./src/claude/asset-generation.mjs",
+    "./claude/headless-entry": "./src/claude/headless-entry.mjs",
     "./claude/hook-decisions": "./src/claude/hook-decisions.mjs",
     "./config": "./src/config/config.mjs",
     "./debt/cluster": "./src/debt/cluster.mjs",
