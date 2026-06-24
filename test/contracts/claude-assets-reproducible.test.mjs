@@ -12,6 +12,20 @@ import { collectGeneratedAssets, checkAssets, writeAssets } from "../../scripts/
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
+test("shared docs + dev-loop templates are bundled so generated skill links resolve (#816)", () => {
+  // The generated skills reference `../docs/<contract>.md` and `../dev-loop/templates/<t>.md`;
+  // these resolve only if the shared content is bundled under .claude/skills/.
+  const assets = collectGeneratedAssets({ repoRoot });
+  const targets = new Set(assets.map((a) => a.target));
+  // A representative `../docs/` link target (from .claude/skills/dev-loop/SKILL.md).
+  assert.ok(targets.has(".claude/skills/docs/public-dev-loop-contract.md"), "shared contract doc must be bundled");
+  // A representative `../dev-loop/templates/` link target.
+  assert.ok(targets.has(".claude/skills/dev-loop/templates/phase-doc.md"), "dev-loop template must be bundled");
+  // Every bundled doc must be byte-identical to its source (verbatim copy).
+  const bundled = assets.find((a) => a.target === ".claude/skills/docs/public-dev-loop-contract.md");
+  assert.equal(bundled.content, fs.readFileSync(path.join(repoRoot, "skills/docs/public-dev-loop-contract.md"), "utf8"));
+});
+
 test("the committed .claude tree is byte-reproducible from the canonical sources (no drift)", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   assert.ok(assets.length > 0, "expected to generate at least one asset");

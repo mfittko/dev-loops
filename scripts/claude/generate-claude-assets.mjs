@@ -47,7 +47,38 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
     }
   }
 
+  // Bundle the shared markdown the generated skills reference via relative links so they resolve
+  // inside the .claude/ tree (#816). The skills live at .claude/skills/<name>/, so:
+  //   `../docs/<contract>.md`        → .claude/skills/docs/<contract>.md      (skills/docs/*.md)
+  //   `../dev-loop/templates/<t>.md` → .claude/skills/dev-loop/templates/<t>.md (skills/dev-loop/templates/*.md)
+  // Copied verbatim; the no-drift test keeps them in sync with source. (Repo-root `../../` refs —
+  // PLAN.md/AGENTS.md/docs/phases — point at the *consumer project's* files and are out of scope.)
+  for (const [srcRel, targetRel] of [
+    ["skills/docs", ".claude/skills/docs"],
+    ["skills/dev-loop/templates", ".claude/skills/dev-loop/templates"],
+  ]) {
+    assets.push(...collectBundle(repoRoot, srcRel, targetRel));
+  }
+
   return assets;
+}
+
+/** Recursively collect `*.md` files under a source dir as verbatim {target, content} bundle assets. */
+function collectBundle(repoRoot, srcRel, targetRel) {
+  const out = [];
+  const absDir = path.join(repoRoot, srcRel);
+  if (!fs.existsSync(absDir)) return out;
+  for (const entry of fs.readdirSync(absDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isDirectory()) {
+      out.push(...collectBundle(repoRoot, `${srcRel}/${entry.name}`, `${targetRel}/${entry.name}`));
+    } else if (entry.name.endsWith(".md")) {
+      out.push({
+        target: `${targetRel}/${entry.name}`,
+        content: fs.readFileSync(path.join(absDir, entry.name), "utf8"),
+      });
+    }
+  }
+  return out;
 }
 
 /** Write the generated assets to disk. Returns the list of written targets. */
@@ -60,27 +91,28 @@ export function writeAssets(assets, { repoRoot = process.cwd() } = {}) {
   return assets.map((a) => a.target);
 }
 
-/** List committed generated-asset files currently on disk (repo-relative, posix separators). */
+/** Recursively list committed files under a `.claude/` subtree (repo-relative, sorted). */
+function listFilesRecursive(repoRoot, rel) {
+  const out = [];
+  const abs = path.join(repoRoot, rel);
+  if (!fs.existsSync(abs)) return out;
+  for (const entry of fs.readdirSync(abs, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isDirectory()) out.push(...listFilesRecursive(repoRoot, `${rel}/${entry.name}`));
+    else out.push(`${rel}/${entry.name}`);
+  }
+  return out;
+}
+
+/**
+ * List committed generated-asset files currently on disk (repo-relative, posix separators).
+ * Recurses the whole `.claude/agents` + `.claude/skills` trees so stale orphans — including
+ * bundled docs/templates whose source was removed — are detected, not just SKILL.md files.
+ */
 function listExistingAssetFiles(repoRoot) {
-  const found = [];
-  // Sort directory entries so orphan detection (and --check output) is deterministic
-  // across filesystems/OSes — this backs a byte-stable no-drift contract.
-  const agentsDir = path.join(repoRoot, ".claude", "agents");
-  if (fs.existsSync(agentsDir)) {
-    for (const entry of fs.readdirSync(agentsDir).sort()) {
-      if (entry.endsWith(".md")) found.push(`.claude/agents/${entry}`);
-    }
-  }
-  const skillsDir = path.join(repoRoot, ".claude", "skills");
-  if (fs.existsSync(skillsDir)) {
-    const dirs = fs.readdirSync(skillsDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of dirs) {
-      if (!entry.isDirectory()) continue;
-      const skillFile = path.join(skillsDir, entry.name, "SKILL.md");
-      if (fs.existsSync(skillFile)) found.push(`.claude/skills/${entry.name}/SKILL.md`);
-    }
-  }
-  return found;
+  return [
+    ...listFilesRecursive(repoRoot, ".claude/agents"),
+    ...listFilesRecursive(repoRoot, ".claude/skills"),
+  ];
 }
 
 /**
