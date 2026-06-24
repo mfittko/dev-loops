@@ -89,6 +89,11 @@ const HOOK_BUNDLE = [
   },
 ];
 
+/** Marker that identifies a generated hook-bundle module (a JS comment, distinct from the
+ * markdown `<!-- GENERATED -->` banner used by generated skills/agents/docs). Used both to
+ * stamp generated bundle modules and to scope orphan detection to them within `.claude/hooks/`. */
+const HOOK_BUNDLE_BANNER_PREFIX = "// GENERATED from ";
+
 /** Collect the vendored self-contained hook bundle modules (#843). */
 function collectHookBundle(repoRoot) {
   const out = [];
@@ -97,7 +102,7 @@ function collectHookBundle(repoRoot) {
     if (!fs.existsSync(abs)) continue; // no-op when core sources are absent (e.g. consumer tree)
     let body = fs.readFileSync(abs, "utf8");
     for (const [from, to] of rewrites) body = body.split(from).join(to);
-    const banner = `// GENERATED from ${source} by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate.\n`;
+    const banner = `${HOOK_BUNDLE_BANNER_PREFIX}${source} by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate.\n`;
     out.push({ target, content: banner + body });
   }
   return out;
@@ -154,10 +159,23 @@ function listFilesRecursive(repoRoot, rel) {
  * bundled docs/templates whose source was removed — are detected, not just SKILL.md files.
  */
 function listExistingAssetFiles(repoRoot) {
-  return [
+  const files = [
     ...listFilesRecursive(repoRoot, ".claude/agents"),
     ...listFilesRecursive(repoRoot, ".claude/skills"),
   ];
+  // `.claude/hooks/` mixes hand-authored scripts (hooks.json, _hook-io.mjs, the three hook
+  // scripts) with generated bundle modules (#843). Only the generated ones — identified by the
+  // generator banner — participate in orphan detection, so a dropped/renamed HOOK_BUNDLE entry
+  // is caught without false-flagging the hand-authored files.
+  for (const rel of listFilesRecursive(repoRoot, ".claude/hooks")) {
+    const abs = path.join(repoRoot, rel);
+    try {
+      if (fs.readFileSync(abs, "utf8").startsWith(HOOK_BUNDLE_BANNER_PREFIX)) files.push(rel);
+    } catch {
+      // unreadable — skip
+    }
+  }
+  return files;
 }
 
 /**

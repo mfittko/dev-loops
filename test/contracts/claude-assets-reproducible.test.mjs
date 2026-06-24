@@ -110,6 +110,33 @@ test("checkAssets flags an orphaned committed asset with no generating source", 
   }
 });
 
+test("checkAssets flags a stale generated hook-bundle module but not hand-authored hooks (#843)", () => {
+  // The hooks dir mixes generated bundle modules (banner-stamped) with hand-authored scripts.
+  // Orphan detection must catch a generated module no longer produced (e.g. a dropped HOOK_BUNDLE
+  // entry) while leaving hand-authored hooks (no banner) alone.
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-hooks-orphan-"));
+  try {
+    const hooksDir = path.join(tmpRoot, ".claude", "hooks");
+    fs.mkdirSync(hooksDir, { recursive: true });
+    // A stale generated module: carries the generator banner, but no source produces it.
+    fs.writeFileSync(
+      path.join(hooksDir, "_stale-removed.mjs"),
+      "// GENERATED from packages/core/src/loop/gone.mjs by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate.\nexport const x = 1;\n",
+      "utf8",
+    );
+    // Hand-authored files (no banner) must never be flagged.
+    fs.writeFileSync(path.join(hooksDir, "_hook-io.mjs"), "export function readHookInput() {}\n", "utf8");
+    fs.writeFileSync(path.join(hooksDir, "hooks.json"), "{}\n", "utf8");
+
+    // No sources present in tmpRoot → collectGeneratedAssets yields nothing; the only orphan is
+    // the banner-stamped stale module.
+    const drifted = checkAssets([], { repoRoot: tmpRoot });
+    assert.deepEqual(drifted, [{ target: ".claude/hooks/_stale-removed.mjs", reason: "orphaned" }]);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test("every canonical agent and non-doc skill has a generated counterpart", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   const targets = assets.map((a) => a.target);
