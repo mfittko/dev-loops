@@ -84,7 +84,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 266,
           state: "OPEN",
@@ -208,7 +208,7 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed for non-draft PR
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 266,
           state: "OPEN",
@@ -259,7 +259,7 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed for converged no
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 266,
           state: "OPEN",
@@ -332,7 +332,7 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed when Copilot rou
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 266,
           state: "OPEN",
@@ -433,7 +433,7 @@ test("detect-pr-gate-coordination-state auto-detects local-fix-without-reply (#4
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "269", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "269", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 269,
           state: "OPEN",
@@ -530,7 +530,7 @@ test("detectPrGateCoordinationState tolerates missing local git binary and falls
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 266,
           state: "OPEN",
@@ -582,7 +582,7 @@ test("detect-pr-gate-coordination-state preserves non-conflict mergeStateStatus 
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 266,
           state: "OPEN",
@@ -648,7 +648,7 @@ test("detect-pr-gate-coordination-state surfaces conflict_resolution for conflic
   try {
     const ghEnv = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "370", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "370", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 370,
           state: "OPEN",
@@ -708,7 +708,7 @@ test.skip("detect-pr-gate-coordination-state with --review-mode internal_only sk
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "267", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "267", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 267,
           state: "OPEN",
@@ -796,7 +796,7 @@ test("pre-approval-gate-detector overrides to pre_approval_gate_needed when neve
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "268", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "268", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 268,
           state: "OPEN",
@@ -881,7 +881,7 @@ test("detect-pr-gate-coordination-state blocks merge readiness when retrospectiv
 
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "271", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "271", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 271,
           state: "OPEN",
@@ -966,7 +966,7 @@ test("detect-pr-gate-coordination-state fails closed when the PR head changes mi
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 266,
           state: "OPEN",
@@ -1122,7 +1122,7 @@ test("detect-pr-gate-coordination-state resets Copilot round count when draft_ga
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 266,
           state: "OPEN",
@@ -1184,7 +1184,7 @@ test("detect-pr-gate-coordination-state does NOT reset round count when draft_ga
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
         stdout: jsonLine({
           number: 266,
           state: "OPEN",
