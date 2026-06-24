@@ -94,6 +94,7 @@
     ".claude/.claude-plugin/",
     ".claude/agents/",
     ".claude/skills/",
+    ".claude/hooks/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",

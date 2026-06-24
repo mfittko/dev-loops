@@ -6,7 +6,10 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
-const hooksDir = path.join(repoRoot, "scripts", "claude", "hooks");
+// Hook scripts live under the plugin root (.claude/hooks) so the Claude plugin can bundle them
+// via ${CLAUDE_PLUGIN_ROOT}; the repo's own project .claude/settings.json references the same
+// scripts via ${CLAUDE_PROJECT_DIR}/.claude/hooks (#824).
+const hooksDir = path.join(repoRoot, ".claude", "hooks");
 
 function runHook(script, payload, env = {}) {
   // Build a clean env with the run-id markers explicitly removed (not set to `undefined`, whose
@@ -38,15 +41,31 @@ test(".claude/settings.json is valid JSON and wires the three dev-loop hooks", (
   const writeGuard = pre.find((h) => h.matcher === "Edit|Write");
   const postMerge = post.find((h) => h.matcher === "Bash");
 
-  assert.match(bashGate.hooks[0].command, /pre-tool-use-bash-gate\.mjs/);
-  assert.match(writeGuard.hooks[0].command, /pre-tool-use-write-guard\.mjs/);
-  assert.match(postMerge.hooks[0].command, /post-tool-use-merge\.mjs/);
+  // Project hooks reference the scripts under .claude/hooks via ${CLAUDE_PROJECT_DIR} (#824).
+  assert.match(bashGate.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/pre-tool-use-bash-gate\.mjs/);
+  assert.match(writeGuard.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/pre-tool-use-write-guard\.mjs/);
+  assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/post-tool-use-merge\.mjs/);
 });
 
-test("the three hook scripts exist", () => {
-  for (const script of ["pre-tool-use-bash-gate.mjs", "pre-tool-use-write-guard.mjs", "post-tool-use-merge.mjs"]) {
+test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} (#824)", () => {
+  const hooks = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude", "hooks", "hooks.json"), "utf8")).hooks;
+  const bashGate = hooks.PreToolUse.find((h) => h.matcher === "Bash");
+  const writeGuard = hooks.PreToolUse.find((h) => h.matcher === "Edit|Write");
+  const postMerge = hooks.PostToolUse.find((h) => h.matcher === "Bash");
+  assert.match(bashGate.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-bash-gate\.mjs/);
+  assert.match(writeGuard.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-write-guard\.mjs/);
+  assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/post-tool-use-merge\.mjs/);
+});
+
+test("the three hook scripts (+ _hook-io) exist under the plugin root", () => {
+  for (const script of ["_hook-io.mjs", "pre-tool-use-bash-gate.mjs", "pre-tool-use-write-guard.mjs", "post-tool-use-merge.mjs"]) {
     assert.ok(fs.existsSync(path.join(hooksDir, script)), `missing hook script ${script}`);
   }
+});
+
+test("package.json files allowlist ships the plugin hooks", () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  assert.ok(pkg.files.includes(".claude/hooks/"), "files allowlist must ship .claude/hooks/");
 });
 
 test("bash-gate hook passes through non-gh-pr-ready commands", () => {

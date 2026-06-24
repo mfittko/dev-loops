@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/pre-tool-use-bash-gate.mjs"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use-bash-gate.mjs\""
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/pre-tool-use-write-guard.mjs"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use-write-guard.mjs\""
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/post-tool-use-merge.mjs"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/post-tool-use-merge.mjs\""
           }
         ]
       }
