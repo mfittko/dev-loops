@@ -45,6 +45,14 @@ test("transformAgent strips pi-only blocks from the body", () => {
   assert.match(out, /Outro\./);
 });
 
+test("transformSkill strips pi-only blocks from the body too", () => {
+  const raw = `---\nname: s\ndescription: d\nallowed-tools: read bash\n---\nKeep this.\n<!-- pi-only -->\ncontact_supervisor guidance here.\n<!-- /pi-only -->\nAnd keep this.\n`;
+  const out = transformSkill({ source: "skills/s/SKILL.md", raw });
+  assert.equal(out.includes("contact_supervisor"), false);
+  assert.match(out, /Keep this\./);
+  assert.match(out, /And keep this\./);
+});
+
 test("mapTool expands search to Grep+Glob and maps subagent/review_loop to Agent", () => {
   assert.deepEqual(mapTool("read"), ["Read"]);
   assert.deepEqual(mapTool("search"), ["Grep", "Glob"]);
