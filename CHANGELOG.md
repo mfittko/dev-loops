@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.1
+
+### Added
+
+- **Claude Code marketplace catalog** (#828): ship `.claude-plugin/marketplace.json` at the repo
+  root so the repo can be added as a plugin marketplace (`/plugin marketplace add mfittko/dev-loops`,
+  or the *Manage Plugins → Marketplaces → Add* UI) and the plugin installed with
+  `/plugin install dev-loops@dev-loops`. The catalog's single plugin entry sources the existing
+  in-repo plugin at `./.claude`; the plugin version stays authoritative in `plugin.json`. A
+  contract test locks the catalog shape, and `.claude-plugin/` is added to the npm `files`
+  allowlist. Verified end-to-end with `claude plugin validate` + `marketplace add`/`install`
+  (4 skills, 7 agents, 2 hooks).
+
+### Changed
+
+- `plugin.json` now declares an `author` (clears the marketplace-validation warning).
+- README "Claude Code plugin" section drops the `(preview)` framing and documents marketplace
+  install; the two CLI help lines that said plugin packaging was "in progress" are updated.
+
 ## 0.2.0
 
 ### Added — Claude Code harness (agent-harness-agnostic dev-loop)

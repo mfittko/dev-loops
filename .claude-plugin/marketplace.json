@@ -1,0 +1,19 @@
+{
+  "name": "dev-loops",
+  "owner": {
+    "name": "Manuel Fittko",
+    "email": "manuel.fittko@sofatutor.com"
+  },
+  "description": "Turn GitHub issues into merged PRs: agent-harness-agnostic dev-loop agents, skills, and hooks for Claude Code.",
+  "plugins": [
+    {
+      "name": "dev-loops",
+      "source": "./.claude",
+      "description": "Agent-harness-agnostic dev-loop: agents, skills, and hooks for GitHub/Copilot-driven development loops.",
+      "homepage": "https://github.com/mfittko/dev-loops#readme",
+      "repository": "https://github.com/mfittko/dev-loops.git",
+      "license": "MIT",
+      "keywords": ["dev-loop", "workflow", "github", "copilot", "claude-code", "plugin"]
+    }
+  ]
+}
