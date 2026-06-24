@@ -76,8 +76,12 @@ autonomy:
 # Workflow enforcement defaults.
 workflow:
   asyncStartMode: required
-  requireRetrospective: true
-  requireRetrospectiveGate: true
+  # The retrospective is a dev-loop-development artifact; shipped defaults stay permissive so an
+  # ordinary consumer's product PRs do not carry the meta-process gate (#841). Matches the code
+  # default (DEFAULT_WORKFLOW_CONFIG) and the contract. The dev-loops repo opts in via its own
+  # repo-root .devloops, which takes precedence over these extension defaults.
+  requireRetrospective: false
+  requireRetrospectiveGate: false
   requireDraftFirst: true
   devModeDefault: true
 
