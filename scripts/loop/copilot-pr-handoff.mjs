@@ -384,10 +384,13 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
   }
   // Skip internal detection in sequential stub/test mode to avoid consuming stub entries.
   // Claims-mode stubs handle interleaved calls; detection runs normally.
-  if (!internalOnlySkipCopilot && (!env.GH_SEQUENCE_PATH || env.GH_STUB_MODE === "claims")) {
-  if (options.watchStatus === undefined &&
-      (interpretation.state === STATE.PR_READY_NO_FEEDBACK ||
-       interpretation.state === STATE.READY_TO_REREQUEST_REVIEW)) {
+  if (
+    !internalOnlySkipCopilot &&
+    (!env.GH_SEQUENCE_PATH || env.GH_STUB_MODE === "claims") &&
+    options.watchStatus === undefined &&
+    (interpretation.state === STATE.PR_READY_NO_FEEDBACK ||
+      interpretation.state === STATE.READY_TO_REREQUEST_REVIEW)
+  ) {
     try {
       const internalCheck = await detectPrInternalOnly(options, { env, ghCommand });
       if (internalCheck.ok && internalCheck.internalOnly) {
@@ -402,7 +405,6 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
     } catch {
       // Best-effort: if detection fails, fall through to normal request behavior
     }
-  }
   }
 
   let reviewRequestStatus;
