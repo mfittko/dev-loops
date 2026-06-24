@@ -379,6 +379,37 @@ describe("loader — graceful degradation", () => {
     }
   });
 
+  test("L1b: a plain consumer (no .devloops) defaults the retrospective gate OFF (#841)", async () => {
+    // The retrospective is a dev-loop-development artifact; shipped defaults must be permissive so
+    // an ordinary consumer's product PRs do not carry the meta-process gate. extension-defaults
+    // must not force it on (this asserts the resolved/merged value, not just the code default).
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-retro-off-"));
+    try {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.equal(result.config.workflow.requireRetrospective, false);
+      assert.equal(result.config.workflow.requireRetrospectiveGate, false);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("L1c: a consumer can opt INTO the retrospective gate via .devloops (#841)", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-retro-on-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\nworkflow:\n  requireRetrospective: true\n  requireRetrospectiveGate: true\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.equal(result.config.workflow.requireRetrospective, true);
+      assert.equal(result.config.workflow.requireRetrospectiveGate, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("L2: only defaults.json present, valid", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L2-"));
     try {
