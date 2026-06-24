@@ -20,6 +20,12 @@ All notable changes to this project will be documented in this file.
   Claude the configured mode is honored verbatim).
 - The async-start CLI contract test is now hermetic — it clears `CLAUDECODE` (and the run-id
   markers) so the rejection path is exercised regardless of the harness the suite runs under.
+- The generated `dev-loop` skill prose no longer claims `PI_SUBAGENT_RUN_ID` is *required* — it
+  now describes the async run-id marker (`DEVLOOPS_RUN_ID` / `PI_SUBAGENT_RUN_ID` alias) and notes
+  the Claude-harness relaxation, so the plugin's docs match the runtime behavior. Subagent
+  spawning via the `dev-loop` agent is confirmed correctly wired: it grants the `Agent` tool
+  (the current subagent-spawning tool, renamed from `Task` in Claude Code v2.1.63) and the
+  strategy skills delegate to the worker agents (`developer`/`quality`/`refiner`/`fixer`/`review`/`docs`).
 
 ## 0.2.1
 
