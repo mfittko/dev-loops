@@ -59,4 +59,11 @@ ENV PATH="${PATH}:/workspace/node_modules/.bin"
 
 # Run as non-root node user (base image provides this user)
 USER node
+
+# Dual-harness smoke (#775):
+# - Pi: the default `dev-loops` CMD below (Pi CLI installed above).
+# - Claude (Pi-free, read-only, no interactive session / API key):
+#     npm run smoke:headless            # exercises `dev-loops loop info`
+#   The headless Claude Agent SDK run is `node scripts/claude/headless-dev-loop.mjs --issue <n>`
+#   (needs `claude` on PATH + an API key; use `--dry-run` to inspect the invocation).
 CMD ["dev-loops"]
