@@ -28,16 +28,23 @@ test("plugin manifest version is kept in sync with the root package.json version
   );
 });
 
-test("the plugin's auto-discovered components exist (generated agents + skills)", async () => {
+test("the plugin exposes exactly the expected agents + skills (locks the surface; catches collisions)", async () => {
   // Plugin root is `.claude/`, so agents/skills are discovered at `.claude/agents` + `.claude/skills`.
-  const agents = (await readdir(path.join(repoRoot, ".claude", "agents"))).filter((f) => f.endsWith(".md"));
-  assert.ok(agents.length >= 7, `expected >=7 plugin agents, got ${agents.length}`);
+  // Assert the EXACT set (not >=) so an unexpected component — e.g. a future Pi/Claude collision
+  // leaking extra agents/skills under `.claude/` — fails the test.
+  const agents = (await readdir(path.join(repoRoot, ".claude", "agents")))
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => f.slice(0, -".md".length))
+    .sort();
+  assert.deepEqual(agents, ["dev-loop", "developer", "docs", "fixer", "quality", "refiner", "review"]);
 
-  const skillDirs = await readdir(path.join(repoRoot, ".claude", "skills"), { withFileTypes: true });
-  const skills = skillDirs.filter((d) => d.isDirectory());
-  assert.ok(skills.length >= 4, `expected >=4 plugin skills, got ${skills.length}`);
-  for (const dir of skills) {
-    await access(path.join(repoRoot, ".claude", "skills", dir.name, "SKILL.md"));
+  const skills = (await readdir(path.join(repoRoot, ".claude", "skills"), { withFileTypes: true }))
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .sort();
+  assert.deepEqual(skills, ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation"]);
+  for (const name of skills) {
+    await access(path.join(repoRoot, ".claude", "skills", name, "SKILL.md"));
   }
 });
 
