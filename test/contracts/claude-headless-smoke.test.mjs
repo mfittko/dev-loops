@@ -43,6 +43,12 @@ test("headless-dev-loop --dry-run prints a claude -p invocation carrying DEVLOOP
   assert.match(out.DEVLOOPS_RUN_ID, /^devloops-/);
 });
 
+test("headless-info-smoke --loop-info without a target fails fast (no hidden issue default)", () => {
+  const res = runNode("scripts/claude/headless-info-smoke.mjs", ["--loop-info"]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /--loop-info requires an explicit --issue/);
+});
+
 test("headless entry + smoke scripts do not import the Pi SDK", async () => {
   for (const rel of ["scripts/claude/headless-dev-loop.mjs", "scripts/claude/headless-info-smoke.mjs"]) {
     const content = await readFile(path.join(repoRoot, rel), "utf8");

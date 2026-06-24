@@ -52,6 +52,12 @@ export function buildHeadlessClaudeInvocation({ prompt, runId, claudeBin = DEFAU
   if (typeof runId !== "string" || runId.trim().length === 0) {
     throw new TypeError("buildHeadlessClaudeInvocation: runId must be a non-empty string");
   }
+  if (typeof claudeBin !== "string" || claudeBin.trim().length === 0) {
+    throw new TypeError("buildHeadlessClaudeInvocation: claudeBin must be a non-empty string");
+  }
+  if (!Array.isArray(extraArgs)) {
+    throw new TypeError("buildHeadlessClaudeInvocation: extraArgs must be an array");
+  }
   return {
     command: claudeBin,
     args: ["-p", prompt, ...extraArgs],

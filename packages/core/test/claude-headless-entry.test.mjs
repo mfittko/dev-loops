@@ -37,7 +37,9 @@ test("buildHeadlessClaudeInvocation honors claudeBin and extraArgs", () => {
   assert.deepEqual(args, ["-p", "p", "--output-format", "json"]);
 });
 
-test("buildHeadlessClaudeInvocation rejects empty prompt or runId", () => {
+test("buildHeadlessClaudeInvocation rejects empty prompt/runId/claudeBin and non-array extraArgs", () => {
   assert.throws(() => buildHeadlessClaudeInvocation({ prompt: "", runId: "r" }), /prompt/);
   assert.throws(() => buildHeadlessClaudeInvocation({ prompt: "p", runId: "" }), /runId/);
+  assert.throws(() => buildHeadlessClaudeInvocation({ prompt: "p", runId: "r", claudeBin: "" }), /claudeBin/);
+  assert.throws(() => buildHeadlessClaudeInvocation({ prompt: "p", runId: "r", extraArgs: "--nope" }), /extraArgs/);
 });

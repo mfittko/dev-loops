@@ -50,7 +50,13 @@ function main(argv) {
 
   // Opt-in GitHub-backed info path (needs read access; not run by the hermetic CI smoke).
   if (opts.loopInfo) {
-    const target = opts.pr ? ["--pr", String(opts.pr)] : ["--issue", String(opts.issue ?? "775")];
+    if (opts.issue == null && opts.pr == null) {
+      process.stderr.write(
+        JSON.stringify({ ok: false, error: "--loop-info requires an explicit --issue <n> or --pr <n> target" }) + "\n",
+      );
+      return 1;
+    }
+    const target = opts.pr ? ["--pr", String(opts.pr)] : ["--issue", String(opts.issue)];
     const infoRes = runCli(cliEntry, repoRoot, ["loop", "info", ...target]);
     if (infoRes.status !== 0) {
       process.stderr.write(

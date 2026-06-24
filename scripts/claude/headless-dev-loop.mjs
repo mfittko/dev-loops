@@ -8,8 +8,12 @@
  * session is recognized as the dev-loop subagent context by the write-guard.
  *
  * Usage:
- *   node scripts/claude/headless-dev-loop.mjs --issue <n> [--pr <n>] [--claude-bin <path>] [--dry-run]
+ *   node scripts/claude/headless-dev-loop.mjs [--issue <n> | --pr <n>] [--prompt <text>]
+ *                                             [--claude-bin <path>] [--dry-run]
  *
+ * --issue/--pr select the target; with neither, the prompt targets the current state.
+ * --prompt overrides the generated dev-loop prompt entirely.
+ * --claude-bin overrides the `claude` binary path.
  * --dry-run prints the resolved command + the DEVLOOPS_RUN_ID without spawning `claude`
  *   (CI-safe; no API key / `claude` binary required).
  */
