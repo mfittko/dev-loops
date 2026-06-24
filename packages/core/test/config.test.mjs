@@ -426,7 +426,10 @@ describe("loader — graceful degradation", () => {
   test("L1e: a consumer can opt INTO dev mode via .devloops (#846)", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-devmode-on-"));
     try {
-      await writeFile(path.join(tmpDir, ".devloops"), "version: 1\nworkflow:\n  devModeDefault: true\n");
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\nworkflow:\n  devModeDefault: true\n",
+      );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.equal(result.config.workflow.devModeDefault, true);
