@@ -48,7 +48,7 @@ Resolve authoritative state via the startup resolver (`npx dev-loops loop startu
 
 When the startup resolver returns a fresh-start routing but an existing outer-loop checkpoint
 (`tmp/copilot-loop/<owner>/<repo>/pr-<n>/outer-loop-state.json`) is present on disk, the
-subagent must check the checkpoint before treating the start as a fresh intake or follow-up:
+dev-loop must check the checkpoint before treating the start as a fresh intake or follow-up:
 
 1. Read the outer-loop checkpoint (authored by `outer-loop.mjs`).
 2. If `outerAction` is `continue_wait`, `reenter_copilot_loop`, or `reenter_reviewer_loop`:
@@ -109,14 +109,14 @@ When `@dev-loops/core` is available again, switch back to the full helper. The f
 
 ## Read-only info shortcut
 
-The main agent may handle info/handoff requests directly via `npx dev-loops loop info` without dispatching the async `dev-loop` subagent:
+Info/handoff requests can be served directly via `npx dev-loops loop info` (read-only; no full dev-loop run required):
 - `npx dev-loops loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
 - `npx dev-loops loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
 - `npx dev-loops loop info --issue <n> --json` — machine-readable JSON output
 
-## Guard rules (subagent reference)
+## Guard rules
 
-**Handoff envelope precedence:** The subagent builds the envelope immediately after authoritative-state resolution and treats it as the first handoff artifact. Read it first, load only `requiredReads`, execute `nextAction`. See [Dev-loop subagent](#dev-loop-subagent-post-dispatch). Derivation contract: [Workflow Handoff Contract](../docs/workflow-handoff-contract.md).
+**Handoff envelope precedence:** The dev-loop builds the envelope immediately after authoritative-state resolution and treats it as the first handoff artifact. Read it first, load only `requiredReads`, execute `nextAction`. See [Resolve authoritative state](#resolve-authoritative-state). Derivation contract: [Workflow Handoff Contract](../docs/workflow-handoff-contract.md).
 
 **Handoff contract rule:** When no envelope is present, use the `workflow-handoff-contract.md` contract. Never delegate with abbreviated task summaries. Include deterministic routing inputs, explicit `cwd`, bounded task scope, exit conditions.
 
