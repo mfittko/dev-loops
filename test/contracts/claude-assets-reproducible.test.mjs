@@ -21,9 +21,20 @@ test("shared docs + dev-loop templates are bundled so generated skill links reso
   assert.ok(targets.has(".claude/skills/docs/public-dev-loop-contract.md"), "shared contract doc must be bundled");
   // A representative `../dev-loop/templates/` link target.
   assert.ok(targets.has(".claude/skills/dev-loop/templates/phase-doc.md"), "dev-loop template must be bundled");
-  // Every bundled doc must be byte-identical to its source (verbatim copy).
-  const bundled = assets.find((a) => a.target === ".claude/skills/docs/public-dev-loop-contract.md");
-  assert.equal(bundled.content, fs.readFileSync(path.join(repoRoot, "skills/docs/public-dev-loop-contract.md"), "utf8"));
+
+  // EVERY bundled file must be byte-identical to its source (verbatim copy). Bundled targets map
+  // back to source by dropping the `.claude/skills/` prefix → `skills/<...>`.
+  const bundlePrefixes = [".claude/skills/docs/", ".claude/skills/dev-loop/templates/"];
+  const bundled = assets.filter((a) => bundlePrefixes.some((p) => a.target.startsWith(p)));
+  assert.ok(bundled.length >= 30, `expected the full bundled set, got ${bundled.length}`);
+  for (const asset of bundled) {
+    const source = asset.target.replace(/^\.claude\/skills\//, "skills/");
+    assert.equal(
+      asset.content,
+      fs.readFileSync(path.join(repoRoot, source), "utf8"),
+      `${asset.target} must be a verbatim copy of ${source}`,
+    );
+  }
 });
 
 test("the committed .claude tree is byte-reproducible from the canonical sources (no drift)", () => {
