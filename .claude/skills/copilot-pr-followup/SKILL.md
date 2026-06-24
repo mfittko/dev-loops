@@ -137,9 +137,8 @@ already has an outer-loop checkpoint, check whether the checkpoint implies an au
    (including `timestamp` and potentially incrementing `waitCycles`).
    Read the on-disk artifact without mutating it.
 2. If `outerAction` is `continue_wait`:
-   - The loop was waiting. Under Pi the subagent exits and the main session re-dispatches a
-     fresh `dev-loop` async subagent that resumes from the checkpoint; under the Claude Code
-     harness, continue the wait inline (run the next watch cycle yourself) from the checkpoint.
+   - The loop was waiting; resume it from the checkpoint.
+     Under the Claude Code harness, continue the wait inline (run the next watch cycle yourself).
 3. If `outerAction` is `reenter_copilot_loop`:
    - The copilot inner loop needs action. Run `copilot-pr-handoff.mjs` to determine the
      exact next step and proceed.
