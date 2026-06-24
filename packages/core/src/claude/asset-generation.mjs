@@ -55,7 +55,15 @@ const GENERATED_NOTE = (source) =>
  * @returns {string}
  */
 export function stripPiOnlyBlocks(body) {
-  return String(body)
+  const s = String(body);
+  // True no-op when there are no markers — must NOT touch blank-line runs in marker-free
+  // bodies (they may carry intentional spacing; collapsing them would drift the committed tree).
+  if (!s.includes("<!-- pi-only -->")) {
+    return s;
+  }
+  // Markers must not nest; pairs are matched non-greedily. The trailing `\n{3,}` collapse only
+  // tidies the gap left where a block was removed.
+  return s
     .replace(/[ \t]*<!-- pi-only -->[\s\S]*?<!-- \/pi-only -->[ \t]*\n?/g, "")
     .replace(/\n{3,}/g, "\n\n");
 }

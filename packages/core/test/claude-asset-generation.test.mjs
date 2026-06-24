@@ -21,9 +21,20 @@ test("stripPiOnlyBlocks removes <!-- pi-only --> blocks and collapses blank runs
   assert.equal(out.includes("\n\n\n"), false, "blank-line runs collapsed");
 });
 
-test("stripPiOnlyBlocks is a no-op when there are no markers", () => {
-  const body = "Subagents are fine to mention.\n\nNo markers here.\n";
+test("stripPiOnlyBlocks is a byte-exact no-op without markers, even with pre-existing blank runs", () => {
+  // Must NOT collapse intentional double-blank runs in marker-free bodies (drift guard).
+  const body = "Para one.\n\n\nPara two (after a double blank).\n\nPara three.\n";
   assert.equal(stripPiOnlyBlocks(body), body);
+});
+
+test("stripPiOnlyBlocks removes multiple blocks non-greedily (no over-strip between them)", () => {
+  const body = "A\n\n<!-- pi-only -->\nfirst\n<!-- /pi-only -->\n\nKEEP MIDDLE\n\n<!-- pi-only -->\nsecond\n<!-- /pi-only -->\n\nB\n";
+  const out = stripPiOnlyBlocks(body);
+  assert.equal(out.includes("first"), false);
+  assert.equal(out.includes("second"), false);
+  assert.match(out, /KEEP MIDDLE/);
+  assert.match(out, /A\n/);
+  assert.match(out, /B\n/);
 });
 
 test("transformAgent strips pi-only blocks from the body", () => {
