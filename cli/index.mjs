@@ -210,7 +210,7 @@ function buildCliHelpLines() {
     "",
     "`/dev-loops hide` remains an extension-only Pi command.",
     "Run via `npx dev-loops` (or `npm install -g dev-loops` for the shell command); see the",
-    "README for Pi-extension setup (Claude Code plugin packaging is in progress).",
+    "README for Pi-extension and Claude Code plugin setup.",
   ];
 }
 
