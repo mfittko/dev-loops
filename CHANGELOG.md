@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.3
+
+### Added
+
+- **Opt out of the Copilot review gate via `refinement.maxCopilotRounds: 0`** (#832). For repos
+  without a Copilot reviewer configured (or that prefer local-harness-only review), setting
+  `maxCopilotRounds: 0` disables the external Copilot review cycle entirely — the loop runs
+  `draft_gate → pre_approval_gate` with no Copilot request or wait. The config schema now accepts
+  `0` (`nonnegative`; negative still rejected); `evaluatePrGateCoordination` routes `0` through the
+  existing `internal_only` path, `shouldGuardCopilotReviewRequest` never forces a request at `0`,
+  and the watch-cycle handoff (`copilot-pr-handoff`) skips the request too. Default (`5`) unchanged.
+  Documented in the README, extension config docs, and the `copilot-pr-followup` skill.
+
 ## 0.2.2
 
 ### Fixed
