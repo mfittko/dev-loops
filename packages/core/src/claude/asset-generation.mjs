@@ -42,6 +42,25 @@ const GENERATED_NOTE = (source) =>
   `<!-- GENERATED from ${source} by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->`;
 
 /**
+ * Strip Pi-runtime-only prose blocks from a body for the Claude output (#817).
+ *
+ * The canonical sources stay Pi-complete; sections that are Pi-runtime-specific and misleading
+ * under Claude (e.g. `tools: [subagent]`/`maxSubagentDepth` assertions that contradict the
+ * mapped Claude frontmatter, or the `contact_supervisor`/`pi-intercom` Pi-bug guidance) are
+ * wrapped in the source with `<!-- pi-only -->` … `<!-- /pi-only -->` and removed here. Resulting
+ * blank-line runs are collapsed so the stripped body stays clean. `subagent` prose in general is
+ * NOT stripped — Claude has subagents too.
+ *
+ * @param {string} body
+ * @returns {string}
+ */
+export function stripPiOnlyBlocks(body) {
+  return String(body)
+    .replace(/[ \t]*<!-- pi-only -->[\s\S]*?<!-- \/pi-only -->[ \t]*\n?/g, "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+/**
  * Map a single Pi tool name to its Claude tool name(s).
  * @param {string} name
  * @returns {string[]} Claude tool names (empty if unknown).
@@ -104,7 +123,8 @@ function normalizeToolList(value) {
  * @returns {string} Full generated file content.
  */
 export function transformAgent({ source, raw }) {
-  const { frontmatter, body } = splitFrontmatter(raw, source);
+  const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
+  const body = stripPiOnlyBlocks(rawBody);
   const tools = mapTools(normalizeToolList(frontmatter.tools));
 
   const lines = ["---"];
@@ -127,7 +147,8 @@ export function transformAgent({ source, raw }) {
  * @returns {string} Full generated file content.
  */
 export function transformSkill({ source, raw }) {
-  const { frontmatter, body } = splitFrontmatter(raw, source);
+  const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
+  const body = stripPiOnlyBlocks(rawBody);
   const tools = mapTools(normalizeToolList(frontmatter["allowed-tools"]));
 
   const lines = ["---"];

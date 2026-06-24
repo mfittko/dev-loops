@@ -59,7 +59,9 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 
 ## Subagent delegation
 
+<!-- pi-only -->
 This agent has `tools: [subagent]` and `maxSubagentDepth: 3` to allow orchestrating parallel review, chains, and staged fix passes.
+<!-- /pi-only -->
 
 All delegation must originate from the handoff envelope: the envelope's `nextAction`, `requiredReads`, `stopRules`, and `acceptance` define the bounded task. The envelope is passed to child subagents as their primary handoff artifact.
 
@@ -68,12 +70,14 @@ The pi-subagents skill is parent-only, so delegated subagents do not receive orc
 - No child subagent spawning beyond assigned fanout work.
 - Bounded tasks with concrete scope, exit conditions, and validation expectations.
 
+<!-- pi-only -->
 **Supervisor communication (known pi runtime bug #671):** The pi runtime `contact_supervisor` tool has a broken response path — supervisor responses do not flow back to resolve the pending subagent tool call. Subagents calling `contact_supervisor` become blocked until the idle timeout fires (~60s), then pause without the decision.
 
 - **Prefer `intercom` when available.** If the `pi-intercom` extension is active, use `intercom({ action: "ask", ... })` instead of `contact_supervisor`. The `intercom` tool uses message-based delivery (no blocking tool-call state) — see the pi documentation for `intercom({ action: "ask", ... })` parameters and reply conventions.
 - **When `intercom` is unavailable,** do not call `contact_supervisor`. Instead, brief the supervisor to include the decision in the resume message when re-dispatching. The subagent states what it needs in the task description; the supervisor provides the answer on resume. This avoids the broken response path entirely.
 - **If `contact_supervisor` was already called** (legacy code or unavoidable): expect a ~60s idle timeout followed by a pause. On resume, the supervisor must inject the decision in the resume message — do not rely on `intercom` on resume when it was unavailable at call time.
 - **Timeout detection (supervisor-side):** if a `contact_supervisor` call has been pending for >30s, the supervisor should treat it as a probable timeout and prepare to inject the decision in the resume message on re-dispatch. The subagent cannot execute this detection while blocked inside `contact_supervisor`; the supervisor must observe the pending duration externally.
+<!-- /pi-only -->
 
 ## Output
 

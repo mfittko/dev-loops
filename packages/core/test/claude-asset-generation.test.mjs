@@ -6,9 +6,33 @@ import {
   mapTool,
   mapTools,
   splitFrontmatter,
+  stripPiOnlyBlocks,
   transformAgent,
   transformSkill,
 } from "../src/claude/asset-generation.mjs";
+
+test("stripPiOnlyBlocks removes <!-- pi-only --> blocks and collapses blank runs; keeps other prose", () => {
+  const body = "Keep A.\n\n<!-- pi-only -->\nPi-only line about contact_supervisor.\n<!-- /pi-only -->\n\nKeep B.\n";
+  const out = stripPiOnlyBlocks(body);
+  assert.equal(out.includes("contact_supervisor"), false);
+  assert.equal(out.includes("pi-only"), false);
+  assert.match(out, /Keep A\./);
+  assert.match(out, /Keep B\./);
+  assert.equal(out.includes("\n\n\n"), false, "blank-line runs collapsed");
+});
+
+test("stripPiOnlyBlocks is a no-op when there are no markers", () => {
+  const body = "Subagents are fine to mention.\n\nNo markers here.\n";
+  assert.equal(stripPiOnlyBlocks(body), body);
+});
+
+test("transformAgent strips pi-only blocks from the body", () => {
+  const raw = `---\nname: x\ndescription: d\ntools: [read]\n---\nIntro.\n<!-- pi-only -->\nmaxSubagentDepth: 3 lives here.\n<!-- /pi-only -->\nOutro.\n`;
+  const out = transformAgent({ source: "agents/x.agent.md", raw });
+  assert.equal(out.includes("maxSubagentDepth"), false);
+  assert.match(out, /Intro\./);
+  assert.match(out, /Outro\./);
+});
 
 test("mapTool expands search to Grep+Glob and maps subagent/review_loop to Agent", () => {
   assert.deepEqual(mapTool("read"), ["Read"]);
