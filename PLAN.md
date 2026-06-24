@@ -158,7 +158,6 @@ Success for Phase 7 still means:
 
 Keep the durable plan parked at [Phase 7 Plan](./docs/phases/phase-7.md) until the repo is ready to resume that portability proof.
 
-A separate supporting memo at [Workflow Remediation Prep](./docs/archive/workflow-remediation-prep.md) records the workflow-remediation findings behind issue #70. That memo supports bounded prep chunks, but it is not a roadmap phase and does not replace the deferred Phase 7 pilot.
 
 ### After Phase 8
 

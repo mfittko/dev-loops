@@ -40,14 +40,9 @@
     "repo-wiki:lint": "node scripts/repo-wiki.mjs lint --repo .",
     "repo-wiki:search": "node scripts/repo-wiki.mjs search --repo .",
     "repo-wiki:init": "node scripts/repo-wiki.mjs init --repo .",
-    "repo-wiki:local": "node scripts/repo-wiki-local.mjs",
-    "repo-wiki:local-bootstrap": "node scripts/repo-wiki-local.mjs scan --repo . && node scripts/repo-wiki-local.mjs plan --repo . && node scripts/repo-wiki-local.mjs compile --repo .",
-    "repo-wiki:local-scan": "node scripts/repo-wiki-local.mjs scan --repo .",
-    "repo-wiki:local-plan": "node scripts/repo-wiki-local.mjs plan --repo .",
-    "repo-wiki:local-lint-docs": "node scripts/repo-wiki-local.mjs lint-docs --repo .",
-    "repo-wiki:local-compile": "node scripts/repo-wiki-local.mjs compile --repo .",
-    "repo-wiki:local-lint": "node scripts/repo-wiki-local.mjs lint --repo .",
-    "repo-wiki:prepare": "node scripts/repo-wiki-local.mjs prepare"
+    "repo-wiki:prepare": "node scripts/repo-wiki.mjs --source local prepare",
+    "repo-wiki:local": "node scripts/repo-wiki.mjs --source local",
+    "repo-wiki:local-prepare": "node scripts/repo-wiki.mjs --source local prepare"
   },
   "bin": {
     "dev-loops": "./cli/index.mjs"
@@ -58,7 +53,6 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
-    "c8": "^11.0.0",
     "tsx": "^4.22.0"
   },
   "pi": {
@@ -74,7 +68,6 @@
   },
   "dependencies": {
     "mermaid": "11.15.0",
-    "zod": "^4.4.3",
     "@dev-loops/core": "^0.2.1"
   },
   "repository": {

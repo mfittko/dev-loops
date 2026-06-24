@@ -24,7 +24,6 @@ Separately, issue #70 tracks a bounded workflow-remediation preparation chain. T
 
 ## Supporting context
 
-- Workflow-remediation findings memo for issue #70: [Workflow Remediation Prep](./archive/workflow-remediation-prep.md)
 
 ## Current phase
 
@@ -47,7 +46,6 @@ If the user says **"continue implementation"**:
 7. start from the public `dev-loop` entrypoint and let routing choose the right internal path
 8. inspect `tmp/phases/index.json` and any useful prior artifacts only if prior context helps
 9. if durable repo truth changed during the work, sync [README](../README.md), [Project Plan](../PLAN.md), [Implementation State](./IMPLEMENTATION_STATE.md), and any affected contract docs before closing the slice
-10. if the request is about workflow-remediation preparation, read [Workflow Remediation Prep](archive/workflow-remediation-prep.md) and work the next bounded #70 chunk without widening scope
 11. if the request reopens the deferred Phase 7 pilot, explicitly confirm that reprioritization before treating [Phase 7 Plan](phases/phase-7.md) as the active phase again
 
 ## Next unfinished phase

@@ -8,7 +8,6 @@
     "./cli/helpers": "./src/cli/helpers.mjs",
     "./cli/primitives": "./src/cli/primitives.mjs",
     "./cli/retry-wrapper": "./src/cli/retry-wrapper.mjs",
-    "./cli/subcommand-runner": "./src/cli/subcommand-runner.mjs",
     "./claude/asset-generation": "./src/claude/asset-generation.mjs",
     "./claude/headless-entry": "./src/claude/headless-entry.mjs",
     "./claude/hook-decisions": "./src/claude/hook-decisions.mjs",

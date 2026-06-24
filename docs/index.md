@@ -28,11 +28,6 @@ Start here for repository documentation.
 
 - [Phase 7 Plan](./phases/phase-7.md) — deferred second-repo pilot plan
 
-## Archived history
-
-- [Phase 0 Archive](./archive/phases/phase-0.md) through [Phase 6 Archive](./archive/phases/phase-6.md) — completed phase history
-- [Workflow Remediation Prep](./archive/workflow-remediation-prep.md) — issue #70 supporting memo/history
-
 ## Presentations
 
 - [Applied Dev Loops Presentation](./presentations/applied-dev-loops-presentation.md)
