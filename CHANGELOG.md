@@ -11,7 +11,7 @@ All notable changes to this project will be documented in this file.
   bounded work and exit on the wait boundary; the main session re-dispatches* — is now scoped to
   Pi via `<!-- pi-only -->`. Under the Claude harness the single dev-loop agent runs the
   `watch → fix/reply/resolve → re-request → watch` loop **inline**: the helper-owned wait tools
-  (`dev-loops loop watch-cycle`, `gh run watch`, `gate probe-copilot`) block inline and return, so
+  (`dev-loops loop watch-cycle`, `gh run watch`, `dev-loops gate probe-copilot`) block inline and return, so
   the agent keeps looping until terminal or the watch budget expires — no exit-and-redispatch. The
   outer-loop checkpoint, watch budget, the forbidden-shell-watcher rules, and the gate requirements
   are unchanged and harness-agnostic. Pi behavior is unchanged.
