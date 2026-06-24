@@ -57,7 +57,15 @@ Use this helper output as source of truth for the normal routing seam. Interpret
 ```sh
 node <resolved-skill-scripts>/loop/run-watch-cycle.mjs --repo <owner/name> --pr <number>
 ```
-Persistent async watch/fix loop, not handoff-only behavior: `watch → detect → if threads found, fix + reply + resolve → re-request → watch again → … → pre_approval_gate → merge`. **PERSISTENCE MODEL: Subagents do bounded implementation tasks and exit on external wait. The main session drives the loop and re-dispatches when continuation is feasible.** A single returned watch cycle is never completion by itself. If `cycleDisposition` is `pending` and `terminal` is `false`, the subagent exits on the wait boundary; the main session re-dispatches another watch boundary. Max watch timeout: **30 minutes** (from `policy-constants.mjs` COPILOT_REVIEW_WAIT_TIMEOUT_MS); expired budget + still `waiting_for_copilot_review` = hard stop. If the user explicitly asks for async handoff-only behavior, say that out loud and stop after the handoff boundary.
+Persistent async watch/fix loop, not handoff-only behavior: `watch → detect → if threads found, fix + reply + resolve → re-request → watch again → … → pre_approval_gate → merge`. A single returned watch cycle is never completion by itself.
+
+<!-- pi-only -->
+**PERSISTENCE MODEL: Subagents do bounded implementation tasks and exit on external wait. The main session drives the loop and re-dispatches when continuation is feasible.** If `cycleDisposition` is `pending` and `terminal` is `false`, the subagent exits on the wait boundary; the main session re-dispatches another watch boundary.
+<!-- /pi-only -->
+
+> Under the Claude Code harness, run this loop **inline in a single agent**: the helper-owned wait tools (`dev-loops loop watch-cycle`, `gh run watch`, `dev-loops gate probe-copilot`) block inline and return — when `cycleDisposition` is `pending` and `terminal` is `false`, run the next watch cycle yourself. Do not exit on the wait boundary or dispatch a separate subagent; keep looping until a terminal state or the watch budget expires.
+
+Max watch timeout: **30 minutes** (from `policy-constants.mjs` COPILOT_REVIEW_WAIT_TIMEOUT_MS); expired budget + still `waiting_for_copilot_review` = hard stop. If the user explicitly asks for async handoff-only behavior, say that out loud and stop after the handoff boundary.
 
 **4. Low-level helpers**
 ```sh
@@ -137,8 +145,9 @@ already has an outer-loop checkpoint, check whether the checkpoint implies an au
    (including `timestamp` and potentially incrementing `waitCycles`).
    Read the on-disk artifact without mutating it.
 2. If `outerAction` is `continue_wait`:
-   - The loop was waiting. The subagent exits; the main session re-dispatches a fresh
-     `dev-loop` async subagent that resumes from the checkpoint.
+   - The loop was waiting. Under Pi the subagent exits and the main session re-dispatches a
+     fresh `dev-loop` async subagent that resumes from the checkpoint; under the Claude Code
+     harness, continue the wait inline (run the next watch cycle yourself) from the checkpoint.
 3. If `outerAction` is `reenter_copilot_loop`:
    - The copilot inner loop needs action. Run `copilot-pr-handoff.mjs` to determine the
      exact next step and proceed.
@@ -149,8 +158,8 @@ already has an outer-loop checkpoint, check whether the checkpoint implies an au
 6. If no checkpoint exists or `outerAction` is `done`:
    - Continue with normal step sequencing.
 
-Do not skip this guard when transitioning between async subagent runs on the same PR.
-The outer-loop checkpoint is the canonical re-attachment artifact for the subagent.
+Do not skip this guard when resuming work on the same PR (under Pi, between async subagent runs).
+The outer-loop checkpoint is the canonical re-attachment artifact.
 
 ## Step 6: Async watch behavior
 
@@ -166,8 +175,10 @@ Preferred approach:
 - `timeout`/`idle` → re-run `copilot-pr-handoff.mjs --watch-status <status>` once to refresh state; if still `waiting_for_copilot_review` after 30-minute watch budget exhausted, hard stop with `watch timeout — PR #<number> needs manual attention`
 - zero-timeout `idle` probes are for explicit one-shot status/reattach checks only; they are not the normal async wait mechanism
 - after a successful fix / reply-resolve / re-request cycle, returning to `waiting_for_copilot_review` is a persistence boundary: resume the watcher instead of reporting completion
+<!-- pi-only -->
 - if a child async run exits and the refreshed state remains non-terminal (for example `waiting_for_copilot_review`) before merge and without a hard stop, treat that as early exit and the main session re-dispatches the same-PR follow-up path when feasible (the subagent exits on external wait)
-- dispatch fix findings to `fixer` subagent; do not run inline fix passes in-watcher
+<!-- /pi-only -->
+- dispatch fix findings to the `fixer` agent; do not run inline fix passes in-watcher
 - do not report completion while unresolved Copilot feedback remains
 
 ### Canonical async dispatch wording
@@ -181,8 +192,8 @@ Key rules:
 - agent-authored shell polling is forbidden: do not use `nohup`, detached shell jobs, `tmux`, `screen`, or ad hoc `for i in $(seq ...)`, `while true`, `until ...; do sleep ...; done`, or `sleep`-retry bash loops
 - do not wrap repeated `gh pr view`, `gh pr checks`, `gh api`, or `detect-copilot-loop-state.mjs` calls inside shell polling loops
 - do not bypass session-based async notifications with detached shell automation
-- if Pi async subagents or the designated async follow-up skill are not appropriate or available, stop and report rather than improvising a shell watcher
-- the async-start contract is enforced in code: `outer-loop.mjs` fails closed without a visible Pi-managed async run id when `workflow.asyncStartMode: required`
+- if the designated async follow-up skill is not appropriate or available, stop and report rather than improvising a shell watcher
+- the async-start contract is enforced in code: `outer-loop.mjs` fails closed without a visible async run id when `workflow.asyncStartMode: required` (relaxed automatically under the Claude Code harness — see #830)
 
 ### Async delegation guard rules (#524)
 

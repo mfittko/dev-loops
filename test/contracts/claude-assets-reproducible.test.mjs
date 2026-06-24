@@ -49,6 +49,23 @@ test("shared docs + dev-loop templates are bundled so generated skill links reso
     fs.readFileSync(path.join(repoRoot, "skills/docs/main-agent-contract.md"), "utf8").includes("Main agent must NEVER"),
     "source must retain the Pi read-only contract",
   );
+
+  // The Claude copilot-pr-followup skill must drop the Pi "subagent exits → main session
+  // re-dispatches" persistence model (#838) and state the single-agent inline-loop model,
+  // while the source retains the Pi persistence prose.
+  const followup = assets.find((a) => a.target === ".claude/skills/copilot-pr-followup/SKILL.md");
+  assert.ok(followup, "copilot-pr-followup skill must be generated");
+  assert.equal(
+    followup.content.includes("the subagent exits on the wait boundary; the main session re-dispatches"),
+    false,
+    "Claude copilot-pr-followup must drop the Pi exit/redispatch persistence model",
+  );
+  assert.match(followup.content, /run this loop \*\*inline in a single agent\*\*/i, "Claude bundle must state the inline single-agent loop");
+  assert.ok(
+    fs.readFileSync(path.join(repoRoot, "skills/copilot-pr-followup/SKILL.md"), "utf8")
+      .includes("the subagent exits on the wait boundary; the main session re-dispatches"),
+    "source must retain the Pi persistence model",
+  );
 });
 
 test("Pi-runtime-only prose is stripped from generated assets but retained in source (#817)", () => {
