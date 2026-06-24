@@ -61,7 +61,7 @@ directly.
 
 - Under **Pi**, this contract is enforced by convention and review.
 - Under **Claude Code**, the **Edit/Write tool** path is enforced **mechanically** by a
-  `PreToolUse` Write/Edit hook (`scripts/claude/hooks/pre-tool-use-write-guard.mjs`, wired in
+  `PreToolUse` Write/Edit hook (`.claude/hooks/pre-tool-use-write-guard.mjs`, wired in
   `.claude/settings.json`): a Write/Edit whose target is inside the repo working tree and not
   gitignored is **denied** when it originates from the main agent, and allowed only inside the
   `dev-loop` subagent context (detected via the neutral `DEVLOOPS_RUN_ID` run-id contract, or
