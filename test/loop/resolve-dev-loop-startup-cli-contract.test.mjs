@@ -124,10 +124,20 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
     const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
       cwd: repoRoot,
       encoding: "utf8",
-      // Deliberately omit PI_SUBAGENT_RUN_ID.
+      // Deliberately omit every async-context signal so both the rejection
+      // path AND its exact reason are exercised hermetically — independent of
+      // the ambient harness. CLAUDECODE would relax the contract (#830);
+      // PI_SESSION_ID / PI_ASYNC_CONTEXT / PI_DEV_LOOP_DETACHED would switch
+      // validateAsyncStartContext to a different rejection-reason branch.
       env: Object.fromEntries(
         Object.entries(process.env).filter(
-          ([k]) => k !== "PI_SUBAGENT_RUN_ID",
+          ([k]) =>
+            k !== "PI_SUBAGENT_RUN_ID" &&
+            k !== "DEVLOOPS_RUN_ID" &&
+            k !== "CLAUDECODE" &&
+            k !== "PI_SESSION_ID" &&
+            k !== "PI_ASYNC_CONTEXT" &&
+            k !== "PI_DEV_LOOP_DETACHED",
         ),
       ),
     });

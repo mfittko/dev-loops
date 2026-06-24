@@ -23,7 +23,7 @@
  * This module is intentionally pure and side-effect free.
  */
 
-import { RUN_ID_MARKERS } from "./run-context.mjs";
+import { RUN_ID_MARKERS, isClaudeHarness } from "./run-context.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -53,6 +53,39 @@ export const ASYNC_START_STATUS = Object.freeze({
   /** No harness-managed async context was detected; fail closed. */
   REJECTED: "rejected",
 });
+
+/**
+ * Resolve the effective async-start mode for the current harness.
+ *
+ * The async-start contract is configurable via `workflow.asyncStartMode`
+ * (`required` | `allowed`) — see defaults.yaml. It exists to stop the Pi
+ * harness from running the loop as a detached, uninspectable background
+ * process. Claude Code's Agent tool has no detached-process variant (each
+ * subagent run is visible and inspectable), so under the Claude harness a
+ * *recognized* mode is relaxed to `allowed` at runtime. An unrecognized
+ * (e.g. typo'd) `configuredMode` is returned verbatim — not relaxed — so
+ * `validateAsyncStartContext` still rejects it and the config error surfaces
+ * even under Claude. Pi behavior is unchanged: outside Claude the configured
+ * mode is always returned verbatim.
+ *
+ * @param {string} configuredMode - Mode from workflow config; normally
+ *   `"required"` | `"allowed"`, but any value is accepted and an unrecognized
+ *   one is passed through unchanged for downstream validation.
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string} The effective mode (`"allowed"` when a recognized mode is
+ *   relaxed under Claude; otherwise `configuredMode` verbatim).
+ */
+export function resolveEffectiveAsyncStartMode(configuredMode, env = process.env) {
+  // Only relax a recognized mode. An unrecognized configuredMode must pass through
+  // verbatim so validateAsyncStartContext still rejects it (surfacing the config
+  // error) rather than having the Claude relaxation silently mask a typo'd value.
+  const isRecognizedMode =
+    configuredMode === ASYNC_START_MODE.REQUIRED || configuredMode === ASYNC_START_MODE.ALLOWED;
+  if (isRecognizedMode && isClaudeHarness(env)) {
+    return ASYNC_START_MODE.ALLOWED;
+  }
+  return configuredMode;
+}
 
 // ---------------------------------------------------------------------------
 // Validation

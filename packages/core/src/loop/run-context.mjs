@@ -35,6 +35,27 @@ export const PI_RUN_ID_ALIAS_VAR = "PI_SUBAGENT_RUN_ID";
 export const RUN_CONTEXT_FILENAME = "dev-loop-run-context.json";
 
 /**
+ * Env var Claude Code sets in every tool/subagent shell it spawns.
+ * Used as the harness signal — see `isClaudeHarness`.
+ */
+export const CLAUDE_HARNESS_MARKER = "CLAUDECODE";
+
+/**
+ * True when running under the Claude Code harness.
+ *
+ * Claude Code sets `CLAUDECODE=1` in the environment of every Bash tool and
+ * subagent it spawns. This is the harness-detection seam used to relax
+ * Pi-specific runtime contracts (e.g. the async-start contract) that do not
+ * apply to Claude's execution model.
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {boolean}
+ */
+export function isClaudeHarness(env = process.env) {
+  return env?.[CLAUDE_HARNESS_MARKER] === "1";
+}
+
+/**
  * Resolve the active run id from the environment, neutral marker first.
  *
  * @param {Record<string, string|undefined>} [env]
