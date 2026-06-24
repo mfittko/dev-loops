@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 // no `@earendil-works/pi-*` present, and must not show Pi-only install strings unconditionally.
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
-const PI_IMPORT_RE = /\b(?:from|import)\s+['"]@earendil-works\/pi-[^'"]+['"]|import\(\s*['"]@earendil-works\/pi-/;
+const PI_IMPORT_RE = /\b(?:from|import)\s+['"]@earendil-works\/pi-[^'"]+['"]|\bimport\(\s*['"]@earendil-works\/pi-/;
 
 async function collectSourceFiles(dir) {
   const abs = path.join(repoRoot, dir);
