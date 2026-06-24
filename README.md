@@ -52,8 +52,8 @@ The repo ships a Claude Code plugin rooted at `.claude/` (manifest at
 session with:
 
 ```bash
-claude --plugin-dir .claude            # from a checkout
-claude plugin details dev-loops        # inspect the discovered components
+claude --plugin-dir .claude                              # load it for a session
+claude --plugin-dir .claude plugin details dev-loops     # inspect the discovered components
 ```
 
 When installed from npm, point at the bundled copy: `claude --plugin-dir node_modules/dev-loops/.claude`.

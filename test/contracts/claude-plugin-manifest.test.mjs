@@ -48,7 +48,8 @@ test("the publish files allowlist ships the plugin (not the project settings.jso
   }
   assert.equal(pkg.files.includes(".claude/"), false, "must not ship the whole .claude/ (excludes project settings.json)");
   assert.equal(pkg.files.includes(".claude/settings.json"), false, "must not ship the project settings.json");
-  // Pi packaging preserved (dual-harness).
+  // Pi packaging preserved (dual-harness) — assert the full pi.* contract.
   assert.deepEqual(pkg.pi.extensions, ["./extension/index.ts"]);
   assert.deepEqual(pkg.pi.skills, ["skills"]);
+  assert.deepEqual(pkg.pi.agents, ["agents"]);
 });
