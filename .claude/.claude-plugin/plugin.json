@@ -1,0 +1,9 @@
+{
+  "name": "dev-loops",
+  "version": "0.1.3",
+  "description": "Agent-harness-agnostic dev-loop: agents, skills, and hooks for GitHub/Copilot-driven development loops.",
+  "license": "MIT",
+  "homepage": "https://github.com/mfittko/dev-loops#readme",
+  "repository": "https://github.com/mfittko/dev-loops.git",
+  "keywords": ["dev-loop", "workflow", "github", "copilot", "claude-code", "plugin"]
+}

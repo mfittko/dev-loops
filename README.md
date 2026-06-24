@@ -45,6 +45,22 @@ Or run directly without installing:
 npx dev-loops --help
 ```
 
+### Claude Code plugin (preview)
+
+The repo ships a Claude Code plugin rooted at `.claude/` (manifest at
+`.claude/.claude-plugin/plugin.json`) exposing the dev-loop agents and skills. Load it for a
+session with:
+
+```bash
+claude --plugin-dir .claude            # from a checkout
+claude plugin details dev-loops        # inspect the discovered components
+```
+
+When installed from npm, point at the bundled copy: `claude --plugin-dir node_modules/dev-loops/.claude`.
+
+Preview: hook bundling and shared-doc/Pi-prose neutralization in the generated skills are
+tracked follow-ups (the skills load but some in-body links resolve only inside this repo for now).
+
 ### Pi extension
 
 To use `/dev-loops` inside Pi:
