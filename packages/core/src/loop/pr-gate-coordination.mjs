@@ -1,4 +1,5 @@
 import { DISPOSITION, STATE } from "./copilot-loop-state.mjs";
+import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 
 export const PR_CHECKPOINT = Object.freeze({
   DRAFT_REVIEW: "draft_review",
@@ -324,6 +325,56 @@ function buildRetrospectiveGatePendingResult({
 }
 
 
+/**
+ * Blocked result for a PR that would otherwise reach final_approval_ready but
+ * still carries a merge-blocking marker in its title (issue #842). The title is
+ * the most visible contract surface, so a WIP/DRAFT/DO NOT MERGE title must
+ * block the final-approval boundary just like the mark-ready transition does.
+ */
+function buildTitleMarkerBlockedResult({
+  input,
+  currentHeadSha,
+  draftGateAlreadySatisfied,
+  draftGate,
+  preApprovalGate,
+  mergeStateStatus,
+  conflictFiles,
+  markers,
+  refinementArtifact = null,
+}) {
+  const allowedNextActions = [];
+  const forbiddenActions = [];
+  pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+  pushUnique(forbiddenActions, [
+    PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+    PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+    PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+    PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+    PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+    PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+  ]);
+
+  return buildResult({
+    repo: input.repo ?? null,
+    pr: Number.isInteger(input.pr) ? input.pr : null,
+    currentHeadSha,
+    lifecycleState: "title_marker_blocked",
+    loopDisposition: DISPOSITION.BLOCKED,
+    gateBoundary: PR_CHECKPOINT.BLOCKED,
+    draftGateAlreadySatisfied,
+    draftGate,
+    preApprovalGate,
+    allowedNextActions,
+    forbiddenActions,
+    nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+    reason: `Merge remains blocked: the PR title contains merge-blocking marker(s): ${markers.join(", ")}. Remove them from the title before final approval.`,
+    mergeStateStatus,
+    conflictFiles,
+      refinementArtifact,
+  });
+}
+
+
 function buildDraftGateNeededForMergeResult({
   input,
   currentHeadSha,
@@ -500,6 +551,7 @@ export function evaluatePrGateCoordination(input = {}) {
   const roundCapReached = maxCopilotRounds !== null && copilotReviewRoundCount >= maxCopilotRounds;
   const requireRetrospectiveGate = input.requireRetrospectiveGate === true;
   const retrospectiveCheckpoint = input.retrospectiveCheckpoint;
+  const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
   const refinementArtifact = input.refinementArtifact && typeof input.refinementArtifact === "object"
     ? input.refinementArtifact
     : null;
@@ -777,6 +829,20 @@ export function evaluatePrGateCoordination(input = {}) {
         });
       }
       if (preApprovalGate.currentHeadClean) {
+        const titleMarkers = findBlockingTitleMarkers(prTitle);
+        if (titleMarkers.length > 0) {
+          return buildTitleMarkerBlockedResult({
+            input,
+            currentHeadSha,
+            draftGateAlreadySatisfied: roundCapReached ? true : draftGateAlreadySatisfied,
+            draftGate,
+            preApprovalGate,
+            mergeStateStatus,
+            conflictFiles,
+            markers: titleMarkers,
+            refinementArtifact,
+          });
+        }
         if (requireRetrospectiveGate) {
           const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint);
           if (!retrospectiveGate.approved) {
@@ -1035,6 +1101,20 @@ export function evaluatePrGateCoordination(input = {}) {
     }
 
     if (preApprovalGate.currentHeadClean) {
+      const titleMarkers = findBlockingTitleMarkers(prTitle);
+      if (titleMarkers.length > 0) {
+        return buildTitleMarkerBlockedResult({
+          input,
+          currentHeadSha,
+          draftGateAlreadySatisfied: roundCapReached ? true : draftGateAlreadySatisfied,
+          draftGate,
+          preApprovalGate,
+          mergeStateStatus,
+          conflictFiles,
+          markers: titleMarkers,
+          refinementArtifact,
+        });
+      }
       if (requireRetrospectiveGate) {
         const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint);
         if (!retrospectiveGate.approved) {
@@ -1178,6 +1258,20 @@ export function evaluatePrGateCoordination(input = {}) {
       });
     }
     if (preApprovalGate.currentHeadClean) {
+      const titleMarkers = findBlockingTitleMarkers(prTitle);
+      if (titleMarkers.length > 0) {
+        return buildTitleMarkerBlockedResult({
+          input,
+          currentHeadSha,
+          draftGateAlreadySatisfied: roundCapReached ? true : draftGateAlreadySatisfied,
+          draftGate,
+          preApprovalGate,
+          mergeStateStatus,
+          conflictFiles,
+          markers: titleMarkers,
+          refinementArtifact,
+        });
+      }
       if (requireRetrospectiveGate) {
         const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint);
         if (!retrospectiveGate.approved) {

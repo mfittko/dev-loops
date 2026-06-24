@@ -1475,3 +1475,68 @@ test("guard returns false when review request status is unavailable", () => {
     gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
   }), false);
 });
+
+// #842: a merge-blocking marker in the PR title must re-block the
+// final-approval boundary, mirroring the mark-ready transition guard.
+
+test("WIP title blocks an otherwise final-approval-ready PR (title_marker_blocked)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 842,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    reviewMode: "internal_only",
+    prTitle: "[WIP] add authentication flow",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.lifecycleState, "title_marker_blocked");
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+  assert.match(result.reason, /merge-blocking marker/i);
+  assert.match(result.reason, /WIP/);
+});
+
+test("clean title still reaches final_approval_ready (title-marker control)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 842,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    reviewMode: "internal_only",
+    prTitle: "Add user authentication flow",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+});
+
+test("title marker takes precedence over a missing retrospective checkpoint", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 842,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    reviewMode: "internal_only",
+    requireRetrospectiveGate: true,
+    prTitle: "DO NOT MERGE: pending infra",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.lifecycleState, "title_marker_blocked");
+  assert.match(result.reason, /DO NOT MERGE/);
+});

@@ -3,10 +3,11 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, summari
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
+import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number>\nWrapper around gh pr ready that enforces gate-evidence validation.`;
 const parseError = buildParseError(USAGE);
-const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, state, mergeStateStatus } } }`;
+const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, state, mergeStateStatus, title } } }`;
 
 export function parseReadyForReviewCliArgs(argv) {
   const args = [...argv], opts = { help: false, repo: undefined, pr: undefined };
@@ -33,7 +34,7 @@ async function fetchPrState({ repo, pr }, { env, ghCommand }) {
   const r = await runGhJson(["api", "graphql", "-f", `query=${PR_VIEW_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${pr}`], { env, ghCommand });
   const d = r?.data?.repository?.pullRequest;
   if (!d) throw new Error(`Could not fetch PR #${pr}`);
-  return { id: d.id, isDraft: d.isDraft === true, headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null, state: typeof d.state === "string" ? d.state.trim() : null, mergeStateStatus: typeof d.mergeStateStatus === "string" ? d.mergeStateStatus.trim() : null };
+  return { id: d.id, isDraft: d.isDraft === true, headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null, state: typeof d.state === "string" ? d.state.trim() : null, mergeStateStatus: typeof d.mergeStateStatus === "string" ? d.mergeStateStatus.trim() : null, title: typeof d.title === "string" ? d.title : null };
 }
 
 async function fetchCiStatus({ repo, pr }, { env, ghCommand }) {
@@ -71,6 +72,8 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve head SHA`);
   if (!prState.isDraft) throw new Error(`PR #${options.pr} is not in draft state`);
+  const titleMarkers = findBlockingTitleMarkers(prState.title);
+  if (titleMarkers.length > 0) throw new Error(`PR #${options.pr} cannot be marked ready: title contains merge-blocking marker(s): ${titleMarkers.join(", ")}. Remove them from the title first.`);
   if (requireCi) { const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand }); if (ci.status === "blocked") throw new Error(`PR #${options.pr} has blocking CI checks`); if (ci.status !== "success") throw new Error(`PR #${options.pr} CI is not green`); }
   const gate = await fetchGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand });
   if (!gate.cleanEvidenceExists && !gate.effectiveHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);

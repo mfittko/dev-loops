@@ -289,6 +289,99 @@ test("succeeds when draft gate evidence exists and CI is green", async () => {
   }
 });
 
+test("refuses to mark ready when PR title contains a WIP marker", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-wip-title-"));
+
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                id: "PR_abc123",
+                isDraft: true,
+                headRefOid: "abc123def456",
+                state: "OPEN",
+                mergeStateStatus: "CLEAN",
+                title: "[WIP] add authentication flow",
+              },
+            },
+          },
+        }),
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /title contains merge-blocking marker/i);
+    assert.match(result.stderr, /WIP/);
+
+    // gh pr ready must NOT have been called.
+    const calls = await readGhCalls(ghLogPath);
+    const readyCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready");
+    assert.ok(!readyCall, `gh pr ready should not be called for a WIP title. Calls: ${JSON.stringify(calls)}`);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("proceeds when PR title is clean", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-clean-title-"));
+
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                id: "PR_abc123",
+                isDraft: true,
+                headRefOid: "abc123def456",
+                state: "OPEN",
+                mergeStateStatus: "CLEAN",
+                title: "Add user authentication flow",
+              },
+            },
+          },
+        }),
+      },
+      {
+        stdout: JSON.stringify([
+          { name: "test", state: "success", bucket: "pass" },
+        ]),
+      },
+      {
+        stdout: JSON.stringify([
+          {
+            body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
+            id: 101,
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
+            created_at: "2026-06-05T00:00:00Z",
+            updated_at: "2026-06-05T00:00:00Z",
+          },
+        ]),
+      },
+      { stdout: "" }, // gh pr ready
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0, `Expected exit code 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.action, "marked_ready");
+
+    const calls = await readGhCalls(ghLogPath);
+    const readyCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready");
+    assert.ok(readyCall, "gh pr ready should have been called for a clean title");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test.skip("--skip-gate-check allows transition without gate evidence", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-skip-gate-"));
 

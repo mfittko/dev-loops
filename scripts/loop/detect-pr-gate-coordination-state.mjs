@@ -147,7 +147,7 @@ async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghComm
 async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
   const result = await runChild(
     ghCommand,
-    ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,closingIssuesReferences,reviews,statusCheckRollup"],
+    ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
     env,
   );
   if (result.code !== 0) {
@@ -381,6 +381,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     prDraft: Boolean(context.prData?.isDraft),
     prClosed: String(context.prData?.state || "").toUpperCase() === "CLOSED",
     prMerged: String(context.prData?.state || "").toUpperCase() === "MERGED",
+    prTitle: context.prData?.title,
     mergeStateStatus: context.mergeStateStatus,
     conflictFiles: context.conflictFiles,
     lifecycleState: context.interpretation.state,
