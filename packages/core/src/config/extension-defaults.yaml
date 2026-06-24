@@ -83,7 +83,11 @@ workflow:
   requireRetrospective: false
   requireRetrospectiveGate: false
   requireDraftFirst: true
-  devModeDefault: true
+  # Dev mode is the dev-loop self-improvement mode — it edits the loop's own skill/agent prompts
+  # after a phase, which is only meaningful in the dev-loops repo. Shipped defaults must not force
+  # it on consumers' product phases (#846). Matches the code default; the dev-loops repo opts in
+  # via its own repo-root .devloops (which takes precedence over these extension defaults).
+  devModeDefault: false
 
 # Light-mode threshold for small local changes.
 localImplementation:
