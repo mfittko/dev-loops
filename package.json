@@ -2,15 +2,17 @@
   "name": "dev-loops",
   "license": "MIT",
   "type": "module",
-  "description": "Shared Pi workflow infrastructure for reusable local and remote development loops",
+  "description": "Agent-harness-agnostic dev-loop infrastructure (Pi and Claude Code) for reusable local and remote development loops",
   "keywords": [
-    "pi-package",
+    "dev-loop",
+    "workflow",
+    "github",
+    "copilot",
+    "claude-code",
+    "claude",
     "pi",
     "pi-coding-agent",
-    "workflow",
-    "dev-loop",
-    "github",
-    "copilot"
+    "pi-package"
   ],
   "engines": {
     "node": ">=20"
