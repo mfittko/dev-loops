@@ -38,12 +38,20 @@ test("the plugin entry sources the in-repo plugin at ./.claude", async () => {
 
 test("every relative plugin source is a safe in-repo path (no traversal)", async () => {
   // A real invariant over ALL entries (not coupled to the exact-match above): any
-  // string `source` must be a repo-relative path that does not escape the marketplace root.
+  // string `source` must be a repo-relative path that, once resolved, stays inside the
+  // marketplace root. Resolving (rather than substring-checking for "..") catches traversal
+  // via backslashes, encoded segments, or normalization quirks — not just literal "../".
   const catalog = JSON.parse(await readFile(marketplacePath, "utf8"));
   for (const entry of catalog.plugins) {
     if (typeof entry.source !== "string") continue; // object sources (git/npm) are out of scope here
     assert.ok(entry.source.startsWith("./"), `relative source must start with "./": ${entry.source}`);
-    assert.equal(entry.source.split("/").includes(".."), false, `source must not contain "..": ${entry.source}`);
+    assert.equal(entry.source.includes("\\"), false, `source must not contain backslashes: ${entry.source}`);
+    const resolved = path.resolve(repoRoot, entry.source);
+    const rel = path.relative(repoRoot, resolved);
+    assert.ok(
+      rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel)),
+      `source must resolve to a path inside the repo root: ${entry.source} -> ${resolved}`,
+    );
   }
 });
 
