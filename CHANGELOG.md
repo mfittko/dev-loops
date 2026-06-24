@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.4
+
+### Changed
+
+- **Claude Code: the dev-loop runs as a single agent** (#837). The Pi "umbrella" execution model —
+  a strictly read-only main agent that must dispatch an async `dev-loop` subagent, with all
+  mutations and state-changing CLI (`gate`/`pr`/`loop`) confined to that subagent — is now scoped
+  to Pi only. Under the Claude harness the dev-loop agent performs the steps directly: it reads and
+  writes repo files, runs git/PR operations, runs the `dev-loops` CLI, and **posts gate verdicts
+  under the operating session's identity** (fixing clean gates that previously stalled, unable to
+  record their verdict without separate "coordinator authority"). The `gh pr ready` draft-gate
+  guard still applies, and the read-only boundary remains available opt-in via
+  `DEVLOOPS_MAIN_AGENT_READONLY=1`. Implemented by scoping the Pi read-only/dispatch contract in
+  `main-agent-contract.md` and the dev-loop skill's startup procedure behind `<!-- pi-only -->`
+  markers; the asset generator now applies that stripping to bundled contract docs too, so the
+  Claude plugin ships the single-agent model while Pi keeps the full contract. Pi behavior is
+  unchanged. (Follow-up #838 tracks the copilot-pr-followup/conductor async-execution model.)
+
 ## 0.2.3
 
 ### Added

@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { collectGeneratedAssets, checkAssets, writeAssets } from "../../scripts/claude/generate-claude-assets.mjs";
+import { stripPiOnlyBlocks } from "../../packages/core/src/claude/asset-generation.mjs";
 
 // #772: the committed .claude tree must be byte-reproducible from the canonical sources.
 // If a source agent/skill changes, the generator must be re-run and the result committed.
@@ -22,8 +23,10 @@ test("shared docs + dev-loop templates are bundled so generated skill links reso
   // A representative `../dev-loop/templates/` link target.
   assert.ok(targets.has(".claude/skills/dev-loop/templates/phase-doc.md"), "dev-loop template must be bundled");
 
-  // EVERY bundled file must be byte-identical to its source (verbatim copy). Bundled targets map
-  // back to source by dropping the `.claude/skills/` prefix → `skills/<...>`.
+  // EVERY bundled file must equal its source with `<!-- pi-only -->` blocks stripped (#837).
+  // For marker-free docs this is a verbatim copy (stripPiOnlyBlocks is a no-op); docs that scope
+  // Pi-runtime prose (e.g. main-agent-contract.md) bundle their Claude-applicable subset. Bundled
+  // targets map back to source by dropping the `.claude/skills/` prefix → `skills/<...>`.
   const bundlePrefixes = [".claude/skills/docs/", ".claude/skills/dev-loop/templates/"];
   const bundled = assets.filter((a) => bundlePrefixes.some((p) => a.target.startsWith(p)));
   assert.ok(bundled.length >= 30, `expected the full bundled set, got ${bundled.length}`);
@@ -31,10 +34,21 @@ test("shared docs + dev-loop templates are bundled so generated skill links reso
     const source = asset.target.replace(/^\.claude\/skills\//, "skills/");
     assert.equal(
       asset.content,
-      fs.readFileSync(path.join(repoRoot, source), "utf8"),
-      `${asset.target} must be a verbatim copy of ${source}`,
+      stripPiOnlyBlocks(fs.readFileSync(path.join(repoRoot, source), "utf8")),
+      `${asset.target} must be its source with pi-only blocks stripped (${source})`,
     );
   }
+
+  // The Claude bundle of main-agent-contract.md must drop the Pi read-only/dispatch contract
+  // (collapsed umbrella, #837) while the source retains it.
+  const contract = bundled.find((a) => a.target.endsWith("docs/main-agent-contract.md"));
+  assert.ok(contract, "main-agent-contract.md must be bundled");
+  assert.equal(contract.content.includes("Main agent must NEVER"), false, "Claude bundle must drop the Pi read-only contract");
+  assert.match(contract.content, /the dev-loop runs as a single agent/i, "Claude bundle must state the single-agent model");
+  assert.ok(
+    fs.readFileSync(path.join(repoRoot, "skills/docs/main-agent-contract.md"), "utf8").includes("Main agent must NEVER"),
+    "source must retain the Pi read-only contract",
+  );
 });
 
 test("Pi-runtime-only prose is stripped from generated assets but retained in source (#817)", () => {

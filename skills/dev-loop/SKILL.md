@@ -22,29 +22,33 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 
 ## Startup procedure
 
+<!-- pi-only -->
 ### Main agent (read-only)
 
 The main agent must **always** dispatch the `dev-loop` async subagent for any dev-loop work.
 Do not run `dev-loops loop startup` or any startup resolver in the main agent.
 For async-required routes (config `workflow.asyncStartMode`, default `required`) the resolver needs an async run-id marker (`DEVLOOPS_RUN_ID`, or the `PI_SUBAGENT_RUN_ID` alias) that the Pi harness injects when it dispatches the async subagent; under the Claude Code harness the requirement is relaxed automatically (no marker needed). The startup resolver also runs without a marker for non-async routes. Regardless, only the `dev-loop` subagent runs it — never the main agent.
+<!-- /pi-only -->
 
-### Dev-loop subagent (post-dispatch)
+### Resolve authoritative state
 
-The subagent resolves authoritative state via the startup resolver (`npx dev-loops loop startup --issue <n>` for issues, `npx dev-loops loop startup --pr <n>` for PRs), then immediately builds the handoff envelope via `npx dev-loops loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
+> Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no read-only boundary and no separate async-subagent dispatch. See [Main Agent Contract](../docs/main-agent-contract.md).
+
+Resolve authoritative state via the startup resolver (`npx dev-loops loop startup --issue <n>` for issues, `npx dev-loops loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `npx dev-loops loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
 
 **Retrospective checkpoint gate:** the resolver reads `.pi/dev-loop-retrospective-checkpoint.json` and injects the state. When the checkpoint is `missing` and the repo config `workflow.requireRetrospective` (set via `.devloops` at repo root) is `true`, the resolver returns `needs_reconcile`. Complete or explicitly skip the retrospective before starting.
 
-**Pre-delegation gate (mandatory — subagent only):** Before delegating async work targeting an existing PR, the dev-loop subagent must run `node scripts/loop/copilot-pr-handoff.mjs --repo <owner/name> --pr <number>` and abort if `action: "stop"`. When `terminal: true`, proceed inline. When `terminal: false`, resolve the blocking condition first.
+**Pre-flight PR gate (mandatory):** Before working an existing PR, the dev-loop must run `node scripts/loop/copilot-pr-handoff.mjs --repo <owner/name> --pr <number>` and abort if `action: "stop"`. When `terminal: true`, proceed inline. When `terminal: false`, resolve the blocking condition first.
 
-**Worktree cwd (mandatory — subagent only):** Always use a worktree checkout for git operations, file reads/writes, and validation commands — never use the `main` checkout.
+**Worktree cwd (mandatory):** Always use a worktree checkout for git operations, file reads/writes, and validation commands — never use the `main` checkout.
 
-**Worktree fetch (mandatory — subagent only):** Always run `git fetch origin` before creating or reusing any worktree.
+**Worktree fetch (mandatory):** Always run `git fetch origin` before creating or reusing any worktree.
 
 ### Resume from existing loop state
 
 When the startup resolver returns a fresh-start routing but an existing outer-loop checkpoint
 (`tmp/copilot-loop/<owner>/<repo>/pr-<n>/outer-loop-state.json`) is present on disk, the
-subagent must check the checkpoint before treating the start as a fresh intake or follow-up:
+dev-loop must check the checkpoint before treating the start as a fresh intake or follow-up:
 
 1. Read the outer-loop checkpoint (authored by `outer-loop.mjs`).
 2. If `outerAction` is `continue_wait`, `reenter_copilot_loop`, or `reenter_reviewer_loop`:
@@ -105,14 +109,14 @@ When `@dev-loops/core` is available again, switch back to the full helper. The f
 
 ## Read-only info shortcut
 
-The main agent may handle info/handoff requests directly via `npx dev-loops loop info` without dispatching the async `dev-loop` subagent:
+Info/handoff requests can be served directly via `npx dev-loops loop info` (read-only; no full dev-loop run required):
 - `npx dev-loops loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
 - `npx dev-loops loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
 - `npx dev-loops loop info --issue <n> --json` — machine-readable JSON output
 
-## Guard rules (subagent reference)
+## Guard rules
 
-**Handoff envelope precedence:** The subagent builds the envelope immediately after authoritative-state resolution and treats it as the first handoff artifact. Read it first, load only `requiredReads`, execute `nextAction`. See [Dev-loop subagent](#dev-loop-subagent-post-dispatch). Derivation contract: [Workflow Handoff Contract](../docs/workflow-handoff-contract.md).
+**Handoff envelope precedence:** The dev-loop builds the envelope immediately after authoritative-state resolution and treats it as the first handoff artifact. Read it first, load only `requiredReads`, execute `nextAction`. See [Resolve authoritative state](#resolve-authoritative-state). Derivation contract: [Workflow Handoff Contract](../docs/workflow-handoff-contract.md).
 
 **Handoff contract rule:** When no envelope is present, use the `workflow-handoff-contract.md` contract. Never delegate with abbreviated task summaries. Include deterministic routing inputs, explicit `cwd`, bounded task scope, exit conditions.
 
@@ -135,7 +139,7 @@ All PRs must pass the full gate pipeline before merge. No scope is exempt: docs-
 ## Authority boundary
 
 - Source code, tests, config, CI, and shared contract docs are authoritative.
-- Main-agent delegation contract: [Main Agent Contract](../docs/main-agent-contract.md) — absolute read-only boundary; all mutations flow through `dev-loop` async subagent.
+- Main-agent delegation contract: [Main Agent Contract](../docs/main-agent-contract.md) — how dev-loop work is structured per harness (Pi: read-only main agent + async-subagent dispatch; Claude: a single agent runs the steps directly).
 - Before any state-changing action, get explicit confirmation unless already authorized.
 - A question requires an answer, not an action.
 - Stop and ask rather than guessing when facts don't agree.
