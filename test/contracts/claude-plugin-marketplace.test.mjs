@@ -26,6 +26,7 @@ test("marketplace catalog exists and names the dev-loops marketplace", async () 
 
 test("the plugin entry sources the in-repo plugin at ./.claude", async () => {
   const catalog = JSON.parse(await readFile(marketplacePath, "utf8"));
+  assert.ok(Array.isArray(catalog.plugins) && catalog.plugins.length >= 1, "catalog must list at least one plugin");
   const entry = catalog.plugins[0];
   assert.equal(entry.name, "dev-loops");
   assert.equal(entry.source, "./.claude", "source must point at the plugin dir (the one holding .claude-plugin/)");
@@ -57,6 +58,7 @@ test("every relative plugin source is a safe in-repo path (no traversal)", async
 
 test("the catalog defers versioning to plugin.json (no entry-level version to drift)", async () => {
   const catalog = JSON.parse(await readFile(marketplacePath, "utf8"));
+  assert.ok(Array.isArray(catalog.plugins) && catalog.plugins.length >= 1, "catalog must list at least one plugin");
   const entry = catalog.plugins[0];
   assert.equal(
     "version" in entry,

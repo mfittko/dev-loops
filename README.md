@@ -50,9 +50,10 @@ npx dev-loops --help
 The repo ships a Claude Code plugin rooted at `.claude/` (manifest at
 `.claude/.claude-plugin/plugin.json`) exposing the dev-loop **agents, skills, and hooks**.
 
-Install it from the bundled marketplace catalog (`.claude-plugin/marketplace.json`):
+Install it from the bundled marketplace catalog (`.claude-plugin/marketplace.json`) by running
+these slash commands inside Claude Code:
 
-```bash
+```text
 /plugin marketplace add mfittko/dev-loops    # register the marketplace
 /plugin install dev-loops@dev-loops          # install the plugin
 ```
