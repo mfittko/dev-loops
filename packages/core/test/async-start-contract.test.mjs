@@ -192,6 +192,15 @@ test("resolveEffectiveAsyncStartMode: relaxes to allowed under the Claude harnes
   );
 });
 
+test("resolveEffectiveAsyncStartMode: does NOT relax an unrecognized mode under Claude (config error must still surface)", () => {
+  // A typo'd asyncStartMode must pass through so validateAsyncStartContext rejects it,
+  // rather than the Claude relaxation silently masking the misconfiguration.
+  const bogus = "requried";
+  assert.equal(resolveEffectiveAsyncStartMode(bogus, { CLAUDECODE: "1" }), bogus);
+  const result = validateAsyncStartContext({ env: { CLAUDECODE: "1" }, asyncStartMode: bogus });
+  assert.equal(result.status, ASYNC_START_STATUS.REJECTED);
+});
+
 test("resolveEffectiveAsyncStartMode: returns the configured mode verbatim outside Claude (Pi unchanged)", () => {
   assert.equal(resolveEffectiveAsyncStartMode(ASYNC_START_MODE.REQUIRED, {}), ASYNC_START_MODE.REQUIRED);
   assert.equal(resolveEffectiveAsyncStartMode(ASYNC_START_MODE.ALLOWED, {}), ASYNC_START_MODE.ALLOWED);

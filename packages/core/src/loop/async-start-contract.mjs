@@ -71,7 +71,12 @@ export const ASYNC_START_STATUS = Object.freeze({
  * @returns {"required"|"allowed"}
  */
 export function resolveEffectiveAsyncStartMode(configuredMode, env = process.env) {
-  if (isClaudeHarness(env)) {
+  // Only relax a recognized mode. An unrecognized configuredMode must pass through
+  // verbatim so validateAsyncStartContext still rejects it (surfacing the config
+  // error) rather than having the Claude relaxation silently mask a typo'd value.
+  const isRecognizedMode =
+    configuredMode === ASYNC_START_MODE.REQUIRED || configuredMode === ASYNC_START_MODE.ALLOWED;
+  if (isRecognizedMode && isClaudeHarness(env)) {
     return ASYNC_START_MODE.ALLOWED;
   }
   return configuredMode;
