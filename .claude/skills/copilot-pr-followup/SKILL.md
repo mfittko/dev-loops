@@ -149,7 +149,7 @@ already has an outer-loop checkpoint, check whether the checkpoint implies an au
 6. If no checkpoint exists or `outerAction` is `done`:
    - Continue with normal step sequencing.
 
-Do not skip this guard when resuming work on the same PR (under Pi, between async subagent runs).
+Do not skip this guard when resuming work on the same PR.
 The outer-loop checkpoint is the canonical re-attachment artifact.
 
 ## Step 6: Async watch behavior
