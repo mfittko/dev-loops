@@ -29,12 +29,22 @@ test("the plugin entry sources the in-repo plugin at ./.claude", async () => {
   const entry = catalog.plugins[0];
   assert.equal(entry.name, "dev-loops");
   assert.equal(entry.source, "./.claude", "source must point at the plugin dir (the one holding .claude-plugin/)");
-  assert.equal(entry.source.includes(".."), false, "source must not contain path traversal");
   // The source dir must actually contain a plugin manifest.
   assert.ok(
     existsSync(path.join(repoRoot, ".claude", ".claude-plugin", "plugin.json")),
     "source ./.claude must contain .claude-plugin/plugin.json",
   );
+});
+
+test("every relative plugin source is a safe in-repo path (no traversal)", async () => {
+  // A real invariant over ALL entries (not coupled to the exact-match above): any
+  // string `source` must be a repo-relative path that does not escape the marketplace root.
+  const catalog = JSON.parse(await readFile(marketplacePath, "utf8"));
+  for (const entry of catalog.plugins) {
+    if (typeof entry.source !== "string") continue; // object sources (git/npm) are out of scope here
+    assert.ok(entry.source.startsWith("./"), `relative source must start with "./": ${entry.source}`);
+    assert.equal(entry.source.split("/").includes(".."), false, `source must not contain "..": ${entry.source}`);
+  }
 });
 
 test("the catalog defers versioning to plugin.json (no entry-level version to drift)", async () => {
