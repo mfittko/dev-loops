@@ -524,7 +524,63 @@ export function shouldGuardCopilotReviewRequest({
   return true;
 }
 
+/**
+ * Boundaries at which a non-draft PR must NOT carry a merge-blocking title
+ * marker (issue #842 / AC2). A WIP/DRAFT/DO NOT MERGE/🚧 title is acceptable
+ * while the PR is still in draft, but the moment the PR leaves draft and reaches
+ * the pre-approval gate boundary (entry) or the final-approval boundary, the
+ * title is a live merge-contract surface and must be clean. The guard is applied
+ * once, as a post-pass over the core evaluation result, so no individual return
+ * site can be missed even if a PR was un-drafted externally (bypassing
+ * ready-for-review).
+ */
+const TITLE_MARKER_GUARDED_BOUNDARIES = Object.freeze([
+  PR_CHECKPOINT.PRE_APPROVAL_GATE_NEEDED,
+  PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  PR_CHECKPOINT.FINAL_APPROVAL_READY,
+]);
+
+/**
+ * Evaluates PR gate coordination, then re-asserts the merge-blocking title guard
+ * (issue #842) at the pre-approval / final-approval boundary for non-draft PRs.
+ *
+ * The title check is also performed inline at the three FINAL_APPROVAL_READY
+ * sites (defense in depth); this wrapper additionally covers the pre-approval
+ * gate boundary, which is reached before any pre-approval evidence exists and so
+ * is not protected by the inline checks.
+ */
 export function evaluatePrGateCoordination(input = {}) {
+  const result = evaluatePrGateCoordinationCore(input);
+
+  const prDraft = input.prDraft === true;
+  const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
+  // Draft PRs may legitimately carry a WIP title; the marker only blocks once
+  // the PR has left draft and is at a pre-approval/final-approval boundary.
+  if (prDraft || !result || typeof result !== "object") {
+    return result;
+  }
+  if (!TITLE_MARKER_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
+    return result;
+  }
+  const markers = findBlockingTitleMarkers(prTitle);
+  if (markers.length === 0) {
+    return result;
+  }
+
+  return buildTitleMarkerBlockedResult({
+    input,
+    currentHeadSha: result.currentHeadSha ?? null,
+    draftGateAlreadySatisfied: result.draftGateAlreadySatisfied === true,
+    draftGate: result.draftGate,
+    preApprovalGate: result.preApprovalGate,
+    mergeStateStatus: result.mergeStateStatus ?? null,
+    conflictFiles: result.conflictFiles ?? [],
+    markers,
+    refinementArtifact: result.refinementArtifact ?? null,
+  });
+}
+
+function evaluatePrGateCoordinationCore(input = {}) {
   const currentHeadSha = typeof input.currentHeadSha === "string" && input.currentHeadSha.trim().length > 0
     ? input.currentHeadSha.trim()
     : null;

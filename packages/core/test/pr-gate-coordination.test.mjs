@@ -1624,3 +1624,71 @@ test("clean title still reaches final_approval_ready at the low-signal heuristic
   assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
 });
+
+// #842 AC2: a WIP/DRAFT/DO NOT MERGE/🚧 title must also block the pre-approval
+// gate ENTRY boundary for non-draft PRs (e.g. a PR un-drafted externally,
+// bypassing ready-for-review). Draft PRs are NOT blocked — a WIP title is fine
+// while the work is still in draft.
+
+test("WIP title blocks a non-draft PR at the pre-approval gate boundary (#842 AC2)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "success",
+    prTitle: "[WIP] converge the review loop",
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.lifecycleState, "title_marker_blocked");
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /merge-blocking marker/i);
+  assert.match(result.reason, /WIP/);
+});
+
+test("clean title still reaches the pre-approval gate boundary for a non-draft PR (#842 AC2 control)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "success",
+    prTitle: "Converge the review loop",
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("draft PR with a WIP title is NOT blocked by the title guard (#842 AC2 — draft work continues)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    prTitle: "[WIP] still building this",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.notEqual(result.lifecycleState, "title_marker_blocked");
+  assert.notEqual(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.draftGate.cleanEvidenceExists, true);
+});
