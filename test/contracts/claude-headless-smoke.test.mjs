@@ -15,10 +15,19 @@ function runNode(scriptRel, args) {
   return spawnSync(process.execPath, [path.join(repoRoot, scriptRel), ...args], { cwd: repoRoot, encoding: "utf8" });
 }
 
-test("headless-info-smoke runs the read-only loop info path and exits 0 (Pi-free)", () => {
-  const res = runNode("scripts/claude/headless-info-smoke.mjs", ["--issue", "775"]);
+test("headless-info-smoke runs the offline read-only status path and exits 0 (no GitHub auth, Pi-free)", () => {
+  // Run with GitHub auth env explicitly removed to prove the default smoke is secret-free
+  // (hermetic CI verify job has no token); the default path is `dev-loops status` (offline).
+  const env = { ...process.env };
+  delete env.GH_TOKEN;
+  delete env.GITHUB_TOKEN;
+  const res = spawnSync(process.execPath, [path.join(repoRoot, "scripts/claude/headless-info-smoke.mjs")], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env,
+  });
   assert.equal(res.status, 0, res.stderr);
-  assert.match(res.stdout, /Issue #775/);
+  assert.match(res.stdout, /dev-loops status:/);
   assert.match(res.stdout, /"ok":true,"smoke":"headless-info"/);
 });
 

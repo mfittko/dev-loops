@@ -62,8 +62,9 @@ USER node
 
 # Dual-harness smoke (#775):
 # - Pi: the default `dev-loops` CMD below (Pi CLI installed above).
-# - Claude (Pi-free, read-only, no interactive session / API key):
-#     npm run smoke:headless            # exercises `dev-loops loop info`
+# - Claude (Pi-free, read-only, offline — no interactive session, API key, or GitHub token):
+#     npm run smoke:headless            # exercises the offline `dev-loops status` info path
+#   Add `-- --loop-info --issue <n>` to also exercise `dev-loops loop info` (needs GitHub read access).
 #   The headless Claude Agent SDK run is `node scripts/claude/headless-dev-loop.mjs --issue <n>`
 #   (needs `claude` on PATH + an API key; use `--dry-run` to inspect the invocation).
 CMD ["dev-loops"]
