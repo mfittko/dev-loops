@@ -124,10 +124,12 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
     const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
       cwd: repoRoot,
       encoding: "utf8",
-      // Deliberately omit PI_SUBAGENT_RUN_ID.
+      // Deliberately omit every async-context signal so the rejection path is
+      // exercised hermetically — including CLAUDECODE, which would otherwise
+      // relax the contract when this suite runs under the Claude Code harness (#830).
       env: Object.fromEntries(
         Object.entries(process.env).filter(
-          ([k]) => k !== "PI_SUBAGENT_RUN_ID",
+          ([k]) => k !== "PI_SUBAGENT_RUN_ID" && k !== "DEVLOOPS_RUN_ID" && k !== "CLAUDECODE",
         ),
       ),
     });

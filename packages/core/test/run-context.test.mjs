@@ -15,6 +15,8 @@ import {
   writeRunContext,
   readRunContext,
   ensureRunId,
+  isClaudeHarness,
+  CLAUDE_HARNESS_MARKER,
 } from "../src/loop/run-context.mjs";
 
 // Track temp dirs and clean them up after the suite so CI does not accumulate /tmp entries.
@@ -116,4 +118,15 @@ test("ensureRunId mints in-memory when no root is given (no file write)", () => 
   assert.equal(result.minted, true);
   assert.equal(result.statePath, null);
   assert.match(result.runId, /^devloops-/);
+});
+
+test("isClaudeHarness is true only when CLAUDECODE is exactly \"1\"", () => {
+  // Assert against explicit env objects only — the default arg reads process.env,
+  // whose CLAUDECODE is ambient (set under the Claude Code harness, unset in CI).
+  assert.equal(CLAUDE_HARNESS_MARKER, "CLAUDECODE");
+  assert.equal(isClaudeHarness({ CLAUDECODE: "1" }), true);
+  assert.equal(isClaudeHarness({ CLAUDECODE: "0" }), false);
+  assert.equal(isClaudeHarness({ CLAUDECODE: "true" }), false);
+  assert.equal(isClaudeHarness({ CLAUDECODE: "" }), false);
+  assert.equal(isClaudeHarness({}), false);
 });

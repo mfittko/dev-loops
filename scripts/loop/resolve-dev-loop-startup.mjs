@@ -16,6 +16,7 @@ import {
 import {
   validateAsyncStartContext,
   buildAsyncStartRejection,
+  resolveEffectiveAsyncStartMode,
   ASYNC_START_STATUS,
 } from "@dev-loops/core/loop/async-start-contract";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -411,7 +412,10 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
     ? (STRATEGY_ASYNC_DISPATCH[bundle.selectedStrategy] ?? false)
     : false;
   if (requiresAsyncDispatch) {
-    const validation = validateAsyncStartContext({ env: effectiveEnv, asyncStartMode });
+    // The configured async-start mode is relaxed to "allowed" under the Claude
+    // harness, where the Pi async-subagent start contract does not apply.
+    const effectiveAsyncStartMode = resolveEffectiveAsyncStartMode(asyncStartMode, effectiveEnv);
+    const validation = validateAsyncStartContext({ env: effectiveEnv, asyncStartMode: effectiveAsyncStartMode });
     if (validation.status === ASYNC_START_STATUS.REJECTED) {
       return buildAsyncStartRejection(validation);
     }

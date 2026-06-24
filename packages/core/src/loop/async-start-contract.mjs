@@ -23,7 +23,7 @@
  * This module is intentionally pure and side-effect free.
  */
 
-import { RUN_ID_MARKERS } from "./run-context.mjs";
+import { RUN_ID_MARKERS, isClaudeHarness } from "./run-context.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -53,6 +53,29 @@ export const ASYNC_START_STATUS = Object.freeze({
   /** No harness-managed async context was detected; fail closed. */
   REJECTED: "rejected",
 });
+
+/**
+ * Resolve the effective async-start mode for the current harness.
+ *
+ * The async-start contract is configurable via `workflow.asyncStartMode`
+ * (`required` | `allowed`) — see defaults.yaml. It exists to stop the Pi
+ * harness from running the loop as a detached, uninspectable background
+ * process. Claude Code's Agent tool has no detached-process variant (each
+ * subagent run is visible and inspectable), so under the Claude harness the
+ * requirement is relaxed to `allowed` at runtime, regardless of the
+ * configured value. Pi behavior is unchanged: outside Claude the configured
+ * mode is returned verbatim.
+ *
+ * @param {"required"|"allowed"} configuredMode - Mode from workflow config.
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {"required"|"allowed"}
+ */
+export function resolveEffectiveAsyncStartMode(configuredMode, env = process.env) {
+  if (isClaudeHarness(env)) {
+    return ASYNC_START_MODE.ALLOWED;
+  }
+  return configuredMode;
+}
 
 // ---------------------------------------------------------------------------
 // Validation

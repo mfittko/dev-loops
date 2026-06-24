@@ -7,6 +7,7 @@ import {
   PI_ASYNC_CONTEXT_MARKERS,
   buildAsyncStartRejection,
   validateAsyncStartContext,
+  resolveEffectiveAsyncStartMode,
 } from "../src/loop/async-start-contract.mjs";
 
 // ---------------------------------------------------------------------------
@@ -173,4 +174,48 @@ test("ASYNC_START_STATUS has all expected values", () => {
   assert.equal(ASYNC_START_STATUS.ALLOWED, "allowed");
   assert.equal(ASYNC_START_STATUS.SNAPSHOT_MODE, "snapshot_mode");
   assert.equal(ASYNC_START_STATUS.REJECTED, "rejected");
+});
+
+// ---------------------------------------------------------------------------
+// resolveEffectiveAsyncStartMode: Claude Code harness relaxation (#830)
+// ---------------------------------------------------------------------------
+
+test("resolveEffectiveAsyncStartMode: relaxes to allowed under the Claude harness", () => {
+  assert.equal(
+    resolveEffectiveAsyncStartMode(ASYNC_START_MODE.REQUIRED, { CLAUDECODE: "1" }),
+    ASYNC_START_MODE.ALLOWED,
+  );
+  // Even an explicitly-allowed config stays allowed under Claude.
+  assert.equal(
+    resolveEffectiveAsyncStartMode(ASYNC_START_MODE.ALLOWED, { CLAUDECODE: "1" }),
+    ASYNC_START_MODE.ALLOWED,
+  );
+});
+
+test("resolveEffectiveAsyncStartMode: returns the configured mode verbatim outside Claude (Pi unchanged)", () => {
+  assert.equal(resolveEffectiveAsyncStartMode(ASYNC_START_MODE.REQUIRED, {}), ASYNC_START_MODE.REQUIRED);
+  assert.equal(resolveEffectiveAsyncStartMode(ASYNC_START_MODE.ALLOWED, {}), ASYNC_START_MODE.ALLOWED);
+  // CLAUDECODE present but not exactly "1" → no relaxation.
+  for (const value of ["0", "", "true", "yes"]) {
+    assert.equal(
+      resolveEffectiveAsyncStartMode(ASYNC_START_MODE.REQUIRED, { CLAUDECODE: value }),
+      ASYNC_START_MODE.REQUIRED,
+      `CLAUDECODE=${JSON.stringify(value)} must not relax`,
+    );
+  }
+});
+
+test("resolveEffectiveAsyncStartMode + validateAsyncStartContext: Claude harness passes without a run-id marker", () => {
+  // End-to-end of the runtime override: required config + Claude harness + no marker → not rejected.
+  const effective = resolveEffectiveAsyncStartMode(ASYNC_START_MODE.REQUIRED, { CLAUDECODE: "1" });
+  const result = validateAsyncStartContext({ env: { CLAUDECODE: "1" }, asyncStartMode: effective });
+  assert.equal(result.status, ASYNC_START_STATUS.ALLOWED);
+  assert.notEqual(result.status, ASYNC_START_STATUS.REJECTED);
+});
+
+test("Claude harness override still honors an explicit run-id marker as VALID", () => {
+  const effective = resolveEffectiveAsyncStartMode(ASYNC_START_MODE.REQUIRED, { CLAUDECODE: "1", DEVLOOPS_RUN_ID: "devloops-abc" });
+  const result = validateAsyncStartContext({ env: { CLAUDECODE: "1", DEVLOOPS_RUN_ID: "devloops-abc" }, asyncStartMode: effective });
+  assert.equal(result.status, ASYNC_START_STATUS.VALID);
+  assert.equal(result.detectedMarker, "DEVLOOPS_RUN_ID");
 });

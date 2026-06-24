@@ -22,6 +22,7 @@ import {
   ASYNC_START_STATUS,
   buildAsyncStartRejection,
   validateAsyncStartContext,
+  resolveEffectiveAsyncStartMode,
 } from "@dev-loops/core/loop/async-start-contract";
 import { loadDevLoopConfig, resolveConductorModel, resolveAutonomyStopAt, resolveWorkflowConfig } from "@dev-loops/core/config";
 const USAGE = `Usage: outer-loop.mjs --repo <owner/name> --pr <number>
@@ -286,9 +287,11 @@ export async function runOuterLoop(options, { env = process.env, ghCommand = "gh
       devLoopConfig = loaded.config;
     }
   }
-  const asyncStartMode = devLoopConfig === null
+  const configuredAsyncStartMode = devLoopConfig === null
     ? "required"
     : resolveWorkflowConfig(devLoopConfig, "asyncStartMode");
+  // Relaxed to "allowed" under the Claude harness (Pi async-start contract does not apply).
+  const asyncStartMode = resolveEffectiveAsyncStartMode(configuredAsyncStartMode, env);
   const asyncStartValidation = validateAsyncStartContext({ env, isSnapshotMode, asyncStartMode });
   if (asyncStartValidation.status === ASYNC_START_STATUS.REJECTED) {
     return buildAsyncStartRejection(asyncStartValidation);

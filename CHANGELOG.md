@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.2
+
+### Fixed
+
+- **Claude Code: dev-loop no longer dead-ends on the async-start contract** (#830). Running
+  `/dev-loop` from the installed plugin failed immediately because `dev-loops loop startup`
+  enforces an async-start contract — it requires a run-id env marker (`DEVLOOPS_RUN_ID` /
+  `PI_SUBAGENT_RUN_ID`) that Pi injects when dispatching an async subagent but Claude Code's
+  Agent tool does not. That contract guards against detached, uninspectable background
+  processes, a risk that does not exist under Claude's Agent model (each subagent run is
+  visible and inspectable). The async requirement remains configurable via
+  `workflow.asyncStartMode` (`required` | `allowed`); under the Claude harness it is now
+  **relaxed to `allowed` at runtime** via `resolveEffectiveAsyncStartMode`, which consults the
+  new `isClaudeHarness` helper (`CLAUDECODE=1`) in `@dev-loops/core/loop/run-context`. An
+  explicit `DEVLOOPS_RUN_ID` still resolves as `valid`, and Pi behavior is unchanged (outside
+  Claude the configured mode is honored verbatim).
+- The async-start CLI contract test is now hermetic — it clears `CLAUDECODE` (and the run-id
+  markers) so the rejection path is exercised regardless of the harness the suite runs under.
+
 ## 0.2.1
 
 ### Added
