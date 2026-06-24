@@ -21,10 +21,20 @@ import { fileURLToPath } from "node:url";
 
 function parseArgs(argv) {
   const opts = { loopInfo: false };
+  const requireValue = (name, i) => {
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith("--")) throw new Error(`${name} requires a value`);
+    return v;
+  };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--loop-info") opts.loopInfo = true;
-    else if (argv[i] === "--issue") opts.issue = argv[++i];
-    else if (argv[i] === "--pr") opts.pr = argv[++i];
+    const a = argv[i];
+    if (a === "--loop-info") opts.loopInfo = true;
+    else if (a === "--issue") { opts.issue = requireValue(a, i); i++; }
+    else if (a === "--pr") { opts.pr = requireValue(a, i); i++; }
+    else throw new Error(`unknown argument: ${a}`);
+  }
+  if (opts.issue != null && opts.pr != null) {
+    throw new Error("--issue and --pr are mutually exclusive");
   }
   return opts;
 }
@@ -34,7 +44,13 @@ function runCli(cliEntry, repoRoot, args) {
 }
 
 function main(argv) {
-  const opts = parseArgs(argv);
+  let opts;
+  try {
+    opts = parseArgs(argv);
+  } catch (error) {
+    process.stderr.write(JSON.stringify({ ok: false, error: error.message }) + "\n");
+    return 1;
+  }
   const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
   const cliEntry = path.join(repoRoot, "cli", "index.mjs");
 

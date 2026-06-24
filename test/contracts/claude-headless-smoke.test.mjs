@@ -49,6 +49,20 @@ test("headless-info-smoke --loop-info without a target fails fast (no hidden iss
   assert.match(res.stderr, /--loop-info requires an explicit --issue/);
 });
 
+test("headless-dev-loop arg parsing fails fast on bad invocations", () => {
+  const both = runNode("scripts/claude/headless-dev-loop.mjs", ["--dry-run", "--issue", "1", "--pr", "2"]);
+  assert.notEqual(both.status, 0);
+  assert.match(both.stderr, /mutually exclusive/);
+
+  const missing = runNode("scripts/claude/headless-dev-loop.mjs", ["--issue", "--dry-run"]);
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /--issue requires a value/);
+
+  const unknown = runNode("scripts/claude/headless-dev-loop.mjs", ["--dry-run", "--bogus"]);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /unknown argument: --bogus/);
+});
+
 test("headless entry + smoke scripts do not import the Pi SDK", async () => {
   for (const rel of ["scripts/claude/headless-dev-loop.mjs", "scripts/claude/headless-info-smoke.mjs"]) {
     const content = await readFile(path.join(repoRoot, rel), "utf8");

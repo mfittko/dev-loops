@@ -14,6 +14,10 @@ test("buildDevLoopPrompt targets issue, pr, or current state", () => {
   assert.match(buildDevLoopPrompt({ issue: 1 }), /\/dev-loop skill/);
 });
 
+test("buildDevLoopPrompt rejects both issue and pr (single target)", () => {
+  assert.throws(() => buildDevLoopPrompt({ issue: 1, pr: 2 }), /at most one target/);
+});
+
 test("buildHeadlessClaudeInvocation builds `claude -p <prompt>` and propagates DEVLOOPS_RUN_ID", () => {
   const { command, args, env } = buildHeadlessClaudeInvocation({
     prompt: "do the loop",

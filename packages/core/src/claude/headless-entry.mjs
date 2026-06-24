@@ -25,6 +25,9 @@ export const DEFAULT_CLAUDE_BIN = "claude";
  * @returns {string}
  */
 export function buildDevLoopPrompt({ issue, pr } = {}) {
+  if (issue != null && `${issue}`.trim() && pr != null && `${pr}`.trim()) {
+    throw new TypeError("buildDevLoopPrompt: provide at most one target (issue or pr), not both");
+  }
   if (issue != null && `${issue}`.trim()) {
     return `Run the dev-loop for issue #${issue}. Use the /dev-loop skill; routing resolves the rest.`;
   }
