@@ -10,6 +10,21 @@ Canonical owner for merge preconditions across all workflow families.
 4. ✅ All review threads resolved
 5. ✅ Explicit merge authorization from operator
 6. ✅ PR body contains `Closes #N` or `Fixes #N`
+7. ✅ PR **title** free of merge-blocking markers — `WIP`, `[WIP]`, `DRAFT`, `DO NOT MERGE`, `🚧` (case-insensitive)
+
+## Title markers
+
+The PR title is a contract surface, so a merge-blocking marker in the title is enforced
+deterministically (`findBlockingTitleMarkers` in `@dev-loops/core/loop/pr-title-markers`), not
+just reviewed:
+
+- At the **draft → ready-for-review** transition: `ready-for-review` refuses `gh pr ready` while the
+  title carries a marker.
+- At the **pre-approval gate boundary and final approval** (for non-draft PRs): the gate coordinator
+  returns `title_marker_blocked` so a PR un-drafted externally still cannot enter pre-approval or
+  reach merge-ready with a marked title.
+
+A marker is allowed only while the PR is still in draft; it must be removed before the PR leaves draft.
 
 ## Merge authorization
 

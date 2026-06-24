@@ -367,7 +367,7 @@ function buildTitleMarkerBlockedResult({
     allowedNextActions,
     forbiddenActions,
     nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-    reason: `Merge remains blocked: the PR title contains merge-blocking marker(s): ${markers.join(", ")}. Remove them from the title before final approval.`,
+    reason: `Blocked: the PR title contains merge-blocking marker(s): ${markers.join(", ")}. Remove them from the title before the PR can leave draft, enter the pre-approval gate, or reach final approval.`,
     mergeStateStatus,
     conflictFiles,
       refinementArtifact,
