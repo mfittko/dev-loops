@@ -4,7 +4,7 @@
  * Hooks receive the event payload as JSON on stdin and signal a PreToolUse decision either via
  * exit code 2 (stderr → Claude) or exit 0 with a `hookSpecificOutput` JSON object. We use the
  * structured JSON form so the deny reason is explicit. The decision logic itself lives in the
- * pure `@dev-loops/core/claude/hook-decisions` deciders — these helpers are only the edge IO.
+ * pure deciders in the vendored `./_hook-decisions.mjs` bundle — these helpers are only edge IO.
  */
 import { readFileSync } from "node:fs";
 

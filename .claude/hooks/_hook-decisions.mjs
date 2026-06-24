@@ -1,0 +1,130 @@
+// GENERATED from packages/core/src/claude/hook-decisions.mjs by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate.
+/**
+ * Pure decision logic for the Claude Code dev-loop hooks (#773).
+ *
+ * The hook *scripts* are thin: they read the PreToolUse/PostToolUse stdin payload, gather facts
+ * (git tracked/ignored status, gate-evidence result), and call these pure deciders. Keeping the
+ * decisions here makes the deny/allow boundary fully unit-testable without spawning hooks, and
+ * keeps the Claude-specific stdin/stdout IO at the edge.
+ *
+ * Pure and side-effect free.
+ */
+
+import { resolveRunId } from "./_run-context.mjs";
+import {
+  isGhPrReadyCommand,
+  extractPrNumberFromGhPrReady,
+  extractRepoFlagFromGhPrReady,
+  TARGET_REPO_SLUG,
+} from "./_bash-command-classify.mjs";
+
+/**
+ * @typedef {Object} HookDecision
+ * @property {"allow"|"deny"} decision
+ * @property {string} [reason] - Human-readable reason (shown to Claude on deny).
+ */
+
+const ALLOW = Object.freeze({ decision: "allow" });
+
+/**
+ * The agent type (Claude `agent_type` / the canonical agent name) that owns repo mutations.
+ * Only this subagent — not arbitrary subagents (Explore, Plan, generic Task agents) — may
+ * bypass the main-agent read-only boundary.
+ */
+export const DEV_LOOP_AGENT_TYPE = "dev-loop";
+
+/**
+ * Decide whether a PreToolUse Bash command must be blocked by the draft-gate boundary.
+ *
+ * Mirrors the Pi extension's `onUserBash`: the only blocked case is `gh pr ready` for the
+ * target repo without clean draft_gate evidence. Everything else (including merges, which
+ * trigger the post-merge step, not a block) is allowed through.
+ *
+ * @param {Object} params
+ * @param {string} params.command - The Bash command string.
+ * @param {string|null} [params.repoSlug] - Resolved owner/name of the cwd repo (null if unknown).
+ * @param {boolean} [params.gatePassed] - Whether `pre-pr-ready-gate` evidence exists for the PR.
+ * @param {string|null} [params.gateError] - Error detail when the gate guard could not run.
+ * @returns {HookDecision}
+ */
+export function decideBashGate({ command, repoSlug = null, gatePassed = false, gateError = null }) {
+  if (typeof command !== "string" || !isGhPrReadyCommand(command)) {
+    return ALLOW;
+  }
+
+  // An explicit `--repo other/repo` that is not the target → not our concern, pass through.
+  const explicitRepo = extractRepoFlagFromGhPrReady(command);
+  if (explicitRepo && explicitRepo.toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
+    return ALLOW;
+  }
+  // Only gate within the target repo (case-insensitive — callers may pass an un-lowercased slug).
+  if ((repoSlug ?? "").toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
+    return ALLOW;
+  }
+
+  const prNumber = extractPrNumberFromGhPrReady(command);
+  if (prNumber === null) {
+    return {
+      decision: "deny",
+      reason:
+        "gh pr ready blocked: could not determine the PR number from the command. Include the PR number explicitly.",
+    };
+  }
+
+  if (gateError) {
+    return {
+      decision: "deny",
+      reason: `gh pr ready blocked: draft-gate evidence check failed (${gateError}).`,
+    };
+  }
+
+  if (!gatePassed) {
+    return {
+      decision: "deny",
+      reason: `gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #${prNumber}.`,
+    };
+  }
+
+  return ALLOW;
+}
+
+/**
+ * Decide whether a PreToolUse Write/Edit must be blocked by the main-agent read-only boundary.
+ *
+ * Denies a mutation whose target is inside the repo working tree AND not gitignored, when the
+ * call originates from the MAIN agent. Allows it only inside the *dev-loop* subagent context:
+ * the CA2 run id (`DEVLOOPS_RUN_ID`) is present, or the Claude `agent_type` is the dev-loop
+ * agent. A generic subagent (Explore, Plan, an arbitrary Task agent) is NOT authorized — the
+ * contract requires mutations to flow through the dev-loop subagent specifically. Non-repo /
+ * gitignored paths are always allowed. Strict enforcement is opt-in via `enforce` (the hook
+ * derives it from `DEVLOOPS_MAIN_AGENT_READONLY=1`) so adopting the harness does not
+ * retroactively break a repo's own interactive dev; default is fail-open.
+ *
+ * @param {Object} params
+ * @param {string} params.filePath - Target file path.
+ * @param {boolean} params.isRepoMutation - True if inside the repo working tree AND not gitignored.
+ * @param {boolean} [params.enforce] - Strict mode (DEVLOOPS_MAIN_AGENT_READONLY=1).
+ * @param {Record<string,string|undefined>} [params.env] - Environment (for the CA2 run id).
+ * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload, if any.
+ * @returns {HookDecision}
+ */
+export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, env = {}, agentType = null }) {
+  if (!enforce) {
+    return ALLOW; // strict enforcement not enabled — fail open
+  }
+  if (!isRepoMutation) {
+    return ALLOW; // non-repo or gitignored path (e.g. /tmp, tmp/) — allowed by the contract
+  }
+  // Authorized only inside the dev-loop subagent context: CA2 run id, or the dev-loop agent
+  // type. Any other subagent type is treated like the main agent and denied.
+  if (resolveRunId(env) || agentType === DEV_LOOP_AGENT_TYPE) {
+    return ALLOW;
+  }
+  return {
+    decision: "deny",
+    reason:
+      `Main-agent read-only boundary: refusing to mutate repository path "${filePath}". ` +
+      "All repository mutations must flow through the dev-loop subagent. " +
+      "See skills/docs/main-agent-contract.md.",
+  };
+}

@@ -10,13 +10,13 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import { decideBashGate } from "@dev-loops/core/claude/hook-decisions";
+import { decideBashGate } from "./_hook-decisions.mjs";
 import {
   isGhPrReadyCommand,
   extractPrNumberFromGhPrReady,
   normalizeGitHubRepoSlug,
   TARGET_REPO_SLUG,
-} from "@dev-loops/core/loop/bash-command-classify";
+} from "./_bash-command-classify.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 

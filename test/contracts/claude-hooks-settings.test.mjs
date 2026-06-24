@@ -63,6 +63,36 @@ test("the three hook scripts (+ _hook-io) exist under the plugin root", () => {
   }
 });
 
+test("the self-contained hook bundle modules exist under the plugin root (#843)", () => {
+  for (const module of ["_bash-command-classify.mjs", "_run-context.mjs", "_hook-decisions.mjs"]) {
+    assert.ok(fs.existsSync(path.join(hooksDir, module)), `missing bundled module ${module}`);
+  }
+});
+
+test("no .claude/hooks script imports an unresolvable bare package (#843)", () => {
+  // The marketplace plugin bundle has no node_modules, so a bare specifier like
+  // `@dev-loops/core/...` is unresolvable from the plugin cache and crashes the hook on load.
+  // Hooks (and their vendored bundle modules) may only import `node:` builtins or relative paths.
+  const importPattern = /^\s*(?:import|export)\b[^"';]*?\bfrom\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']/gm;
+  const offenders = [];
+  for (const file of fs.readdirSync(hooksDir).filter((f) => f.endsWith(".mjs"))) {
+    const body = fs.readFileSync(path.join(hooksDir, file), "utf8");
+    // Fresh regex per file: a shared /g regex would carry `lastIndex` across files and skip
+    // imports at the top of later files (Copilot review, PR #844).
+    for (const match of body.matchAll(new RegExp(importPattern))) {
+      const spec = match[1] ?? match[2];
+      if (!spec) continue;
+      const resolvable = spec.startsWith("node:") || spec.startsWith("./") || spec.startsWith("../");
+      if (!resolvable) offenders.push(`${file} → ${spec}`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `Bundled hooks must only import node: builtins or relative paths (no node_modules in the plugin):\n${offenders.join("\n")}`,
+  );
+});
+
 test("package.json files allowlist ships the plugin hooks", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   assert.ok(pkg.files.includes(".claude/hooks/"), "files allowlist must ship .claude/hooks/");
