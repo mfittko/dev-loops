@@ -232,7 +232,7 @@ function orderedCliSetupSteps(checks) {
   return [
     "1. Use `/dev-loop` (Claude Code) or `/skill:dev-loop` (Pi) to start or continue a dev loop — the single public entry.",
     "2. Run `dev-loops status` whenever you want a concise readiness snapshot.",
-    "3. Run via `npx dev-loops` (or `npm install -g dev-loops` for the shell command); see the README for Pi-extension setup (Claude Code plugin packaging is in progress).",
+    "3. Run via `npx dev-loops` (or `npm install -g dev-loops` for the shell command); see the README for Pi-extension and Claude Code plugin setup.",
   ];
 }
 
