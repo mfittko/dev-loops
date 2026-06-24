@@ -2,6 +2,7 @@
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, normalizeTimestamp } from "../_core-helpers.mjs";
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import path from "node:path";
 import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
@@ -315,9 +316,9 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
   let interpretation = interpretLoopState(snapshot, refinementConfig);
 
   // Check for human comments since last subagent action
-  // Only active in async subagent context (PI_SUBAGENT_RUN_ID set)
+  // Only active in async subagent context (DEVLOOPS_RUN_ID, or the PI_SUBAGENT_RUN_ID alias, set)
   let humanCommentCheck = { paused: false };
-  if (env.PI_SUBAGENT_RUN_ID) {
+  if (resolveRunId(env)) {
     humanCommentCheck = await detectRecentHumanComments(
       { repo: options.repo, pr: options.pr, claimedAtMs: runnerOwnership?.activeRun?.claimedAt ? new Date(runnerOwnership.activeRun.claimedAt).getTime() : undefined },
       { env, ghCommand },

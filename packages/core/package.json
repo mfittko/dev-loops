@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "0.1.3",
+  "version": "0.2.1",
   "type": "module",
   "description": "Shared deterministic support package for dev-loop skills, repo-local scripts, and GitHub automation.",
   "exports": {
@@ -8,6 +8,9 @@
     "./cli/helpers": "./src/cli/helpers.mjs",
     "./cli/primitives": "./src/cli/primitives.mjs",
     "./cli/retry-wrapper": "./src/cli/retry-wrapper.mjs",
+    "./claude/asset-generation": "./src/claude/asset-generation.mjs",
+    "./claude/headless-entry": "./src/claude/headless-entry.mjs",
+    "./claude/hook-decisions": "./src/claude/hook-decisions.mjs",
     "./config": "./src/config/config.mjs",
     "./debt/cluster": "./src/debt/cluster.mjs",
     "./debt/finding": "./src/debt/debt-finding.mjs",
@@ -20,6 +23,7 @@
     "./github/repo-slug": "./src/github/repo-slug.mjs",
     "./github/review-threads": "./src/github/review-threads.mjs",
     "./loop/async-start-contract": "./src/loop/async-start-contract.mjs",
+    "./loop/bash-command-classify": "./src/loop/bash-command-classify.mjs",
     "./loop/conductor-routing": "./src/loop/conductor-routing.mjs",
     "./loop/copilot-ci-status": "./src/loop/copilot-ci-status.mjs",
     "./loop/copilot-loop-iterations": "./src/loop/copilot-loop-iterations.mjs",
@@ -35,6 +39,7 @@
     "./loop/queue-parallel": "./src/loop/queue-parallel.mjs",
     "./loop/queue-state": "./src/loop/queue-state.mjs",
     "./loop/reviewer-loop-state": "./src/loop/reviewer-loop-state.mjs",
+    "./loop/run-context": "./src/loop/run-context.mjs",
     "./loop/run-inspection": "./src/loop/run-inspection.mjs",
     "./loop/steering": "./src/loop/steering.mjs",
     "./loop/timeout-policy": "./src/loop/timeout-policy.mjs",

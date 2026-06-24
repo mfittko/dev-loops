@@ -8,6 +8,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
+import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
@@ -452,7 +453,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even
   // though the old run is dead, forcing manual file deletion.
-  const envRunId = typeof env?.PI_SUBAGENT_RUN_ID === "string" ? env.PI_SUBAGENT_RUN_ID.trim() : "";
+  const envRunId = resolveRunId(env) ?? "";
   if (envRunId) {
     try {
       const staleCheck = await detectStaleRunner({ repo: options.repo, pr: options.pr, cwd: repoRoot });
@@ -606,7 +607,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (existing) {
     const updated = await updateComment({ repo: options.repo, commentId: existing.commentId, body: desiredBody }, { env, ghCommand });
     // Post-update verification: verify the updated comment is visible via direct API fetch by comment ID.
-    // PI_SUBAGENT_RUN_ID is set (production context).
+    // A run id is set (production context) — DEVLOOPS_RUN_ID, or the PI_SUBAGENT_RUN_ID alias.
     let updateVerificationWarning = null;
     if (envRunId) {
       let verified = await verifyComment({ repo: options.repo, commentId: updated.commentId }, { env, ghCommand });
@@ -639,7 +640,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // comment is not yet returned by paginated list endpoints. A direct fetch
   // by comment ID confirms the comment is persisted, preventing the evidence
   // checker from falsely reporting "missing" and triggering a duplicate post.
-  // Only active when PI_SUBAGENT_RUN_ID is set (production context).
+  // Only active when a run id is set (production context) — DEVLOOPS_RUN_ID or the PI_SUBAGENT_RUN_ID alias.
   let verified = true;
   let verificationWarning = null;
   if (envRunId) {

@@ -2,15 +2,17 @@
   "name": "dev-loops",
   "license": "MIT",
   "type": "module",
-  "description": "Shared Pi workflow infrastructure for reusable local and remote development loops",
+  "description": "Agent-harness-agnostic dev-loop infrastructure (Pi and Claude Code) for reusable local and remote development loops",
   "keywords": [
-    "pi-package",
+    "dev-loop",
+    "workflow",
+    "github",
+    "copilot",
+    "claude-code",
+    "claude",
     "pi",
     "pi-coding-agent",
-    "workflow",
-    "dev-loop",
-    "github",
-    "copilot"
+    "pi-package"
   ],
   "engines": {
     "node": ">=20"
@@ -21,12 +23,13 @@
   "scripts": {
     "verify": "npm test && npm run test:dev-loop",
     "test": "npm run test:assets && npm run test:extension && npm run test:scripts && npm run test:core && npm run test:docs",
-    "test:assets": "node --test test/dev-loop-init-phase-smoke.test.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
-    "test:extension": "node --import tsx --test test/extension-checks.test.mjs test/extension-post-merge-update.test.mjs test/extension-command-contract.test.mjs test/extension-package-contract.test.mjs test/dev-loops-core.test.mjs test/dev-loops-cli.test.mjs",
-    "test:scripts": "node --test test/github/*.test.mjs test/loop/*.test.mjs test/docs/*.test.mjs test/projects/*.test.mjs",
-    "test:core": "node --test packages/core/test/*.test.mjs",
-    "test:dev-loop": "node --test skills/dev-loop/scripts/dev-mode-context.test.mjs skills/dev-loop/scripts/render-template.test.mjs skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs",
+    "test:assets": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/dev-loop-init-phase-smoke.test.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
+    "test:extension": "node --import tsx --test --test-reporter ./test/failure-summary-reporter.mjs test/extension-checks.test.mjs test/extension-post-merge-update.test.mjs test/extension-command-contract.test.mjs test/extension-package-contract.test.mjs test/extension-pi-adapter.test.mjs test/extension-claude-adapter.test.mjs test/dev-loops-core.test.mjs test/dev-loops-cli.test.mjs",
+    "test:scripts": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/github/*.test.mjs test/loop/*.test.mjs test/docs/*.test.mjs test/projects/*.test.mjs",
+    "test:core": "node --test --test-reporter ./test/failure-summary-reporter.mjs packages/core/test/*.test.mjs",
+    "test:dev-loop": "node --test --test-reporter ./test/failure-summary-reporter.mjs skills/dev-loop/scripts/dev-mode-context.test.mjs skills/dev-loop/scripts/render-template.test.mjs skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs",
     "test:playwright:viewer": "playwright test -c playwright.inspect-run-viewer.config.mjs",
+    "smoke:headless": "node scripts/claude/headless-info-smoke.mjs",
     "test:docs": "node scripts/docs/validate-links.mjs && node scripts/docs/validate-no-duplicate-rules.mjs",
     "repo-wiki": "node scripts/repo-wiki.mjs",
     "repo-wiki:bootstrap": "node scripts/repo-wiki.mjs scan --repo . && node scripts/repo-wiki.mjs plan --repo . && node scripts/repo-wiki.mjs compile --repo .",
@@ -65,7 +68,7 @@
   },
   "dependencies": {
     "mermaid": "11.15.0",
-    "@dev-loops/core": "^0.1.3"
+    "@dev-loops/core": "^0.2.1"
   },
   "repository": {
     "type": "git",
@@ -75,7 +78,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "0.1.3",
+  "version": "0.2.1",
   "files": [
     "cli/",
     "lib/",
@@ -83,6 +86,11 @@
     "extension/",
     "skills/",
     "agents/",
+    ".claude-plugin/",
+    ".claude/.claude-plugin/",
+    ".claude/agents/",
+    ".claude/skills/",
+    ".claude/hooks/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",

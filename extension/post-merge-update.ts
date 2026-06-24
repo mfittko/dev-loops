@@ -1,14 +1,39 @@
-import type {
-  AgentEndEvent,
-  ExecResult,
-  ExtensionAPI,
-  ExtensionContext,
-  ToolResultEvent,
-  UserBashEvent,
-  UserBashEventResult,
-} from '@earendil-works/pi-coding-agent';
+import type { ExtensionHarnessAdapter, HarnessContext, HarnessExecResult } from './harness-types.ts';
+import {
+  TARGET_REPO_SLUG,
+  trimToNull,
+  normalizeGitHubRepoSlug,
+  isMergeCapableCommand,
+  isGhPrReadyCommand,
+  extractPrNumberFromGhPrReady,
+  extractRepoFlagFromGhPrReady,
+} from '@dev-loops/core/loop/bash-command-classify';
 
-export const TARGET_REPO_SLUG = 'mfittko/dev-loops';
+// The bash-command classifiers now live in `@dev-loops/core/loop/bash-command-classify` so the
+// Pi extension and the Claude Code Bash hook share one source of truth. Re-export them here so
+// existing importers (and tests) that reference them from this module keep resolving.
+export {
+  TARGET_REPO_SLUG,
+  normalizeGitHubRepoSlug,
+  isMergeCapableCommand,
+  isGhPrReadyCommand,
+  extractPrNumberFromGhPrReady,
+  extractRepoFlagFromGhPrReady,
+};
+
+// Neutral event shapes the post-merge hook reads. The harness adapter forwards the
+// harness-native event object through unchanged; these capture only the fields used here.
+type ToolResultLike = { toolName?: string; input?: { command?: unknown } | null; isError?: boolean };
+type UserBashLike = { command: string; cwd: string };
+type UserBashResultLike = {
+  result: {
+    output: string;
+    exitCode: number | undefined;
+    cancelled: boolean;
+    truncated: boolean;
+  };
+};
+
 export const POST_MERGE_UPDATE_COMMAND = 'pi update git:github.com/mfittko/dev-loops';
 export const PRE_PR_READY_GATE_SCRIPT = 'node scripts/loop/pre-pr-ready-gate.mjs';
 
@@ -16,9 +41,6 @@ const MERGE_COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
 const POST_MERGE_UPDATE_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_RESOLUTION_TIMEOUT_MS = 5_000;
 const PR_READY_GATE_TIMEOUT_MS = 30_000;
-
-// Flags known to take a value argument for gh pr ready (not boolean flags)
-const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
 
 type RepoContext = {
   repoRoot: string | null;
@@ -31,7 +53,7 @@ type RunCommandArgs = {
   timeout?: number;
 };
 
-type RunCommandResult = ExecResult;
+type RunCommandResult = HarnessExecResult;
 
 type PostMergeUpdateHookState = {
   pendingPostMergeUpdate: boolean;
@@ -40,14 +62,10 @@ type PostMergeUpdateHookState = {
 };
 
 type CreatePostMergeUpdateHookOptions = {
+  exec?: ExtensionHarnessAdapter['exec'];
   resolveRepoContext?: (cwd: string) => Promise<RepoContext>;
   runCommand?: (args: RunCommandArgs) => Promise<RunCommandResult>;
 };
-
-function trimToNull(value: string | null | undefined): string | null {
-  const trimmed = `${value ?? ''}`.trim();
-  return trimmed ? trimmed : null;
-}
 
 function buildShellOutput(result: Pick<RunCommandResult, 'stdout' | 'stderr'>): string {
   const stdout = `${result.stdout ?? ''}`.trimEnd();
@@ -66,22 +84,22 @@ function buildFailureSummary(result: Pick<RunCommandResult, 'stdout' | 'stderr' 
       : (typeof result.code === 'number' ? `exit code ${result.code}` : 'exit code unavailable'));
 }
 
-function getBashCommandFromToolResult(event: ToolResultEvent): string | null {
-  if (event.toolName !== 'bash') {
+function getBashCommandFromToolResult(event: ToolResultLike | null | undefined): string | null {
+  if (!event || event.toolName !== 'bash') {
     return null;
   }
   const command = event.input?.command;
   return typeof command === 'string' ? command : null;
 }
 
-function notify(ctx: ExtensionContext, message: string, level: 'info' | 'warning' | 'error' = 'info'): void {
+function notify(ctx: Pick<HarnessContext, 'hasUI' | 'ui'>, message: string, level: 'info' | 'warning' | 'error' = 'info'): void {
   if (ctx.hasUI) {
     ctx.ui.notify(message, level);
   }
 }
 
-async function defaultResolveRepoContext(pi: ExtensionAPI, cwd: string): Promise<RepoContext> {
-  const rootResult = await pi.exec('bash', ['-lc', 'git rev-parse --show-toplevel'], {
+async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<RepoContext> {
+  const rootResult = await exec('git rev-parse --show-toplevel', {
     cwd,
     timeout: REPO_RESOLUTION_TIMEOUT_MS,
   });
@@ -94,7 +112,7 @@ async function defaultResolveRepoContext(pi: ExtensionAPI, cwd: string): Promise
     return { repoRoot: null, repoSlug: null };
   }
 
-  const remoteResult = await pi.exec('bash', ['-lc', 'git config --get remote.origin.url'], {
+  const remoteResult = await exec('git config --get remote.origin.url', {
     cwd: repoRoot,
     timeout: REPO_RESOLUTION_TIMEOUT_MS,
   });
@@ -104,12 +122,12 @@ async function defaultResolveRepoContext(pi: ExtensionAPI, cwd: string): Promise
 
   return {
     repoRoot,
-    repoSlug: normalizeGitHubRepoSlug(remoteResult.stdout),
+    repoSlug: normalizeGitHubRepoSlug(remoteResult.stdout ?? ''),
   };
 }
 
-async function defaultRunCommand(pi: ExtensionAPI, args: RunCommandArgs): Promise<RunCommandResult> {
-  return pi.exec('bash', ['-lc', args.command], {
+async function defaultRunCommand(exec: ExtensionHarnessAdapter['exec'], args: RunCommandArgs): Promise<RunCommandResult> {
+  return exec(args.command, {
     cwd: args.cwd,
     timeout: args.timeout,
   });
@@ -159,165 +177,17 @@ async function queueIfEligible(
   return true;
 }
 
-export function normalizeGitHubRepoSlug(remoteUrl: string): string | null {
-  const normalized = trimToNull(remoteUrl);
-  if (!normalized) {
-    return null;
-  }
 
-  const patterns = [
-    /^git@github\.com:([^\s]+?)(?:\.git)?$/i,
-    /^https:\/\/github\.com\/([^\s]+?)(?:\.git)?$/i,
-    /^ssh:\/\/git@github\.com\/([^\s]+?)(?:\.git)?$/i,
-    /^git:github\.com\/([^\s]+?)(?:\.git)?$/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    if (!match) {
-      continue;
-    }
-    return trimToNull(match[1])?.toLowerCase() ?? null;
-  }
-
-  return null;
-}
-
-function isGhPrMergeCommand(segment: string): boolean {
-  if (!/^gh\s+pr\s+merge(?:\s|$)/i.test(segment)) {
-    return false;
-  }
-
-  const remainder = segment.replace(/^gh\s+pr\s+merge(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return true;
-  }
-
-  const firstArg = remainder.match(/^(\S+)/)?.[1]?.toLowerCase() ?? '';
-  return !['--help', '-h'].includes(firstArg);
-}
-
-function isGitMergeCompletionCommand(segment: string): boolean {
-  if (!/^git\s+merge(?:\s|$)/i.test(segment)) {
-    return false;
-  }
-
-  const remainder = segment.replace(/^git\s+merge(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return true;
-  }
-
-  const firstArg = remainder.match(/^(\S+)/)?.[1]?.toLowerCase() ?? '';
-  return !['--abort', '--continue', '--quit', '--help', '-h'].includes(firstArg);
-}
-
-export function isMergeCapableCommand(command: string): boolean {
-  const normalized = command.trim();
-  if (!normalized) {
-    return false;
-  }
-
-  return normalized
-    .split(/\s*(?:&&|\|\||;|\|)\s*/)
-    .some((segment) => isGhPrMergeCommand(segment) || isGitMergeCompletionCommand(segment));
-}
-
-function firstShellSegment(command: string): string {
-  return command.trim().split(/\s*(?:&&|\|\||;|\|)\s*/)[0]?.trim() ?? '';
-}
-
-export function isGhPrReadyCommand(command: string): boolean {
-  const segment = firstShellSegment(command);
-  if (!segment || !/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
-    return false;
-  }
-
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return true;
-  }
-  // Block interception if --help or -h appears anywhere in the arguments
-  const args = remainder.split(/\s+/).map(a => a.toLowerCase());
-  return !args.includes('--help') && !args.includes('-h');
-}
-
-export function extractPrNumberFromGhPrReady(command: string): number | null {
-  const segment = firstShellSegment(command);
-  if (!/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
-    return null;
-  }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return null;
-  }
-  // Skip flags (--flag or --flag=value)
-  const tokens = remainder.split(/\s+/);
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith('-')) {
-      // Only skip the next token for flags known to take a value argument
-      const flagName = token.replace(/=.*$/, '').toLowerCase();
-      if (!token.includes('=') && FLAGS_THAT_TAKE_VALUE.has(flagName)) {
-        i++; // skip next token (the flag value)
-      }
-      continue;
-    }
-    if (/^\d+$/.test(token)) {
-      const num = Number(token);
-      if (num > 0) {
-        return num;
-      }
-    }
-    // Non-numeric non-flag token — not a PR number
-    return null;
-  }
-  return null;
-}
-
-export function extractRepoFlagFromGhPrReady(command: string): string | null {
-  const segment = firstShellSegment(command);
-  if (!/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
-    return null;
-  }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, '').trim();
-  if (!remainder) {
-    return null;
-  }
-  const tokens = remainder.split(/\s+/);
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    const lower = token.toLowerCase();
-    if (lower === '-r' || lower === '--repo') {
-      // Next token is the repo slug value
-      if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
-        return tokens[i + 1];
-      }
-    }
-    // Handle --repo=value and -R=value
-    const repoEqMatch = token.match(/^(?:--repo|-R)=(.+)$/i);
-    if (repoEqMatch) {
-      return repoEqMatch[1];
-    }
-
-  }
-  return null;
-}
-
-export function createPostMergeUpdateHook(
-  piOrOptions: ExtensionAPI | CreatePostMergeUpdateHookOptions,
-  maybeOptions: CreatePostMergeUpdateHookOptions = {},
-) {
-  const hasPiExec = typeof (piOrOptions as ExtensionAPI)?.exec === 'function';
-  const pi = hasPiExec ? piOrOptions as ExtensionAPI : null;
-  const options = hasPiExec ? maybeOptions : (piOrOptions as CreatePostMergeUpdateHookOptions);
+export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOptions = {}) {
+  const exec = options.exec ?? null;
 
   const resolveRepoContext = options.resolveRepoContext
-    ?? (pi ? ((cwd: string) => defaultResolveRepoContext(pi, cwd)) : null);
+    ?? (exec ? ((cwd: string) => defaultResolveRepoContext(exec, cwd)) : null);
   const runCommand = options.runCommand
-    ?? (pi ? ((args: RunCommandArgs) => defaultRunCommand(pi, args)) : null);
+    ?? (exec ? ((args: RunCommandArgs) => defaultRunCommand(exec, args)) : null);
 
   if (!resolveRepoContext || !runCommand) {
-    throw new Error('createPostMergeUpdateHook requires an ExtensionAPI or explicit resolveRepoContext/runCommand overrides.');
+    throw new Error('createPostMergeUpdateHook requires an `exec` function or explicit resolveRepoContext/runCommand overrides.');
   }
 
   const state: PostMergeUpdateHookState = {
@@ -341,15 +211,24 @@ export function createPostMergeUpdateHook(
       reset();
     },
 
-    async onToolResult(event: Pick<ToolResultEvent, 'toolName' | 'input' | 'isError'>, ctx: Pick<ExtensionContext, 'cwd'>): Promise<void> {
-      const command = getBashCommandFromToolResult(event as ToolResultEvent);
+    async onToolResult(rawEvent: unknown, ctx: Pick<HarnessContext, 'cwd'>): Promise<void> {
+      // Harness events arrive as `unknown` across the neutral seam; narrow here, at the
+      // single place that knows which fields this hook reads.
+      const event = rawEvent as ToolResultLike;
+      const command = getBashCommandFromToolResult(event);
       if (!command || event.isError) {
         return;
       }
       await queueIfEligible(state, resolveRepoContext, command, ctx.cwd);
     },
 
-    async onUserBash(event: Pick<UserBashEvent, 'command' | 'cwd'>, _ctx?: ExtensionContext): Promise<UserBashEventResult | undefined> {
+    async onUserBash(rawEvent: unknown, _ctx?: HarnessContext): Promise<UserBashResultLike | undefined> {
+      const event = rawEvent as UserBashLike;
+      // The seam forwards events as `unknown`; a malformed/foreign-harness event must pass
+      // through untouched rather than crash the handler (downstream calls .trim() on command).
+      if (!event || typeof event.command !== 'string') {
+        return undefined;
+      }
       // Intercept gh pr ready before any other checks
       if (isGhPrReadyCommand(event.command)) {
         // Check if the command explicitly targets a different repo via -R/--repo
@@ -477,13 +356,13 @@ export function createPostMergeUpdateHook(
       }
     },
 
-    async onAgentEnd(_event: AgentEndEvent, ctx: Pick<ExtensionContext, 'cwd' | 'hasUI' | 'ui'>): Promise<void> {
+    async onAgentEnd(_event: unknown, ctx: Pick<HarnessContext, 'cwd' | 'hasUI' | 'ui'>): Promise<void> {
       if (!state.pendingPostMergeUpdate || state.updateInFlight) {
         return;
       }
 
       state.updateInFlight = true;
-      notify(ctx as ExtensionContext, `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
+      notify(ctx, `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
 
       try {
         const result = await runCommand({
@@ -493,17 +372,17 @@ export function createPostMergeUpdateHook(
         });
 
         if (result.code === 0 && !result.killed) {
-          notify(ctx as ExtensionContext, `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
+          notify(ctx, `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
         } else {
           notify(
-            ctx as ExtensionContext,
+            ctx,
             `Post-merge update failed (warning only): ${buildFailureSummary(result)}`,
             'warning',
           );
         }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        notify(ctx as ExtensionContext, `Post-merge update failed (warning only): ${detail}`, 'warning');
+        notify(ctx, `Post-merge update failed (warning only): ${detail}`, 'warning');
       } finally {
         reset();
       }

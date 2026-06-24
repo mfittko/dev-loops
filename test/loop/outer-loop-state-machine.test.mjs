@@ -637,7 +637,7 @@ test("outer-loop: rejects when no Pi-managed async context markers are present",
 
     assert.equal(result.ok, false);
     assert.equal(result.asyncStartContract, "rejected");
-    assert.ok(result.error.includes("No Pi-managed async context detected"));
+    assert.ok(result.error.includes("No async context detected"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -662,7 +662,7 @@ test("outer-loop CLI: async-start rejection exits non-zero and writes JSON error
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.equal(payload.asyncStartContract, "rejected");
-    assert.ok(payload.error.includes("No Pi-managed async context detected"));
+    assert.ok(payload.error.includes("No async context detected"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

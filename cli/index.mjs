@@ -195,7 +195,7 @@ function buildCliHelpLines() {
     "dev-loops help",
     "",
     "Workflow entry:",
-    "- /skill:dev-loop (in Pi) or `subagent dev-loop` — single public entrypoint; routing handles the rest",
+    "- `/dev-loop` (Claude Code) or `/skill:dev-loop` (Pi) — single public entrypoint; routing handles the rest",
     "",
     "Commands:",
     "- dev-loops help                   Show this help",
@@ -209,8 +209,8 @@ function buildCliHelpLines() {
     "Use `dev-loops <category> <subcommand> --help` for per-subcommand usage.",
     "",
     "`/dev-loops hide` remains an extension-only Pi command.",
-    "Use `pi install git:github.com/mfittko/dev-loops` to install skills and agents, or",
-    "`pi update git:github.com/mfittko/dev-loops` to refresh the package.",
+    "Run via `npx dev-loops` (or `npm install -g dev-loops` for the shell command); see the",
+    "README for Pi-extension and Claude Code plugin setup.",
   ];
 }
 
@@ -230,9 +230,9 @@ function orderedCliSetupSteps(checks) {
   const steps = [...new Set(DEV_LOOP_CHECK_IDS.filter((id) => byId.get(id)?.ok === false).map((id) => CLI_SETUP_GUIDANCE[id]))];
   if (steps.length > 0) return steps.map((step, i) => `${i + 1}. ${step}`);
   return [
-    "1. Use `/skill:dev-loop` (in Pi) or `subagent dev-loop` to start or continue a dev loop — the single public entry.",
+    "1. Use `/dev-loop` (Claude Code) or `/skill:dev-loop` (Pi) to start or continue a dev loop — the single public entry.",
     "2. Run `dev-loops status` whenever you want a concise readiness snapshot.",
-    "3. Use `pi install git:github.com/mfittko/dev-loops` to install the package, or `pi update git:github.com/mfittko/dev-loops` to refresh it.",
+    "3. Run via `npx dev-loops` (or `npm install -g dev-loops` for the shell command); see the README for Pi-extension and Claude Code plugin setup.",
   ];
 }
 
