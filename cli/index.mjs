@@ -209,8 +209,8 @@ function buildCliHelpLines() {
     "Use `dev-loops <category> <subcommand> --help` for per-subcommand usage.",
     "",
     "`/dev-loops hide` remains an extension-only Pi command.",
-    "Install the CLI with `npm install dev-loops`; see the README for harness-specific setup",
-    "(Claude Code plugin or the Pi extension).",
+    "Install the CLI with `npm install dev-loops`; see the README for Pi-extension setup",
+    "(Claude Code plugin packaging is in progress).",
   ];
 }
 
@@ -232,7 +232,7 @@ function orderedCliSetupSteps(checks) {
   return [
     "1. Use `/dev-loop` (Claude Code) or `/skill:dev-loop` (Pi) to start or continue a dev loop — the single public entry.",
     "2. Run `dev-loops status` whenever you want a concise readiness snapshot.",
-    "3. Install the CLI with `npm install dev-loops`; see the README for harness setup (Claude Code plugin or Pi extension).",
+    "3. Install the CLI with `npm install dev-loops`; see the README for Pi-extension setup (Claude Code plugin packaging is in progress).",
   ];
 }
 
