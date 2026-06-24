@@ -410,6 +410,34 @@ describe("loader — graceful degradation", () => {
     }
   });
 
+  test("L1d: a plain consumer (no .devloops) defaults devModeDefault OFF (#846)", async () => {
+    // Dev mode is the dev-loop self-improvement mode (it edits the loop's own skill/agent prompts
+    // after a phase); shipped defaults must not force it on consumers' ordinary product phases.
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-devmode-off-"));
+    try {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.equal(result.config.workflow.devModeDefault, false);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("L1e: a consumer can opt INTO dev mode via .devloops (#846)", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-devmode-on-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\nworkflow:\n  devModeDefault: true\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.equal(result.config.workflow.devModeDefault, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("L2: only defaults.json present, valid", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L2-"));
     try {
