@@ -225,6 +225,7 @@ When unresolved feedback exists, use a narrow follow-up loop:
     - if the refreshed snapshot reports unresolved threads, re-enter the reply/resolve loop for the missed threads
 12. only after GitHub-side reply/resolve work is done for the addressed threads and the refreshed thread snapshot proves zero unresolved threads remain, decide whether another Copilot pass is desired
     - resolve the review-round cap from config via `resolveRefinementConfig(config, "maxCopilotRounds")` from `@dev-loops/core/config`; default config ships `maxCopilotRounds: 5`
+    - **Opt out entirely:** `maxCopilotRounds: 0` disables the external Copilot review gate for the repo — the loop runs `draft_gate → pre_approval_gate` with the local harness only, never requesting or waiting on Copilot. Use this when the repo has no Copilot reviewer configured or prefers local-harness-only review.
     - use the completed Copilot review-round count from `detect-copilot-loop-state.mjs` / `copilot-pr-handoff.mjs` as the current PR's review-round count
     - if completed review rounds have reached the maximum (default: 5), do **not** re-request Copilot review
     - when the round limit is reached **and** the refreshed thread snapshot proves zero unresolved threads **and** current-head CI is green or credibly green, treat that clean state as eligible for `pre_approval_gate` fallback instead of deadlocking on another Copilot rerequest

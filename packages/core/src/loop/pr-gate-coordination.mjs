@@ -447,6 +447,12 @@ export function shouldGuardCopilotReviewRequest({
   if (!gateBoundariesRequiringCopilotFormalRequest.has(gateBoundary)) {
     return false;
   }
+  // Copilot review disabled for the repo (maxCopilotRounds: 0): never force a
+  // formal request — the loop runs draft_gate → pre_approval with the local
+  // harness only. See evaluatePrGateCoordination (internal_only routing).
+  if (maxCopilotRounds === 0) {
+    return false;
+  }
   if (copilotReviewRequestStatus !== "none") {
     return false;
   }
@@ -477,9 +483,14 @@ export function evaluatePrGateCoordination(input = {}) {
   const prClosed = input.prClosed === true;
   const prMerged = input.prMerged === true;
   const sameHeadCleanConverged = input.sameHeadCleanConverged === true;
-  const reviewMode = typeof input.reviewMode === "string"
-    ? input.reviewMode.trim().toLowerCase()
-    : null;
+  // maxCopilotRounds: 0 disables the external Copilot review gate entirely
+  // (for repos without Copilot / local-harness-only review). It reuses the
+  // existing internal_only routing — skip the Copilot cycle, go straight to
+  // pre_approval — so no separate skip path is needed.
+  const copilotReviewDisabled = input.maxCopilotRounds === 0;
+  const reviewMode = copilotReviewDisabled
+    ? "internal_only"
+    : (typeof input.reviewMode === "string" ? input.reviewMode.trim().toLowerCase() : null);
   const mergeStateStatus = normalizeMergeStateStatus(input.mergeStateStatus);
   const conflictFiles = normalizeConflictFiles(input.conflictFiles);
   const ciStatus = normalizeCiStatus(input.ciStatus);
@@ -813,7 +824,9 @@ export function evaluatePrGateCoordination(input = {}) {
           allowedNextActions,
           forbiddenActions,
           nextAction: PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
-          reason: "This is an explicitly internal-only PR with clean draft_gate evidence and current-head clean pre_approval_gate, so it is ready for final human approval.",
+          reason: copilotReviewDisabled
+            ? "Copilot review is disabled for this repo (maxCopilotRounds: 0); with clean draft_gate evidence and current-head clean pre_approval_gate, the PR is ready for final human approval."
+            : "This is an explicitly internal-only PR with clean draft_gate evidence and current-head clean pre_approval_gate, so it is ready for final human approval.",
           mergeStateStatus,
           conflictFiles,
             refinementArtifact,
@@ -835,7 +848,9 @@ export function evaluatePrGateCoordination(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-        reason: "This is an explicitly internal-only PR, so `pre_approval_gate` is the next legal boundary instead of an external Copilot review cycle.",
+        reason: copilotReviewDisabled
+          ? "Copilot review is disabled for this repo (maxCopilotRounds: 0), so `pre_approval_gate` is the next legal boundary instead of an external Copilot review cycle."
+          : "This is an explicitly internal-only PR, so `pre_approval_gate` is the next legal boundary instead of an external Copilot review cycle.",
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,

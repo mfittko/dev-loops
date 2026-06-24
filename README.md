@@ -193,7 +193,7 @@ npx dev-loops gates   # see what reviewers will check
 Key surfaces:
 - **Gate angles** — which review lenses run at draft and pre-approval gates
 - **Persona prompts** — focused instructions per angle (DRY, KISS, YAGNI, SRP, SoC, and more)
-- **Refinement** — fan-out count and mode for parallel review variants
+- **Refinement** — fan-out count and mode for parallel review variants; `refinement.maxCopilotRounds` caps Copilot re-review rounds (default `5`), and **`maxCopilotRounds: 0` disables the Copilot review gate entirely** for local-harness-only review (`draft_gate → pre_approval_gate`, no Copilot) — useful when the repo has no Copilot reviewer configured
 - **Autonomy** — which gates require operator confirmation
 - **Workflow defaults** — retrospective enforcement, draft-first posture, dev-mode policy
 

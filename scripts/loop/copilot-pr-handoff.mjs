@@ -366,12 +366,31 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
   // Detect internal tooling PRs — suppress Copilot review request step entirely.
   // Internal-only PRs (scripts/docs/tests/config) skip the request, not just the wait.
   let internalOnlySkipCopilot = false;
-  // Skip internal detection in sequential stub/test mode to avoid consuming stub entries.
-  // Claims-mode stubs handle interleaved calls; detection runs normally.
-  if (!env.GH_SEQUENCE_PATH || env.GH_STUB_MODE === "claims") {
-  if (options.watchStatus === undefined &&
+  // Config opt-out (#832): maxCopilotRounds: 0 disables the external Copilot review
+  // gate for the repo (local-harness-only review). Treat it like an internal-only PR
+  // — skip the request, not just the wait — regardless of stub/sequence mode. This
+  // mirrors the gate-coordination side, which routes maxCopilotRounds: 0 to internal_only.
+  if (refinementConfig?.maxCopilotRounds === 0 &&
+      options.watchStatus === undefined &&
       (interpretation.state === STATE.PR_READY_NO_FEEDBACK ||
        interpretation.state === STATE.READY_TO_REREQUEST_REVIEW)) {
+    internalOnlySkipCopilot = true;
+    interpretation = {
+      ...interpretation,
+      state: STATE.INTERNAL_TOOLING_DIRECT_GATE,
+      nextAction: NEXT_ACTIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE],
+      allowedTransitions: TRANSITIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE] || [STATE.DONE],
+    };
+  }
+  // Skip internal detection in sequential stub/test mode to avoid consuming stub entries.
+  // Claims-mode stubs handle interleaved calls; detection runs normally.
+  if (
+    !internalOnlySkipCopilot &&
+    (!env.GH_SEQUENCE_PATH || env.GH_STUB_MODE === "claims") &&
+    options.watchStatus === undefined &&
+    (interpretation.state === STATE.PR_READY_NO_FEEDBACK ||
+      interpretation.state === STATE.READY_TO_REREQUEST_REVIEW)
+  ) {
     try {
       const internalCheck = await detectPrInternalOnly(options, { env, ghCommand });
       if (internalCheck.ok && internalCheck.internalOnly) {
@@ -386,7 +405,6 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
     } catch {
       // Best-effort: if detection fails, fall through to normal request behavior
     }
-  }
   }
 
   let reviewRequestStatus;

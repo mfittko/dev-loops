@@ -2252,6 +2252,31 @@ test("copilot-pr-handoff skips Copilot request for internal-only PR and emits fi
   }
 });
 
+test("copilot-pr-handoff skips Copilot request when maxCopilotRounds: 0 disables the gate (#832)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-copilot-disabled-"));
+  try {
+    // Repo config disables the Copilot review gate entirely.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 0\n", "utf8");
+    // Only the autoDetect snapshot calls are consumed — the config opt-out short-circuits
+    // before the file-path internal detection and before any review request.
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json"], stdout: JSON.stringify({isDraft:false,state:"OPEN",number:17,headRefOid:"abc123",reviews:[],statusCheckRollup:[{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }]}) + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { cwd: tempDir, env });
+    assert.equal(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.state, STATE.INTERNAL_TOOLING_DIRECT_GATE);
+    assert.equal(output.internalOnlySkipCopilot, true);
+    assert.equal(output.reviewRequestStatus, undefined, "must not request Copilot when the gate is disabled");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("copilot-pr-handoff does not skip Copilot for consumer-facing PR", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-not-internal-"));
   try {
