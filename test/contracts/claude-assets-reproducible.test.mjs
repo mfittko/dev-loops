@@ -37,6 +37,15 @@ test("shared docs + dev-loop templates are bundled so generated skill links reso
   }
 });
 
+test("Pi-runtime-only prose is stripped from generated assets but retained in source (#817)", () => {
+  const generated = fs.readFileSync(path.join(repoRoot, ".claude/agents/dev-loop.md"), "utf8");
+  const source = fs.readFileSync(path.join(repoRoot, "agents/dev-loop.agent.md"), "utf8");
+  for (const term of ["maxSubagentDepth", "contact_supervisor", "pi-intercom", "<!-- pi-only -->"]) {
+    assert.equal(generated.includes(term), false, `generated dev-loop.md must not contain Pi-runtime prose: ${term}`);
+    assert.ok(source.includes(term), `source dev-loop.agent.md must retain Pi-complete prose: ${term}`);
+  }
+});
+
 test("the committed .claude tree is byte-reproducible from the canonical sources (no drift)", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   assert.ok(assets.length > 0, "expected to generate at least one asset");

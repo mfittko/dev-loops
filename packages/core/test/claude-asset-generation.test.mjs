@@ -6,9 +6,52 @@ import {
   mapTool,
   mapTools,
   splitFrontmatter,
+  stripPiOnlyBlocks,
   transformAgent,
   transformSkill,
 } from "../src/claude/asset-generation.mjs";
+
+test("stripPiOnlyBlocks removes <!-- pi-only --> blocks and collapses blank runs; keeps other prose", () => {
+  const body = "Keep A.\n\n<!-- pi-only -->\nPi-only line about contact_supervisor.\n<!-- /pi-only -->\n\nKeep B.\n";
+  const out = stripPiOnlyBlocks(body);
+  assert.equal(out.includes("contact_supervisor"), false);
+  assert.equal(out.includes("pi-only"), false);
+  assert.match(out, /Keep A\./);
+  assert.match(out, /Keep B\./);
+  assert.equal(out.includes("\n\n\n"), false, "blank-line runs collapsed");
+});
+
+test("stripPiOnlyBlocks is a byte-exact no-op without markers, even with pre-existing blank runs", () => {
+  // Must NOT collapse intentional double-blank runs in marker-free bodies (drift guard).
+  const body = "Para one.\n\n\nPara two (after a double blank).\n\nPara three.\n";
+  assert.equal(stripPiOnlyBlocks(body), body);
+});
+
+test("stripPiOnlyBlocks removes multiple blocks non-greedily (no over-strip between them)", () => {
+  const body = "A\n\n<!-- pi-only -->\nfirst\n<!-- /pi-only -->\n\nKEEP MIDDLE\n\n<!-- pi-only -->\nsecond\n<!-- /pi-only -->\n\nB\n";
+  const out = stripPiOnlyBlocks(body);
+  assert.equal(out.includes("first"), false);
+  assert.equal(out.includes("second"), false);
+  assert.match(out, /KEEP MIDDLE/);
+  assert.match(out, /A\n/);
+  assert.match(out, /B\n/);
+});
+
+test("transformAgent strips pi-only blocks from the body", () => {
+  const raw = `---\nname: x\ndescription: d\ntools: [read]\n---\nIntro.\n<!-- pi-only -->\nmaxSubagentDepth: 3 lives here.\n<!-- /pi-only -->\nOutro.\n`;
+  const out = transformAgent({ source: "agents/x.agent.md", raw });
+  assert.equal(out.includes("maxSubagentDepth"), false);
+  assert.match(out, /Intro\./);
+  assert.match(out, /Outro\./);
+});
+
+test("transformSkill strips pi-only blocks from the body too", () => {
+  const raw = `---\nname: s\ndescription: d\nallowed-tools: read bash\n---\nKeep this.\n<!-- pi-only -->\ncontact_supervisor guidance here.\n<!-- /pi-only -->\nAnd keep this.\n`;
+  const out = transformSkill({ source: "skills/s/SKILL.md", raw });
+  assert.equal(out.includes("contact_supervisor"), false);
+  assert.match(out, /Keep this\./);
+  assert.match(out, /And keep this\./);
+});
 
 test("mapTool expands search to Grep+Glob and maps subagent/review_loop to Agent", () => {
   assert.deepEqual(mapTool("read"), ["Read"]);

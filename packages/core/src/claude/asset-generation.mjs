@@ -7,9 +7,11 @@
  * Pi→Claude tool-name mapping (confirmed against Claude Code docs):
  *   read→Read, search→Grep+Glob, execute→Bash, bash→Bash, edit→Edit, write→Write,
  *   agent→Agent, subagent→Agent, todo→TodoWrite, review_loop→Agent (the review subagent).
- * Only the frontmatter *tool lists* are rewritten; bodies are copied verbatim. Any prose
- * mentions of Pi tool names (e.g. a sentence like "tools: [subagent]") are preserved as-is —
- * neutralizing Pi-specific body prose is harness-neutrality work owned by #774, not this slice.
+ * Frontmatter *tool lists* are rewritten, and bodies are copied through `stripPiOnlyBlocks`
+ * (#817): `<!-- pi-only -->`…`<!-- /pi-only -->` sections are removed for the Claude output so
+ * Pi-runtime-specific prose (e.g. `tools: [subagent]`/`maxSubagentDepth` assertions, the
+ * `contact_supervisor`/`pi-intercom` bug guidance) doesn't contradict the Claude assets. The
+ * source stays Pi-complete; general `subagent` prose is preserved (Claude has subagents too).
  *
  * Frontmatter handling:
  * - Agents keep name/description/tools (comma-separated, per Claude's agent format) and drop
@@ -40,6 +42,35 @@ export const TOOL_NAME_MAP = Object.freeze({
 
 const GENERATED_NOTE = (source) =>
   `<!-- GENERATED from ${source} by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->`;
+
+/**
+ * Strip Pi-runtime-only prose blocks from a body for the Claude output (#817).
+ *
+ * The canonical sources stay Pi-complete; sections that are Pi-runtime-specific and misleading
+ * under Claude (e.g. `tools: [subagent]`/`maxSubagentDepth` assertions that contradict the
+ * mapped Claude frontmatter, or the `contact_supervisor`/`pi-intercom` Pi-bug guidance) are
+ * wrapped in the source with `<!-- pi-only -->` … `<!-- /pi-only -->` and removed here. Resulting
+ * blank-line runs are collapsed so the stripped body stays clean. `subagent` prose in general is
+ * NOT stripped — Claude has subagents too.
+ *
+ * @param {string} body
+ * @returns {string}
+ */
+export function stripPiOnlyBlocks(body) {
+  const s = String(body);
+  // True no-op when there are no markers — must NOT touch blank-line runs in marker-free
+  // bodies (they may carry intentional spacing; collapsing them would drift the committed tree).
+  if (!s.includes("<!-- pi-only -->")) {
+    return s;
+  }
+  // Markers must not nest; pairs are matched non-greedily. After removing the block(s), collapse
+  // any run of 3+ newlines in this (marker-bearing) body to a single blank line — this tidies the
+  // gaps left by removal; marker-free bodies are returned untouched above, so their intentional
+  // blank runs are never affected.
+  return s
+    .replace(/[ \t]*<!-- pi-only -->[\s\S]*?<!-- \/pi-only -->[ \t]*\n?/g, "")
+    .replace(/\n{3,}/g, "\n\n");
+}
 
 /**
  * Map a single Pi tool name to its Claude tool name(s).
@@ -104,7 +135,8 @@ function normalizeToolList(value) {
  * @returns {string} Full generated file content.
  */
 export function transformAgent({ source, raw }) {
-  const { frontmatter, body } = splitFrontmatter(raw, source);
+  const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
+  const body = stripPiOnlyBlocks(rawBody);
   const tools = mapTools(normalizeToolList(frontmatter.tools));
 
   const lines = ["---"];
@@ -127,7 +159,8 @@ export function transformAgent({ source, raw }) {
  * @returns {string} Full generated file content.
  */
 export function transformSkill({ source, raw }) {
-  const { frontmatter, body } = splitFrontmatter(raw, source);
+  const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
+  const body = stripPiOnlyBlocks(rawBody);
   const tools = mapTools(normalizeToolList(frontmatter["allowed-tools"]));
 
   const lines = ["---"];
