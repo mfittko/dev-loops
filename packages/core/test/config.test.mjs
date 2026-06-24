@@ -212,12 +212,20 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
-  test("S17b: refinement.maxCopilotRounds must be a positive integer", () => {
-    const result = DevLoopConfigSchema.safeParse({
+  test("S17b: refinement.maxCopilotRounds must be a non-negative integer (0 = Copilot gate disabled)", () => {
+    // 0 is valid and disables the external Copilot review gate (#832).
+    const zero = DevLoopConfigSchema.safeParse({
       version: 1,
       refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: 0 },
     });
-    assert.ok(!result.success);
+    assert.ok(zero.success, "maxCopilotRounds: 0 must be accepted (Copilot opt-out)");
+    assert.equal(zero.data.refinement.maxCopilotRounds, 0);
+    // Negative is still rejected.
+    const negative = DevLoopConfigSchema.safeParse({
+      version: 1,
+      refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: -1 },
+    });
+    assert.ok(!negative.success);
   });
 
   test("S18: autonomy.stopAt contains unknown gate name", () => {

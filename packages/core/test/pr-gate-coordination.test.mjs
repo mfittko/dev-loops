@@ -684,6 +684,74 @@ test("PR without explicit reviewMode uses standard Copilot review path (default)
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
+// #832: maxCopilotRounds: 0 disables the external Copilot review gate entirely
+// (reusing the internal_only routing — skip Copilot, go to pre-approval).
+
+test("maxCopilotRounds: 0 disables Copilot — ready PR skips to pre-approval gate", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 298,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    maxCopilotRounds: 0,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  assert.match(result.reason, /disabled.*maxCopilotRounds: 0/i);
+});
+
+test("maxCopilotRounds: 0 with both gates clean goes straight to final approval (no Copilot)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 298,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    maxCopilotRounds: 0,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  assert.match(result.reason, /disabled.*maxCopilotRounds: 0/i);
+});
+
+test("shouldGuardCopilotReviewRequest: never forces a request when maxCopilotRounds is 0", () => {
+  // At a pre-approval boundary, status none, never requested, not converged —
+  // normally this would force a request; with the gate disabled it must not.
+  const guarded = shouldGuardCopilotReviewRequest({
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 0,
+    copilotReviewEverFormallyRequested: false,
+    maxCopilotRounds: 0,
+    sameHeadCleanConverged: false,
+    gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_NEEDED,
+  });
+  assert.equal(guarded, false);
+
+  // Sanity: with the default cap it WOULD guard in the same situation.
+  const guardedDefault = shouldGuardCopilotReviewRequest({
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 0,
+    copilotReviewEverFormallyRequested: false,
+    maxCopilotRounds: 5,
+    sameHeadCleanConverged: false,
+    gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_NEEDED,
+  });
+  assert.equal(guardedDefault, true);
+});
+
 test("internal-only PR without clean draft gate still enters pre-approval gate window", () => {
   const result = evaluatePrGateCoordination({
     pr: 298,

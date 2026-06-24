@@ -28,7 +28,7 @@ const ModelsConfig = z.strictObject({
 const RefinementConfig = z.strictObject({
   fanOut: z.number().int().min(1).max(10),
   mode: z.enum(["parallel", "sequential"]),
-  maxCopilotRounds: z.number().int().positive().default(5),
+  maxCopilotRounds: z.number().int().nonnegative().default(5),
   stopOnLowSignal: z.boolean().default(false),
   lowSignalRoundThreshold: z.number().int().nonnegative().default(3),
   lowSignalMaxComments: z.number().int().nonnegative().default(2),

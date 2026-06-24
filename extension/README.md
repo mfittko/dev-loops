@@ -133,7 +133,9 @@ personas:
 
 # Override gate requirements
 refinement:
-  fanOut: 5      # run 5 parallel review variants instead of 3
+  fanOut: 5            # run 5 parallel review variants instead of 3
+  maxCopilotRounds: 0  # 0 disables the Copilot review gate entirely (local-harness-only
+                       # review: draft_gate → pre_approval_gate, no Copilot). Default: 5.
 
 autonomy:
   stopAt:
