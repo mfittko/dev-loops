@@ -41,6 +41,8 @@ test("headless-dev-loop --dry-run prints a claude -p invocation carrying DEVLOOP
   assert.equal(out.args[0], "-p");
   assert.match(out.args[1], /issue #775/);
   assert.match(out.DEVLOOPS_RUN_ID, /^devloops-/);
+  // --dry-run must be side-effect-free: no run-context state file written.
+  assert.equal(res.stderr, "", "dry-run should not warn/persist");
 });
 
 test("headless-info-smoke --loop-info without a target fails fast (no hidden issue default)", () => {
