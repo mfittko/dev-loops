@@ -75,7 +75,7 @@
   "dependencies": {
     "mermaid": "11.15.0",
     "zod": "^4.4.3",
-    "@dev-loops/core": "^0.2.0"
+    "@dev-loops/core": "^0.2.1"
   },
   "repository": {
     "type": "git",
@@ -85,7 +85,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "files": [
     "cli/",
     "lib/",
@@ -93,6 +93,7 @@
     "extension/",
     "skills/",
     "agents/",
+    ".claude-plugin/",
     ".claude/.claude-plugin/",
     ".claude/agents/",
     ".claude/skills/",

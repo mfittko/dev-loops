@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Shared deterministic support package for dev-loop skills, repo-local scripts, and GitHub automation.",
   "exports": {

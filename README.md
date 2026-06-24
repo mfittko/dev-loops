@@ -45,11 +45,19 @@ Or run directly without installing:
 npx dev-loops --help
 ```
 
-### Claude Code plugin (preview)
+### Claude Code plugin
 
 The repo ships a Claude Code plugin rooted at `.claude/` (manifest at
-`.claude/.claude-plugin/plugin.json`) exposing the dev-loop agents and skills. Load it for a
-session with:
+`.claude/.claude-plugin/plugin.json`) exposing the dev-loop **agents, skills, and hooks**.
+
+Install it from the bundled marketplace catalog (`.claude-plugin/marketplace.json`):
+
+```bash
+/plugin marketplace add mfittko/dev-loops    # register the marketplace
+/plugin install dev-loops@dev-loops          # install the plugin
+```
+
+Or load it directly for a single session without installing:
 
 ```bash
 claude --plugin-dir .claude                              # load it for a session
@@ -58,8 +66,11 @@ claude --plugin-dir .claude plugin details dev-loops     # inspect the discovere
 
 When installed from npm, point at the bundled copy: `claude --plugin-dir node_modules/dev-loops/.claude`.
 
-Preview: hook bundling and shared-doc/Pi-prose neutralization in the generated skills are
-tracked follow-ups (the skills load but some in-body links resolve only inside this repo for now).
+The plugin is self-contained: it bundles the shared contract docs and templates the skills
+reference, and strips Pi-runtime-only prose from the generated assets. The hooks provide the
+`gh pr ready` draft-gate guard and the main-agent read-only boundary (the read-only enforcement
+is opt-in via `DEVLOOPS_MAIN_AGENT_READONLY=1`). Skill references to a project's own `PLAN.md` /
+`AGENTS.md` resolve against the consumer repo, by design.
 
 ### Pi extension
 
