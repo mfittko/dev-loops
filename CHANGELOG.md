@@ -34,6 +34,25 @@ dev-loops is now dual-harness: it runs under both Pi and Claude Code. Pi behavio
 - `@dev-loops/core` bumped to `^0.2.0` (new `claude/*`, `loop/run-context`, and
   `loop/bash-command-classify` exports).
 
+## 0.1.3
+
+### Fixed
+
+- Removed a stale `defaults.yaml` from the `files` allowlist and regenerated the lockfile (#806).
+
+## 0.1.2
+
+### Changed
+
+- Ship the extension-packaged dev-loop defaults only; removed the duplicated
+  `.pi/dev-loop/defaults.yaml` (#805).
+
+## 0.1.1
+
+### Changed
+
+- Renamed the Pi peer dependencies to the `@earendil-works/pi-*` scope (#799).
+
 ## 0.1.0
 
 ### Added
