@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile, readdir, access } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,14 +39,15 @@ test("the plugin exposes exactly the expected agents + skills (locks the surface
     .sort();
   assert.deepEqual(agents, ["dev-loop", "developer", "docs", "fixer", "quality", "refiner", "review"]);
 
-  const skills = (await readdir(path.join(repoRoot, ".claude", "skills"), { withFileTypes: true }))
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name)
-    .sort();
-  assert.deepEqual(skills, ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation"]);
-  for (const name of skills) {
-    await access(path.join(repoRoot, ".claude", "skills", name, "SKILL.md"));
+  // A skill is a dir containing SKILL.md. `.claude/skills/` also holds bundled shared content
+  // (e.g. `docs/` from #816) which is NOT a skill — assert the exact set of SKILL-bearing dirs.
+  const skillDirs = (await readdir(path.join(repoRoot, ".claude", "skills"), { withFileTypes: true })).filter((d) => d.isDirectory());
+  const skills = [];
+  for (const d of skillDirs) {
+    if (existsSync(path.join(repoRoot, ".claude", "skills", d.name, "SKILL.md"))) skills.push(d.name);
   }
+  skills.sort();
+  assert.deepEqual(skills, ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation"]);
 });
 
 test("the publish files allowlist ships the plugin (not the project settings.json) and preserves Pi packaging", async () => {
