@@ -7,9 +7,11 @@
  * Pi→Claude tool-name mapping (confirmed against Claude Code docs):
  *   read→Read, search→Grep+Glob, execute→Bash, bash→Bash, edit→Edit, write→Write,
  *   agent→Agent, subagent→Agent, todo→TodoWrite, review_loop→Agent (the review subagent).
- * Only the frontmatter *tool lists* are rewritten; bodies are copied verbatim. Any prose
- * mentions of Pi tool names (e.g. a sentence like "tools: [subagent]") are preserved as-is —
- * neutralizing Pi-specific body prose is harness-neutrality work owned by #774, not this slice.
+ * Frontmatter *tool lists* are rewritten, and bodies are copied through `stripPiOnlyBlocks`
+ * (#817): `<!-- pi-only -->`…`<!-- /pi-only -->` sections are removed for the Claude output so
+ * Pi-runtime-specific prose (e.g. `tools: [subagent]`/`maxSubagentDepth` assertions, the
+ * `contact_supervisor`/`pi-intercom` bug guidance) doesn't contradict the Claude assets. The
+ * source stays Pi-complete; general `subagent` prose is preserved (Claude has subagents too).
  *
  * Frontmatter handling:
  * - Agents keep name/description/tools (comma-separated, per Claude's agent format) and drop
@@ -61,8 +63,10 @@ export function stripPiOnlyBlocks(body) {
   if (!s.includes("<!-- pi-only -->")) {
     return s;
   }
-  // Markers must not nest; pairs are matched non-greedily. The trailing `\n{3,}` collapse only
-  // tidies the gap left where a block was removed.
+  // Markers must not nest; pairs are matched non-greedily. After removing the block(s), collapse
+  // any run of 3+ newlines in this (marker-bearing) body to a single blank line — this tidies the
+  // gaps left by removal; marker-free bodies are returned untouched above, so their intentional
+  // blank runs are never affected.
   return s
     .replace(/[ \t]*<!-- pi-only -->[\s\S]*?<!-- \/pi-only -->[ \t]*\n?/g, "")
     .replace(/\n{3,}/g, "\n\n");
