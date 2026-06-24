@@ -9,7 +9,7 @@
  * action is a no-op. There is therefore nothing to run on Stop/SubagentStop; the merge is simply
  * detected here on PostToolUse and an informational, non-blocking note is surfaced. Never blocks.
  */
-import { isMergeCapableCommand } from "@dev-loops/core/loop/bash-command-classify";
+import { isMergeCapableCommand } from "./_bash-command-classify.mjs";
 
 import { readHookInput } from "./_hook-io.mjs";
 

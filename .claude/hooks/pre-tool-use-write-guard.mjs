@@ -12,7 +12,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import { decideWriteGuard } from "@dev-loops/core/claude/hook-decisions";
+import { decideWriteGuard } from "./_hook-decisions.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
