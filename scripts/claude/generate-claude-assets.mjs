@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { transformAgent, transformSkill } from "@dev-loops/core/claude/asset-generation";
+import { transformAgent, transformSkill, stripPiOnlyBlocks } from "@dev-loops/core/claude/asset-generation";
 
 /**
  * Collect the generated assets as { target, content } pairs (target is repo-relative).
@@ -63,7 +63,12 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
   return assets;
 }
 
-/** Recursively collect `*.md` files under a source dir as verbatim {target, content} bundle assets. */
+/**
+ * Recursively collect `*.md` files under a source dir as {target, content} bundle assets.
+ * Bodies are passed through `stripPiOnlyBlocks` so bundled contract docs can scope Pi-runtime
+ * prose out of the Claude copies via `<!-- pi-only -->` markers (a no-op for marker-free docs,
+ * so the existing verbatim bundle is unchanged).
+ */
 function collectBundle(repoRoot, srcRel, targetRel) {
   const out = [];
   const absDir = path.join(repoRoot, srcRel);
@@ -74,7 +79,7 @@ function collectBundle(repoRoot, srcRel, targetRel) {
     } else if (entry.name.endsWith(".md")) {
       out.push({
         target: `${targetRel}/${entry.name}`,
-        content: fs.readFileSync(path.join(absDir, entry.name), "utf8"),
+        content: stripPiOnlyBlocks(fs.readFileSync(path.join(absDir, entry.name), "utf8")),
       });
     }
   }
