@@ -4,7 +4,7 @@ import {
   test,
 } from "../imported-assets-helpers.mjs";
 
-test("local-implementation skill keeps narrow failure-triage guidance", async () => {
+test("local-implementation skill keeps narrow failure-triage ordering", async () => {
   const content = await readRepo("skills/local-implementation/SKILL.md");
 
   assertMatchesAll(content, [
@@ -16,7 +16,21 @@ test("local-implementation skill keeps narrow failure-triage guidance", async ()
     /patch the minimum call sites/i,
     /focused smoke checks/i,
     /default verification/i,
-    /Do not read installed package internals unless the failing path is inside that installed package or no public CLI\/docs path exists/i,
-    /Do not run duplicate broad searches/i,
+    /general tooling-internals and duplicate-broad-search prohibition/i,
   ], "skills/local-implementation/SKILL.md");
+});
+
+test("anti-patterns doc owns the general tooling-internals guidance", async () => {
+  const content = await readRepo("skills/docs/anti-patterns.md");
+
+  assertMatchesAll(content, [
+    /Spelunking tooling internals instead of using the public surface/i,
+    /Do not read installed package internals/i,
+    /scan tooling source/i,
+    /run ad-hoc scripts to understand a tool's behavior/i,
+    /Use the CLI[\s\S]{0,120}`--help` subcommands[\s\S]{0,120}`skills\/docs\/?`/i,
+    /concrete failure path is inside it and no public CLI\/docs path exists/i,
+    /search changed files for the exact pattern/i,
+    /don't run duplicate broad searches/i,
+  ], "skills/docs/anti-patterns.md");
 });

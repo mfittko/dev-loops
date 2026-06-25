@@ -95,7 +95,7 @@ When resuming local implementation with dirty work or an observed failing comman
 6. run focused smoke checks for that failure
 7. run default verification
 
-Do not read installed package internals unless the failing path is inside that installed package or no public CLI/docs path exists. Do not run duplicate broad searches (for example `grep` and `rg` over the same pattern) once the exact suspect pattern is known.
+Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-internals and duplicate-broad-search prohibition; this local fast path owns only the ordered failure-triage procedure above.
 
 ### Step 1
 
