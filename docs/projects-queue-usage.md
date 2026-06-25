@@ -12,8 +12,8 @@ hint — not as a database or transactional state store.
 
 - **Board state is durable** — survives CI restarts, local machine wipes, and session boundaries
 - **Board state is visible** — operators inspect and reorder the queue from the GitHub UI
-- **Board state is optional** — queue helpers treat it as an optional scheduling input, not mandatory authority
-- **No local queue file duplication** — the board complements `.pi/dev-loop-queue.json` for entry lifecycle tracking; it does not replace it and does not introduce a second local file
+- **Board state is authoritative when configured** — a configured board is the source of queue membership and ordering; the queue runner reconciles its `Next Up` items into `.pi/dev-loop-queue.json` before running. When no board is configured, the local queue file's entry order is used.
+- **No local queue file duplication** — the board drives membership/ordering while `.pi/dev-loop-queue.json` tracks entry lifecycle; the board does not introduce a second local file
 
 This means board position is a **good-enough** signal for ordering the outer queue. The board
 does not need to be transactionally consistent with local state for the queue to work correctly:
@@ -128,20 +128,26 @@ project structure. It safely re-runs: if the board and Status field already exis
 clean with the existing project details. Runtime helpers (list, move, add, reorder) never
 create or modify project/field structure.
 
-## How dev-loop should treat board state
+## How dev-loop treats board state
 
-Dev-loop queue drivers should treat board state as **optional scheduling input**, not as
-mandatory authority:
+When a board is **configured** (`queue.projectNumber` or `queue.boardTitle` in `.devloops`),
+it is the **authoritative source of queue membership and ordering** — not just status:
 
-- When the board is configured and reachable: queue ordering may be read from board position
-- When the board is configured but unreachable (API error): the queue continues with its
-  default entry ordering; no board mutations are attempted
-- When the board is not configured: the queue falls back to its default entry order
-  (e.g., `.pi/dev-loop-queue.json` entry order)
+- **Configured and reachable**: `dev-loops queue run` resolves the board's `Next Up` column and
+  reconciles those items into `.pi/dev-loop-queue.json` (appending a queued entry for any
+  `Next Up` issue not already present) before running. The board therefore drives **which**
+  issues are worked and their order. Enqueue work via `dev-loops project add ... --status "Next Up"`
+  rather than hand-editing the queue file.
+- **Configured but unreachable (API error)**: reconciliation fails open — the run continues
+  with the existing local queue entries; no board mutations are attempted.
+- **Configured but `Next Up` is empty**: the run reports "Board configured but Next Up is empty;
+  nothing to run", distinct from the unconfigured "Queue is empty".
+- **Not configured**: the queue falls back to its local entry order (`.pi/dev-loop-queue.json`),
+  and the legacy "Queue is empty" message applies when that file has no pending entries.
 
-This posture keeps the queue resilient: a transient GitHub API outage or misconfigured
-board does not block the entire queue run. Board state is read at dispatch time; the queue
-does not continuously sync local state to board state.
+This posture keeps the queue resilient: a transient GitHub API outage or misconfigured board
+does not block the run. Board state is read at dispatch time; the queue does not continuously
+sync local state to board state.
 
 ## See also
 

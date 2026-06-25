@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 import { runQueue, DEFAULT_QUEUE_DRIVER_OPTIONS } from "@dev-loops/core/loop/queue-driver";
 import { computeParallelSchedule } from "@dev-loops/core/loop/queue-parallel";
 import { readQueue } from "@dev-loops/core/loop/queue-state";
+import { reconcileBoardMembership } from "@dev-loops/core/loop/queue-membership";
 import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -111,7 +112,46 @@ async function main() {
 
   const queue = await readQueue(REPO_ROOT);
 
-  if (queue.entries.length === 0) {
+  // A configured GitHub Projects board is the authoritative queue MEMBERSHIP
+  // source (issue #864): fold its "Next Up" items into the queue before judging
+  // emptiness so a populated board with an empty local queue is no longer a
+  // silent no-op. Fail-open — a board hiccup falls back to the local queue.
+  // reconcileBoardMembership already logs an "added N ... from board Next Up"
+  // line to stderr (single source of truth); we deliberately do not duplicate
+  // it here to avoid noise for JSON consumers of stdout.
+  const membership = await reconcileBoardMembership(REPO_ROOT, args.repo, queue);
+
+  if (membership.emptiness === "board_empty") {
+    // Distinct from the legacy generic "Queue is empty": the board is the
+    // membership source and it currently has nothing in Next Up. This branch is
+    // only reached for a genuinely empty Next Up (reason == null), never for a
+    // resolution failure (which falls through to the local queue below).
+    console.log(JSON.stringify({
+      ok: true,
+      message: "Board configured but Next Up is empty; nothing to run",
+      boardConfigured: true,
+      reason: null,
+      results: [],
+    }));
+    return;
+  }
+
+  if (membership.emptiness === "board_unavailable") {
+    // The board IS configured but Next Up resolution failed (fail-open) and the
+    // local queue had nothing to fall back to. Do NOT claim "Next Up is empty";
+    // surface the real reason so consumers can distinguish an outage from an
+    // intentionally empty board.
+    console.log(JSON.stringify({
+      ok: true,
+      message: `Board configured but unavailable (${membership.reason}); nothing to run`,
+      boardConfigured: true,
+      reason: membership.reason ?? null,
+      results: [],
+    }));
+    return;
+  }
+
+  if (membership.emptiness === "queue_empty") {
     console.log(JSON.stringify({ ok: true, message: "Queue is empty", results: [] }));
     return;
   }
