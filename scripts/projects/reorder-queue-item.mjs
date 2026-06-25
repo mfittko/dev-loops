@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
 
 const USAGE = `Usage:
   dev-loops project reorder --repo <owner/name> --project <number|id> --item <number|node-id> [--after <number|node-id>]
@@ -40,62 +41,79 @@ Exit codes:
 `.trim();
 
 const SUBCOMMANDS = new Set(["move-to-top", "move-after", "order"]);
-const VALID_ARGS = new Set(["--repo", "--project", "--item", "--after", "--dry-run", "--help", "-h"]);
 
-function parseArgs(argv) {
+function parseCliArgs(argv) {
+  const parseError = (message) => Object.assign(new Error(message), { usage: USAGE });
+  const requireValue = (token, message) => {
+    const v = token.value;
+    if (typeof v !== "string" || v.length === 0 || v.startsWith("-")) {
+      throw parseError(message);
+    }
+    return v;
+  };
+
   const args = { _positional: [] };
-  let i = 0;
+  let rest = argv;
 
-  // Optional leading positional subcommand.
   if (argv.length > 0 && SUBCOMMANDS.has(argv[0])) {
     args._subcommand = argv[0];
-    i = 1;
+    rest = argv.slice(1);
   }
 
-  for (; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg.startsWith("-")) {
-      // Positional ref (only meaningful with a subcommand).
-      args._positional.push(arg);
+  const { tokens } = parseArgs({
+    args: [...rest],
+    options: {
+      repo: { type: "string" },
+      project: { type: "string" },
+      item: { type: "string" },
+      after: { type: "string" },
+      "dry-run": { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      args._positional.push(token.value);
       continue;
     }
-    if (!VALID_ARGS.has(arg)) {
-      throw Object.assign(
-        new Error(`Unknown flag: ${arg}`),
-        { code: "INVALID_ARGS", usage: USAGE },
-      );
+    if (token.kind !== "option") {
+      continue;
     }
-    if (arg === "--repo") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(new Error("--repo requires a value (owner/name)"), { code: "INVALID_REPO" });
-      }
-      args.repo = argv[++i];
-    } else if (arg === "--project") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(new Error("--project requires a value (number or node ID)"), { code: "INVALID_PROJECT" });
-      }
-      args.project = argv[++i];
-    } else if (arg === "--item") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(new Error("--item requires a value (number or node ID)"), { code: "INVALID_ITEM" });
-      }
-      args.item = argv[++i];
-    } else if (arg === "--after") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(new Error("--after requires a value (number or node ID)"), { code: "INVALID_AFTER" });
-      }
-      args.after = argv[++i];
-    } else if (arg === "--dry-run") {
-      args.dryRun = true;
-    } else if (arg === "--help" || arg === "-h") {
-      args.help = true;
-    } else {
-      throw Object.assign(new Error(`Unexpected argument: ${arg}`), { code: "INVALID_ARGS", usage: USAGE });
+    switch (token.name) {
+      case "help":
+        if (token.value !== undefined) {
+          throw parseError(`Unknown flag: ${token.rawName}=${token.value}`);
+        }
+        args.help = true;
+        break;
+      case "repo":
+        args.repo = requireValue(token, "--repo requires a value (owner/name)");
+        break;
+      case "project":
+        args.project = requireValue(token, "--project requires a value (number or node ID)");
+        break;
+      case "item":
+        args.item = requireValue(token, "--item requires a value (number or node ID)");
+        break;
+      case "after":
+        args.after = requireValue(token, "--after requires a value (number or node ID)");
+        break;
+      case "dry-run":
+        if (token.value !== undefined) {
+          throw parseError(`Unknown flag: ${token.rawName}=${token.value}`);
+        }
+        args.dryRun = true;
+        break;
+      default:
+        throw parseError(`Unknown flag: ${token.rawName}`);
     }
   }
   return args;
 }
-
 // ── Validation ───────────────────────────────────────────────────────────
 
 const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
@@ -747,7 +765,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
   let args;
   try {
-    args = parseArgs(argv);
+    args = parseCliArgs(argv);
   } catch (err) {
     stderr.write(`${formatCliError(err)}\n`);
     process.exitCode = 1;

@@ -20,6 +20,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 import { ensureRunId } from "@dev-loops/core/loop/run-context";
 import {
@@ -28,22 +29,61 @@ import {
   DEFAULT_CLAUDE_BIN,
 } from "@dev-loops/core/claude/headless-entry";
 
-function parseArgs(argv) {
+function parseCliArgs(argv) {
   const opts = { dryRun: false, claudeBin: DEFAULT_CLAUDE_BIN };
-  const requireValue = (name, i) => {
-    const v = argv[i + 1];
-    if (v === undefined || v.startsWith("--")) throw new Error(`${name} requires a value`);
+  const requireValue = (name, token) => {
+    const v = token.value;
+    if (typeof v !== "string" || v.length === 0 || v.startsWith("--")) {
+      throw new Error(`${name} requires a value`);
+    }
     return v;
   };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--dry-run") opts.dryRun = true;
-    else if (a === "--issue") { opts.issue = requireValue(a, i); i++; }
-    else if (a === "--pr") { opts.pr = requireValue(a, i); i++; }
-    else if (a === "--claude-bin") { opts.claudeBin = requireValue(a, i); i++; }
-    else if (a === "--prompt") { opts.prompt = requireValue(a, i); i++; }
-    else throw new Error(`unknown argument: ${a}`);
+
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      "dry-run": { type: "boolean" },
+      issue: { type: "string" },
+      pr: { type: "string" },
+      "claude-bin": { type: "string" },
+      prompt: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw new Error(`unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    switch (token.name) {
+      case "dry-run":
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
+        opts.dryRun = true;
+        break;
+      case "issue":
+        opts.issue = requireValue("--issue", token);
+        break;
+      case "pr":
+        opts.pr = requireValue("--pr", token);
+        break;
+      case "claude-bin":
+        opts.claudeBin = requireValue("--claude-bin", token);
+        break;
+      case "prompt":
+        opts.prompt = requireValue("--prompt", token);
+        break;
+      default:
+        throw new Error(`unknown argument: ${token.rawName}`);
+    }
   }
+
   if (opts.issue != null && opts.pr != null) {
     throw new Error("--issue and --pr are mutually exclusive");
   }
@@ -53,7 +93,7 @@ function parseArgs(argv) {
 function main(argv) {
   let opts;
   try {
-    opts = parseArgs(argv);
+    opts = parseCliArgs(argv);
   } catch (error) {
     process.stderr.write(JSON.stringify({ ok: false, error: error.message }) + "\n");
     return 1;

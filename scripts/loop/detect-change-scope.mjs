@@ -1,12 +1,9 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import process from "node:process";
-function parseArgs() {
-  const args = process.argv.slice(2);
-  const opts = { base: null, head: null };
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--help" || args[i] === "-h") {
-      process.stdout.write(`Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
+import { parseArgs } from "node:util";
+
+const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
 Detect change scope from git diff for light-mode eligibility.
 Options:
   --base <ref>   Override base ref (default: HEAD~1)
@@ -15,11 +12,39 @@ Options:
 Exit codes:
   0   Success
   1   Error
-`);
-      process.exit(0);
+`;
+
+function parseCliArgs(argv) {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      base: { type: "string" },
+      head: { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
+  const opts = { base: null, head: null };
+  for (const token of tokens) {
+    if (token.kind === "option") {
+      if (token.name === "help") {
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
+        process.stdout.write(USAGE);
+        process.exit(0);
+      }
+      if (token.name === "base") {
+        opts.base = token.value ?? null;
+        continue;
+      }
+      if (token.name === "head") {
+        opts.head = token.value ?? null;
+      }
     }
-    if (args[i] === "--base" && i + 1 < args.length) opts.base = args[++i];
-    else if (args[i] === "--head" && i + 1 < args.length) opts.head = args[++i];
   }
   return opts;
 }
@@ -64,7 +89,7 @@ function isEligibleForLightMode(scope, threshold) {
   return scope.filesChanged <= threshold.maxFiles && scope.linesChanged <= threshold.maxLines;
 }
 async function main() {
-  const opts = parseArgs();
+  const opts = parseCliArgs(process.argv.slice(2));
   const scope = detectScope(opts);
   let threshold = { maxFiles: 3, maxLines: 200 };
   let eligible = false;
