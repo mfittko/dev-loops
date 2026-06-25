@@ -25,7 +25,11 @@ The envelope is the primary handoff artifact — it is derived from resolver out
 - `acceptance` — self-validation criteria for declaring completion
 
 **Construction sequence:**
-1. Run the deterministic startup resolver to produce the authoritative state bundle: `npx dev-loops loop startup --issue <n>` for issues, or `npx dev-loops loop startup --pr <n>` for PRs.
+<!-- pi-only -->
+**CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` from this agent's own installed path: this agent is installed at `<package-root>/.pi/agents/dev-loop.agent.md`, so the package root is `../../..` from this agent's directory. (The `dev-loop` skill resolves it analogously from its own installed path.)
+<!-- /pi-only -->
+
+1. Run the deterministic startup resolver to produce the authoritative state bundle: `node <dev-loops-package-root>/cli/index.mjs loop startup --issue <n>` for issues, or `node <dev-loops-package-root>/cli/index.mjs loop startup --pr <n>` for PRs.
 2. Pass the resolver output, resolved settings (merged from `.devloops` and `.pi/dev-loop/defaults.yaml`), and current gate state to `buildDevLoopHandoffEnvelope()`.
 3. **Validate the envelope** with `validateHandoffEnvelope()` before consuming any field. If validation returns `ok: false`, reject the handoff with the structured error — do not load requiredReads, do not execute nextAction, do not delegate.
 4. Read the envelope as the first artifact.

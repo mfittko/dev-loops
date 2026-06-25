@@ -7,9 +7,29 @@ import {
   mapTools,
   splitFrontmatter,
   stripPiOnlyBlocks,
+  rewriteCliInvocation,
   transformAgent,
   transformSkill,
 } from "../src/claude/asset-generation.mjs";
+
+test("rewriteCliInvocation pins the package-local CLI to npx dev-loops@<version> (#801, #833)", () => {
+  const body = "Run `node <dev-loops-package-root>/cli/index.mjs loop info` and `node <dev-loops-package-root>/cli/index.mjs loop startup`.";
+  const out = rewriteCliInvocation(body, "0.2.6");
+  assert.equal(out.includes("node <dev-loops-package-root>/cli/index.mjs"), false);
+  assert.equal((out.match(/npx dev-loops@0\.2\.6/g) ?? []).length, 2, "every token is rewritten");
+});
+
+test("transformAgent and transformSkill rewrite the package-local CLI form to the pinned npx form", () => {
+  const agentRaw = `---\nname: a\ndescription: d\ntools: [read]\n---\nRun \`node <dev-loops-package-root>/cli/index.mjs loop startup\`.\n`;
+  const agent = transformAgent({ source: "agents/a.agent.md", raw: agentRaw, version: "1.2.3" });
+  assert.ok(agent.includes("npx dev-loops@1.2.3 loop startup"));
+  assert.equal(agent.includes("<dev-loops-package-root>"), false);
+
+  const skillRaw = `---\nname: s\ndescription: d\nallowed-tools: read\n---\nRun \`node <dev-loops-package-root>/cli/index.mjs loop info\`.\n`;
+  const skill = transformSkill({ source: "skills/s/SKILL.md", raw: skillRaw, version: "1.2.3" });
+  assert.ok(skill.includes("npx dev-loops@1.2.3 loop info"));
+  assert.equal(skill.includes("<dev-loops-package-root>"), false);
+});
 
 test("stripPiOnlyBlocks removes <!-- pi-only --> blocks and collapses blank runs; keeps other prose", () => {
   const body = "Keep A.\n\n<!-- pi-only -->\nPi-only line about contact_supervisor.\n<!-- /pi-only -->\n\nKeep B.\n";
