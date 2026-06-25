@@ -1010,6 +1010,10 @@ test("#836: a PR un-drafted externally before draft_gate ran is caught at the me
   assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
   assert.equal(result.draftGateAlreadySatisfied, false);
+  // Lock the "draft_gate never ran" precondition: no clean evidence, and no visible
+  // draft_gate comment at all (matches the surrounding #579/#587 tests).
+  assert.equal(result.draftGate.cleanEvidenceExists, false);
+  assert.equal(result.draftGate.anyVisible, false);
   assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY));
   assert.match(result.reason, /no gate exemptions, #579/i);
 });
