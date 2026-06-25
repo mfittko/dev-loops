@@ -94,6 +94,40 @@ test("syncBoardStatus moves item when configured", async () => {
   }
 });
 
+// AC #5 (#874): both dev-loop transitions move the item. "In Progress" is
+// covered above (PR-ready); this covers the merge → "Done" transition with the
+// same stringified-ref contract.
+test("syncBoardStatus moves item to Done (merge transition)", async () => {
+  const dir = await makeRepo("queue:\n  projectNumber: 5\n");
+  try {
+    const moved = [];
+    const result = await syncBoardStatus(
+      "owner/repo",
+      dir,
+      42,
+      "Done",
+      { GH_TOKEN: "mock" },
+      {
+        moveQueueItem: async (args, _ctx) => {
+          moved.push(args);
+          return { ok: true, item: { newColumn: args.toColumn } };
+        },
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.skipped, false);
+    assert.equal(moved.length, 1);
+    assert.deepEqual(moved[0], {
+      repo: "owner/repo",
+      project: "5",
+      item: "42",
+      toColumn: "Done",
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("syncBoardStatus fail-open when move fails", async () => {
   const dir = await makeRepo("queue:\n  projectNumber: 5\n");
   try {
