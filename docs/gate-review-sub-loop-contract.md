@@ -50,8 +50,20 @@ on an isolated checkout:
 - fresh context (do not fork the parent session just to share chat history). **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs` at startup and refuse to proceed on contamination. Use `--scope <angle>` so each reviewer writes its own sentinel.
 - `worktree: true` recommended per reviewer/subagent for filesystem isolation; prescribe it but
   do not fail closed if worktrees are unavailable in the current environment
+- the preamble resolves the gate's review angle set: it starts from the configured
+  angle pool (`gates.<gate>.angles`) and, when `gates.<gate>.dynamicAngles` is enabled,
+  narrows it to the angles relevant to the change at hand (configured pool → resolved
+  set). Optional code-review lenses not triggered by the change (for example most code
+  lenses for a docs-only change) are dropped, and the reason each angle was dropped is
+  recorded as rationale. Angles in `gates.<gate>.mandatoryAngles` form a floor and are
+  always included after dynamic selection (filtered only by `excludeAngles`); they are
+  never dropped. When `dynamicAngles` is off (or no diff is available), the configured
+  static pool is used unchanged.
 - the preamble produces one or more review handoff artifacts (branch, head SHA, PR/issue
-  scope, acceptance criteria, touched files, validation posture)
+  scope, acceptance criteria, touched files, validation posture). The resolved angle set
+  and its rationale are written as a deterministic handoff artifact under
+  `tmp/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json` so the fork fan-out phase
+  consumes a stable, auditable briefing per head SHA.
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
@@ -187,7 +199,7 @@ resolved-in SHA (for findings resolved in a later pass).
 ## Execution mode and fan-out evidence enforcement
 
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
-default `inline_single_agent`) via the [Gate comment command](../skills/copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. The opt-in `gates.requireFanoutEvidence` config (default `false`) makes the pre-merge evidence check fail closed for a required gate unless its recorded `executionMode` is `fanout_fanin` and a findings-log ledger exists for that gate + head SHA. Phases 2-3 — live context-builder/fan-out execution and dynamic angle resolution — are the follow-up that makes `fanout_fanin` producible.
+default `inline_single_agent`) via the [Gate comment command](../skills/copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. The opt-in `gates.requireFanoutEvidence` config (default `false`) makes the pre-merge evidence check fail closed for a required gate unless its recorded `executionMode` is `fanout_fanin` and a findings-log ledger exists for that gate + head SHA. Live context-builder/fan-out execution (the follow-up work tracked in epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
 
 ## See also
 
