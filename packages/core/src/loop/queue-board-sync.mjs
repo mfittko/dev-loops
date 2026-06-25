@@ -47,6 +47,8 @@ export const DEFAULT_STATE_LOGICAL_MAP = Object.freeze({
 
   // In Progress — active implementation / review / feedback resolution
   implementation: LOGICAL_COLUMN.IN_PROGRESS,
+  // Tolerated alias for `implementation` (conceptual name from issue #793);
+  // the queue driver passes the real `implementation` lifecycle state.
   local_implementation_active: LOGICAL_COLUMN.IN_PROGRESS,
   draft_gate: LOGICAL_COLUMN.IN_PROGRESS,
   pr_ready_no_feedback: LOGICAL_COLUMN.IN_PROGRESS,
@@ -69,11 +71,12 @@ export const DEFAULT_STATE_LOGICAL_MAP = Object.freeze({
   pre_approval_gate: LOGICAL_COLUMN.READY_FOR_REVIEW,
   final_approval_ready: LOGICAL_COLUMN.READY_FOR_REVIEW,
 
-  // Done — terminal
+  // Done — terminal (lifecycle MERGE = "merge", queue terminal = "done")
   merge: LOGICAL_COLUMN.DONE,
+  done: LOGICAL_COLUMN.DONE,
+  // Tolerated aliases (conceptual names from issue #793).
   merged: LOGICAL_COLUMN.DONE,
   issue_closed: LOGICAL_COLUMN.DONE,
-  done: LOGICAL_COLUMN.DONE,
 });
 
 /** Safe default logical column for any state we do not explicitly map. */
@@ -315,9 +318,13 @@ export async function syncBoardStatus(
   env = process.env,
   dependencies = {},
 ) {
+  // AC4: the not-on-board / fail-open path is a logged no-op. Default to
+  // console.error so it logs in real runs; tests inject their own stub. The
+  // log fires at most once per syncBoardStatus call (single catch, no internal
+  // retry), so it cannot spam.
   const log = typeof dependencies.log === "function"
     ? dependencies.log
-    : () => {};
+    : (msg) => console.error(msg);
 
   const config = loadBoardConfig(repoRoot);
   if (!config.enabled) {

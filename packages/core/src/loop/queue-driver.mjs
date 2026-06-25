@@ -107,12 +107,13 @@ export async function runQueue(repoRoot, repo, options = {}) {
       return r;
     };
 
-    // Entry has been picked up and is actively running: local implementation.
+    // Entry has been picked up and is actively running: implementation phase
+    // (real lifecycle state, lifecycle-state.mjs LIFECYCLE_STATE.IMPLEMENTATION).
     await recordBoardSync(syncBoardStatus(
       repo,
       repoRoot,
       entry.target,
-      columnFor("local_implementation_active"),
+      columnFor("implementation"),
       opts.env ?? process.env,
       boardSyncDeps,
     ));
@@ -129,7 +130,7 @@ export async function runQueue(repoRoot, repo, options = {}) {
           if (opts.mergeAuthorized) {
             await doTransition(entry, "merging", queue, repoRoot, opts);
             await doTransition(entry, "done", queue, repoRoot, opts, { retrospectiveWritten: true });
-            await recordBoardSync(syncBoardStatus(repo, repoRoot, entry.target, columnFor("merged"), opts.env ?? process.env, boardSyncDeps));
+            await recordBoardSync(syncBoardStatus(repo, repoRoot, entry.target, columnFor("done"), opts.env ?? process.env, boardSyncDeps));
           } else {
             // PR is up with gates passing but merge is not authorized: the work
             // is awaiting final approval/merge. Map to the final-approval column
