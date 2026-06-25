@@ -354,13 +354,16 @@ test("appendBugIssue with dependency", () => {
 
 // ── reconcileEntriesFromBoard ───────────────────────────────────────
 
-test("reconcileEntriesFromBoard adds missing board targets as queued issue entries", () => {
+test("reconcileEntriesFromBoard adds missing board targets as queued board entries", () => {
   const queue = { version: 1, entries: [] };
   const { queue: out, added } = reconcileEntriesFromBoard(queue, [10, 20, 30]);
   assert.equal(out, queue, "mutates/returns the same queue object");
   assert.deepEqual(added, [10, 20, 30]);
   assert.deepEqual(out.entries.map((e) => e.target), [10, 20, 30]);
-  assert.ok(out.entries.every((e) => e.kind === "issue"));
+  // Board Next Up can hold issues OR PRs and resolveNextUpOrder discards the
+  // kind, so board-sourced entries use a neutral "board" kind rather than
+  // falsely asserting "issue". The driver resolves the artifact by number.
+  assert.ok(out.entries.every((e) => e.kind === "board"));
   assert.ok(out.entries.every((e) => e.status === "queued"));
 });
 
@@ -404,6 +407,36 @@ test("reconcileEntriesFromBoard ignores non-number targets", () => {
   const queue = { version: 1, entries: [] };
   const { added } = reconcileEntriesFromBoard(queue, [10, "PVTI_abc", null, 11]);
   assert.deepEqual(added, [10, 11]);
+});
+
+test("reconcileEntriesFromBoard filters NaN, Infinity, non-integer, negative, and 0 targets", () => {
+  const queue = { version: 1, entries: [] };
+  const { added } = reconcileEntriesFromBoard(queue, [
+    10,
+    NaN,
+    Infinity,
+    -Infinity,
+    3.5,
+    -7,
+    0,
+    11,
+  ]);
+  // Only positive integers survive the numeric guard.
+  assert.deepEqual(added, [10, 11]);
+  assert.deepEqual(queue.entries.map((e) => e.target), [10, 11]);
+});
+
+test("reconcileEntriesFromBoard never creates a NaN entry and does not accumulate across repeated reconciles", () => {
+  // NaN never dedups via findEntry (NaN !== NaN), so without the integer guard
+  // each reconcile would append a fresh NaN entry. Verify it is filtered and
+  // repeated reconciles stay a no-op.
+  const queue = { version: 1, entries: [] };
+  for (let i = 0; i < 3; i++) {
+    const { added } = reconcileEntriesFromBoard(queue, [NaN]);
+    assert.deepEqual(added, []);
+  }
+  assert.equal(queue.entries.length, 0);
+  assert.ok(!queue.entries.some((e) => Number.isNaN(e.target)));
 });
 
 test("reconcileEntriesFromBoard tolerates a malformed queue", () => {

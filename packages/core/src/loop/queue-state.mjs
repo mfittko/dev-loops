@@ -81,7 +81,7 @@ export async function writeQueue(repoRoot, queue) {
 export function createEntry(target, kind, dependsOn = []) {
   return {
     target,
-    kind,           // "issue" | "pr"
+    kind,           // "issue" | "pr" | "board" (board = issue-or-PR, resolved by number at run time)
     status: "queued",
     dependsOn: Array.isArray(dependsOn) ? dependsOn : [],
     pr: null,
@@ -220,16 +220,24 @@ export function pendingEntries(queue) {
  * MEMBERSHIP (which issues should be worked), not just ordering/status. This
  * pure helper folds the board's "Next Up" targets into the queue: for each
  * target not already present (by `findEntry`), it appends a fresh queued
- * `createEntry(target, "issue")`. Existing entries — and their status, order,
+ * `createEntry(target, "board")`. Existing entries — and their status, order,
  * and metadata — are preserved untouched, and targets already present are
  * skipped (dedup).
+ *
+ * Entry kind is `"board"` rather than `"issue"`: the board's Next Up can hold
+ * issues OR PRs, and `resolveNextUpOrder` collapses each item to a bare number
+ * (`issueNumber ?? prNumber`), discarding the artifact kind. The queue driver
+ * never branches on `entry.kind`; it dispatches purely by `entry.target` and
+ * the per-entry startup resolver resolves the actual artifact (issue or PR) by
+ * number at run time. So a neutral `"board"` kind correctly records the
+ * provenance without falsely asserting "issue" for PR-backed board items.
  *
  * Pure: performs no I/O. Mutates and returns the passed `queue` object (its
  * `entries` array is appended to in place) plus the list of newly added
  * targets so the caller can log/report.
  *
  * @param {{version:number, entries:Array}} queue - the current queue.
- * @param {Array<number>} nextUpTargets - board "Next Up" issue numbers.
+ * @param {Array<number>} nextUpTargets - board "Next Up" issue/PR numbers.
  * @returns {{queue:{version:number, entries:Array}, added:number[]}}
  */
 export function reconcileEntriesFromBoard(queue, nextUpTargets) {
@@ -241,12 +249,18 @@ export function reconcileEntriesFromBoard(queue, nextUpTargets) {
     return { queue, added };
   }
   for (const target of nextUpTargets) {
-    // Guard against malformed/duplicate board input: only number targets,
-    // and never add the same target twice (even if it repeats in the board
-    // list and was not yet in the queue at the start of this loop).
-    if (typeof target !== "number") continue;
+    // Guard against malformed/duplicate board input: only positive-integer
+    // targets, and never add the same target twice (even if it repeats in the
+    // board list and was not yet in the queue at the start of this loop).
+    //
+    // The integer guard is critical for NaN: a NaN target never dedups via
+    // findEntry (NaN !== NaN), so accepting it would re-append a fresh NaN
+    // entry on every reconcile. Infinity, non-integers, negatives, and 0 are
+    // never valid issue/PR numbers either, so reject anything that is not a
+    // positive integer.
+    if (!Number.isInteger(target) || target <= 0) continue;
     if (findEntry(queue, target)) continue;
-    queue.entries.push(createEntry(target, "issue"));
+    queue.entries.push(createEntry(target, "board"));
     added.push(target);
   }
   return { queue, added };

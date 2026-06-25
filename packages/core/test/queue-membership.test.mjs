@@ -181,6 +181,43 @@ test("board config read error fails open to unconfigured (no crash)", async () =
   assert.equal(result.emptiness, "queue_empty");
 });
 
+test("loadBoardConfig read/parse failure reason (enabled:false + reason) is logged", async () => {
+  // loadBoardConfig does not throw on a read/parse error; it returns
+  // { enabled:false, reason }. That reason must be surfaced via the log seam so
+  // a real config failure is visible rather than silently swallowed.
+  const queue = makeQueue([]);
+  const { log, lines } = captureLog();
+
+  const result = await reconcileBoardMembership("/repo", "owner/name", queue, {
+    loadBoardConfig: () => ({ enabled: false, reason: "config read/parse error: bad yaml" }),
+    resolveNextUpOrder: async () => { throw new Error("should not be called"); },
+    writeQueue: async () => {},
+    log,
+  });
+
+  assert.equal(result.boardConfigured, false);
+  assert.equal(result.emptiness, "queue_empty");
+  assert.ok(
+    lines.some((l) => l.includes("config read/parse error: bad yaml")),
+    "the config failure reason should be logged",
+  );
+});
+
+test("ordinary 'board not configured' (enabled:false, no reason) is not logged", async () => {
+  const queue = makeQueue([]);
+  const { log, lines } = captureLog();
+
+  await reconcileBoardMembership("/repo", "owner/name", queue, {
+    loadBoardConfig: () => ({ enabled: false }),
+    resolveNextUpOrder: async () => { throw new Error("should not be called"); },
+    writeQueue: async () => {},
+    log,
+  });
+
+  // No reason => no config-unavailable log line (quiet legacy path).
+  assert.ok(!lines.some((l) => l.includes("board config unavailable")));
+});
+
 test("persist failure does not crash; entries still drive the in-memory run", async () => {
   const queue = makeQueue([]);
 

@@ -63,7 +63,16 @@ export async function reconcileBoardMembership(repoRoot, repo, queue, deps = {})
 
   let boardConfigured = false;
   try {
-    boardConfigured = Boolean(loadConfig(repoRoot)?.enabled);
+    const config = loadConfig(repoRoot);
+    boardConfigured = Boolean(config?.enabled);
+    // loadBoardConfig does not throw on read/parse failures; it reports them
+    // via `{ enabled: false, reason: ... }`. Surface that reason so a genuine
+    // config read/parse error is visible instead of being silently treated as
+    // "board not configured". The ordinary "board not configured" case carries
+    // no reason and must stay quiet.
+    if (!boardConfigured && config?.reason) {
+      log(`[queue-membership] board config unavailable (fail-open): ${config.reason}`);
+    }
   } catch (err) {
     // Config read errors must not crash the queue; treat as unconfigured.
     log(`[queue-membership] board config read failed (fail-open): ${err?.message ?? err}`);
