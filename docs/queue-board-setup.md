@@ -106,15 +106,22 @@ The subcommand forms emit diff-friendly JSON with the column order **before** an
 ```json
 {
   "ok": true,
-  "item": { "itemId": "PVTI_b", "issueNumber": 630, "status": "Next Up", "position": "top" },
+  "item": { "itemId": "PVTI_b", "issueNumber": 630, "prNumber": null, "status": "Next Up", "position": "top" },
   "after_ref": null,
-  "before": [{ "itemId": "PVTI_a", "issueNumber": 625 }, { "itemId": "PVTI_b", "issueNumber": 630 }],
-  "after":  [{ "itemId": "PVTI_b", "issueNumber": 630 }, { "itemId": "PVTI_a", "issueNumber": 625 }]
+  "before": [
+    { "itemId": "PVTI_a", "issueNumber": 625, "prNumber": null, "status": "Next Up" },
+    { "itemId": "PVTI_b", "issueNumber": 630, "prNumber": null, "status": "Next Up" }
+  ],
+  "after": [
+    { "itemId": "PVTI_b", "issueNumber": 630, "prNumber": null, "status": "Next Up" },
+    { "itemId": "PVTI_a", "issueNumber": 625, "prNumber": null, "status": "Next Up" }
+  ]
 }
 ```
 
-`order` returns a `moves` array (one entry per chained position mutation) plus the
-same `before`/`after` snapshots.
+Each snapshot entry carries `itemId`, `issueNumber`, `prNumber` (one of the latter
+two is `null`), and `status`. `order` returns a `moves` array (one entry per chained
+position mutation) plus the same `before`/`after` snapshots.
 
 > **`order` is not atomic.** It applies N sequential `updateProjectV2ItemPosition`
 > mutations with no rollback. If it fails partway, the board is left partially
@@ -139,9 +146,17 @@ dev-loops project reorder order 103 101 102 --repo mfittko/dev-loops --project 1
   "mutations": [
     { "query": "mutation(...) { updateProjectV2ItemPosition(...) }", "variables": { "projectId": "PVT_proj1", "itemId": "PVTI_3" } },
     { "query": "...", "variables": { "projectId": "PVT_proj1", "itemId": "PVTI_1", "afterId": "PVTI_3" } }
+  ],
+  "before": [
+    { "itemId": "PVTI_1", "issueNumber": 101, "prNumber": null, "status": "Next Up" },
+    { "itemId": "PVTI_2", "issueNumber": 102, "prNumber": null, "status": "Next Up" },
+    { "itemId": "PVTI_3", "issueNumber": 103, "prNumber": null, "status": "Next Up" }
   ]
 }
 ```
+
+The flag form (`--item [--after] --dry-run`) returns the same `{ mutations, before }`
+shape with a single mutation.
 
 A ref that does not resolve to an item in the target Project fails closed with a
 clear `ITEM_NOT_FOUND` error (exit code 3) — only items in the target Project can

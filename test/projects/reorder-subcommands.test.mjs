@@ -122,8 +122,7 @@ describe("reorder — move-to-top subcommand", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // resolve target item
-      { payload: getItemsByContentResponse(items) }, // before-order snapshot
+      { payload: getItemsByContentResponse(items) }, // single fetch: resolve + before snapshot
       { payload: updatePositionResponse() },
       { payload: getItemsByContentResponse([items[1], items[0]]) }, // after-order snapshot
     ];
@@ -156,9 +155,7 @@ describe("reorder — move-after subcommand", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // target
-      { payload: getItemsByContentResponse(items) }, // after-ref
-      { payload: getItemsByContentResponse(items) }, // before snapshot
+      { payload: getItemsByContentResponse(items) }, // single fetch: resolve both refs + before
       { payload: updatePositionResponse() },
       { payload: getItemsByContentResponse([items[1], items[0]]) }, // after snapshot
     ];
@@ -196,14 +193,11 @@ describe("reorder — order subcommand", () => {
       makeItemNode("PVTI_2", 102, "Issue", "Next Up"),
       makeItemNode("PVTI_3", 103, "Issue", "Next Up"),
     ];
-    // order 103 101 102: resolve each (3), before snapshot (1), 3 mutations, after snapshot (1)
+    // order 103 101 102: single fetch (resolve all + before), 3 mutations, after snapshot (1)
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // resolve 103
-      { payload: getItemsByContentResponse(items) }, // resolve 101
-      { payload: getItemsByContentResponse(items) }, // resolve 102
-      { payload: getItemsByContentResponse(items) }, // before snapshot
+      { payload: getItemsByContentResponse(items) }, // single fetch: resolve all refs + before
       { payload: updatePositionResponse() }, // 103 -> top
       { payload: updatePositionResponse() }, // 101 -> after 103
       { payload: updatePositionResponse() }, // 102 -> after 101
@@ -233,14 +227,11 @@ describe("reorder — order partial-failure recovery", () => {
       makeItemNode("PVTI_2", 102, "Issue", "Next Up"),
       makeItemNode("PVTI_3", 103, "Issue", "Next Up"),
     ];
-    // order 103 101 102: resolve each (3), before snapshot (1), mutation 1 ok, mutation 2 fails
+    // order 103 101 102: single fetch (resolve all + before), mutation 1 ok, mutation 2 fails
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // resolve 103
-      { payload: getItemsByContentResponse(items) }, // resolve 101
-      { payload: getItemsByContentResponse(items) }, // resolve 102
-      { payload: getItemsByContentResponse(items) }, // before snapshot
+      { payload: getItemsByContentResponse(items) }, // single fetch: resolve all refs + before
       { payload: updatePositionResponse() }, // move 1 ok
       { error: "boom" }, // move 2 fails
     ];
@@ -270,8 +261,7 @@ describe("reorder — --dry-run", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // resolve
-      { payload: getItemsByContentResponse(items) }, // before snapshot
+      { payload: getItemsByContentResponse(items) }, // single fetch: resolve + before snapshot
     ];
     const runChild = mockRunChild(responses);
 
@@ -286,6 +276,7 @@ describe("reorder — --dry-run", () => {
     assert.strictEqual(result.mutations.length, 1);
     assert.ok(result.mutations[0].query.includes("updateProjectV2ItemPosition"));
     assert.strictEqual(result.mutations[0].variables.itemId, "PVTI_b");
+    assert.ok(Array.isArray(result.before), "before snapshot present in dry-run");
     // No mutation gh calls were made
     assert.strictEqual(countMutations(runChild.calls), 0);
   });
@@ -298,9 +289,7 @@ describe("reorder — --dry-run", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // resolve 102
-      { payload: getItemsByContentResponse(items) }, // resolve 101
-      { payload: getItemsByContentResponse(items) }, // before snapshot
+      { payload: getItemsByContentResponse(items) }, // single fetch: resolve all refs + before
     ];
     const runChild = mockRunChild(responses);
 
@@ -317,6 +306,43 @@ describe("reorder — --dry-run", () => {
   });
 });
 
+// ── legacy flag form ──────────────────────────────────────────────────────
+
+describe("reorder — legacy flag form", () => {
+  it("rejects a stray positional argument (fail closed)", async () => {
+    const runChild = mockRunChild([]); // should never reach a gh call
+    await assert.rejects(
+      () => main(
+        { _positional: ["630"], repo: "mfittko/dev-loops", project: "1", item: "630" },
+        { runChild },
+      ),
+      (err) => err.code === "INVALID_ARGS" && /Unexpected argument: 630/.test(err.message),
+    );
+  });
+
+  it("includes a before snapshot in --dry-run output (parity with subcommands)", async () => {
+    const items = [makeItemNode("PVTI_b", 630, "Issue", "Next Up")];
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+      { payload: getItemsByContentResponse(items) }, // resolveProjectItem (number)
+      { payload: getItemsByContentResponse(items) }, // before snapshot
+    ];
+    const runChild = mockRunChild(responses);
+
+    const result = await main(
+      { _positional: [], repo: "mfittko/dev-loops", project: "1", item: "630", dryRun: true },
+      { runChild },
+    );
+
+    assert.ok(result.ok);
+    assert.strictEqual(result.dryRun, true);
+    assert.strictEqual(result.mutations.length, 1);
+    assert.ok(Array.isArray(result.before), "before snapshot present in legacy dry-run");
+    assert.strictEqual(countMutations(runChild.calls), 0);
+  });
+});
+
 // ── issue vs PR ref ───────────────────────────────────────────────────────
 
 describe("reorder — issue and PR refs", () => {
@@ -325,10 +351,9 @@ describe("reorder — issue and PR refs", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) },
-      { payload: getItemsByContentResponse(items) },
+      { payload: getItemsByContentResponse(items) }, // single fetch: resolve + before
       { payload: updatePositionResponse() },
-      { payload: getItemsByContentResponse(items) },
+      { payload: getItemsByContentResponse(items) }, // after snapshot
     ];
     const runChild = mockRunChild(responses);
 
@@ -363,6 +388,26 @@ describe("reorder — cross-project error", () => {
         { runChild },
       ),
       (err) => err.code === "ITEM_NOT_FOUND" && /not found in project/.test(err.message),
+    );
+  });
+
+  it("fails closed when an item NODE ID ref belongs to another repo", async () => {
+    // The item id exists on the board but its content is in a different repo.
+    const items = [makeItemNode("PVTI_other", 630, "Issue", "Next Up", "Next Up")];
+    items[0].content.repository.nameWithOwner = "other/repo";
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+      { payload: getItemsByContentResponse(items) }, // single fetch
+    ];
+    const runChild = mockRunChild(responses);
+
+    await assert.rejects(
+      () => main(
+        { _subcommand: "move-to-top", _positional: ["PVTI_other"], repo: "mfittko/dev-loops", project: "1" },
+        { runChild },
+      ),
+      (err) => err.code === "ITEM_NOT_FOUND" && /not found in project for repo/.test(err.message),
     );
   });
 });

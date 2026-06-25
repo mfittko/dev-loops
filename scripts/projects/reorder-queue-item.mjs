@@ -360,19 +360,59 @@ function statusOf(node) {
   return null;
 }
 
+function describeItem(node) {
+  return {
+    itemId: node.id,
+    issueNumber: node.content?.__typename === "Issue" ? node.content.number : null,
+    prNumber: node.content?.__typename === "PullRequest" ? node.content.number : null,
+    status: statusOf(node),
+  };
+}
+
 // Build a diff-friendly snapshot of items in `repo` (optionally a single Status
-// column), in board position order.
-async function snapshotOrder(projectId, repo, statusFilter, env, runChild) {
-  const items = await fetchAllItems(projectId, env, runChild);
+// column), in board position order, from a pre-fetched item list.
+function snapshotFromItems(items, repo, statusFilter) {
   return items
     .filter((it) => it.content && it.content.repository?.nameWithOwner === repo)
     .filter((it) => (statusFilter == null ? true : statusOf(it) === statusFilter))
-    .map((it) => ({
-      itemId: it.id,
-      issueNumber: it.content.__typename === "Issue" ? it.content.number : null,
-      prNumber: it.content.__typename === "PullRequest" ? it.content.number : null,
-      status: statusOf(it),
-    }));
+    .map(describeItem);
+}
+
+async function snapshotOrder(projectId, repo, statusFilter, env, runChild) {
+  const items = await fetchAllItems(projectId, env, runChild);
+  return snapshotFromItems(items, repo, statusFilter);
+}
+
+// Resolve a ref (number or item node ID) against a pre-fetched item list,
+// enforcing the same repo scope for BOTH number and id refs so a cross-project
+// ref fails closed with ITEM_NOT_FOUND.
+function resolveFromItems(items, itemRef, repo) {
+  let match;
+  if (itemRef.kind === "id") {
+    match = items.find(
+      (it) => it.id === itemRef.value && it.content?.repository?.nameWithOwner === repo,
+    );
+    if (!match) {
+      throw Object.assign(
+        new Error(`Item "${itemRef.value}" not found in project for repo "${repo}"`),
+        { code: "ITEM_NOT_FOUND" },
+      );
+    }
+  } else {
+    match = items.find(
+      (it) =>
+        it.content &&
+        it.content.repository?.nameWithOwner === repo &&
+        it.content.number === itemRef.value,
+    );
+    if (!match) {
+      throw Object.assign(
+        new Error(`Item #${itemRef.value} not found in project for repo "${repo}"`),
+        { code: "ITEM_NOT_FOUND" },
+      );
+    }
+  }
+  return describeItem(match);
 }
 
 // ── Resolve an item in a project by reference (number or node ID) ──────
@@ -507,10 +547,13 @@ async function mainFlagForm(args, { env, child, repo, owner, repoName, project }
   const mutation = executePosition(project.id, item.itemId, afterItem ? afterItem.itemId : null);
 
   if (args.dryRun) {
+    // Include the before snapshot for parity with the subcommand dry-run form.
+    const before = await snapshotOrder(project.id, repo, item.status ?? null, env, child);
     return {
       ok: true,
       dryRun: true,
       mutations: [mutation],
+      before,
     };
   }
 
@@ -552,17 +595,19 @@ function requirePositionals(subcommand, positional) {
   }
 }
 
-async function mainSubcommand(args, { env, child, repo, owner, repoName, project }) {
+async function mainSubcommand(args, { env, child, repo, project }) {
   const subcommand = args._subcommand;
   const positional = args._positional ?? [];
   requirePositionals(subcommand, positional);
 
+  // Fetch the board item list ONCE, then resolve every ref (number or id) from
+  // that single list — avoids N full-board scans for N refs and enforces the
+  // same repo scope for both ref kinds (cross-project refs fail closed).
+  const items = await fetchAllItems(project.id, env, child);
+
   // Resolve all referenced items up-front (fail closed before any mutation).
   const refs = positional.map((p) => parseItemRef(p));
-  const resolved = [];
-  for (const ref of refs) {
-    resolved.push(await resolveProjectItem(project.id, ref, owner, repoName, repo, env, child));
-  }
+  const resolved = refs.map((ref) => resolveFromItems(items, ref, repo));
 
   // Build the ordered list of position moves, each { item, afterItem|null }.
   let plan;
@@ -585,8 +630,9 @@ async function mainSubcommand(args, { env, child, repo, owner, repoName, project
   const mutations = plan.map((m) => executePosition(project.id, m.item.itemId, m.afterItem ? m.afterItem.itemId : null));
 
   // Status column for the diff snapshot: use the primary moved item's status.
+  // Reuse the already-fetched list for the before-snapshot (no extra fetch).
   const statusFilter = resolved[0].status ?? null;
-  const before = await snapshotOrder(project.id, repo, statusFilter, env, child);
+  const before = snapshotFromItems(items, repo, statusFilter);
 
   if (args.dryRun) {
     return { ok: true, dryRun: true, mutations, before };
@@ -662,10 +708,19 @@ async function main(args, { env = process.env, runChild } = {}) {
   const [owner, repoName] = repo.split("/");
   const projectRef = parseProjectRef(args.project);
 
+  // Fail closed: the legacy flag form takes no positional arguments. A stray
+  // token (e.g. `reorder 630 --item ...`) must not be silently ignored.
+  if (!args._subcommand && (args._positional?.length ?? 0) > 0) {
+    throw Object.assign(
+      new Error(`Unexpected argument: ${args._positional[0]}`),
+      { code: "INVALID_ARGS", usage: USAGE },
+    );
+  }
+
   const project = await resolveProject(owner, projectRef, env, child);
 
   if (args._subcommand) {
-    return mainSubcommand(args, { env, child, repo, owner, repoName, project });
+    return mainSubcommand(args, { env, child, repo, project });
   }
   return mainFlagForm(args, { env, child, repo, owner, repoName, project });
 }
