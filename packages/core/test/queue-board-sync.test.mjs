@@ -302,6 +302,62 @@ test("syncBoardStatus is a logged no-op when item is not on the board (AC4)", as
     assert.equal(result.skipped, true);
     assert.match(result.reason, /not on/i);
     assert.equal(logs.length, 1, "expected exactly one log for the no-op");
+    assert.match(logs[0], /no-op: item 42 is not on the board/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("syncBoardStatus also treats ITEM_NOT_FOUND as the not-on-board no-op (AC4)", async () => {
+  const dir = await makeRepo("queue:\n  projectNumber: 5\n");
+  try {
+    const logs = [];
+    const result = await syncBoardStatus(
+      "owner/repo",
+      dir,
+      42,
+      "In Progress",
+      { GH_TOKEN: "mock" },
+      {
+        log: (msg) => logs.push(msg),
+        moveQueueItem: async () => {
+          throw Object.assign(new Error("Item #42 not found in project"), {
+            code: "ITEM_NOT_FOUND",
+          });
+        },
+      },
+    );
+    assert.equal(result.skipped, true);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /not on the board/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("syncBoardStatus logs a distinct fail-open message for non-not-on-board errors", async () => {
+  const dir = await makeRepo("queue:\n  projectNumber: 5\n");
+  try {
+    const logs = [];
+    const result = await syncBoardStatus(
+      "owner/repo",
+      dir,
+      42,
+      "In Progress",
+      { GH_TOKEN: "mock" },
+      {
+        log: (msg) => logs.push(msg),
+        moveQueueItem: async () => {
+          throw Object.assign(new Error("API rate limit exceeded"), { code: "GH_API_ERROR" });
+        },
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.skipped, true);
+    assert.equal(logs.length, 1);
+    // Must NOT be mistaken for the AC4 not-on-board no-op.
+    assert.doesNotMatch(logs[0], /not on the board/);
+    assert.match(logs[0], /sync failed \(fail-open\)/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

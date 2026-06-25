@@ -349,11 +349,18 @@ export async function syncBoardStatus(
     );
     return { ok: true, skipped: false, result };
   } catch (err) {
-    // Fail-open: a board hiccup (rate limit, item not on board, missing column)
-    // must never break the loop. AC4: when the item is not on the board this is
-    // a logged no-op, not an error.
+    // Fail-open: a board hiccup (rate limit, missing column, item not on board)
+    // must never break the loop.
     const reason = err?.message ?? "board sync failed";
-    log(`[board-sync] no-op for item ${itemNumber} → "${targetColumn}": ${reason}`);
+    // AC4: the explicit "item not on board" case is a clean, logged no-op.
+    // Other fail-open failures (rate limit, missing column, etc.) get a
+    // distinct, distinguishable message so they are not conflated with AC4.
+    const notOnBoard = err?.code === "ITEM_NOT_FOUND" || err?.code === "ITEM_NOT_ON_BOARD";
+    if (notOnBoard) {
+      log(`[board-sync] no-op: item ${itemNumber} is not on the board (${reason})`);
+    } else {
+      log(`[board-sync] sync failed (fail-open) for item ${itemNumber} → "${targetColumn}": ${reason}`);
+    }
     return { ok: true, skipped: true, reason };
   }
 }
