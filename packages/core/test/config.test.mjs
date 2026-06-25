@@ -21,6 +21,8 @@ import {
   resolveWorkflowConfig,
   resolveLightMode,
   resolveRequireFanoutEvidence,
+  resolveMaxFanoutReviewers,
+  DEFAULT_MAX_FANOUT_REVIEWERS,
 } from "../src/config/config.mjs";
 // ============================================================================
 // Schema validation tests (S1–S26)
@@ -2701,5 +2703,40 @@ describe("gates.requireFanoutEvidence", () => {
   test("rejects non-boolean requireFanoutEvidence", () => {
     const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { requireFanoutEvidence: "yes" } });
     assert.equal(bad.success, false);
+  });
+});
+
+describe("gates.maxFanoutReviewers", () => {
+  test("defaults to 8 when absent (resolver + parsed schema)", () => {
+    assert.equal(DEFAULT_MAX_FANOUT_REVIEWERS, 8);
+    assert.equal(resolveMaxFanoutReviewers({}), 8);
+    assert.equal(resolveMaxFanoutReviewers({ gates: {} }), 8);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.maxFanoutReviewers, 8);
+    assert.equal(resolveMaxFanoutReviewers(parsed.data), 8);
+  });
+
+  test("honors a configured override in full and file schemas", () => {
+    const full = DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 4 } });
+    assert.equal(full.success, true);
+    assert.equal(full.data.gates.maxFanoutReviewers, 4);
+    assert.equal(resolveMaxFanoutReviewers(full.data), 4);
+
+    const file = FileConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 12 } });
+    assert.equal(file.success, true);
+    assert.equal(file.data.gates.maxFanoutReviewers, 12);
+  });
+
+  test("rejects non-positive / non-integer / out-of-range maxFanoutReviewers", () => {
+    assert.equal(DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 0 } }).success, false);
+    assert.equal(DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 2.5 } }).success, false);
+    assert.equal(DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 65 } }).success, false);
+  });
+
+  test("resolver falls back to default for invalid runtime values", () => {
+    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 0 } }), 8);
+    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: -3 } }), 8);
+    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: "x" } }), 8);
   });
 });

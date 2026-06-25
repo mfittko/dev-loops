@@ -72,7 +72,7 @@ on an isolated checkout:
 
 ### Phase 2 — Fork fan-out: parallel reviewers
 
-Fan out one fresh-context reviewer per gate-specific review angle. Each reviewer:
+Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../agents/review.agent.md)), spawned once per resolved angle. Parallelism is capped at `gates.maxFanoutReviewers` (resolved via `resolveMaxFanoutReviewers(config)`, default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
 
 - starts in fresh context (do not inherit prior conversation state). **Mandatory:** run `scripts/github/verify-fresh-review-context.mjs --scope <angle>` at startup; refuse to proceed on contamination. Use `--scope` so parallel reviewers in the same working directory do not trigger false contamination from each other's sentinels.
 - receives a concise briefing summary from the preamble handoff artifacts
@@ -91,8 +91,12 @@ don't need re-review unless their angle's scope overlaps with the fix changes.
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
-Merge the parallel reviewer findings into one consolidated fix plan using a
-consolidation pass (not manual concatenation):
+Merge the parallel reviewer findings into one consolidated fix plan using the
+pure `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` (not manual
+concatenation). It collates the per-angle artifacts, gates `clean` on
+`blockCleanOnFindingSeverities`, returns `blocked` when any per-angle artifact is
+malformed/missing, and `toFindingsLogShape` maps the result into the
+`write-gate-findings-log.mjs` `--findings` shape:
 
 - collate findings from all review angles
 - classify each finding: `must-fix`, `worth-fixing-now`, `defer`
