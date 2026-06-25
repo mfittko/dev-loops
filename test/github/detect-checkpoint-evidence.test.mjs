@@ -574,6 +574,9 @@ test("detect-checkpoint-evidence fails pre-merge check when pre-approval gate is
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-review-stale-head-"));
 
   try {
+    // Hermetic: opt out of default-on fan-out enforcement so this test asserts
+    // only the stale-head failure, independent of the repo's .devloops.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
@@ -619,7 +622,7 @@ test("detect-checkpoint-evidence fails pre-merge check when pre-approval gate is
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     const payload = JSON.parse(result.stderr);
