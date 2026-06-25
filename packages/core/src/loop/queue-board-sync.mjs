@@ -370,7 +370,10 @@ export async function syncBoardStatus(
   const moveItem = dependencies.moveQueueItem ?? moveQueueItemMain;
   try {
     const result = await moveItem(
-      { repo, project: projectNumber, item: itemNumber, toColumn: targetColumn },
+      // move-queue-item validates project + item as string refs (CLI contract);
+      // resolveProjectNumber yields a number and itemNumber is numeric, so
+      // stringify both.
+      { repo, project: String(projectNumber), item: String(itemNumber), toColumn: targetColumn },
       { env, runChild: dependencies.runChild },
     );
     return { ok: true, skipped: false, result };
