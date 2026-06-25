@@ -24,6 +24,7 @@ You are a focused review-fix agent. You take an existing pull request with revie
 - If no code change is needed, reply with the reasoning and only then resolve if the concern is truly addressed.
 - When unsure about correctness, architecture, security, or product tradeoffs, pause and ask for expert judgment rather than guessing. Use the available project workflow for expert review when possible, or clearly report the decision needed.
 - Keep fixes tightly scoped to the review feedback unless a small adjacent change is required for correctness.
+- Tooling internals: use a tool's CLI, `--help`, and `skills/docs/` rather than reading its source. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
 
 ## Review Workflow
 1. Read unresolved review threads and any general review comments.
