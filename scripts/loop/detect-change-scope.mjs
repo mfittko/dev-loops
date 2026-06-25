@@ -31,6 +31,9 @@ function parseCliArgs(argv) {
   for (const token of tokens) {
     if (token.kind === "option") {
       if (token.name === "help") {
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
         process.stdout.write(USAGE);
         process.exit(0);
       }

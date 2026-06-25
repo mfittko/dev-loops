@@ -62,6 +62,9 @@ function parseCliArgs(argv) {
     }
     switch (token.name) {
       case "dry-run":
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
         opts.dryRun = true;
         break;
       case "issue":

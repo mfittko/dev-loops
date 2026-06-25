@@ -68,6 +68,9 @@ function parseCliArgs(argv) {
     }
     switch (token.name) {
       case "help":
+        if (token.value !== undefined) {
+          throw parseError(`Unknown flag: ${token.rawName}=${token.value}`);
+        }
         args.help = true;
         break;
       case "repo":
@@ -89,6 +92,9 @@ function parseCliArgs(argv) {
         args.linkRepo = requireValue(token, "--link-repo requires a value (owner/name)");
         break;
       case "repair-rename":
+        if (token.value !== undefined) {
+          throw parseError(`Unknown flag: ${token.rawName}=${token.value}`);
+        }
         args.repairRename = true;
         break;
       default:

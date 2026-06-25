@@ -85,6 +85,9 @@ function parseCliArgs(argv) {
     }
     switch (token.name) {
       case "help":
+        if (token.value !== undefined) {
+          throw parseError(`Unknown flag: ${token.rawName}=${token.value}`);
+        }
         args.help = true;
         break;
       case "repo":
@@ -100,6 +103,9 @@ function parseCliArgs(argv) {
         args.after = requireValue(token, "--after requires a value (number or node ID)");
         break;
       case "dry-run":
+        if (token.value !== undefined) {
+          throw parseError(`Unknown flag: ${token.rawName}=${token.value}`);
+        }
         args.dryRun = true;
         break;
       default:

@@ -65,9 +65,15 @@ function parseCliArgs(argv) {
         args.repo = token.value;
         break;
       case "merge-authorized":
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
         args.mergeAuthorized = true;
         break;
       case "parallel":
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
         args.parallel = true;
         break;
       case "redispatch-max-retries":
@@ -77,6 +83,9 @@ function parseCliArgs(argv) {
         args.maxParallel = parsePositiveInteger(token.value, "--max-parallel");
         break;
       case "help":
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
         args.help = true;
         break;
       default:

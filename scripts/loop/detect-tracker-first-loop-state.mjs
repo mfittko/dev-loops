@@ -35,6 +35,9 @@ function parseCliArgs(argv) {
   for (const token of tokens) {
     if (token.kind === "option") {
       if (token.name === "help") {
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
         showHelp();
       }
       if (token.name === "repo") {

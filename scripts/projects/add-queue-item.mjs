@@ -58,6 +58,9 @@ function parseCliArgs(argv) {
     }
     switch (token.name) {
       case "help":
+        if (token.value !== undefined) {
+          throw Object.assign(new Error(`Unknown flag: ${token.rawName}=${token.value}`), { code: "INVALID_ARGS", usage: USAGE });
+        }
         args.help = true;
         break;
       case "repo":

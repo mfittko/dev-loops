@@ -51,6 +51,9 @@ function parseCliArgs(argv) {
     }
     switch (token.name) {
       case "loop-info":
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
         opts.loopInfo = true;
         break;
       case "issue":
