@@ -319,6 +319,111 @@ test("runQueue wires board transitions when configured and records them", async 
   }
 });
 
+test("runQueue syncs final-approval column for open PR when merge not authorized (#793)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-final-approval-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "queue:\n  projectNumber: 7\n");
+    const queue = {
+      version: 1,
+      entries: [createEntry(201, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    const moves = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: false,
+      runEntry: async () => ({ ok: true, pr: 42 }),
+      queueBoardSyncDependencies: {
+        moveQueueItem: async (args) => {
+          moves.push({ ...args });
+          return { ok: true, item: { newColumn: args.toColumn } };
+        },
+      },
+    });
+
+    // Entry stays at gates_passing (merge not authorized) for a future run.
+    assert.equal(result.queue.entries[0].status, "gates_passing");
+    // running → In Progress; final_approval_ready resolves to the SAME column
+    // ("In Progress") so the redundant board write is deduped — only ONE move.
+    assert.equal(moves.length, 1, "redundant same-column final-approval sync is deduped");
+    assert.equal(moves[0].toColumn, "In Progress");
+    // Both syncs still accounted for; the second is a skipped "column unchanged".
+    assert.equal(result.results[0].boardSync.length, 2);
+    assert.equal(result.results[0].boardSync[0].skipped, false);
+    assert.equal(result.results[0].boardSync[1].skipped, true);
+    assert.equal(result.results[0].boardSync[1].reason, "column unchanged");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue does sync a distinct Ready for Review column for open PR (#793)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-ready-review-"));
+  try {
+    await writeFile(
+      path.join(dir, ".devloops"),
+      "queue:\n  projectNumber: 7\n  statusColumns:\n    ready_for_review: \"Ready for Review\"\n",
+    );
+    const queue = {
+      version: 1,
+      entries: [createEntry(203, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    const moves = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: false,
+      runEntry: async () => ({ ok: true, pr: 42 }),
+      queueBoardSyncDependencies: {
+        moveQueueItem: async (args) => {
+          moves.push({ ...args });
+          return { ok: true, item: { newColumn: args.toColumn } };
+        },
+      },
+    });
+
+    assert.equal(result.queue.entries[0].status, "gates_passing");
+    // Distinct column configured → both moves land (no dedup).
+    assert.equal(moves.length, 2);
+    assert.equal(moves[0].toColumn, "In Progress");
+    assert.equal(moves[1].toColumn, "Ready for Review");
+    assert.equal(result.results[0].boardSync[1].skipped, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue final-approval board sync is a no-op when board unconfigured (#793)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-final-approval-noop-"));
+  try {
+    const queue = {
+      version: 1,
+      entries: [createEntry(202, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    const moves = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: false,
+      runEntry: async () => ({ ok: true, pr: 42 }),
+      queueBoardSyncDependencies: {
+        moveQueueItem: async (args) => {
+          moves.push({ ...args });
+          return { ok: true, item: { newColumn: args.toColumn } };
+        },
+      },
+    });
+
+    assert.equal(result.queue.entries[0].status, "gates_passing");
+    assert.equal(moves.length, 0, "no board mutations when board is unconfigured");
+    // Both syncs (running + final approval) recorded as skipped no-ops.
+    assert.equal(result.results[0].boardSync.length, 2);
+    assert.equal(result.results[0].boardSync.every((s) => s.skipped), true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("runQueue records fallback board transition on failure", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-board-fail-"));
   try {
