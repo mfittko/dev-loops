@@ -86,7 +86,7 @@ export function parseCliArgs(argv) {
       log: { type: "string" },
       record: { type: "string" },
     },
-    allowPositionals: false,
+    allowPositionals: true,
     strict: false,
     tokens: true,
   });

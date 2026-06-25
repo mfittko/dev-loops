@@ -82,6 +82,13 @@ test("parseCliTokens collects option values and rejects unknown flags / position
   assert.throws(() => parseCliTokens(["extra"], options), (e) => e.message === "Unknown argument: extra");
 });
 
+test("parseCliTokens sets a bare boolean flag true but honors an explicit =false", () => {
+  const options = { json: { type: "boolean" } };
+  assert.equal(parseCliTokens(["--json"], options).values.get("json"), true);
+  assert.equal(parseCliTokens(["--json=false"], options).values.get("json"), false);
+  assert.equal(parseCliTokens(["--json=true"], options).values.get("json"), true);
+});
+
 test("parseCliTokens keeps positionals when allowed and rejects flag-like option values", () => {
   const options = { repo: { type: "string" } };
   const { positionals } = parseCliTokens(["cmd"], options, null, { allowPositionals: true });

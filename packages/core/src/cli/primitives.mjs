@@ -54,7 +54,9 @@ export function parseCliTokens(argv, options, parseError = null, { allowPosition
     }
 
     if (spec.type === "boolean") {
-      values.set(token.name, true);
+      // A bare boolean flag carries no value (parseArgs → undefined) and means true;
+      // an explicit inline value (e.g. --flag=false) is honored rather than forced true.
+      values.set(token.name, token.value === undefined ? true : token.value !== "false");
       continue;
     }
 
