@@ -166,8 +166,29 @@ export function buildFindingsMarker({ gate }) {
 // Collapse any run of whitespace (newlines, tabs, repeated spaces) to a single
 // space and trim. LLM-generated free text often carries embedded newlines, which
 // would otherwise break a single Markdown list item across lines.
+//
+// Additionally neutralize any embedded HTML-comment delimiters (`<!--` / `-->`).
+// The findings comment is keyed by a hidden marker that IS an HTML comment
+// (buildFindingsMarker), and free text comes from scoped-review agents. Without
+// this, a finding field could inject a second `<!-- dev-loops:gate-findings ... -->`
+// marker (breaking idempotent comment matching) or otherwise smuggle an HTML
+// comment into the rendered body. We escape the opening/closing angle brackets so
+// the delimiter renders as visible literal text and cannot form a real comment.
 function sanitizeInline(value) {
-  return String(value).replace(/\s+/g, " ").trim();
+  return String(value)
+    .replace(/\s+/g, " ")
+    .replace(/<!--/g, "&lt;!--")
+    .replace(/-->/g, "--&gt;")
+    .trim();
+}
+
+// Sanitize free text that is rendered INSIDE an inline backtick code span
+// (`angle`, file refs). On top of sanitizeInline, strip any literal backtick:
+// a backtick inside the span would prematurely close it, breaking out into raw
+// Markdown (injection) for the remainder of the list item. Backticks are never
+// meaningful in an angle label or a file path, so dropping them is safe.
+function sanitizeCodeSpan(value) {
+  return sanitizeInline(String(value).replace(/`/g, ""));
 }
 
 export function renderFindingsCommentBody({ gate, headSha, findings }) {
@@ -200,14 +221,20 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
       // the single-line Markdown list item.
       const summary = sanitizeInline(finding.summary);
       const dispositionSuffix = finding.disposition ? ` — _${sanitizeInline(finding.disposition)}_` : "";
-      // angle is a code/label literal → backticks; summary is prose.
-      lines.push(`- \`${finding.angle}\`: ${summary}${dispositionSuffix}`);
+      // angle is a code/label literal → backticks; summary is prose. angle is
+      // free text from a scoped-review agent and is rendered inside an inline
+      // code span, so it must be sanitized too: an embedded backtick or newline
+      // would otherwise break the code span (markdown injection) or split the
+      // list item. Use sanitizeCodeSpan (backtick-stripping) since it lives
+      // inside backticks, consistent with the file refs below.
+      const angle = sanitizeCodeSpan(finding.angle);
+      lines.push(`- \`${angle}\`: ${summary}${dispositionSuffix}`);
       if (Array.isArray(finding.files) && finding.files.length > 0) {
-        // File refs go inside backticks; sanitize each so embedded whitespace or
-        // newlines can't break the single Markdown list item, and drop any that
-        // sanitize to empty.
+        // File refs go inside backticks; sanitize each so embedded whitespace,
+        // newlines, or backticks can't break the single Markdown list item /
+        // code span, and drop any that sanitize to empty.
         const refs = finding.files
-          .map(f => sanitizeInline(f))
+          .map(f => sanitizeCodeSpan(f))
           .filter(f => f.length > 0)
           .map(f => `\`${f}\``)
           .join(", ");

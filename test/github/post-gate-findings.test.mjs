@@ -204,6 +204,55 @@ test("renderFindingsCommentBody sanitizes file refs (collapses whitespace/newlin
   assert.ok(!body.includes("``"));
 });
 
+test("renderFindingsCommentBody sanitizes an angle containing a backtick + newline into a single clean code span", () => {
+  const findings = parseFindings(JSON.stringify([
+    {
+      severity: "must-fix",
+      // angle from a scoped-review agent carrying a backtick (would close the
+      // code span) and an embedded newline (would split the list item).
+      angle: "sco`pe\ninjection",
+      summary: "Scope too broad",
+    },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  // The finding renders as exactly one Markdown list line (no embedded newline).
+  const listLine = body.split("\n").find(line => line.startsWith("- `"));
+  assert.ok(listLine, "expected a single list line for the finding");
+  // Backtick is stripped (cannot break out of the code span) and the newline is
+  // collapsed to a single space, yielding one clean inline span.
+  assert.equal(listLine, "- `scope injection`: Scope too broad");
+  // No stray backtick leaked from the angle into the rendered body beyond the
+  // two that delimit the code span (and the colon/summary that follow).
+  assert.ok(!body.includes("sco`pe"));
+});
+
+test("renderFindingsCommentBody neutralizes an embedded gate-findings marker in free text (no second HTML comment)", () => {
+  const injectedMarker = buildFindingsMarker({ gate: "draft_gate" });
+  const findings = parseFindings(JSON.stringify([
+    {
+      severity: "must-fix",
+      angle: "scope",
+      // A summary that tries to smuggle a second findings marker (HTML comment)
+      // into the rendered body, which would break idempotent comment matching.
+      summary: `Scope too broad ${injectedMarker} trailing`,
+    },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  // Exactly ONE real marker (the legitimate one at the top of the body): the
+  // injected one is neutralized, so the raw marker string appears only once.
+  const occurrences = body.split(injectedMarker).length - 1;
+  assert.equal(occurrences, 1, "the injected marker must be neutralized, leaving only the real marker");
+  // The injected text is still visible, just with escaped comment delimiters so
+  // it cannot form a real HTML comment.
+  assert.ok(body.includes("&lt;!-- dev-loops:gate-findings gate=draft_gate --&gt;"));
+  // And the rendered body must not contain a second literal `<!--` ... `-->`
+  // pair beyond the single legitimate marker on the first line.
+  const lines = body.split("\n");
+  assert.ok(lines[0] === injectedMarker, "first line is the legitimate marker");
+  const rest = lines.slice(1).join("\n");
+  assert.ok(!rest.includes("<!--"), "no raw HTML-comment opener in the rendered body beyond the marker");
+});
+
 // ---------------------------------------------------------------------------
 // Idempotent create / update via stubbed gh
 // ---------------------------------------------------------------------------
