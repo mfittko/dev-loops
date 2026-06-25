@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.8
+
+### Added
+
+- **Local post-merge board archive** (#869). The dev-loop post-merge step archives `Done`-column board items older than a configurable threshold (`.devloops` `queue.archiveOlderThanDays`, default 7d) using local `gh` auth — best-effort, non-fatal, no CI/cron/PAT. On-demand `dev-loops project archive-done` is unchanged.
+- **Gate execution-mode disclosure scaffolding** (#867, partial). Gate verdicts can record `--execution-mode` / `--inline-reason`; opt-in `gates.requireFanoutEvidence` (default off) is available. (Live fan-out/fan-in execution remains follow-up.)
+
+### Fixed
+
+- **`dev-loops project move` repaired** (#865). Item lookup now resolves both issue/PR number and node-id refs against a single paginated board-item list; fixes the `ITEM_NOT_FOUND` (unpaginated `first:10`) and the invalid `ProjectV2.item` GraphQL query.
+
+### Changed
+
+- **Index-based arg parsers migrated to `node:util.parseArgs`** (#857, #870). The remaining `argv[++i]` parsers across `scripts/projects`, `scripts/loop`, `scripts/claude`, and `archive-done-items.mjs` now use `parseArgs`; CLI contracts preserved and boolean flags reject an explicit inline `=value`.
+
+### Documentation
+
+- **Tooling-internals anti-pattern promoted** (#861, #863). The "use the CLI/`--help`/`skills/docs/` instead of reading tooling source" rule is now a canonical entry in `skills/docs/anti-patterns.md`, with a local failure-triage fast path and pointers from the `developer`/`fixer` agents.
+
 ## 0.2.7
 
 ### Fixed
