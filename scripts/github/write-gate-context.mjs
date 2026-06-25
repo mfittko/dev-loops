@@ -291,17 +291,124 @@ export function parseWriteGateContextCliArgs(argv) {
  * @returns {string} relative artifact path
  */
 export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.json`);
+}
+
+/**
+ * Validate the non-repo path components (gate, pr, headSha) that are
+ * interpolated into a filesystem path which is later `path.resolve()`d and
+ * read/written. Mirrors the repo-segment safety check in {@link repoSlugFor} so
+ * both path builders reject traversal sequences and odd filenames coming from
+ * untrusted inputs. Returns sanitized values for interpolation.
+ *
+ * @param {object} input
+ * @param {number|string} input.pr — must coerce to a positive integer
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha — 7-64 char hex SHA
+ * @returns {{ pr: number, gate: string, headSha: string }}
+ */
+function validatePathSegments({ pr, gate, headSha }) {
+  if (gate !== "draft_gate" && gate !== "pre_approval_gate") {
+    throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected draft_gate or pre_approval_gate)`);
+  }
+  // Require a CANONICAL positive integer: the trimmed string must be all digits
+  // (`/^\d+$/`) and > 0. This mirrors the CLI's parsePrNumber rule so the path
+  // builder cannot accept non-canonical numeric forms ("1e3" → 1000, "0x10" →
+  // 16, "1.5") that Number() would coerce to a DIFFERENT pr-<N> segment than the
+  // operator/CLI intended, breaking the deterministic producer/consumer
+  // round-trip. " 9 " trims to "9" and stays valid; numbers are stringified first.
+  const prStr = String(pr).trim();
+  const prNum = Number(prStr);
+  if (!/^\d+$/.test(prStr) || !Number.isInteger(prNum) || prNum <= 0) {
+    throw new Error(`--pr segment ${JSON.stringify(pr)} is unsafe (expected a positive integer)`);
+  }
+  // Lowercase the validated SHA so the path segment is case-canonical regardless
+  // of caller casing, matching the CLI's normalizeHeadSha. A mixed-case
+  // headRefOid (e.g. ABC123) must compute the SAME filename as its lowercase
+  // form (abc123) or readGateContext / the .diff lookup would miss it — a
+  // determinism bug.
+  const sha = String(headSha).trim().toLowerCase();
+  if (!/^[0-9a-f]{7,64}$/i.test(sha)) {
+    throw new Error(`--head-sha segment ${JSON.stringify(headSha)} is unsafe (expected a 7-64 character hex SHA)`);
+  }
+  return { pr: prNum, gate, headSha: sha };
+}
+
+/**
+ * Validate the repo string and return its `owner-name` slug, applying the same
+ * safety checks (no `.`/`..` segments, no whitespace/backslashes) shared by the
+ * artifact and diff path builders.
+ * @param {string} repo — owner/name
+ * @returns {string} repo slug
+ */
+function repoSlugFor(repo) {
   const parts = String(repo).split("/");
   if (parts.length !== 2 || parts.some((p) => p.length === 0)) {
     throw new Error(`--repo must be in owner/name format, got: ${JSON.stringify(repo)}`);
   }
   for (const p of parts) {
     if (p === "." || p === ".." || /[\s\\]/.test(p)) {
-      throw new Error(`--repo segment ${JSON.stringify(p)} contains unsafe characters (dots, whitespace, or backslashes)`);
+      throw new Error(`--repo segment ${JSON.stringify(p)} is unsafe (a "." or ".." path segment, or contains whitespace/backslashes)`);
     }
   }
-  const repoSlug = parts.join("-");
-  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
+  return parts.join("-");
+}
+
+/**
+ * Build the deterministic path for the FULL diff captured alongside the gate
+ * context artifact. Mirrors buildGateContextPath but with a `.diff` extension so
+ * scoped reviewers can read the entire change set (not just hunks) from a stable
+ * location. Exported for reuse by the fork fan-out reviewers.
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {string} relative diff path
+ */
+export function buildGateDiffPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.diff`);
+}
+
+/**
+ * Parse `git diff --name-status` output into full repo-relative changed file
+ * paths. Handles rename/copy entries (R100 old new, C75 old new) by recording
+ * the destination path. Tolerates blank lines and malformed rows.
+ * @param {string} nameStatusOutput
+ * @returns {string[]}
+ */
+export function parseChangedFiles(nameStatusOutput) {
+  if (typeof nameStatusOutput !== "string" || nameStatusOutput.length === 0) {
+    return [];
+  }
+  const files = [];
+  for (const line of nameStatusOutput.split("\n")) {
+    const trimmed = line.replace(/\r$/, "");
+    if (trimmed.trim().length === 0) continue;
+    const cols = trimmed.split("\t");
+    if (cols.length < 2) continue;
+    const status = cols[0].trim();
+    let dest;
+    if (/^[RC]\d*$/i.test(status)) {
+      // Rename (Rxxx) / copy (Cxxx) entries carry status + old + new paths and
+      // must have >= 3 columns; record the new (last) path. A malformed 2-column
+      // rename/copy row (e.g. "R100\told-path", missing the new path) is skipped
+      // rather than misrecording the OLD path as the changed file.
+      if (cols.length < 3) continue;
+      dest = cols[cols.length - 1];
+    } else {
+      dest = cols[1];
+    }
+    const file = (dest ?? "").trim();
+    if (file.length > 0) files.push(file);
+  }
+  return files;
 }
 
 /**
@@ -323,6 +430,8 @@ export function buildGateContextArtifact(options) {
       branch: options.branch ?? null,
       headSha: options.headSha,
       touchedFiles: Array.isArray(options.touchedFiles) ? options.touchedFiles : [],
+      changedFiles: Array.isArray(options.changedFiles) ? options.changedFiles : [],
+      diffPath: options.diffPath ?? null,
       acceptanceCriteria: options.acceptanceCriteria ?? null,
       validationPosture: options.validationPosture ?? null,
     },
@@ -359,7 +468,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {object} input
  * @param {import("@dev-loops/core/config").DevLoopConfig} input.config — merged dev-loop config
  * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {{ nameStatusOutput: string, diffOutput?: string }} [input.diff] — diff for dynamic resolution
+ * @param {{ nameStatusOutput: string, diffOutput?: string }} [input.diff] — diff for dynamic resolution; when `diffOutput` is present it is also persisted to `scope.diffPath` and parsed into `scope.changedFiles`
  * @param {string} input.repo — owner/name
  * @param {number|string} input.pr
  * @param {string} input.headSha
@@ -378,6 +487,38 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
+  const tmpRoot = input.tmpRoot || "tmp";
+
+  // Best-effort full-diff capture: when the resolver was handed a diff with
+  // `diffOutput`, persist the ENTIRE diff to a deterministic `.diff` file next
+  // to the context artifact so scoped reviewers can read the full change set
+  // (not just hunks) and trace adjacent code. Reference it from `scope.diffPath`
+  // (relative) and record full repo-relative `scope.changedFiles` parsed from
+  // the diff's `nameStatusOutput`. We do NOT inline the diff in the JSON.
+  const diffOutput = input.diff?.diffOutput;
+  let diffPath = null;
+  let changedFiles = parseChangedFiles(input.diff?.nameStatusOutput);
+  if (typeof diffOutput === "string" && diffOutput.length > 0) {
+    diffPath = buildGateDiffPath({
+      repo: input.repo,
+      pr: input.pr,
+      gate: input.gate,
+      headSha: input.headSha,
+      tmpRoot,
+    });
+    const fullDiffPath = path.resolve(repoRoot, diffPath);
+    try {
+      await mkdir(path.dirname(fullDiffPath), { recursive: true });
+      await writeFile(fullDiffPath, diffOutput.endsWith("\n") ? diffOutput : diffOutput + "\n", "utf8");
+    } catch (err) {
+      // Best-effort: a diff-file write failure (disk, permissions) must not block
+      // the context artifact. Degrade to diffPath=null; reviewers reconstruct the
+      // diff with `git diff`. changedFiles (from nameStatusOutput) is unaffected.
+      process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
+      diffPath = null;
+    }
+  }
+
   const writeResult = await writeGateContext(
     {
       repo: input.repo,
@@ -388,9 +529,11 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       rationale,
       branch: input.branch ?? null,
       touchedFiles: input.touchedFiles ?? [],
+      changedFiles,
+      diffPath,
       acceptanceCriteria: input.acceptanceCriteria ?? null,
       validationPosture: input.validationPosture ?? null,
-      tmpRoot: input.tmpRoot || "tmp",
+      tmpRoot,
     },
     { repoRoot },
   );

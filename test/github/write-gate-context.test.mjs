@@ -10,7 +10,9 @@ import {
   buildGateContext,
   buildGateContextArtifact,
   buildGateContextPath,
+  buildGateDiffPath,
   mapGateToConfigKey,
+  parseChangedFiles,
   parseWriteGateContextCliArgs,
   rationaleFromResolver,
   readGateContext,
@@ -66,6 +68,121 @@ test("buildGateContextPath honors custom tmp-root", () => {
 test("buildGateContextPath rejects malformed repo", () => {
   assert.throws(() => buildGateContextPath({ repo: "no-slash", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name/);
   assert.throws(() => buildGateContextPath({ repo: "../x/y", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name|unsafe/);
+});
+
+test("buildGateContextPath lowercases the headSha segment (case-canonical, matches normalizeHeadSha)", () => {
+  // A mixed-case headRefOid must compute the SAME filename as its lowercase form
+  // so readGateContext / the .diff lookup never misses it (determinism).
+  const p = buildGateContextPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234def" });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-7", "pre_approval_gate-abc1234def.json"));
+  // Upper- and lower-case SHAs resolve to the same path.
+  assert.equal(
+    buildGateContextPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234DEF" }),
+    buildGateContextPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "abc1234def" }),
+  );
+});
+
+test("buildGateContextPath accepts a whitespace-padded canonical pr (trims to digits)", () => {
+  const p = buildGateContextPath({ repo: "owner/repo", pr: " 9 ", gate: "draft_gate", headSha: "abc1234" });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-9", "draft_gate-abc1234.json"));
+});
+
+test("buildGateContextPath rejects unsafe pr/gate/headSha segments", () => {
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 1, gate: "../etc", headSha: "abc1234" }), /gate.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "1.5", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "../9", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 0, gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  // Non-canonical numeric forms that Number() would silently coerce to a DIFFERENT
+  // pr-<N> segment than the CLI's parsePrNumber (`/^\d+$/`) would accept.
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "1e3", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "0x10", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "abc", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "../../etc/passwd" }), /head-sha.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "xyz" }), /head-sha.*unsafe/);
+});
+
+// ---------------------------------------------------------------------------
+// Diff path builder (mirrors buildGateContextPath, .diff extension)
+// ---------------------------------------------------------------------------
+
+test("buildGateDiffPath produces a deterministic slugged .diff path", () => {
+  const p = buildGateDiffPath({
+    repo: "owner/repo",
+    pr: 42,
+    gate: "draft_gate",
+    headSha: "abc1234",
+    tmpRoot: "tmp",
+  });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-42", "draft_gate-abc1234.diff"));
+});
+
+test("buildGateDiffPath honors custom tmp-root and sits beside the context artifact", () => {
+  const diffPath = buildGateDiffPath({ repo: "a/b", pr: 1, gate: "pre_approval_gate", headSha: "deadbeef", tmpRoot: "custom" });
+  const jsonPath = buildGateContextPath({ repo: "a/b", pr: 1, gate: "pre_approval_gate", headSha: "deadbeef", tmpRoot: "custom" });
+  assert.equal(diffPath, path.join("custom", "gate-context", "a-b", "pr-1", "pre_approval_gate-deadbeef.diff"));
+  assert.equal(path.dirname(diffPath), path.dirname(jsonPath));
+});
+
+test("buildGateDiffPath rejects malformed repo (same safety as context path)", () => {
+  assert.throws(() => buildGateDiffPath({ repo: "no-slash", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name/);
+  assert.throws(() => buildGateDiffPath({ repo: "../x/y", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name|unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "a b/c", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /unsafe/);
+});
+
+test("buildGateDiffPath lowercases the headSha segment (case-canonical, matches the context path)", () => {
+  const p = buildGateDiffPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234def" });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-7", "pre_approval_gate-abc1234def.diff"));
+  // The .diff and .json siblings must agree on the lowercased SHA so a scoped
+  // reviewer that found the JSON also finds the diff.
+  const jsonPath = buildGateContextPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234def" });
+  assert.equal(path.basename(p, ".diff"), path.basename(jsonPath, ".json"));
+});
+
+test("buildGateDiffPath rejects unsafe pr/gate/headSha segments (same safety as context path)", () => {
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "../etc", headSha: "abc1234" }), /gate.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "1.5", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "../9", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 0, gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "1e3", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "0x10", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "../../etc/passwd" }), /head-sha.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "xyz" }), /head-sha.*unsafe/);
+});
+
+// ---------------------------------------------------------------------------
+// parseChangedFiles — full repo-relative paths from --name-status output
+// ---------------------------------------------------------------------------
+
+test("parseChangedFiles parses M/A/D entries and tolerates blanks", () => {
+  const out = "M\tscripts/a.mjs\nA\tscripts/b.mjs\n\nD\tdocs/old.md\n";
+  assert.deepEqual(parseChangedFiles(out), ["scripts/a.mjs", "scripts/b.mjs", "docs/old.md"]);
+});
+
+test("parseChangedFiles records destination path for renames/copies", () => {
+  const out = "R100\tsrc/old.mjs\tsrc/new.mjs\nC75\tsrc/base.mjs\tsrc/copy.mjs\n";
+  assert.deepEqual(parseChangedFiles(out), ["src/new.mjs", "src/copy.mjs"]);
+});
+
+test("parseChangedFiles records the new path for a well-formed 3-column rename/copy", () => {
+  assert.deepEqual(parseChangedFiles("R100\told\tnew\n"), ["new"]);
+  assert.deepEqual(parseChangedFiles("C75\ta\tb\n"), ["b"]);
+});
+
+test("parseChangedFiles skips a malformed 2-column rename/copy row (no new path)", () => {
+  // "R100\told" lacks the destination column; recording the OLD path would be wrong.
+  assert.deepEqual(parseChangedFiles("R100\told\n"), []);
+  assert.deepEqual(parseChangedFiles("C75\tonly-old\n"), []);
+  // Malformed rename row is skipped but valid neighbors are still recorded.
+  assert.deepEqual(
+    parseChangedFiles("R100\told\nM\tkept.mjs\nR50\tx\ty\n"),
+    ["kept.mjs", "y"],
+  );
+});
+
+test("parseChangedFiles returns empty for empty/non-string input", () => {
+  assert.deepEqual(parseChangedFiles(""), []);
+  assert.deepEqual(parseChangedFiles(undefined), []);
+  assert.deepEqual(parseChangedFiles(null), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -154,6 +271,8 @@ test("buildGateContextArtifact records angles + rationale + scope", () => {
     branch: "feat",
     headSha: "abc1234",
     touchedFiles: ["x.mjs"],
+    changedFiles: [],
+    diffPath: null,
     acceptanceCriteria: "#5",
     validationPosture: "npm test",
   });
@@ -305,11 +424,14 @@ test("buildGateContext persists resolveGateAnglesDynamic output (docs-only)", as
     assert.ok(!result.artifact.resolvedAngles.includes("coverage"));
     assert.ok(result.artifact.rationale.some((r) => r.angle === "coverage" && r.action === "dropped"));
 
-    // Scope persisted.
+    // Scope persisted. DOCS_ONLY_DIFF has empty diffOutput, so diffPath is null
+    // and changedFiles is parsed from nameStatusOutput.
     assert.deepEqual(result.artifact.scope, {
       branch: "issue-877",
       headSha: "abc1234567890",
       touchedFiles: ["docs/foo.md", "README.md"],
+      changedFiles: ["docs/foo.md", "README.md"],
+      diffPath: null,
       acceptanceCriteria: "#877",
       validationPosture: "npm run verify",
     });
@@ -384,6 +506,111 @@ test("buildGateContext maps pre_approval_gate to the preApproval config key", as
     assert.ok(result.artifact.resolvedAngles.includes("renderer-security"));
     assert.equal(result.artifact.gate, "pre_approval_gate");
     assert.equal(result.path, path.join("tmp", "gate-context", "a-b", "pr-14", "pre_approval_gate-feedface1234.json"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// buildGateContext — full-diff capture
+// ---------------------------------------------------------------------------
+
+test("buildGateContext writes the .diff file and records scope.diffPath + scope.changedFiles when diffOutput is present", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const config = draftConfig();
+    const diffOutput = [
+      "diff --git a/scripts/a.mjs b/scripts/a.mjs",
+      "index 111..222 100644",
+      "--- a/scripts/a.mjs",
+      "+++ b/scripts/a.mjs",
+      "@@ -1,3 +1,4 @@",
+      "+const added = parseFloat(input);",
+      "diff --git a/scripts/b.mjs b/scripts/b.mjs",
+      "+more",
+    ].join("\n");
+    const diff = {
+      nameStatusOutput: "M\tscripts/a.mjs\nA\tscripts/b.mjs\n",
+      diffOutput,
+    };
+
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff,
+        repo: "owner/repo",
+        pr: 20,
+        headSha: "abc1234567890",
+      },
+      { repoRoot },
+    );
+
+    const expectedDiffPath = buildGateDiffPath({
+      repo: "owner/repo", pr: 20, gate: "draft_gate", headSha: "abc1234567890",
+    });
+    assert.equal(result.artifact.scope.diffPath, expectedDiffPath);
+    assert.deepEqual(result.artifact.scope.changedFiles, ["scripts/a.mjs", "scripts/b.mjs"]);
+
+    // The full diff is written to the .diff file, NOT inlined in the JSON.
+    const onDiskDiff = await readFile(path.resolve(repoRoot, expectedDiffPath), "utf8");
+    assert.ok(onDiskDiff.includes("diff --git a/scripts/a.mjs"));
+    assert.ok(onDiskDiff.includes("const added = parseFloat(input);"));
+    const onDiskJson = await readFile(
+      path.resolve(repoRoot, result.path),
+      "utf8",
+    );
+    assert.ok(!onDiskJson.includes("diff --git"), "diff body must not be embedded inline in the JSON artifact");
+
+    // Round-trips through readGateContext.
+    const reread = await readGateContext({
+      repo: "owner/repo", pr: 20, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(reread.scope.diffPath, expectedDiffPath);
+    assert.deepEqual(reread.scope.changedFiles, ["scripts/a.mjs", "scripts/b.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext leaves scope.diffPath null when diffOutput is absent (still records changedFiles)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const config = draftConfig();
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: { nameStatusOutput: "M\tscripts/a.mjs\n" }, // no diffOutput
+        repo: "owner/repo",
+        pr: 21,
+        headSha: "abc1234567890",
+      },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.scope.diffPath, null);
+    assert.deepEqual(result.artifact.scope.changedFiles, ["scripts/a.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext leaves scope.diffPath null and changedFiles empty when no diff is given", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const config = draftConfig();
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        repo: "owner/repo",
+        pr: 22,
+        headSha: "abc1234567890",
+      },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.scope.diffPath, null);
+    assert.deepEqual(result.artifact.scope.changedFiles, []);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
