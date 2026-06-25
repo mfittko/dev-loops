@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 import { runQueue, DEFAULT_QUEUE_DRIVER_OPTIONS } from "@dev-loops/core/loop/queue-driver";
 import { computeParallelSchedule } from "@dev-loops/core/loop/queue-parallel";
 import { readQueue } from "@dev-loops/core/loop/queue-state";
+import { reconcileBoardMembership } from "@dev-loops/core/loop/queue-membership";
 import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -111,7 +112,29 @@ async function main() {
 
   const queue = await readQueue(REPO_ROOT);
 
-  if (queue.entries.length === 0) {
+  // A configured GitHub Projects board is the authoritative queue MEMBERSHIP
+  // source (issue #864): fold its "Next Up" items into the queue before judging
+  // emptiness so a populated board with an empty local queue is no longer a
+  // silent no-op. Fail-open — a board hiccup falls back to the local queue.
+  const membership = await reconcileBoardMembership(REPO_ROOT, args.repo, queue);
+  if (membership.added.length > 0) {
+    console.error(`Board: reconciled ${membership.added.length} Next Up item(s) into the queue (${membership.added.join(", ")})`);
+  }
+
+  if (membership.emptiness === "board_empty") {
+    // Distinct from the legacy generic "Queue is empty": the board is the
+    // membership source and it currently has nothing in Next Up.
+    console.log(JSON.stringify({
+      ok: true,
+      message: "Board configured but Next Up is empty; nothing to run",
+      boardConfigured: true,
+      reason: membership.reason ?? null,
+      results: [],
+    }));
+    return;
+  }
+
+  if (membership.emptiness === "queue_empty") {
     console.log(JSON.stringify({ ok: true, message: "Queue is empty", results: [] }));
     return;
   }

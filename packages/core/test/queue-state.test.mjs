@@ -24,6 +24,7 @@ import {
   pendingEntries,
   appendBugIssue,
   queueFilePath,
+  reconcileEntriesFromBoard,
 } from "../src/loop/queue-state.mjs";
 
 // ── Constants ───────────────────────────────────────────────────────
@@ -349,4 +350,63 @@ test("appendBugIssue with dependency", () => {
   const queue = { version: 1, entries: [createEntry(1, "issue")] };
   appendBugIssue(queue, 999, 1);
   assert.deepEqual(queue.entries[1].dependsOn, [1]);
+});
+
+// ── reconcileEntriesFromBoard ───────────────────────────────────────
+
+test("reconcileEntriesFromBoard adds missing board targets as queued issue entries", () => {
+  const queue = { version: 1, entries: [] };
+  const { queue: out, added } = reconcileEntriesFromBoard(queue, [10, 20, 30]);
+  assert.equal(out, queue, "mutates/returns the same queue object");
+  assert.deepEqual(added, [10, 20, 30]);
+  assert.deepEqual(out.entries.map((e) => e.target), [10, 20, 30]);
+  assert.ok(out.entries.every((e) => e.kind === "issue"));
+  assert.ok(out.entries.every((e) => e.status === "queued"));
+});
+
+test("reconcileEntriesFromBoard preserves existing entries and their status/order", () => {
+  const done = createEntry(10, "issue"); done.status = "done";
+  const running = createEntry(20, "issue"); running.status = "running";
+  const queue = { version: 1, entries: [done, running] };
+  // Board reports 20 (already present) and 30 (new).
+  const { added } = reconcileEntriesFromBoard(queue, [20, 30]);
+  assert.deepEqual(added, [30]);
+  // Existing entries untouched and in original order; new one appended last.
+  assert.deepEqual(queue.entries.map((e) => e.target), [10, 20, 30]);
+  assert.equal(queue.entries[0].status, "done");
+  assert.equal(queue.entries[1].status, "running");
+  assert.equal(queue.entries[2].status, "queued");
+});
+
+test("reconcileEntriesFromBoard dedups targets already present", () => {
+  const queue = { version: 1, entries: [createEntry(10, "issue")] };
+  const { added } = reconcileEntriesFromBoard(queue, [10]);
+  assert.deepEqual(added, []);
+  assert.equal(queue.entries.length, 1);
+});
+
+test("reconcileEntriesFromBoard dedups repeated targets within the board list", () => {
+  const queue = { version: 1, entries: [] };
+  const { added } = reconcileEntriesFromBoard(queue, [10, 10, 11]);
+  assert.deepEqual(added, [10, 11]);
+  assert.deepEqual(queue.entries.map((e) => e.target), [10, 11]);
+});
+
+test("reconcileEntriesFromBoard is a no-op on empty board input", () => {
+  const queue = { version: 1, entries: [createEntry(1, "issue")] };
+  assert.deepEqual(reconcileEntriesFromBoard(queue, []).added, []);
+  assert.deepEqual(reconcileEntriesFromBoard(queue, null).added, []);
+  assert.deepEqual(reconcileEntriesFromBoard(queue, undefined).added, []);
+  assert.equal(queue.entries.length, 1);
+});
+
+test("reconcileEntriesFromBoard ignores non-number targets", () => {
+  const queue = { version: 1, entries: [] };
+  const { added } = reconcileEntriesFromBoard(queue, [10, "PVTI_abc", null, 11]);
+  assert.deepEqual(added, [10, 11]);
+});
+
+test("reconcileEntriesFromBoard tolerates a malformed queue", () => {
+  assert.deepEqual(reconcileEntriesFromBoard(null, [1]).added, []);
+  assert.deepEqual(reconcileEntriesFromBoard({}, [1]).added, []);
 });

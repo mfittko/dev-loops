@@ -8,7 +8,9 @@ The board provides durable, visible, shared state for queue ordering and item st
 
 - **Durable** — survives CI restarts, local machine wipes, and session boundaries
 - **Visible** — operators can inspect and reorder the queue from the GitHub UI
-- **Optional** — queue helpers treat board state as an optional scheduling input, not mandatory authority. Without the board, `dev-loop queue` falls back to positional argument ordering.
+- **Authoritative for membership + ordering when configured** — when a board is configured (`queue.projectNumber` or `queue.boardTitle`), `dev-loop queue run` reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` before running, so the board (not hand edits) drives **which** issues are worked and their order. Without a configured board, `dev-loop queue` falls back to the local queue file's entry order.
+
+> Add work to the queue via the board (`dev-loops project add ... --status "Next Up"`), not by hand-editing `.pi/dev-loop-queue.json`. With a populated board and an empty local queue, the runner reconciles the board's `Next Up` items in rather than reporting an empty queue. If a board is configured but `Next Up` is empty, the runner reports "Board configured but Next Up is empty; nothing to run" — distinct from the unconfigured-and-empty "Queue is empty".
 
 ## Setup
 
@@ -75,10 +77,11 @@ After manual creation, the wrapper's idempotent re-run will detect the existing 
 Dev-loop queue wrappers will:
 
 - **List** items from the board ordered by position
-- **Add** new items to the `Backlog` column when issues are queued
+- **Add** new items to the `Backlog` column when issues are queued; promote to `Next Up` to enqueue them for the runner
+- **Drive membership + ordering** from the board's `Next Up` column: `dev-loop queue run` reconciles `Next Up` items into queue entries before running (configured board is authoritative)
 - **Move** items to `In Progress` when processing starts, `Done` when complete
 - **Reorder** items when the operator adjusts priority via `--after` dependencies or manual intervention
-- **Fall back** gracefully when the board is absent: positional argument order takes over, and no board mutations are attempted
+- **Fall back** gracefully when the board is absent or unreachable: the local queue file's entry order takes over, and no board mutations are attempted
 
 Use `dev-loops project --help` to inspect the queue helper surface and per-subcommand `--help` for details.
 

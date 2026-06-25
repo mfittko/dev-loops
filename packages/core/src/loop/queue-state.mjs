@@ -211,6 +211,47 @@ export function pendingEntries(queue) {
   );
 }
 
+// ── Board membership reconciliation ──────────────────────────────────
+
+/**
+ * Reconcile board-driven membership into the local queue (issue #864).
+ *
+ * A configured GitHub Projects board is the authoritative source of queue
+ * MEMBERSHIP (which issues should be worked), not just ordering/status. This
+ * pure helper folds the board's "Next Up" targets into the queue: for each
+ * target not already present (by `findEntry`), it appends a fresh queued
+ * `createEntry(target, "issue")`. Existing entries — and their status, order,
+ * and metadata — are preserved untouched, and targets already present are
+ * skipped (dedup).
+ *
+ * Pure: performs no I/O. Mutates and returns the passed `queue` object (its
+ * `entries` array is appended to in place) plus the list of newly added
+ * targets so the caller can log/report.
+ *
+ * @param {{version:number, entries:Array}} queue - the current queue.
+ * @param {Array<number>} nextUpTargets - board "Next Up" issue numbers.
+ * @returns {{queue:{version:number, entries:Array}, added:number[]}}
+ */
+export function reconcileEntriesFromBoard(queue, nextUpTargets) {
+  const added = [];
+  if (!queue || !Array.isArray(queue.entries)) {
+    return { queue, added };
+  }
+  if (!Array.isArray(nextUpTargets) || nextUpTargets.length === 0) {
+    return { queue, added };
+  }
+  for (const target of nextUpTargets) {
+    // Guard against malformed/duplicate board input: only number targets,
+    // and never add the same target twice (even if it repeats in the board
+    // list and was not yet in the queue at the start of this loop).
+    if (typeof target !== "number") continue;
+    if (findEntry(queue, target)) continue;
+    queue.entries.push(createEntry(target, "issue"));
+    added.push(target);
+  }
+  return { queue, added };
+}
+
 // ── Bug injection ────────────────────────────────────────────────────
 
 export function appendBugIssue(queue, issueNumber, dependsOn = null) {
