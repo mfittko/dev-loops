@@ -34,7 +34,11 @@ For async-required routes (config `workflow.asyncStartMode`, default `required`)
 
 > Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no read-only boundary and no separate async-subagent dispatch. See [Main Agent Contract](../docs/main-agent-contract.md).
 
-Resolve authoritative state via the startup resolver (`npx dev-loops loop startup --issue <n>` for issues, `npx dev-loops loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `npx dev-loops loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
+<!-- pi-only -->
+**CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands below are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` from this skill's own installed path: this skill is installed at `<package-root>/.pi/skills/dev-loop/SKILL.md`, so the package root is `../../..` from this skill's directory. (The `dev-loop` agent resolves it analogously from its own installed path.)
+<!-- /pi-only -->
+
+Resolve authoritative state via the startup resolver (`node <dev-loops-package-root>/cli/index.mjs loop startup --issue <n>` for issues, `node <dev-loops-package-root>/cli/index.mjs loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `node <dev-loops-package-root>/cli/index.mjs loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
 
 **Retrospective checkpoint gate:** the resolver reads `.pi/dev-loop-retrospective-checkpoint.json` and injects the state. When the checkpoint is `missing` and the repo config `workflow.requireRetrospective` (set via `.devloops` at repo root) is `true`, the resolver returns `needs_reconcile`. Complete or explicitly skip the retrospective before starting.
 
@@ -109,10 +113,10 @@ When `@dev-loops/core` is available again, switch back to the full helper. The f
 
 ## Read-only info shortcut
 
-Info/handoff requests can be served directly via `npx dev-loops loop info` (read-only; no full dev-loop run required):
-- `npx dev-loops loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
-- `npx dev-loops loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
-- `npx dev-loops loop info --issue <n> --json` — machine-readable JSON output
+Info/handoff requests can be served directly via `node <dev-loops-package-root>/cli/index.mjs loop info` (read-only; no full dev-loop run required):
+- `node <dev-loops-package-root>/cli/index.mjs loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
+- `node <dev-loops-package-root>/cli/index.mjs loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
+- `node <dev-loops-package-root>/cli/index.mjs loop info --issue <n> --json` — machine-readable JSON output
 
 ## Guard rules
 

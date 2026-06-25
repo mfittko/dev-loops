@@ -24,6 +24,16 @@ import { transformAgent, transformSkill, stripPiOnlyBlocks } from "@dev-loops/co
 export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
   const assets = [];
 
+  // The dev-loops package version pins the Claude `npx dev-loops@<version>` CLI invocation so the
+  // generated plugin tree cannot drift against the published version (#833). Read it once here.
+  // Falls back to `latest` when no repo-root package.json is present (e.g. a consumer/fixture tree
+  // that mirrors only agents/skills).
+  let version = "latest";
+  const pkgPath = path.join(repoRoot, "package.json");
+  if (fs.existsSync(pkgPath)) {
+    version = JSON.parse(fs.readFileSync(pkgPath, "utf8")).version ?? "latest";
+  }
+
   const agentsDir = path.join(repoRoot, "agents");
   if (fs.existsSync(agentsDir)) {
     for (const entry of fs.readdirSync(agentsDir).sort()) {
@@ -31,7 +41,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
       const source = `agents/${entry}`;
       const raw = fs.readFileSync(path.join(repoRoot, source), "utf8");
       const base = entry.slice(0, -".agent.md".length);
-      assets.push({ target: `.claude/agents/${base}.md`, content: transformAgent({ source, raw }) });
+      assets.push({ target: `.claude/agents/${base}.md`, content: transformAgent({ source, raw, version }) });
     }
   }
 
@@ -43,7 +53,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
       const abs = path.join(repoRoot, source);
       if (!fs.existsSync(abs)) continue; // e.g. skills/docs/ holds shared docs, not a SKILL.md
       const raw = fs.readFileSync(abs, "utf8");
-      assets.push({ target: `.claude/skills/${entry.name}/SKILL.md`, content: transformSkill({ source, raw }) });
+      assets.push({ target: `.claude/skills/${entry.name}/SKILL.md`, content: transformSkill({ source, raw, version }) });
     }
   }
 

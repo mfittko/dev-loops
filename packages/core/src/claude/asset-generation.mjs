@@ -73,6 +73,22 @@ export function stripPiOnlyBlocks(body) {
 }
 
 /**
+ * Rewrite the Pi package-local CLI invocation into the Claude version-pinned `npx` form (#801,
+ * #833). The Pi runtime sources invoke the CLI as `node <dev-loops-package-root>/cli/index.mjs`
+ * (resolves unambiguously from the installed package). The Claude plugin does NOT bundle `cli/`,
+ * so for the generated tree those tokens become `npx dev-loops@<version>` — pinning the version
+ * keeps the CLI from drifting against the published plugin version (#833). The Pi-only
+ * package-root resolution note is removed separately by `stripPiOnlyBlocks`.
+ *
+ * @param {string} body
+ * @param {string} version dev-loops package version to pin (e.g. "0.2.6").
+ * @returns {string}
+ */
+export function rewriteCliInvocation(body, version) {
+  return String(body).split("node <dev-loops-package-root>/cli/index.mjs").join(`npx dev-loops@${version}`);
+}
+
+/**
  * Map a single Pi tool name to its Claude tool name(s).
  * @param {string} name
  * @returns {string[]} Claude tool names (empty if unknown).
@@ -131,12 +147,12 @@ function normalizeToolList(value) {
 
 /**
  * Transform a canonical `agents/*.agent.md` into a Claude `.claude/agents/*.md` document.
- * @param {{ source: string, raw: string }} input
+ * @param {{ source: string, raw: string, version?: string }} input
  * @returns {string} Full generated file content.
  */
-export function transformAgent({ source, raw }) {
+export function transformAgent({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = stripPiOnlyBlocks(rawBody);
+  const body = rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version);
   const tools = mapTools(normalizeToolList(frontmatter.tools));
 
   const lines = ["---"];
@@ -155,12 +171,12 @@ export function transformAgent({ source, raw }) {
 
 /**
  * Transform a canonical `skills/<name>/SKILL.md` into a Claude `.claude/skills/<name>/SKILL.md`.
- * @param {{ source: string, raw: string }} input
+ * @param {{ source: string, raw: string, version?: string }} input
  * @returns {string} Full generated file content.
  */
-export function transformSkill({ source, raw }) {
+export function transformSkill({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = stripPiOnlyBlocks(rawBody);
+  const body = rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version);
   const tools = mapTools(normalizeToolList(frontmatter["allowed-tools"]));
 
   const lines = ["---"];
