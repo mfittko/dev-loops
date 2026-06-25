@@ -85,6 +85,7 @@ const QueueConfig = z.strictObject({
   reDispatchMaxRetries: z.number().int().min(0).max(10).default(1),
   projectNumber: z.number().int().positive().optional(),
   boardTitle: z.string().trim().min(1).optional(),
+  archiveOlderThanDays: z.number().int().positive().optional(),
 });
 
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */

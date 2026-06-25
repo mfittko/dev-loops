@@ -349,6 +349,16 @@ node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state skipped --rea
 
 Do not report completion or advance to the next PR queue item until `.pi/dev-loop-retrospective-checkpoint.json` is updated to `complete` or `skipped`.
 
+### Post-merge board archive (best-effort)
+
+After the retrospective checkpoint write, optionally tidy the queue board locally:
+
+```sh
+node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name>
+```
+
+Board and threshold resolve from `.devloops` (`queue.projectNumber`/`queue.boardTitle`, `queue.archiveOlderThanDays`, default 7d), using local `gh` auth — no CI, cron, or PAT. This step is best-effort and NON-FATAL: ignore any failure and never let it block the merge or the retrospective.
+
 ## Validation policy
 
 Follow [Validation Policy](../docs/validation-policy.md). Default: `npm run verify` before PR creation, gate entry, and merge. For repo-local examples: `npm run test:dev-loop` for skill scripts, contract tests for templates, `git diff --check` for docs. When CI runs exist, use `gh run watch` or `detect-copilot-loop-state.mjs` instead of `sleep`-based polling. Distinguish: locally validated, full PR-equivalent checks, awaiting CI.
