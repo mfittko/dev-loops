@@ -82,6 +82,66 @@ Dev-loop queue wrappers will:
 
 Use `dev-loops project --help` to inspect the queue helper surface and per-subcommand `--help` for details.
 
+## Status sync is driven by the loop state
+
+The board **Status** column is kept in sync with the dev-loop's own state machine
+rather than from hardcoded strings. A pure mapping
+(`boardColumnForLoopState(loopState, mapping)` in
+`packages/core/src/loop/queue-board-sync.mjs`) resolves each loop/lifecycle state
+to a logical column, then to a configured display name.
+
+### State → logical column (defaults)
+
+| Loop / lifecycle state | Logical column | Default display name |
+| --- | --- | --- |
+| `issue_opened`, `issue_intake`, `refinement`, `no_pr`, `pr_draft` | `next_up` | **Next Up** |
+| `implementation`, `local_implementation_active`, `pr_ready_no_feedback`, `waiting_for_copilot_review`, `ready_to_rerequest_review`, `unresolved_feedback_present`, `already_fixed_needs_reply_resolve`, `waiting_for_ci`, `blocked_needs_user_decision`, other in-flight states | `in_progress` | **In Progress** |
+| `final_approval_ready`, `pre_approval_gate` | `ready_for_review` | **In Progress** (unless overridden, see below) |
+| `merged`, `issue_closed`, `done`, `merge` | `done` | **Done** |
+| _any unmapped state_ | `in_progress` | **In Progress** (safe default — work is visibly active rather than dropped) |
+
+The mapping is **stateless**: it depends only on the current state, so a reverted
+state moves the column backward automatically. For example, a merged PR that is
+reopened maps back from **Done** to **In Progress**, and a ready PR demoted to a
+draft maps back from **In Progress** to **Next Up**. No "furthest reached" column
+is persisted.
+
+### Configuring column names (opt-in)
+
+Both overrides live under the same opt-in `queue` section in `.devloops` that
+enables board sync (`queue.projectNumber` or `queue.boardTitle`). When the
+`queue` section is absent or disabled, status sync is a **no-op** — nothing is
+read or written.
+
+`queue.statusColumns` renames the display name of a logical column:
+
+```yaml
+queue:
+  projectNumber: 7
+  statusColumns:
+    next_up: "Todo"
+    in_progress: "Doing"
+    ready_for_review: "Ready for Review"   # opt-in column; otherwise final_approval_ready stays "In Progress"
+    done: "Shipped"
+```
+
+`queue.stateColumnMap` remaps an individual loop state to a different logical
+column (rarely needed):
+
+```yaml
+queue:
+  projectNumber: 7
+  stateColumnMap:
+    blocked_needs_user_decision: next_up
+```
+
+### No-op behavior
+
+- **Board not configured / disabled** — sync returns `{ ok: true, skipped: true }`
+  and performs no GitHub calls (AC2/AC6).
+- **Item not on the board** — sync is a logged no-op (`{ ok: true, skipped: true }`),
+  never an error, so a missing board item can never break the loop (AC4).
+
 ## Reordering board items
 
 `dev-loops project reorder` wraps the `updateProjectV2ItemPosition` mutation. In

@@ -13,7 +13,12 @@ import {
   RECOVERABLE_FAILURES,
   appendBugIssue,
 } from "./queue-state.mjs";
-import { syncBoardStatus, nonSuccessBoardColumn } from "./queue-board-sync.mjs";
+import {
+  syncBoardStatus,
+  nonSuccessBoardColumn,
+  boardColumnForLoopState,
+  loadStateColumnMap,
+} from "./queue-board-sync.mjs";
 import { resolveNextUpOrder } from "./queue-board-ordering.mjs";
 
 export const DEFAULT_QUEUE_DRIVER_OPTIONS = {
@@ -51,6 +56,12 @@ async function doTransition(entry, to, queue, repoRoot, opts, metadata) {
 export async function runQueue(repoRoot, repo, options = {}) {
   const opts = { ...DEFAULT_QUEUE_DRIVER_OPTIONS, ...options };
   const queue = await readQueue(repoRoot);
+
+  // Config-driven loop-state → board-column mapping (#793, AC1/AC3). Loaded
+  // once per run; resolves logical columns to configured display names, with
+  // the AC1 defaults when no `queue.statusColumns`/`queue.stateColumnMap` is set.
+  const stateColumnMap = loadStateColumnMap(repoRoot);
+  const columnFor = (loopState) => boardColumnForLoopState(loopState, stateColumnMap);
 
   // Optional board-aware ordering: fetch Next Up order before processing.
   // Fail-open: if the board is unreachable, orderHint stays empty and the
@@ -96,11 +107,12 @@ export async function runQueue(repoRoot, repo, options = {}) {
       return r;
     };
 
+    // Entry has been picked up and is actively running: local implementation.
     await recordBoardSync(syncBoardStatus(
       repo,
       repoRoot,
       entry.target,
-      "In Progress",
+      columnFor("local_implementation_active"),
       opts.env ?? process.env,
       boardSyncDeps,
     ));
@@ -117,12 +129,16 @@ export async function runQueue(repoRoot, repo, options = {}) {
           if (opts.mergeAuthorized) {
             await doTransition(entry, "merging", queue, repoRoot, opts);
             await doTransition(entry, "done", queue, repoRoot, opts, { retrospectiveWritten: true });
-            await recordBoardSync(syncBoardStatus(repo, repoRoot, entry.target, "Done", opts.env ?? process.env, boardSyncDeps));
+            await recordBoardSync(syncBoardStatus(repo, repoRoot, entry.target, columnFor("merged"), opts.env ?? process.env, boardSyncDeps));
+          } else {
+            // PR is up with gates passing but merge is not authorized: the work
+            // is awaiting final approval/merge. Map to the final-approval column
+            // (configured "Ready for Review" if present, else "In Progress").
+            await recordBoardSync(syncBoardStatus(repo, repoRoot, entry.target, columnFor("final_approval_ready"), opts.env ?? process.env, boardSyncDeps));
           }
-          // else: stays at gates_passing for future merge run
         } else {
           await doTransition(entry, "done", queue, repoRoot, opts);
-          await recordBoardSync(syncBoardStatus(repo, repoRoot, entry.target, "Done", opts.env ?? process.env, boardSyncDeps));
+          await recordBoardSync(syncBoardStatus(repo, repoRoot, entry.target, columnFor("done"), opts.env ?? process.env, boardSyncDeps));
         }
         results.push({ target: entry.target, ok: true, entry: snapshotEntry(entry), boardSync });
       } else {
