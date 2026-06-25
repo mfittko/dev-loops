@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { access, open, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runChild, requireOptionValue } from "../_cli-primitives.mjs";
+import { requireOptionValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
@@ -13,6 +13,7 @@ import {
   parseRecordedHandoffContract,
 } from "./_handoff-contract.mjs";
 import { interpretLoopState, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
+import { listOpenPrs } from "./_loop-pr-aggregation.mjs";
 const USAGE = `Usage: conductor-monitor.mjs --repo <owner/name> [--auto-resume]
 Aggregate Copilot-loop status across all open PRs in one repo.
 Required:
@@ -80,7 +81,6 @@ Exit codes:
   0  Success
   1  Argument error, gh failure, or indeterminate PR status`.trim();
 const parseError = buildParseError(USAGE);
-const OPEN_PR_LIST_LIMIT = 1000;
 const DEFAULT_SESSION_ROOT = path.join(os.homedir(), ".pi", "agent", "sessions");
 const RUN_STATE = {
   COMPLETED: "completed",
@@ -144,43 +144,6 @@ function parseCliArgs(argv) {
     throw parseError(error instanceof Error ? error.message : String(error));
   }
   return options;
-}
-async function listOpenPrs({ repo }, { env, ghCommand }) {
-  const result = await runChild(
-    ghCommand,
-    [
-      "pr",
-      "list",
-      "--repo",
-      repo,
-      "--state",
-      "open",
-      "--limit",
-      String(OPEN_PR_LIST_LIMIT),
-      "--json",
-      "number,title,url,isDraft,headRefName,author",
-    ],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  const payload = parseJsonText(result.stdout);
-  if (!Array.isArray(payload)) {
-    throw new Error("Invalid gh pr list payload: expected an array");
-  }
-  return payload
-    .map((pr) => ({
-      number: Number.isInteger(pr?.number) ? pr.number : null,
-      title: typeof pr?.title === "string" ? pr.title : "",
-      url: typeof pr?.url === "string" ? pr.url : null,
-      isDraft: Boolean(pr?.isDraft),
-      headRefName: typeof pr?.headRefName === "string" ? pr.headRefName : null,
-      authorLogin: typeof pr?.author?.login === "string" ? pr.author.login : null,
-    }))
-    .filter((pr) => pr.number !== null)
-    .sort((left, right) => left.number - right.number);
 }
 function summarizePrDisposition(loopDisposition) {
   switch (loopDisposition) {
