@@ -20,6 +20,7 @@ import {
 } from "./public-dev-loop-routing-contract.mjs";
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
+import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -430,6 +431,16 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     ? { ...options.overrides }
     : undefined;
 
+  // Surface the *effective* async-start posture alongside the *configured* one (#834). The
+  // configured `asyncStartMode` is echoed verbatim from settings (back-compat), but the contract
+  // is relaxed at validation time under the Claude harness (resolveEffectiveAsyncStartMode →
+  // "allowed" when CLAUDECODE=1). Without surfacing the effective value, a `required` envelope
+  // reads as if it should still block even though the resolver correctly proceeds.
+  const env = options.env ?? (typeof process !== "undefined" ? process.env : {});
+  const configuredAsyncStartMode = settings?.workflow?.asyncStartMode ?? "required";
+  const effectiveAsyncStartMode = resolveEffectiveAsyncStartMode(configuredAsyncStartMode, env);
+  const asyncStartRelaxedBy = effectiveAsyncStartMode !== configuredAsyncStartMode ? "claude-harness" : null;
+
   const envelope = {
     handoffVersion: ENVELOPE_HANDOFF_VERSION,
     derivedAt: (now ?? new Date()).toISOString(),
@@ -447,7 +458,9 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     requiredReads,
 
     stopRules,
-    asyncStartMode: settings?.workflow?.asyncStartMode ?? "required",
+    asyncStartMode: configuredAsyncStartMode,
+    asyncStartEffective: effectiveAsyncStartMode,
+    asyncStartRelaxedBy,
     requireDraftFirst: settings?.workflow?.requireDraftFirst ?? false,
 
     cwd: derivedCwd,
@@ -694,6 +707,21 @@ export function validateHandoffEnvelope(envelope) {
       field: "asyncStartMode",
       reason: `must be one of: ${VALID_ASYNC_START_MODES.join(", ")}`,
       got: envelope.asyncStartMode,
+    });
+  }
+
+  // ----- asyncStartEffective (required field; the harness-resolved posture, #834) -----
+  if (envelope.asyncStartEffective === undefined || envelope.asyncStartEffective === null) {
+    errors.push({
+      field: "asyncStartEffective",
+      reason: "must be present",
+      got: envelope.asyncStartEffective,
+    });
+  } else if (!VALID_ASYNC_START_MODES.includes(envelope.asyncStartEffective)) {
+    errors.push({
+      field: "asyncStartEffective",
+      reason: `must be one of: ${VALID_ASYNC_START_MODES.join(", ")}`,
+      got: envelope.asyncStartEffective,
     });
   }
 

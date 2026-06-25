@@ -136,6 +136,42 @@ test("fn-exists: buildDevLoopHandoffEnvelope is a function", () => {
   assert.equal(typeof buildDevLoopHandoffEnvelope, "function");
 });
 
+test("async-start (#834): configured mode echoed; not relaxed off the Claude harness", () => {
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    defaultSettings,
+    {},
+    { ...defaultOptions, env: {} }, // no CLAUDECODE
+  );
+  assert.equal(env.asyncStartMode, "required", "configured value unchanged (back-compat)");
+  assert.equal(env.asyncStartEffective, "required", "effective equals configured off-harness");
+  assert.equal(env.asyncStartRelaxedBy, null, "no relaxation flag when nothing was relaxed");
+});
+
+test("async-start (#834): required is relaxed to allowed under the Claude harness, with a flag", () => {
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    defaultSettings,
+    {},
+    { ...defaultOptions, env: { CLAUDECODE: "1" } },
+  );
+  assert.equal(env.asyncStartMode, "required", "configured value still echoed verbatim");
+  assert.equal(env.asyncStartEffective, "allowed", "effective is allowed under Claude");
+  assert.equal(env.asyncStartRelaxedBy, "claude-harness", "relaxation source surfaced");
+});
+
+test("async-start (#834): already-allowed config is not flagged as relaxed under Claude", () => {
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    { ...defaultSettings, workflow: { asyncStartMode: "allowed", requireDraftFirst: true } },
+    {},
+    { ...defaultOptions, env: { CLAUDECODE: "1" } },
+  );
+  assert.equal(env.asyncStartMode, "allowed");
+  assert.equal(env.asyncStartEffective, "allowed");
+  assert.equal(env.asyncStartRelaxedBy, null, "no relaxation when already allowed");
+});
+
 test("shape: envelope has correct top-level keys", () => {
   const env = buildDevLoopHandoffEnvelope(
     issueBundle(42),
