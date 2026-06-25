@@ -58,6 +58,10 @@ const GatesConfig = z.strictObject({
   // durable findings-log ledger), not an inline single-agent run. Default
   // false preserves current behavior. See docs/gate-review-sub-loop-contract.md.
   requireFanoutEvidence: z.boolean().default(false),
+  // Cap on how many scoped `review` reviewers the gate fan-out spawns in
+  // parallel. When the resolved angle set exceeds this cap, the overflow runs
+  // in sequential batches and the degradation is recorded in the gate evidence.
+  maxFanoutReviewers: z.number().int().min(1).max(64).default(8),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -113,6 +117,7 @@ const FileGatesConfig = z.strictObject({
   draft: FileGateConfig.optional(),
   preApproval: FileGateConfig.optional(),
   requireFanoutEvidence: z.boolean().optional(),
+  maxFanoutReviewers: z.number().int().min(1).max(64).optional(),
 });
 
 // Partial persona entries for file-level config (allows omitting fields)
@@ -237,6 +242,8 @@ const BUILTIN_PERSONAS = Object.freeze({
   "state-concurrency": { persona: "review", defaultModel: null },
   "renderer-security": { persona: "review", defaultModel: null },
   determinism:          { persona: "review", defaultModel: null },
+  "acceptance-criteria": { persona: "review", defaultModel: null },
+  "ac-dod":              { persona: "review", defaultModel: null },
 });
 
 const DEFAULT_REVIEWER_PERSONA = "default-reviewer";
@@ -834,6 +841,30 @@ export function resolveGateConfig(config, gate) {
  */
 export function resolveRequireFanoutEvidence(config) {
   return config?.gates?.requireFanoutEvidence === true;
+}
+
+/** Default parallel fan-out reviewer cap (mirrors GatesConfig.maxFanoutReviewers). */
+export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
+
+/**
+ * Resolve the parallel fan-out reviewer cap for the gate sub-loop.
+ *
+ * Returns the configured `gates.maxFanoutReviewers` when it is an integer in
+ * the schema-bounded range 1..64; otherwise the built-in default (8). Clamping
+ * here (not just the Zod schema) keeps programmatically-constructed config
+ * objects that bypass schema validation within the same bound. The fan-out
+ * spawns at most this many scoped `review` reviewers in parallel; overflow runs
+ * sequentially.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {number}
+ */
+export function resolveMaxFanoutReviewers(config) {
+  const raw = config?.gates?.maxFanoutReviewers;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 64) {
+    return raw;
+  }
+  return DEFAULT_MAX_FANOUT_REVIEWERS;
 }
 
 /**

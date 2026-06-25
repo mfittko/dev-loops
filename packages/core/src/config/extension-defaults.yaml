@@ -382,6 +382,18 @@ personas:
       Do not block on formatting preferences other than checkbox correctness.
     defaultModel: null
 
+  acceptance-criteria:
+    persona: review
+    prompt: >-
+      Verify that each acceptance criterion and definition-of-done item from the
+      linked issue/PR is actually satisfied by the implementation — not merely
+      listed. For every criterion, cite the concrete code/test/behavior evidence
+      that meets it; flag any criterion that is unmet, only partially met, or
+      unverifiable from the diff as a blocking finding. Confirm definition-of-done
+      items (tests, docs, validation) are done and that declared non-goals are
+      respected (no scope creep).
+    defaultModel: null
+
   pr-checklist-matrix:
     persona: review
     prompt: >-

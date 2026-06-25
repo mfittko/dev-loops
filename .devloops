@@ -53,8 +53,13 @@ gates:
       - dip
       - renderer-security
       - pr-checklist-matrix
+      - acceptance-criteria
+    # Mandatory angles always run in the fan-out (never dropped by dynamic
+    # resolution); fully configurable — add/remove any angle from the pool.
     mandatoryAngles:
       - pr-checklist-matrix
+      - acceptance-criteria
+      - yagni
 
     blockCleanOnFindingSeverities:
       - must-fix
