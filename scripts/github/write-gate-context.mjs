@@ -291,6 +291,18 @@ export function parseWriteGateContextCliArgs(argv) {
  * @returns {string} relative artifact path
  */
 export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
+}
+
+/**
+ * Validate the repo string and return its `owner-name` slug, applying the same
+ * safety checks (no `.`/`..` segments, no whitespace/backslashes) shared by the
+ * artifact and diff path builders.
+ * @param {string} repo — owner/name
+ * @returns {string} repo slug
+ */
+function repoSlugFor(repo) {
   const parts = String(repo).split("/");
   if (parts.length !== 2 || parts.some((p) => p.length === 0)) {
     throw new Error(`--repo must be in owner/name format, got: ${JSON.stringify(repo)}`);
@@ -300,8 +312,52 @@ export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" 
       throw new Error(`--repo segment ${JSON.stringify(p)} contains unsafe characters (dots, whitespace, or backslashes)`);
     }
   }
-  const repoSlug = parts.join("-");
-  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
+  return parts.join("-");
+}
+
+/**
+ * Build the deterministic path for the FULL diff captured alongside the gate
+ * context artifact. Mirrors buildGateContextPath but with a `.diff` extension so
+ * scoped reviewers can read the entire change set (not just hunks) from a stable
+ * location. Exported for reuse by the fork fan-out reviewers.
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {string} relative diff path
+ */
+export function buildGateDiffPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${pr}`, `${gate}-${headSha}.diff`);
+}
+
+/**
+ * Parse `git diff --name-status` output into full repo-relative changed file
+ * paths. Handles rename/copy entries (R100 old new, C75 old new) by recording
+ * the destination path. Tolerates blank lines and malformed rows.
+ * @param {string} nameStatusOutput
+ * @returns {string[]}
+ */
+export function parseChangedFiles(nameStatusOutput) {
+  if (typeof nameStatusOutput !== "string" || nameStatusOutput.length === 0) {
+    return [];
+  }
+  const files = [];
+  for (const line of nameStatusOutput.split("\n")) {
+    const trimmed = line.replace(/\r$/, "");
+    if (trimmed.trim().length === 0) continue;
+    const cols = trimmed.split("\t");
+    if (cols.length < 2) continue;
+    const status = cols[0].trim();
+    // Rename (Rxxx) and copy (Cxxx) entries carry old + new paths; record the new path.
+    const dest = /^[RC]\d*$/i.test(status) ? cols[cols.length - 1] : cols[1];
+    const file = (dest ?? "").trim();
+    if (file.length > 0) files.push(file);
+  }
+  return files;
 }
 
 /**
@@ -323,6 +379,8 @@ export function buildGateContextArtifact(options) {
       branch: options.branch ?? null,
       headSha: options.headSha,
       touchedFiles: Array.isArray(options.touchedFiles) ? options.touchedFiles : [],
+      changedFiles: Array.isArray(options.changedFiles) ? options.changedFiles : [],
+      diffPath: options.diffPath ?? null,
       acceptanceCriteria: options.acceptanceCriteria ?? null,
       validationPosture: options.validationPosture ?? null,
     },
@@ -359,7 +417,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {object} input
  * @param {import("@dev-loops/core/config").DevLoopConfig} input.config — merged dev-loop config
  * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {{ nameStatusOutput: string, diffOutput?: string }} [input.diff] — diff for dynamic resolution
+ * @param {{ nameStatusOutput: string, diffOutput?: string }} [input.diff] — diff for dynamic resolution; when `diffOutput` is present it is also persisted to `scope.diffPath` and parsed into `scope.changedFiles`
  * @param {string} input.repo — owner/name
  * @param {number|string} input.pr
  * @param {string} input.headSha
@@ -378,6 +436,30 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
+  const tmpRoot = input.tmpRoot || "tmp";
+
+  // Best-effort full-diff capture: when the resolver was handed a diff with
+  // `diffOutput`, persist the ENTIRE diff to a deterministic `.diff` file next
+  // to the context artifact so scoped reviewers can read the full change set
+  // (not just hunks) and trace adjacent code. Reference it from `scope.diffPath`
+  // (relative) and record full repo-relative `scope.changedFiles` parsed from
+  // the diff's `nameStatusOutput`. We do NOT inline the diff in the JSON.
+  const diffOutput = input.diff?.diffOutput;
+  let diffPath = null;
+  let changedFiles = parseChangedFiles(input.diff?.nameStatusOutput);
+  if (typeof diffOutput === "string" && diffOutput.length > 0) {
+    diffPath = buildGateDiffPath({
+      repo: input.repo,
+      pr: input.pr,
+      gate: input.gate,
+      headSha: input.headSha,
+      tmpRoot,
+    });
+    const fullDiffPath = path.resolve(repoRoot, diffPath);
+    await mkdir(path.dirname(fullDiffPath), { recursive: true });
+    await writeFile(fullDiffPath, diffOutput.endsWith("\n") ? diffOutput : diffOutput + "\n", "utf8");
+  }
+
   const writeResult = await writeGateContext(
     {
       repo: input.repo,
@@ -388,9 +470,11 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       rationale,
       branch: input.branch ?? null,
       touchedFiles: input.touchedFiles ?? [],
+      changedFiles,
+      diffPath,
       acceptanceCriteria: input.acceptanceCriteria ?? null,
       validationPosture: input.validationPosture ?? null,
-      tmpRoot: input.tmpRoot || "tmp",
+      tmpRoot,
     },
     { repoRoot },
   );
