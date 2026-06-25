@@ -50,8 +50,20 @@ on an isolated checkout:
 - fresh context (do not fork the parent session just to share chat history). **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs` at startup and refuse to proceed on contamination. Use `--scope <angle>` so each reviewer writes its own sentinel.
 - `worktree: true` recommended per reviewer/subagent for filesystem isolation; prescribe it but
   do not fail closed if worktrees are unavailable in the current environment
+- the preamble resolves the gate's review angle set: it starts from the configured
+  angle pool (`gates.<gate>.angles`) and, when `gates.<gate>.dynamicAngles` is enabled,
+  narrows it to the angles relevant to the change at hand (configured pool → resolved
+  set). Optional code-review lenses not triggered by the change (for example most code
+  lenses for a docs-only change) are dropped, and the reason each angle was dropped is
+  recorded as rationale. Angles in `gates.<gate>.mandatoryAngles` form a floor and are
+  always included after dynamic selection (filtered only by `excludeAngles`); they are
+  never dropped. When `dynamicAngles` is off (or no diff is available), the configured
+  static pool is used unchanged.
 - the preamble produces one or more review handoff artifacts (branch, head SHA, PR/issue
-  scope, acceptance criteria, touched files, validation posture)
+  scope, acceptance criteria, touched files, validation posture). The resolved angle set
+  and its rationale are written as a deterministic handoff artifact under
+  `tmp/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json` so the Phase 2 fan-out
+  consumes a stable, auditable briefing per head SHA.
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
