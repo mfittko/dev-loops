@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
 
 const USAGE = `Usage: dev-loops project list --repo <owner/name> --project <number|id> [--column <name>] [--limit <n>]
 
@@ -24,69 +25,66 @@ Exit codes:
   3 — project, field, or column not found
 `.trim();
 
-const VALID_ARGS = new Set(["--repo", "--project", "--column", "--limit", "--help", "-h"]);
-
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!VALID_ARGS.has(arg) && arg.startsWith("-")) {
-      throw Object.assign(
-        new Error(`Unknown flag: ${arg}`),
-        { code: "INVALID_ARGS", usage: USAGE },
-      );
+function parseCliArgs(argv) {
+  const parseError = (message) => Object.assign(new Error(message), { usage: USAGE });
+  const requireValue = (token, message) => {
+    const v = token.value;
+    if (typeof v !== "string" || v.length === 0 || v.startsWith("-")) {
+      throw parseError(message);
     }
-    if (arg === "--repo") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(
-          new Error("--repo requires a value (owner/name)"),
-          { code: "INVALID_ARGS", usage: USAGE },
-        );
+    return v;
+  };
+
+  const args = {};
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      repo: { type: "string" },
+      project: { type: "string" },
+      column: { type: "string" },
+      limit: { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unexpected argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    switch (token.name) {
+      case "help":
+        args.help = true;
+        break;
+      case "repo":
+        args.repo = requireValue(token, "--repo requires a value (owner/name)");
+        break;
+      case "project":
+        args.project = requireValue(token, "--project requires a value (number or node ID)");
+        break;
+      case "column":
+        args.column = requireValue(token, "--column requires a value");
+        break;
+      case "limit": {
+        const raw = requireValue(token, "--limit requires a positive integer");
+        const val = Number(raw);
+        if (!Number.isInteger(val) || val < 1) {
+          throw parseError(`--limit must be a positive integer, got "${raw}"`);
+        }
+        args.limit = val;
+        break;
       }
-      args.repo = argv[++i];
-    } else if (arg === "--project") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(
-          new Error("--project requires a value (number or node ID)"),
-          { code: "INVALID_ARGS", usage: USAGE },
-        );
-      }
-      args.project = argv[++i];
-    } else if (arg === "--column") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(
-          new Error("--column requires a value"),
-          { code: "INVALID_ARGS", usage: USAGE },
-        );
-      }
-      args.column = argv[++i];
-    } else if (arg === "--limit") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(
-          new Error("--limit requires a positive integer"),
-          { code: "INVALID_ARGS", usage: USAGE },
-        );
-      }
-      const val = Number(argv[++i]);
-      if (!Number.isInteger(val) || val < 1) {
-        throw Object.assign(
-          new Error(`--limit must be a positive integer, got "${argv[i]}"`),
-          { code: "INVALID_ARGS", usage: USAGE },
-        );
-      }
-      args.limit = val;
-    } else if (arg === "--help" || arg === "-h") {
-      args.help = true;
-    } else {
-      throw Object.assign(
-        new Error(`Unexpected argument: ${arg}`),
-        { code: "INVALID_ARGS", usage: USAGE },
-      );
+      default:
+        throw parseError(`Unknown flag: ${token.rawName}`);
     }
   }
   return args;
 }
-
 // ── Validation ───────────────────────────────────────────────────────────
 
 const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
@@ -460,7 +458,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
   let args;
   try {
-    args = parseArgs(argv);
+    args = parseCliArgs(argv);
   } catch (err) {
     stderr.write(`${formatCliError(err)}\n`);
     process.exitCode = 1;

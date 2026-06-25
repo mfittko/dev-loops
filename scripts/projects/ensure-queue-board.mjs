@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { parseArgs } from "node:util";
 import { parse as parseYaml } from "yaml";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
@@ -32,76 +33,70 @@ Exit codes:
   3 — board schema/config mismatch (manual reconciliation needed)
 `;
 
-const VALID_ARGS = new Set(["--repo", "--project", "--title", "--link-repo", "--repair-rename", "--help", "-h"]);
-
-function parseArgs(argv) {
-  const args = {}; // title default applied in runCli after settings fallback
-  const consumed = new Set();
-  for (let i = 0; i < argv.length; i++) {
-    if (consumed.has(i)) continue;
-    const arg = argv[i];
-    if (!VALID_ARGS.has(arg) && arg.startsWith("-")) {
-      throw Object.assign(
-        new Error(`Unknown flag: ${arg}`),
-        { code: "INVALID_REPO", usage: USAGE },
-      );
+function parseCliArgs(argv) {
+  const parseError = (message) => Object.assign(new Error(message), { usage: USAGE });
+  const requireValue = (token, message) => {
+    const v = token.value;
+    if (typeof v !== "string" || v.length === 0 || v.startsWith("-")) {
+      throw parseError(message);
     }
-    if (arg === "--repo") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(
-          new Error("--repo requires a value (owner/name)"),
-          { code: "INVALID_REPO", usage: USAGE },
-        );
+    return v;
+  };
+
+  const args = {};
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      repo: { type: "string" },
+      project: { type: "string" },
+      title: { type: "string" },
+      "link-repo": { type: "string" },
+      "repair-rename": { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unexpected argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    switch (token.name) {
+      case "help":
+        args.help = true;
+        break;
+      case "repo":
+        args.repo = requireValue(token, "--repo requires a value (owner/name)");
+        break;
+      case "project": {
+        const raw = requireValue(token, "--project requires a numeric value");
+        const num = Number(raw);
+        if (!Number.isInteger(num) || num <= 0) {
+          throw parseError(`--project must be a positive integer, got "${raw}"`);
+        }
+        args.project = num;
+        break;
       }
-      args.repo = argv[++i];
-      consumed.add(i);
-    } else if (arg === "--project") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(
-          new Error("--project requires a numeric value"),
-          { code: "INVALID_PROJECT", usage: USAGE },
-        );
-      }
-      const num = Number(argv[++i]);
-      if (!Number.isInteger(num) || num <= 0) {
-        throw Object.assign(
-          new Error(`--project must be a positive integer, got "${argv[i]}"`),
-          { code: "INVALID_PROJECT", usage: USAGE },
-        );
-      }
-      args.project = num;
-    } else if (arg === "--title") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(
-          new Error("--title requires a value"),
-          { code: "INVALID_REPO", usage: USAGE },
-        );
-      }
-      args.title = argv[++i];
-      consumed.add(i);
-    } else if (arg === "--link-repo") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(
-          new Error("--link-repo requires a value (owner/name)"),
-          { code: "INVALID_REPO", usage: USAGE },
-        );
-      }
-      args.linkRepo = argv[++i];
-      consumed.add(i);
-    } else if (arg === "--repair-rename") {
-      args.repairRename = true;
-    } else if (arg === "--help" || arg === "-h") {
-      args.help = true;
-    } else {
-      throw Object.assign(
-        new Error(`Unexpected argument: ${arg}`),
-        { code: "INVALID_REPO", usage: USAGE },
-      );
+      case "title":
+        args.title = requireValue(token, "--title requires a value");
+        break;
+      case "link-repo":
+        args.linkRepo = requireValue(token, "--link-repo requires a value (owner/name)");
+        break;
+      case "repair-rename":
+        args.repairRename = true;
+        break;
+      default:
+        throw parseError(`Unknown flag: ${token.rawName}`);
     }
   }
   return args;
 }
-
 // ── Validation ───────────────────────────────────────────────────────────
 
 // GitHub slug rules: owner 1-39 chars (alnum/dash, no leading/trailing dash,
@@ -798,7 +793,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd() } = {}) {
   let args;
   try {
-    args = parseArgs(argv);
+    args = parseCliArgs(argv);
   } catch (err) {
     stderr.write(`${formatCliError(err)}\n`);
     process.exitCode = 1;

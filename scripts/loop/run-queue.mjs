@@ -14,6 +14,7 @@
  */
 
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { runQueue, DEFAULT_QUEUE_DRIVER_OPTIONS } from "@dev-loops/core/loop/queue-driver";
 import { computeParallelSchedule } from "@dev-loops/core/loop/queue-parallel";
 import { readQueue } from "@dev-loops/core/loop/queue-state";
@@ -27,7 +28,7 @@ const USAGE = `Usage:
 Run the dev-loop queue driver over entries in .pi/dev-loop-queue.json.
 Exit codes: 0 success, 1 error`.trim();
 
-function parseArgs(argv) {
+function parseCliArgs(argv) {
   const args = {
     repo: null,
     mergeAuthorized: false,
@@ -37,27 +38,49 @@ function parseArgs(argv) {
     help: false,
   };
 
-  for (let i = 0; i < argv.length; i++) {
-    switch (argv[i]) {
-      case "--repo":
-        args.repo = argv[++i];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      repo: { type: "string" },
+      "merge-authorized": { type: "boolean" },
+      parallel: { type: "boolean" },
+      "redispatch-max-retries": { type: "string" },
+      "max-parallel": { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw new Error(`unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    switch (token.name) {
+      case "repo":
+        args.repo = token.value;
         break;
-      case "--merge-authorized":
+      case "merge-authorized":
         args.mergeAuthorized = true;
         break;
-      case "--parallel":
+      case "parallel":
         args.parallel = true;
         break;
-      case "--redispatch-max-retries":
-        args.reDispatchMaxRetries = parsePositiveInteger(argv[++i], "--redispatch-max-retries");
+      case "redispatch-max-retries":
+        args.reDispatchMaxRetries = parsePositiveInteger(token.value, "--redispatch-max-retries");
         break;
-      case "--max-parallel":
-        args.maxParallel = parsePositiveInteger(argv[++i], "--max-parallel");
+      case "max-parallel":
+        args.maxParallel = parsePositiveInteger(token.value, "--max-parallel");
         break;
-      case "--help":
-      case "-h":
+      case "help":
         args.help = true;
         break;
+      default:
+        throw new Error(`unknown argument: ${token.rawName}`);
     }
   }
 
@@ -65,7 +88,7 @@ function parseArgs(argv) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseCliArgs(process.argv.slice(2));
 
   if (args.help) {
     console.log(USAGE);

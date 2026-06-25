@@ -105,29 +105,39 @@ const VALID_REPO_WIKI_SOURCES = new Set(["npm", "local"]);
 
 export function parseCliArgs(argv) {
   const args = Array.isArray(argv) ? [...argv] : [];
-  const { values } = parseArgs({
+  const { tokens } = parseArgs({
     args,
     options: {
       source: { type: "string" },
     },
+    allowPositionals: true,
     strict: false,
+    tokens: true,
   });
 
   const sourceEnv = process.env.REPO_WIKI_SOURCE;
-  const source = values.source || sourceEnv || "npm";
-  if (!VALID_REPO_WIKI_SOURCES.has(source)) {
-    throw new Error(`Unknown repo-wiki source "${source}". Valid sources: npm, local`);
-  }
-
+  let source = sourceEnv || "npm";
   const passthroughArgs = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === "--source") {
-      i++;
+
+  for (const token of tokens) {
+    if (token.kind === "option") {
+      if (token.name === "source") {
+        source = token.value ?? source;
+        continue;
+      }
+      passthroughArgs.push(token.rawName);
+      if (typeof token.value === "string") {
+        passthroughArgs.push(token.value);
+      }
       continue;
     }
-    if (a.startsWith("--source=")) continue;
-    passthroughArgs.push(a);
+    if (token.kind === "positional") {
+      passthroughArgs.push(token.value);
+    }
+  }
+
+  if (!VALID_REPO_WIKI_SOURCES.has(source)) {
+    throw new Error(`Unknown repo-wiki source "${source}". Valid sources: npm, local`);
   }
 
   if (passthroughArgs.length === 0 || passthroughArgs[0] === "help" || passthroughArgs[0] === "--help" || passthroughArgs[0] === "-h") {

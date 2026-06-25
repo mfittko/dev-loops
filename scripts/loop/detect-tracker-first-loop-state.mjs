@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { execFileSync } from "node:child_process";
+import { parseArgs } from "node:util";
 import { interpretTrackerLoopState } from "@dev-loops/core/loop/tracker-first-loop-state";
+
 function showHelp() {
   process.stdout.write(`Usage: detect-tracker-first-loop-state.mjs --repo <owner/name> --issue <number>
 Detect tracker-first loop state for a GitHub issue.
@@ -15,40 +17,70 @@ Exit codes:
 `);
   process.exit(0);
 }
-function parseArgs() {
-  const args = process.argv.slice(2);
+
+function parseCliArgs(argv) {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      repo: { type: "string" },
+      issue: { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
   const opts = { repo: null, issue: null };
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--help" || args[i] === "-h") {
-      showHelp();
+  for (const token of tokens) {
+    if (token.kind === "option") {
+      if (token.name === "help") {
+        showHelp();
+      }
+      if (token.name === "repo") {
+        opts.repo = token.value ?? null;
+        continue;
+      }
+      if (token.name === "issue") {
+        opts.issue = token.value ?? null;
+      }
     }
-    if (args[i] === "--repo" && i + 1 < args.length) opts.repo = args[++i];
-    else if (args[i] === "--issue" && i + 1 < args.length) opts.issue = args[++i];
   }
   return opts;
 }
+
+function requirePositiveInteger(value, flag) {
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < 1) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  return num;
+}
+
 async function main() {
-  const opts = parseArgs();
-  if (!opts.repo || !opts.issue) {
+  const rawOpts = parseCliArgs(process.argv.slice(2));
+  if (!rawOpts.repo || !rawOpts.issue) {
     process.stderr.write(
       JSON.stringify({ ok: false, error: "--repo and --issue required" }) + "\n"
     );
     process.exitCode = 1;
     return;
   }
+  const repo = rawOpts.repo;
+  const issue = requirePositiveInteger(rawOpts.issue, "--issue");
   let rawState = "";
   let prContext = null;
   try {
     const issueJson = execFileSync(
       "gh",
-      ["issue", "view", String(opts.issue), "--repo", opts.repo, "--json", "state,title", "--jq", ".state"],
+      ["issue", "view", String(issue), "--repo", repo, "--json", "state,title", "--jq", ".state"],
       { encoding: "utf8" }
     ).trim();
     rawState = issueJson;
     try {
       const prJson = execFileSync(
         "gh",
-        ["pr", "list", "--repo", opts.repo, "--search", `${opts.issue} in:body`, "--state", "open", "--json", "number,state,headRefName", "--jq", ".[0]"],
+        ["pr", "list", "--repo", repo, "--search", `${issue} in:body`, "--state", "open", "--json", "number,state,headRefName", "--jq", ".[0]"],
         { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }
       ).trim();
       if (prJson) prContext = JSON.parse(prJson);
