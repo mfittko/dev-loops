@@ -83,8 +83,10 @@ test("syncBoardStatus moves item when configured", async () => {
     assert.equal(moved.length, 1);
     assert.deepEqual(moved[0], {
       repo: "owner/repo",
-      project: 5,
-      item: 42,
+      // move-queue-item validates project + item as string refs; syncBoardStatus
+      // stringifies the resolved number/item before delegating.
+      project: "5",
+      item: "42",
       toColumn: "In Progress",
     });
   } finally {
@@ -464,8 +466,8 @@ test("syncBoardStatus resolves boardTitle to project number and moves item", asy
     assert.equal(moved.length, 1);
     assert.deepEqual(moved[0], {
       repo: "owner/repo",
-      project: 9,
-      item: 42,
+      project: "9",
+      item: "42",
       toColumn: "In Progress",
     });
   } finally {
