@@ -11,9 +11,10 @@ for (const agent of ["developer", "fixer"]) {
   test(`${agent} agent references the tooling-internals anti-pattern`, async () => {
     const content = await readRepo(`agents/${agent}.agent.md`);
 
+    // Assert the cross-reference link + a lightweight label only — the agent
+    // doc is a pointer, not a copy of the rule (anti-patterns.md stays canonical).
     assertMatchesAll(content, [
-      /Do not read installed-package internals or scan tooling source/i,
-      /use its CLI[\s\S]{0,40}`--help`[\s\S]{0,40}`skills\/docs\/?`/i,
+      /tooling internals/i,
       /\[Anti-patterns\]\(\.\.\/skills\/docs\/anti-patterns\.md#core-anti-patterns\)/,
     ], `agents/${agent}.agent.md`);
   });
