@@ -27,7 +27,6 @@ function parseBool(value, flag) {
   throw new Error(`${flag} must be true or false`);
 }
 export function parseDetectReviewerCliArgs(argv) {
-  const args = [...argv];
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
