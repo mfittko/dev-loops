@@ -1252,7 +1252,7 @@ test("copilot-pr-handoff keeps same-head suppression (no force flag)", async () 
   }
 });
 
-test("copilot-pr-handoff re-requests at round cap when new commits land after resolved comments", async () => {
+test("copilot-pr-handoff stops at round_cap_clean_fallback (no re-request) when new commits land after resolved comments", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-round-cap-rerequest-"));
 
   try {
@@ -1384,11 +1384,14 @@ test("copilot-pr-handoff re-requests at round cap when new commits land after re
 
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
-    assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
-    assert.equal(output.reviewRequestStatus, "requested");
-    assert.equal(output.loopDisposition, "pending");
-    assert.equal(output.terminal, false);
+    // Head advanced past the last review at the cap: no Copilot re-request is permitted.
+    // The loop proceeds to the pre_approval_gate fallback (terminal/proceeding) rather
+    // than re-requesting and waiting for a review that would be an over-cap round.
+    assert.equal(output.action, "stop");
+    assert.equal(output.state, "round_cap_clean_fallback");
+    assert.equal(output.roundCapCleanEligible, true);
+    assert.equal(output.loopDisposition, "done");
+    assert.equal(output.terminal, true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

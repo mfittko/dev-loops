@@ -895,8 +895,8 @@ test("request-copilot-review respects low-signal refinement config before auto r
   }
 });
 
-test("request-copilot-review automatically re-requests at round cap when new commits land after resolved comments", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-roundcap-auto-rerequest-"));
+test("request-copilot-review does NOT auto re-request at round cap when new commits land after resolved comments (no illegal over-cap re-request)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-roundcap-no-auto-rerequest-"));
 
   try {
     const env = await writeGhStub(tempDir, [
@@ -912,31 +912,18 @@ test("request-copilot-review automatically re-requests at round cap when new com
         assertArgs: ["api", "graphql"],
         stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
       },
-      {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
-        stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
-      },
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
-        stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}},{"id":"r-2","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n',
-      },
     ]);
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
-      ok: true,
-      status: "requested",
-      repo: "owner/repo",
-      pr: 17,
-      reviewer: "Copilot",
-    });
+    // At the cap, a head advance no longer re-opens an automatic Copilot re-request.
+    // The round cap is respected; the pre_approval_gate reviews the current head.
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.status, "round_cap_reached");
+    assert.equal(output.reviewer, "Copilot");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
