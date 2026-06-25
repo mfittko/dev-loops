@@ -118,7 +118,7 @@ test("detect-copilot-loop-state --input routes already-fixed threads to already_
   }
 });
 
-test("detect-copilot-loop-state --input re-opens clean exhausted rounds to ready_to_rerequest_review when head changed", async () => {
+test("detect-copilot-loop-state --input routes clean exhausted rounds to round_cap_clean_fallback when head changed (no illegal re-request)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-clean-"));
 
   try {
@@ -139,10 +139,12 @@ test("detect-copilot-loop-state --input re-opens clean exhausted rounds to ready
 
     assert.equal(result.code, 0);
     const output = JSON.parse(result.stdout);
-    assert.equal(output.state, "ready_to_rerequest_review");
-    assert.equal(output.autoRerequestEligible, true);
-    assert.equal(output.terminal, false);
-    assert.match(output.nextAction, /Re-request Copilot review/i);
+    // Head advanced past the last review, but the cap forbids another Copilot round,
+    // so proceed to the pre_approval_gate fallback instead of re-requesting.
+    assert.equal(output.state, "round_cap_clean_fallback");
+    assert.equal(output.autoRerequestEligible, false);
+    assert.equal(output.terminal, true);
+    assert.match(output.nextAction, /pre_approval_gate/i);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

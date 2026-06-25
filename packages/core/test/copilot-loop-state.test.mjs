@@ -904,7 +904,7 @@ test("interpretLoopState routes to ROUND_CAP_REACHED when round cap reached with
   assert.equal(result.roundCapCleanEligible, false);
 });
 
-test("interpretLoopState re-opens to READY_TO_REREQUEST_REVIEW when round cap reached after new commits with clean PR and green CI", () => {
+test("interpretLoopState routes to ROUND_CAP_CLEAN_FALLBACK (no illegal re-request) when round cap reached after new commits with clean PR and green CI", () => {
   const snapshot = {
     prExists: true,
     prNumber: 17,
@@ -920,15 +920,17 @@ test("interpretLoopState re-opens to READY_TO_REREQUEST_REVIEW when round cap re
   const refinementConfig = { maxCopilotRounds: 5 };
 
   const result = interpretLoopState(snapshot, refinementConfig);
-  assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
-  assert.deepEqual(result.allowedTransitions, [STATE.WAITING_FOR_COPILOT_REVIEW, STATE.REVIEW_REQUEST_UNAVAILABLE, STATE.DONE]);
-  assert.equal(result.autoRerequestEligible, true);
+  // Head advanced past last submitted review, but the cap forbids another Copilot
+  // round, so we must NOT re-open for re-request; pre_approval_gate handles the head.
+  assert.equal(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.deepEqual(result.allowedTransitions, []);
+  assert.equal(result.autoRerequestEligible, false);
   assert.equal(result.sameHeadCleanConverged, false);
-  assert.equal(result.roundCapCleanEligible, false);
-  assert.match(result.nextAction, /Re-request Copilot review/i);
+  assert.equal(result.roundCapCleanEligible, true);
+  assert.match(result.nextAction, /pre_approval_gate/i);
 });
 
-test("interpretLoopState re-opens to READY_TO_REREQUEST_REVIEW when round cap reached after new commits with crediblyGreen CI", () => {
+test("interpretLoopState routes to ROUND_CAP_CLEAN_FALLBACK (no illegal re-request) when round cap reached after new commits with crediblyGreen CI", () => {
   const snapshot = {
     prExists: true,
     prNumber: 17,
@@ -944,9 +946,9 @@ test("interpretLoopState re-opens to READY_TO_REREQUEST_REVIEW when round cap re
   const refinementConfig = { maxCopilotRounds: 5 };
 
   const result = interpretLoopState(snapshot, refinementConfig);
-  assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
-  assert.equal(result.autoRerequestEligible, true);
-  assert.equal(result.roundCapCleanEligible, false);
+  assert.equal(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.equal(result.autoRerequestEligible, false);
+  assert.equal(result.roundCapCleanEligible, true);
 });
 
 test("interpretLoopState fails closed to ROUND_CAP_CLEAN_FALLBACK when round-cap snapshot omits current-head review signal", () => {
@@ -1115,6 +1117,116 @@ test("round cap overrides unresolved-thread routing when maxCopilotRounds is exc
   assert.equal(result.roundCapCleanEligible, false);
 });
 
+// Round-cap deadlock guard (#848): a lingering Copilot reviewer assignment
+// (already-requested) must not dead-end the loop at WAITING_FOR_COPILOT_REVIEW once
+// the cap is reached with a clean PR. The clean fallback takes priority over the
+// stale assignment because no further Copilot round is permitted past the cap.
+test("interpretLoopState routes to ROUND_CAP_CLEAN_FALLBACK when cap reached with clean PR despite lingering already-requested assignment", () => {
+  const snapshot = {
+    prExists: true,
+    prNumber: 847,
+    copilotReviewRequestStatus: "already-requested",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 5,
+    ciStatus: "success",
+  };
+
+  const refinementConfig = { maxCopilotRounds: 5 };
+
+  const result = interpretLoopState(snapshot, refinementConfig);
+  assert.notEqual(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.equal(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.equal(result.roundCapCleanEligible, true);
+  assert.equal(result.autoRerequestEligible, false);
+});
+
+test("interpretLoopState routes to ROUND_CAP_CLEAN_FALLBACK (no illegal re-request) when cap reached with clean PR, head advanced, and lingering requested assignment", () => {
+  const snapshot = {
+    prExists: true,
+    prNumber: 847,
+    copilotReviewRequestStatus: "requested",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 5,
+    ciStatus: "crediblyGreen",
+  };
+
+  const refinementConfig = { maxCopilotRounds: 5 };
+
+  const result = interpretLoopState(snapshot, refinementConfig);
+  assert.equal(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.equal(result.roundCapCleanEligible, true);
+  // No illegal over-cap re-request is implied by the proceeding disposition.
+  assert.equal(result.autoRerequestEligible, false);
+});
+
+test("interpretLoopState keeps WAITING_FOR_COPILOT_REVIEW when cap NOT reached with already-requested assignment (regression guard)", () => {
+  const snapshot = {
+    prExists: true,
+    prNumber: 847,
+    copilotReviewRequestStatus: "already-requested",
+    copilotReviewPresent: false,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 2,
+    ciStatus: "success",
+  };
+
+  const refinementConfig = { maxCopilotRounds: 5 };
+
+  const result = interpretLoopState(snapshot, refinementConfig);
+  assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.equal(result.roundCapCleanEligible, false);
+});
+
+test("interpretLoopState routes to ROUND_CAP_REACHED when cap reached with unresolved threads and already-requested assignment", () => {
+  const snapshot = {
+    prExists: true,
+    prNumber: 847,
+    copilotReviewRequestStatus: "already-requested",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 2,
+    actionableThreadCount: 2,
+    copilotReviewRoundCount: 5,
+    ciStatus: "success",
+  };
+
+  const refinementConfig = { maxCopilotRounds: 5 };
+
+  const result = interpretLoopState(snapshot, refinementConfig);
+  // Not clean + in-flight request: stays in the fix/wait routing rather than a clean
+  // fallback. Unresolved threads take precedence over the lingering assignment.
+  assert.equal(result.state, STATE.UNRESOLVED_FEEDBACK_PRESENT);
+  assert.equal(result.roundCapCleanEligible, false);
+});
+
+test("interpretLoopState does not produce a clean fallback when cap reached with failing CI and already-requested assignment", () => {
+  const snapshot = {
+    prExists: true,
+    prNumber: 847,
+    copilotReviewRequestStatus: "already-requested",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 5,
+    ciStatus: "failure",
+  };
+
+  const refinementConfig = { maxCopilotRounds: 5 };
+
+  const result = interpretLoopState(snapshot, refinementConfig);
+  assert.notEqual(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.equal(result.roundCapCleanEligible, false);
+});
+
 test("summarizeLoopInterpretation marks ROUND_CAP_REACHED as blocked and terminal", () => {
   // ROUND_CAP_REACHED is now reachable through normal routing when round cap gates
   // before unresolved-thread/CI checks. We simulate directly for summary test.
@@ -1165,7 +1277,7 @@ test("interpretLoopState returns false for roundCapCleanEligible in normal READY
   assert.equal(result.roundCapCleanEligible, false);
 });
 
-test("round cap does not interrupt an in-flight Copilot review request", () => {
+test("round cap clean fallback takes priority over a lingering in-flight Copilot review request (no waiting dead-end)", () => {
   const snapshot = {
     prExists: true,
     prNumber: 17,
@@ -1180,7 +1292,32 @@ test("round cap does not interrupt an in-flight Copilot review request", () => {
 
   const refinementConfig = { maxCopilotRounds: 5 };
 
-  // In-flight review request must not be interrupted by round cap
+  // At the cap, copilotReviewRoundCount counts COMPLETED rounds, so any in-flight
+  // request is for a forbidden over-cap round. With a clean PR, the loop must proceed
+  // to the pre_approval_gate fallback rather than dead-end at WAITING_FOR_COPILOT_REVIEW.
+  const result = interpretLoopState(snapshot, refinementConfig);
+  assert.notEqual(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.equal(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.equal(result.roundCapCleanEligible, true);
+});
+
+test("round cap with in-flight request but NOT clean stays in fix/wait routing (no premature clean fallback)", () => {
+  const snapshot = {
+    prExists: true,
+    prNumber: 17,
+    copilotReviewRequestStatus: "requested",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 5,
+    ciStatus: "pending",
+  };
+
+  const refinementConfig = { maxCopilotRounds: 5 };
+
+  // Pending CI + in-flight request: not clean, so no clean fallback; the in-flight
+  // request keeps the loop waiting for Copilot rather than forcing a hard stop.
   const result = interpretLoopState(snapshot, refinementConfig);
   assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
   assert.equal(result.roundCapCleanEligible, false);
@@ -1207,7 +1344,7 @@ test("round cap does not override BLOCKED_NEEDS_USER_DECISION from failed review
   assert.equal(result.roundCapCleanEligible, false);
 });
 
-test("low-signal heuristic can still suppress a round-cap re-opened re-request when both apply", () => {
+test("round-cap clean fallback takes priority over the low-signal heuristic at the cap", () => {
   const snapshot = {
     prExists: true,
     prNumber: 17,
@@ -1228,7 +1365,10 @@ test("low-signal heuristic can still suppress a round-cap re-opened re-request w
     lowSignalMaxComments: 2,
   };
 
+  // At the cap with a clean PR the loop proceeds to the pre_approval_gate fallback.
+  // The low-signal heuristic only suppresses a permitted re-request (READY_TO_REREQUEST_REVIEW),
+  // which is forbidden at the cap, so it never applies here.
   const result = interpretLoopState(snapshot, refinementConfig);
-  assert.equal(result.state, STATE.LOW_SIGNAL_CONVERGED);
-  assert.equal(result.roundCapCleanEligible, false);
+  assert.equal(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.equal(result.roundCapCleanEligible, true);
 });

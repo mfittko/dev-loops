@@ -533,7 +533,7 @@ test("detect-copilot-loop-state keeps zero-suite current-head CI at none under r
 });
 
 
-test("detect-copilot-loop-state re-opens round-cap clean PRs when new commits land after resolved comments", async () => {
+test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fallback when new commits land after resolved comments", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-rerequest-"));
 
   try {
@@ -616,9 +616,11 @@ test("detect-copilot-loop-state re-opens round-cap clean PRs when new commits la
     const output = JSON.parse(result.stdout);
     assert.equal(output.snapshot.ciStatus, "success");
     assert.equal(output.snapshot.copilotReviewOnCurrentHead, false);
-    assert.equal(output.state, "ready_to_rerequest_review");
-    assert.equal(output.autoRerequestEligible, true);
-    assert.equal(output.terminal, false);
+    // Head advanced past last review, but the cap forbids another Copilot round, so
+    // proceed to the pre_approval_gate fallback instead of an illegal re-request.
+    assert.equal(output.state, "round_cap_clean_fallback");
+    assert.equal(output.autoRerequestEligible, false);
+    assert.equal(output.terminal, true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

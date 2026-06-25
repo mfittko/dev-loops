@@ -229,12 +229,6 @@ function isAutoRerequestEligible(snapshot, state) {
  */
 const VALID_SIGNAL_LEVELS = new Set(["high", "mid", "low"]);
 
-function hasExplicitCurrentHeadReviewSignal(raw) {
-  return Boolean(raw)
-    && typeof raw === "object"
-    && Object.prototype.hasOwnProperty.call(raw, "copilotReviewOnCurrentHead");
-}
-
 export function normalizeSnapshot(raw) {
   if (!raw || typeof raw !== "object") {
     throw new Error("Snapshot must be a non-null object");
@@ -353,32 +347,48 @@ export function interpretLoopState(snapshot, refinementConfig) {
   // count has been exhausted, stop re-requests before entering fix/reply-resolve routing.
   // Gating here (before unresolved-thread checks) ensures round cap takes priority over
   // the normal fix loop, including unresolved threads, pending CI, and CI failures.
-  // Clean PRs are usually eligible for pre_approval_gate fallback; the only automatic
-  // exception is when the head has advanced since the last submitted Copilot review,
-  // all prior feedback is resolved, and CI is green/credibly green again. In that case
-  // the state re-opens to READY_TO_REREQUEST_REVIEW instead of terminating as clean fallback.
-  // Does NOT interrupt an in-flight review request (requested/already-requested).
+  //
+  // Precedence at the cap: copilotReviewRoundCount counts COMPLETED rounds, so at
+  // `>= maxRounds` every permitted Copilot round is already done and any lingering
+  // in-flight request (requested/already-requested) is for a forbidden over-cap round.
+  // A stale Copilot reviewer assignment must therefore NOT block the clean fallback:
+  // when threads are clean and CI is green, route to ROUND_CAP_CLEAN_FALLBACK even if
+  // copilotReviewRequestStatus is requested/already-requested. Otherwise a lingering
+  // assignment would dead-end the loop at WAITING_FOR_COPILOT_REVIEW waiting for a
+  // review that can never come (no further round is permitted past the cap). The
+  // pre_approval_gate (current-head clean evidence, enforced elsewhere) reviews any
+  // post-cap head change, so this proceeds without skipping review of new code.
+  //
+  // An in-flight request only still blocks the cap block when the PR is NOT clean
+  // (unresolved threads or non-green CI) — that legitimately stays in the fix/wait
+  // routing below rather than terminating as a clean fallback.
+  //
+  // Head-advanced handling: even when the head has advanced past the last submitted
+  // Copilot review with clean threads and green CI, re-requesting another Copilot pass
+  // is forbidden at the cap, so this routes to ROUND_CAP_CLEAN_FALLBACK (not
+  // READY_TO_REREQUEST_REVIEW, which would trigger an illegal auto re-request). The
+  // pre_approval_gate handles the current head.
   const maxRounds = refinementConfig?.maxCopilotRounds;
   const reviewInFlight = s.copilotReviewRequestStatus === "requested"
     || s.copilotReviewRequestStatus === "already-requested";
   if (typeof maxRounds === "number" && maxRounds > 0
       && s.copilotReviewRoundCount >= maxRounds
-      && !reviewInFlight
       && state !== STATE.NO_PR && state !== STATE.DONE
       && state !== STATE.PR_DRAFT && state !== STATE.REVIEW_REQUEST_UNAVAILABLE
       && state !== STATE.BLOCKED_NEEDS_USER_DECISION) {
     const ciClean = s.ciStatus === "success" || s.ciStatus === "crediblyGreen";
     const cleanThreads = s.unresolvedThreadCount === 0;
-    const headAdvancedSinceLastSubmittedCopilotReview = s.copilotReviewPresent
-      && hasExplicitCurrentHeadReviewSignal(snapshot)
-      && !s.copilotReviewOnCurrentHead;
-    if (cleanThreads && ciClean && headAdvancedSinceLastSubmittedCopilotReview) {
-      state = STATE.READY_TO_REREQUEST_REVIEW;
-    } else if (cleanThreads && ciClean) {
+    if (cleanThreads && ciClean) {
+      // Clean PR at the cap: proceed to the pre_approval_gate fallback regardless of a
+      // lingering Copilot reviewer assignment or an advanced head — no further Copilot
+      // round is permitted, so never re-open for re-request or wait on Copilot here.
       state = STATE.ROUND_CAP_CLEAN_FALLBACK;
-    } else {
+    } else if (!reviewInFlight) {
+      // Not clean and no in-flight request: hard stop at the cap.
       state = STATE.ROUND_CAP_REACHED;
     }
+    // Not clean WITH an in-flight request: leave state undecided so the normal
+    // fix/reply-resolve/wait routing below handles it (do not force a clean fallback).
   }
 
   if (state === undefined) {
