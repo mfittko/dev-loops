@@ -5,6 +5,7 @@ import {
   parseCliArgs,
   parseDuration,
   selectArchivable,
+  resolveSettings,
 } from "../../scripts/projects/archive-done-items.mjs";
 
 // ── Pure unit: parseCliArgs ───────────────────────────────────────────────
@@ -205,7 +206,7 @@ describe("archive-done — integration", () => {
     assert.strictEqual(result.archivable, 1);
   });
 
-  it("defaults to 30d when --older-than is omitted", async () => {
+  it("defaults to 7d when --older-than is omitted and no config default applies", async () => {
     const nodes = [rawItemNode("A", 1, { closed: true, closedAt: "2026-06-23T00:00:00Z" })]; // 1d ago
     const responses = [
       { payload: userPayload() },
@@ -221,6 +222,131 @@ describe("archive-done — integration", () => {
 
     assert.ok(result.ok);
     assert.strictEqual(result.archived.length, 0);
-    assert.strictEqual(result.olderThan, "30d");
+    assert.strictEqual(result.olderThan, "7d");
+  });
+
+  it("uses olderThanDefault (from .devloops) when --older-than is omitted", async () => {
+    // closedAt 5d ago: archived under a 3d config default, kept under default 7d.
+    const nodes = [rawItemNode("A", 1, { closed: true, closedAt: "2026-06-19T00:00:00Z" })];
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([PROJECT]) },
+      { payload: itemsResponse(nodes) },
+      { payload: archiveResponse("A") },
+    ];
+    const runChild = mockRunChild(responses);
+
+    const result = await main(
+      { repo: "mfittko/dev-loops", project: "1", olderThanDefault: "3d", now: Date.parse("2026-06-24T00:00:00Z") },
+      { runChild },
+    );
+
+    assert.ok(result.ok);
+    assert.strictEqual(result.olderThan, "3d");
+    assert.strictEqual(result.archived.length, 1);
+  });
+
+  it("explicit --older-than overrides the config default", async () => {
+    const nodes = [rawItemNode("A", 1, { closed: true, closedAt: "2026-06-19T00:00:00Z" })]; // 5d ago
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([PROJECT]) },
+      { payload: itemsResponse(nodes) },
+    ];
+    const runChild = mockRunChild(responses);
+
+    const result = await main(
+      // explicit 7d wins over config default 3d → 5d-old item is kept
+      { repo: "mfittko/dev-loops", project: "1", olderThan: "7d", olderThanDefault: "3d", now: Date.parse("2026-06-24T00:00:00Z") },
+      { runChild },
+    );
+
+    assert.ok(result.ok);
+    assert.strictEqual(result.olderThan, "7d");
+    assert.strictEqual(result.archived.length, 0);
+  });
+
+  it("resolves the board by title when --project is omitted (projectTitle)", async () => {
+    const nodes = [rawItemNode("A", 1, { closed: true, closedAt: "2026-01-01T00:00:00Z" })];
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([PROJECT]) },
+      { payload: itemsResponse(nodes) },
+      { payload: archiveResponse("A") },
+    ];
+    const runChild = mockRunChild(responses);
+
+    const result = await main(
+      { repo: "mfittko/dev-loops", projectTitle: "Dev Loop Queue", olderThan: "30d", now: Date.parse("2026-06-24T00:00:00Z") },
+      { runChild },
+    );
+
+    assert.ok(result.ok);
+    assert.strictEqual(result.archived.length, 1);
+    assert.strictEqual(result.archived[0].itemId, "A");
+  });
+
+  it("fails closed when neither --project nor a configured board resolves", async () => {
+    const runChild = mockRunChild([]);
+    await assert.rejects(
+      () => main({ repo: "mfittko/dev-loops", now: Date.parse("2026-06-24T00:00:00Z") }, { runChild }),
+      (e) => e.code === "INVALID_PROJECT",
+    );
+  });
+});
+
+// ── resolveSettings (config-driven defaults) ──────────────────────────────
+
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
+
+function withTempDevloops(contents, fn) {
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "archive-done-cfg-"));
+  try {
+    if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
+    return fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("archive-done — resolveSettings", () => {
+  it("returns null when no .devloops is present (default threshold/board apply)", () => {
+    withTempDevloops(null, (dir) => {
+      assert.strictEqual(resolveSettings(dir), null);
+    });
+  });
+
+  it("reads archiveOlderThanDays and boardTitle from queue", () => {
+    withTempDevloops(
+      "queue:\n  boardTitle: \"dev-loops Queue\"\n  archiveOlderThanDays: 14\n",
+      (dir) => {
+        const s = resolveSettings(dir);
+        assert.strictEqual(s.title, "dev-loops Queue");
+        assert.strictEqual(s.olderThanDays, 14);
+      },
+    );
+  });
+
+  it("prefers projectNumber over boardTitle for board resolution", () => {
+    withTempDevloops(
+      "queue:\n  projectNumber: 5\n  boardTitle: \"ignored\"\n",
+      (dir) => {
+        const s = resolveSettings(dir);
+        assert.strictEqual(s.project, 5);
+        assert.strictEqual(s.title, undefined);
+      },
+    );
+  });
+
+  it("ignores a non-positive archiveOlderThanDays", () => {
+    withTempDevloops(
+      "queue:\n  boardTitle: \"b\"\n  archiveOlderThanDays: 0\n",
+      (dir) => {
+        const s = resolveSettings(dir);
+        assert.strictEqual(s.olderThanDays, undefined);
+      },
+    );
   });
 });

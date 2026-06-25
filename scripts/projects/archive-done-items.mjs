@@ -1,18 +1,24 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { parse as parseYaml } from "yaml";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 
-const USAGE = `Usage: dev-loops project archive-done --repo <owner/name> --project <number|id> [--older-than <duration>] [--dry-run]
+const USAGE = `Usage: dev-loops project archive-done --repo <owner/name> [--project <number|id>] [--older-than <duration>] [--dry-run]
 
 Archive GitHub Projects V2 items whose issue/PR has been closed for at least the
 given duration. Operator-triggered (no webhooks). Uses archiveProjectV2Item.
 
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
-  --project <number|id>   Required. Project number (integer) or node ID.
+  --project <number|id>   Project number (integer) or node ID. When omitted,
+                          resolved from .devloops queue.projectNumber /
+                          queue.boardTitle.
   --older-than <duration> Closed-for threshold. Format: <n><unit> where unit is
-                          h (hours), d (days), or w (weeks). Default: 30d.
+                          h (hours), d (days), or w (weeks). Default resolves
+                          from .devloops queue.archiveOlderThanDays, else 7d.
   --dry-run               Print the intended archive mutation(s) without executing.
   --help, -h              Show this help.
 
@@ -145,6 +151,37 @@ function parseDuration(raw) {
     throw Object.assign(new Error(`--older-than must be a positive amount, got "${raw}"`), { code: "INVALID_DURATION" });
   }
   return n * UNIT_MS[m[2]];
+}
+
+// ── Settings fallback ──────────────────────────────────────────────────────
+
+// Read .devloops (and extension variants) queue settings, mirroring the
+// resolution used by ensure-queue-board.mjs. Returns { project }, { title },
+// and/or { olderThanDays } when configured; never throws on a missing/bad file.
+function resolveSettings(cwd) {
+  const basePath = path.join(cwd, ".devloops");
+  const extensions = ["", ".yaml", ".yml", ".json"];
+  for (const ext of extensions) {
+    try {
+      const raw = readFileSync(basePath + ext, "utf-8");
+      const settings = ext === ".json" ? JSON.parse(raw) : parseYaml(raw);
+      const queue = settings?.queue;
+      if (!queue) return null;
+      const out = {};
+      if (typeof queue.projectNumber === "number" && Number.isInteger(queue.projectNumber) && queue.projectNumber > 0) {
+        out.project = queue.projectNumber;
+      } else if (typeof queue.boardTitle === "string" && queue.boardTitle.trim().length > 0) {
+        out.title = queue.boardTitle.trim();
+      }
+      if (typeof queue.archiveOlderThanDays === "number" && Number.isInteger(queue.archiveOlderThanDays) && queue.archiveOlderThanDays > 0) {
+        out.olderThanDays = queue.archiveOlderThanDays;
+      }
+      return out;
+    } catch {
+      // extension not present or unparseable — try next
+    }
+  }
+  return null;
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────
@@ -338,19 +375,36 @@ async function main(args, { env = process.env, runChild } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
   const [owner] = repo.split("/");
-  const projectRef = parseProjectRef(args.project);
-  const olderThanRaw = args.olderThan ?? "30d";
+  // Board: explicit --project ref wins; otherwise resolve by board title from
+  // .devloops (passed in as args.projectTitle by runCli). Fail closed if neither.
+  const hasProjectRef = typeof args.project === "string" && args.project.trim().length > 0;
+  const projectRef = hasProjectRef ? parseProjectRef(args.project) : null;
+  const projectTitle = !hasProjectRef && typeof args.projectTitle === "string" && args.projectTitle.trim().length > 0
+    ? args.projectTitle.trim()
+    : null;
+  if (!projectRef && !projectTitle) {
+    throw Object.assign(
+      new Error("--project is required (or configure queue.projectNumber / queue.boardTitle in .devloops)"),
+      { code: "INVALID_PROJECT" },
+    );
+  }
+  const olderThanRaw = args.olderThan ?? args.olderThanDefault ?? "7d";
   const olderThanMs = parseDuration(olderThanRaw);
   const now = args.now ?? Date.now();
 
   const { kind: ownerKind } = await resolveOwner(owner, env, child);
   const projects = await listAllProjects(owner, ownerKind, env, child);
-  const project = projectRef.kind === "id"
-    ? projects.find((p) => p.id === projectRef.value)
-    : projects.find((p) => p.number === projectRef.value);
+  const project = projectRef
+    ? (projectRef.kind === "id"
+        ? projects.find((p) => p.id === projectRef.value)
+        : projects.find((p) => p.number === projectRef.value))
+    : projects.find((p) => p.title === projectTitle);
   if (!project) {
+    const desc = projectRef
+      ? (projectRef.kind === "id" ? `"${projectRef.value}"` : `number ${projectRef.value}`)
+      : `title "${projectTitle}"`;
     throw Object.assign(
-      new Error(`Project ${projectRef.kind === "id" ? `"${projectRef.value}"` : `number ${projectRef.value}`} not found under owner "${owner}"`),
+      new Error(`Project ${desc} not found under owner "${owner}"`),
       { code: "PROJECT_NOT_FOUND" },
     );
   }
@@ -404,7 +458,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 
 // ── CLI entrypoint ──────────────────────────────────────────────────────
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd() } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);
@@ -417,6 +471,19 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     stdout.write(USAGE);
     return;
   }
+
+  // Resolve board + threshold defaults from .devloops when the flags are absent.
+  // Precedence: explicit --project flag > queue.projectNumber/boardTitle.
+  //             explicit --older-than flag > queue.archiveOlderThanDays > 7d.
+  const settings = resolveSettings(cwd);
+  if (args.project === undefined && settings) {
+    if (settings.project) args.project = String(settings.project);
+    else if (settings.title) args.projectTitle = settings.title;
+  }
+  if (args.olderThan === undefined && settings?.olderThanDays) {
+    args.olderThanDefault = `${settings.olderThanDays}d`;
+  }
+
   try {
     const result = await main(args, { env });
     stdout.write(JSON.stringify(result) + "\n");
@@ -433,4 +500,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main, parseCliArgs, parseDuration, selectArchivable };
+export { main, parseCliArgs, parseDuration, selectArchivable, resolveSettings, runCli };
