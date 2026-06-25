@@ -126,7 +126,11 @@ const defaultSettings = {
   },
 };
 
-const defaultOptions = { repoSlug: "owner/repo" };
+// Pin env to {} so envelope-building tests stay deterministic regardless of the ambient harness
+// (buildDevLoopHandoffEnvelope defaults options.env to process.env; under CLAUDECODE=1 a `required`
+// async-start mode resolves to an `allowed` effective value — #834). Tests that exercise Claude
+// behavior override `env` explicitly.
+const defaultOptions = { repoSlug: "owner/repo", env: {} };
 
 // ===========================================================================
 // 1. fn-exists and basic shape
