@@ -264,6 +264,8 @@ Do not treat `fix applied locally` as the end of the loop when the workflow also
 
 For every `draft_gate` or `pre_approval_gate` comment, you MUST run:
 
+For a gate that ran via the fan-out/fan-in sub-loop:
+
 ```sh
 node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --repo <owner/name> \
@@ -272,8 +274,25 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --head-sha <current_head_sha> \
   --verdict <clean|findings_present|blocked> \
   --findings-summary "<summary>" \
-  --next-action "<next action>" --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"defer":0}'
+  --next-action "<next action>" --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"defer":0}' \
+  --execution-mode fanout_fanin
 ```
+
+For a gate that ran inline (single agent, not via the sub-loop):
+
+```sh
+node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
+  --repo <owner/name> \
+  --pr <number> \
+  --gate <draft_gate|pre_approval_gate> \
+  --head-sha <current_head_sha> \
+  --verdict <clean|findings_present|blocked> \
+  --findings-summary "<summary>" \
+  --next-action "<next action>" --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"defer":0}' \
+  --execution-mode inline_single_agent --inline-reason "<why>"
+```
+
+`--execution-mode <fanout_fanin|inline_single_agent>` records how the gate review ran (default `inline_single_agent`). When the gate did not run via the fan-out/fan-in sub-loop ([Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md)), you MUST pass `--execution-mode inline_single_agent --inline-reason "<why>"` — silent inline runs are no longer allowed: inline mode requires a non-empty `--inline-reason` and emits a stderr warning. Because inline is the default mode, a bare call with neither flag now fails with an argument error, so always pass `--execution-mode` explicitly (and `--inline-reason` for inline). The recorded `executionMode` is surfaced by `detect-checkpoint-evidence.mjs` and gated by `gates.requireFanoutEvidence`.
 
 Do NOT use `gh pr comment`, `gh api`, or `gh pr review` for gate comments.
 

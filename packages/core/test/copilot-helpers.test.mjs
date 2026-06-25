@@ -112,6 +112,80 @@ test("parseGateReviewCommentMarkerBody parses partial new-format markers", () =>
 });
 
 
+test("parseGateReviewCommentMarkerBody round-trips executionMode and inlineReason", () => {
+  const inlineBody = [
+    "### Gate review: `draft_gate`",
+    "",
+    "**Reviewed head SHA:** `abc1234`",
+    "**Verdict:** clean",
+    "**Execution mode:** inline_single_agent — small docs-only change",
+    "",
+    "**Findings summary:** no issues found",
+    "",
+    "**Next action:** mark ready for review",
+  ].join("\n");
+  const inline = parseGateReviewCommentMarkerBody(inlineBody);
+  assert.equal(inline.executionMode, "inline_single_agent");
+  assert.equal(inline.inlineReason, "small docs-only change");
+
+  const fanoutBody = inlineBody.replace("inline_single_agent — small docs-only change", "fanout_fanin");
+  const fanout = parseGateReviewCommentMarkerBody(fanoutBody);
+  assert.equal(fanout.executionMode, "fanout_fanin");
+  assert.equal(fanout.inlineReason, null);
+
+  // Markers without an execution-mode line surface null (back-compat).
+  const legacyBody = inlineBody.replace("**Execution mode:** inline_single_agent — small docs-only change\n", "");
+  const legacy = parseGateReviewCommentMarkerBody(legacyBody);
+  assert.equal(legacy.executionMode, null);
+  assert.equal(legacy.inlineReason, null);
+});
+
+test("parseGateReviewCommentMarkerBody only records inlineReason for inline_single_agent", () => {
+  const baseBody = (modeLine) => [
+    "### Gate review: `draft_gate`",
+    "",
+    "**Reviewed head SHA:** `abc1234`",
+    "**Verdict:** clean",
+    `**Execution mode:** ${modeLine}`,
+    "",
+    "**Findings summary:** no issues found",
+    "",
+    "**Next action:** mark ready for review",
+  ].join("\n");
+
+  // A fanout_fanin line with a trailing "— text" must NOT yield an inlineReason:
+  // the mode/reason pair would otherwise be inconsistent.
+  const fanout = parseGateReviewCommentMarkerBody(baseBody("fanout_fanin — ran the full sub-loop"));
+  assert.equal(fanout.executionMode, "fanout_fanin");
+  assert.equal(fanout.inlineReason, null);
+
+  // An invalid mode token with a trailing dash + text must also leave both
+  // fields clean (executionMode null, no inline reason leaking through).
+  const invalid = parseGateReviewCommentMarkerBody(baseBody("bogus_mode — some note"));
+  assert.equal(invalid.executionMode, null);
+  assert.equal(invalid.inlineReason, null);
+});
+
+test("summarizeGateReviewCommentMarkers surfaces executionMode and inlineReason per gate", () => {
+  const comments = [
+    {
+      id: 7,
+      updated_at: "2024-02-01T00:00:00Z",
+      body: [
+        "### Gate review: `draft_gate`",
+        "**Reviewed head SHA:** `abc1234`",
+        "**Verdict:** clean",
+        "**Execution mode:** inline_single_agent — quick fix",
+        "**Findings summary:** none",
+        "**Next action:** ready",
+      ].join("\n"),
+    },
+  ];
+  const summary = summarizeGateReviewCommentMarkers(comments, { headSha: "abc1234" });
+  assert.equal(summary.draft_gate.executionMode, "inline_single_agent");
+  assert.equal(summary.draft_gate.inlineReason, "quick fix");
+});
+
 test("summarizeGateReviewComments picks the most-recently-updated entry per gate", () => {
   const comments = [
     {
@@ -130,6 +204,39 @@ test("summarizeGateReviewComments picks the most-recently-updated entry per gate
   assert.equal(summary.draft_gate?.commentId, 2);
   assert.equal(summary.draft_gate?.verdict, "clean");
   assert.equal(summary.pre_approval_gate, null);
+});
+
+test("summarizeGateReviewComments surfaces executionMode and inlineReason on the strict summary", () => {
+  const comments = [
+    {
+      body: [
+        "### Gate review: `draft_gate`",
+        "**Reviewed head SHA:** `abc1234`",
+        "**Verdict:** clean",
+        "**Execution mode:** inline_single_agent — small docs-only change",
+        "**Findings summary:** no issues found",
+        "**Next action:** mark ready for review",
+      ].join("\n"),
+      id: 7,
+    },
+  ];
+
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate?.executionMode, "inline_single_agent");
+  assert.equal(summary.draft_gate?.inlineReason, "small docs-only change");
+});
+
+test("summarizeGateReviewComments defaults executionMode and inlineReason to null when absent", () => {
+  const comments = [
+    {
+      body: "gate: draft_gate\nhead sha reviewed: aaa1111\nverdict: clean\nfindings summary: ok\nnext action: mark ready for review",
+      id: 9,
+    },
+  ];
+
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate?.executionMode, null);
+  assert.equal(summary.draft_gate?.inlineReason, null);
 });
 
 test("summarizeGateReviewCommentMarkers filters by headSha when provided", () => {

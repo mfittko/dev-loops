@@ -20,6 +20,7 @@ import {
   resolveGateAnglesDynamic,
   resolveWorkflowConfig,
   resolveLightMode,
+  resolveRequireFanoutEvidence,
 } from "../src/config/config.mjs";
 // ============================================================================
 // Schema validation tests (S1–S26)
@@ -374,6 +375,30 @@ describe("loader — graceful degradation", () => {
       assert.ok(result.config);
       assert.equal(result.config.version, 1);
       assert.ok(result.warnings.length > 0, "should warn about missing config");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("L1-validation: invalid .devloops returns non-empty errors without throwing", async () => {
+    // FIX C: loadDevLoopConfig never throws on a validation failure. Callers that
+    // previously wrapped it in try/catch expecting a throw must instead treat a
+    // non-empty errors array as "config unavailable".
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-invalid-"));
+    try {
+      // gates.requireFanoutEvidence must be a boolean; a string value fails schema validation.
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\ngates:\n  requireFanoutEvidence: \"yes\"\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      let result;
+      await assert.doesNotReject(async () => {
+        result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      });
+      assert.ok(Array.isArray(result.errors) && result.errors.length > 0, "validation failure should populate errors");
+      // config object is still returned (merged), so callers can inspect errors and decide.
+      assert.ok(result.config);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -2651,4 +2676,30 @@ describe("resolveGateAnglesDynamic", () => {
     assert.ok(result.recommendedAngles.includes("pr-description"));
   });
 
+});
+
+describe("gates.requireFanoutEvidence", () => {
+  test("defaults to false and resolveRequireFanoutEvidence reflects it", () => {
+    assert.equal(resolveRequireFanoutEvidence({}), false);
+    assert.equal(resolveRequireFanoutEvidence({ gates: {} }), false);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.requireFanoutEvidence, false);
+  });
+
+  test("accepts requireFanoutEvidence: true in full and file schemas", () => {
+    const full = DevLoopConfigSchema.safeParse({ version: 1, gates: { requireFanoutEvidence: true } });
+    assert.equal(full.success, true);
+    assert.equal(full.data.gates.requireFanoutEvidence, true);
+    assert.equal(resolveRequireFanoutEvidence(full.data), true);
+
+    const file = FileConfigSchema.safeParse({ version: 1, gates: { requireFanoutEvidence: true } });
+    assert.equal(file.success, true);
+    assert.equal(file.data.gates.requireFanoutEvidence, true);
+  });
+
+  test("rejects non-boolean requireFanoutEvidence", () => {
+    const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { requireFanoutEvidence: "yes" } });
+    assert.equal(bad.success, false);
+  });
 });

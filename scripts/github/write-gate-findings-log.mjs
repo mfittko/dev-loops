@@ -168,7 +168,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
   }
   return options;
 }
-function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
+export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
   const parts = repo.split("/");
   if (parts.length !== 2 || parts.some(p => p.length === 0)) {
     throw new Error(`--repo must be in owner/name format, got: ${JSON.stringify(repo)}`);

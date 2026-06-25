@@ -8,6 +8,7 @@ import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson a
 
 import {
   parseUpsertCheckpointVerdictCliArgs,
+  renderGateReviewCommentBody,
   summarizeCheckpointVerdictText,
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -15,7 +16,21 @@ import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination
 
 const scriptPath = path.resolve("scripts/github/upsert-checkpoint-verdict.mjs");
 
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
+// Inline mode is the default execution mode and now requires a non-empty
+// --inline-reason (see FIX B). For tests that do not explicitly exercise the
+// execution-mode flags, auto-append a default inline reason so the existing
+// scenarios keep covering their original behavior. Tests that pass their own
+// --execution-mode / --inline-reason (or that expect an argument error before
+// the parser reaches the inline-reason check) are left untouched.
+const DEFAULT_TEST_INLINE_REASON = "single-agent inline review (test)";
+const augmentInlineReason = (args) => {
+  if (args.includes("--execution-mode") || args.includes("--inline-reason")) {
+    return args;
+  }
+  return [...args, "--inline-reason", DEFAULT_TEST_INLINE_REASON];
+};
+
+const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, augmentInlineReason(args), {
   ...options,
   env: {
     ...process.env,
@@ -112,6 +127,7 @@ test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments determinis
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
     "--findings-summary", "no issues found",
     "--next-action", "mark ready for review",
+    "--inline-reason", "tiny docs change",
   ]);
   assert.equal(parsed.headSha, "abc1234");
 
@@ -139,6 +155,7 @@ test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file without --find
     "--verdict", "findings_present",
     "--findings-file", "/tmp/findings.md",
     "--next-action", "stay draft and fix",
+    "--inline-reason", "tiny docs change",
   ]);
   assert.equal(parsed.findingsFile, "/tmp/findings.md");
   assert.equal(parsed.findingsSummary, undefined);
@@ -155,6 +172,7 @@ test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file with --finding
     "--findings-summary", "fallback text",
     "--findings-file", "/tmp/findings.md",
     "--next-action", "stay draft and fix",
+    "--inline-reason", "tiny docs change",
   ]);
   assert.equal(parsed.findingsFile, "/tmp/findings.md");
   assert.equal(parsed.findingsSummary, "fallback text");
@@ -453,7 +471,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
       action: "created",
@@ -464,6 +482,8 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       currentHeadSha: "abc1234",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
   } finally {
@@ -526,7 +546,7 @@ test("upsert-checkpoint-verdict embeds --findings-file content with preserved ne
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "created");
     assert.equal(parsed.gate, "draft_gate");
@@ -587,7 +607,7 @@ test("upsert-checkpoint-verdict --findings-file takes precedence over --findings
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "created");
   } finally {
@@ -640,7 +660,7 @@ test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict"
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "created");
   } finally {
@@ -834,7 +854,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
       action: "created",
@@ -845,6 +865,8 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       currentHeadSha: "abc1234",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
   } finally {
@@ -921,7 +943,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
       action: "created",
@@ -932,6 +954,8 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       currentHeadSha: "abc1234",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
   } finally {
@@ -970,6 +994,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
             "",
             "**Reviewed head SHA:** `abc1234`",
             "**Verdict:** clean",
+            "**Execution mode:** inline_single_agent — single-agent inline review (test)",
             "",
             "**Findings summary:** no issues found",
             "",
@@ -1002,7 +1027,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
       action: "noop",
@@ -1013,10 +1038,92 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       currentHeadSha: "abc1234",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
     // 7 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check
     assert.equal(Number((await readFile(env.GH_COUNTER_PATH, "utf8")).trim()), 7);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict updates (not noop) when only the inline reason changed on the same head", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-inline-reason-change-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
+        stdout: '{"number":17,"state":"OPEN","isDraft":true,"headRefOid":"abc1234","reviews":[],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n',
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "pr=17"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: '{"headRefOid":"abc1234"}\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 101,
+            // Same verdict/summary/nextAction, but a DIFFERENT inline reason than
+            // the incoming request. FIX A: this must force an update, not a noop.
+            body: [
+            "### Gate review: `draft_gate`",
+            "",
+            "**Reviewed head SHA:** `abc1234`",
+            "**Verdict:** clean",
+            "**Execution mode:** inline_single_agent — stale prior reason",
+            "",
+            "**Findings summary:** no issues found",
+            "",
+            "**Next action:** mark ready for review",
+            ].join("\n"),
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
+            updated_at: "2026-05-30T17:00:00Z",
+          },
+        ])}\n`,
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
+        stdout: '{"files":[{"path":"src/index.ts"}]}\n',
+      },
+      {
+        assertArgs: ["api", "-X", "PATCH", "repos/owner/repo/issues/comments/101", "-f"],
+        assertArgContains: ["body=### Gate review: `draft_gate`", "**Execution mode:** inline_single_agent — single-agent inline review (test)"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+    ], { env });
+
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.action, "updated");
+    assert.equal(parsed.executionMode, "inline_single_agent");
+    assert.equal(parsed.inlineReason, "single-agent inline review (test)");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1053,6 +1160,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
             "",
             "**Reviewed head SHA:** `abc1234`",
             "**Verdict:** clean",
+            "**Execution mode:** inline_single_agent — single-agent inline review (test)",
             "",
             "**Findings summary:** no issues found",
             "",
@@ -1092,7 +1200,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "noop");
     assert.equal(parsed.headSha, "abc1234");
@@ -1161,7 +1269,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
       action: "updated",
@@ -1172,6 +1280,8 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       currentHeadSha: "abc1234",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
   } finally {
@@ -1251,7 +1361,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
       action: "updated",
@@ -1263,6 +1373,8 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       warning: "A gate comment for \`draft_gate\` already exists on a different head SHA \`def5678\` (comment 202). The old comment is stale for the current head.",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
   } finally {
@@ -1342,7 +1454,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
       action: "updated",
@@ -1353,6 +1465,8 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       currentHeadSha: "abc1234",
       commentId: 202,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-202",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
   } finally {
@@ -1391,6 +1505,7 @@ test("upsert-checkpoint-verdict expands an abbreviated current-head SHA before m
             "",
             "**Reviewed head SHA:** `abcdef1234567890abcdef1234567890abcdef12`",
             "**Verdict:** clean",
+            "**Execution mode:** inline_single_agent — single-agent inline review (test)",
             "",
             "**Findings summary:** no issues found",
             "",
@@ -1423,7 +1538,7 @@ test("upsert-checkpoint-verdict expands an abbreviated current-head SHA before m
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
       action: "noop",
@@ -1434,6 +1549,8 @@ test("upsert-checkpoint-verdict expands an abbreviated current-head SHA before m
       currentHeadSha: "abcdef1234567890abcdef1234567890abcdef12",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
     // 7 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check
@@ -1547,7 +1664,7 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "created");
     assert.equal(parsed.gate, "draft_gate");
@@ -1681,7 +1798,7 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.action, "created");
@@ -1857,7 +1974,7 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
     ], { env });
 
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.action, "created");
@@ -1927,7 +2044,7 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
     // The command should succeed (not fail with ownership_lost) because the stale runner was taken over.
     // Without the fix, this would fail: "active run is old-run-id, current run is new-run-id".
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stderr, "");
+    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.action, "created");
@@ -1936,4 +2053,126 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates the flag", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--findings-severity-counts", '{"must-fix":0}'];
+
+  // Inline is the default mode and now REQUIRES --inline-reason: a bare call
+  // with neither --execution-mode nor --inline-reason errors (FIX B).
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs(base),
+    /--inline-reason is required for executionMode inline_single_agent/i,
+  );
+
+  // Explicit inline_single_agent without a reason still errors.
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs([...base, "--execution-mode", "inline_single_agent"]),
+    /--inline-reason is required for executionMode inline_single_agent/i,
+  );
+
+  const def = parseUpsertCheckpointVerdictCliArgs([...base, "--inline-reason", "tiny docs change"]);
+  assert.equal(def.executionMode, "inline_single_agent");
+  assert.equal(def.inlineReason, "tiny docs change");
+
+  const inline = parseUpsertCheckpointVerdictCliArgs([...base, "--execution-mode", "inline_single_agent", "--inline-reason", "tiny docs change"]);
+  assert.equal(inline.executionMode, "inline_single_agent");
+  assert.equal(inline.inlineReason, "tiny docs change");
+
+  // fanout_fanin does NOT require a reason.
+  const fanoutNoReason = parseUpsertCheckpointVerdictCliArgs([...base, "--execution-mode", "fanout_fanin"]);
+  assert.equal(fanoutNoReason.executionMode, "fanout_fanin");
+  assert.equal(fanoutNoReason.inlineReason, undefined);
+
+  // fanout_fanin drops any inline reason.
+  const fanout = parseUpsertCheckpointVerdictCliArgs([...base, "--execution-mode", "fanout_fanin", "--inline-reason", "ignored"]);
+  assert.equal(fanout.executionMode, "fanout_fanin");
+  assert.equal(fanout.inlineReason, undefined);
+
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs([...base, "--execution-mode", "bogus"]),
+    /--execution-mode must be one of: fanout_fanin, inline_single_agent/i,
+  );
+});
+
+test("renderGateReviewCommentBody renders the execution-mode line round-trippable by the marker parser", async () => {
+  const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
+  const inlineBody = renderGateReviewCommentBody({
+    gate: "draft_gate", headSha: "abc1234", verdict: "clean", findingsSummary: "none", nextAction: "go",
+    executionMode: "inline_single_agent", inlineReason: "quick fix",
+  });
+  assert.match(inlineBody, /\*\*Execution mode:\*\* inline_single_agent — quick fix/);
+  const parsedInline = parseGateReviewCommentMarkerBody(inlineBody);
+  assert.equal(parsedInline.executionMode, "inline_single_agent");
+  assert.equal(parsedInline.inlineReason, "quick fix");
+
+  const fanoutBody = renderGateReviewCommentBody({
+    gate: "draft_gate", headSha: "abc1234", verdict: "clean", findingsSummary: "none", nextAction: "go",
+    executionMode: "fanout_fanin",
+  });
+  assert.match(fanoutBody, /\*\*Execution mode:\*\* fanout_fanin/);
+  assert.equal(parseGateReviewCommentMarkerBody(fanoutBody).executionMode, "fanout_fanin");
+});
+
+test("upsert-checkpoint-verdict records executionMode and warns on inline, stays clean on fanout", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-execmode-"));
+  try {
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["body=### Gate review: `draft_gate`", "**Execution mode:** inline_single_agent — manual single-agent run"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+    const inline = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "manual single-agent run",
+    ], { env });
+    assert.equal(inline.code, 0, inline.stderr);
+    assert.match(inline.stderr, /WARNING: gate ran inline_single_agent/);
+    const inlineOut = JSON.parse(inline.stdout);
+    assert.equal(inlineOut.executionMode, "inline_single_agent");
+    assert.equal(inlineOut.inlineReason, "manual single-agent run");
+
+    const env2 = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["**Execution mode:** fanout_fanin"],
+        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-102"}\n',
+      },
+    ]);
+    const fanout = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "fanout_fanin",
+    ], { env: env2 });
+    assert.equal(fanout.code, 0, fanout.stderr);
+    assert.equal(fanout.stderr, "");
+    assert.equal(JSON.parse(fanout.stdout).executionMode, "fanout_fanin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict CLI fails closed for inline mode without --inline-reason", async () => {
+  // End-to-end argument-error path: a complete call that resolves to the default
+  // inline mode but omits --inline-reason exits 1 with a clear argument error
+  // (FIX B). runNodeHelper is used directly so no inline reason is auto-appended.
+  const args = [
+    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+    "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+    "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+  ];
+  const result = await runNodeHelper(scriptPath, args, {
+    env: { ...process.env, PI_SUBAGENT_RUN_ID: "" },
+  });
+  assert.equal(result.code, 1);
+  const payload = JSON.parse(result.stderr);
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /--inline-reason is required for executionMode inline_single_agent/i);
 });
