@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Writable } from "node:stream";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { main, parseCliArgs, parseItemNumber, runCli } from "../../scripts/projects/sync-item-status.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -101,22 +104,30 @@ describe("sync-item-status", () => {
       assert.equal(result.reason, "board not configured");
     });
 
-    it("stays best-effort when syncBoardStatus reports a failure (injected stub)", async () => {
-      // Inject a syncBoardStatus stub via the dependency seam is not exposed on
-      // main(); instead drive the real fail-open path through a board-configured
-      // root + failing gh. Here we assert via runCli that stdout carries the
-      // skipped result and exit code stays 0.
-      const stdout = collectingStream();
-      const stderr = collectingStream();
-      await runCli(
-        ["--repo", "mfittko/dev-loops", "--item", "10", "--to-column", "Done"],
-        { stdout, stderr, env: {}, cwd: "/nonexistent-repo-root-for-sync-test" },
-      );
-      assert.equal(process.exitCode ?? 0, 0);
-      const out = JSON.parse(stdout.text());
-      assert.equal(out.ok, true);
-      assert.equal(out.skipped, true);
-      assert.equal(stderr.text(), "");
+    it("stays best-effort when a configured board's gh call fails (fail-open)", async () => {
+      // Drive the REAL gh-failure → fail-open path: configure a board in
+      // .devloops so syncBoardStatus proceeds past the "board not configured"
+      // early-return, then stub gh to fail. The result must be a skipped
+      // fail-open (NOT the "board not configured" skip), and exit code stays 0.
+      const tempDir = mkdtempSync(path.join(tmpdir(), "sync-item-status-"));
+      try {
+        writeFileSync(
+          path.join(tempDir, ".devloops"),
+          "version: 1\nqueue:\n  projectNumber: 3\n",
+          "utf8",
+        );
+        const result = await main(
+          { repo: "mfittko/dev-loops", item: "10", toColumn: "Done" },
+          { runChild: failingRunChild(), cwd: tempDir, env: {} },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.skipped, true);
+        // Must NOT be the not-configured skip — the gh failure was reached.
+        assert.notEqual(result.reason, "board not configured");
+        assert.match(result.reason, /gh api graphql failed|authentication required/);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     });
 
     it("runCli exits 1 with stderr usage on an argument error", async () => {

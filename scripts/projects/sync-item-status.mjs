@@ -34,7 +34,7 @@ function parseCliArgs(argv) {
   const requireValue = (token, message, code) => {
     const v = token.value;
     if (typeof v !== "string" || v.length === 0 || v.startsWith("-")) {
-      throw Object.assign(new Error(message), { code });
+      throw Object.assign(new Error(message), { code, usage: USAGE });
     }
     return v;
   };
@@ -91,6 +91,13 @@ const REPO_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
 function validateRepo(repo) {
   if (!repo || typeof repo !== "string") {
     throw Object.assign(new Error("--repo is required"), { code: "INVALID_REPO" });
+  }
+  const trimmed = repo.trim();
+  if (trimmed !== repo) {
+    throw Object.assign(
+      new Error(`--repo must not have leading/trailing whitespace, got "${repo}"`),
+      { code: "INVALID_REPO" },
+    );
   }
   const slashIdx = repo.indexOf("/");
   if (slashIdx === -1) {
@@ -165,9 +172,15 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     // Defensive: any unexpected error stays best-effort/non-fatal — report it
     // as a skip and keep exit 0 so it never blocks the PR/merge caller.
     stdout.write(JSON.stringify({ ok: true, skipped: true, reason: err.message ?? "board sync failed" }) + "\n");
+    // Explicitly assert success: a pre-existing non-zero process.exitCode from a
+    // long-lived caller must not leak through this best-effort path.
+    process.exitCode = 0;
     return;
   }
   stdout.write(JSON.stringify(result) + "\n");
+  // Best-effort contract: a parsed command always reports success. Explicitly
+  // clear any pre-existing non-zero process.exitCode so it cannot leak.
+  process.exitCode = 0;
 }
 
 if (isDirectCliRun(import.meta.url)) {
