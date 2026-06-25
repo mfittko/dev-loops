@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- **Gate fan-out evidence enforcement is now ON by default** (#879, epic #867 final phase). A clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA; the pre-merge evidence check fails closed otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. See [docs/gate-review-sub-loop-contract.md](docs/gate-review-sub-loop-contract.md).
+
 ## 0.2.8
 
 ### Added

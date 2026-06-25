@@ -205,6 +205,9 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-checkpoint-evidence-"));
 
   try {
+    // Enforcement-agnostic test: opt out of the (now default-on) fan-out evidence
+    // enforcement so inline clean gate comments pass the pre-merge check.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
@@ -267,7 +270,7 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
@@ -352,6 +355,9 @@ test("detect-checkpoint-evidence fails pre-merge check when only draft gate exis
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-checkpoint-evidence-pages-"));
 
   try {
+    // Enforcement-agnostic test (asserts the missing-pre-approval failure). Opt
+    // out of the now default-on fan-out evidence enforcement.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
@@ -394,7 +400,7 @@ test("detect-checkpoint-evidence fails pre-merge check when only draft gate exis
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -505,6 +511,9 @@ test("detect-checkpoint-evidence always passes pre-merge check with clean draft 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-review-premerge-clean-"));
 
   try {
+    // Enforcement-agnostic test (clean inline gate comments). Opt out of the now
+    // default-on fan-out evidence enforcement.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
@@ -550,7 +559,7 @@ test("detect-checkpoint-evidence always passes pre-merge check with clean draft 
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
@@ -565,6 +574,9 @@ test("detect-checkpoint-evidence fails pre-merge check when pre-approval gate is
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-review-stale-head-"));
 
   try {
+    // Hermetic: opt out of default-on fan-out enforcement so this test asserts
+    // only the stale-head failure, independent of the repo's .devloops.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
@@ -610,7 +622,7 @@ test("detect-checkpoint-evidence fails pre-merge check when pre-approval gate is
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     const payload = JSON.parse(result.stderr);
@@ -832,8 +844,8 @@ function cleanEvidence() {
   };
 }
 
-test("buildPreMergeGateCheck default (requireFanoutEvidence off) ignores executionMode", () => {
-  // No fanoutEnforcement argument => current behavior preserved.
+test("buildPreMergeGateCheck with no/disabled enforcement descriptor ignores executionMode", () => {
+  // No fanoutEnforcement argument (or { required: false }) => enforcement skipped.
   const result = buildPreMergeGateCheck(cleanEvidence(), 0, null);
   assert.equal(result.ok, true);
   assert.deepEqual(result.failures, []);
@@ -960,6 +972,9 @@ test("detect-checkpoint-evidence passes pre-merge when all human review threads 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-human-resolved-"));
 
   try {
+    // Enforcement-agnostic test (resolved human threads). Opt out of the now
+    // default-on fan-out evidence enforcement.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
@@ -1012,7 +1027,7 @@ test("detect-checkpoint-evidence passes pre-merge when all human review threads 
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 0);
     const payload = JSON.parse(result.stdout);
@@ -1092,6 +1107,9 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-review-from-pr-review-"));
 
   try {
+    // Enforcement-agnostic test (PR-review gate-comment visibility). Opt out of
+    // the now default-on fan-out evidence enforcement.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const prReviewGateComment = {
       id: 900,
       body: [
@@ -1148,7 +1166,7 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
@@ -1214,6 +1232,10 @@ async function writeLedger(tempDir, gate) {
 test("detect-checkpoint-evidence surfaces executionMode in gate markers", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-execmode-"));
   try {
+    // This test exercises executionMode surfacing, not enforcement. Opt out of
+    // the (now default-on) fan-out evidence enforcement so inline verdicts are
+    // accepted and the surfaced executionMode can be asserted.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, fanoutEvidenceGhEntries("inline_single_agent", "tiny change"));
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
@@ -1221,7 +1243,7 @@ test("detect-checkpoint-evidence surfaces executionMode in gate markers", async 
     assert.equal(payload.draftGateMarker.executionMode, "inline_single_agent");
     assert.equal(payload.draftGateMarker.inlineReason, "tiny change");
     assert.equal(payload.preApprovalGateMarker.executionMode, "inline_single_agent");
-    // requireFanoutEvidence is not set in this tempDir => default false => enforcement off.
+    // requireFanoutEvidence is explicitly false => enforcement off (opt-out).
     assert.equal(payload.fanoutEnforcement.required, false);
     assert.deepEqual(payload.preMergeGateCheck.failures, []);
   } finally {
