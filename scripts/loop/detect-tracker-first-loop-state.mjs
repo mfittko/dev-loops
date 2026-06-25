@@ -49,14 +49,6 @@ function parseCliArgs(argv) {
   return opts;
 }
 
-function requirePositiveInteger(value, flag) {
-  const num = Number(value);
-  if (!Number.isInteger(num) || num < 1) {
-    throw new Error(`${flag} must be a positive integer`);
-  }
-  return num;
-}
-
 async function main() {
   const rawOpts = parseCliArgs(process.argv.slice(2));
   if (!rawOpts.repo || !rawOpts.issue) {
@@ -67,7 +59,7 @@ async function main() {
     return;
   }
   const repo = rawOpts.repo;
-  const issue = requirePositiveInteger(rawOpts.issue, "--issue");
+  const issue = rawOpts.issue;
   let rawState = "";
   let prContext = null;
   try {
