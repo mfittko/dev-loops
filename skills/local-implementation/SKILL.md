@@ -87,6 +87,20 @@ This gate does **not** apply to other routed strategies (`copilot_pr_followup`, 
 
 Development-only bypass (`PI_PREFLIGHT_BYPASS=1`) exists for testing the gate itself but must not be used in production workflow runs. The bypass variable is a testing convenience, not an operational escape hatch.
 
+## Narrow failure-triage fast path
+
+When resuming local implementation with dirty work or an observed failing command, use this path before broad discovery:
+
+1. run startup once from the relevant worktree/context
+2. inspect current state with `git status` and the changed files
+3. reproduce or identify the failing command
+4. run an exact-pattern search in changed files for the suspect call site
+5. patch the minimum call sites
+6. run focused smoke checks for that failure
+7. run default verification
+
+Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-internals and duplicate-broad-search prohibition; this local fast path owns only the ordered failure-triage procedure above.
+
 ### Step 1
 
 - Implement **one phase at a time**.
