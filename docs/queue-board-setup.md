@@ -110,8 +110,9 @@ is persisted.
 
 Both overrides live under the same opt-in `queue` section in `.devloops` that
 enables board sync (`queue.projectNumber` or `queue.boardTitle`). When the
-`queue` section is absent or disabled, status sync is a **no-op** — nothing is
-read or written.
+`queue` section is absent or disabled, status sync is a **no-op**: it makes **no
+GitHub API calls and no board mutations**. (It may still read the local
+`.devloops` config in order to determine that sync is disabled.)
 
 `queue.statusColumns` renames the display name of a logical column:
 

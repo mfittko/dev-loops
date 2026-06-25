@@ -230,8 +230,10 @@ test("loadStateColumnMap returns defaults when no config present", async () => {
   const dir = await makeRepo(null);
   try {
     const mapping = loadStateColumnMap(dir);
-    assert.deepEqual(mapping.columnNames, DEFAULT_STATE_COLUMN_NAMES);
-    assert.deepEqual(mapping.stateColumnMap, {});
+    // Built on null-prototype objects (prototype-pollution hardening), so
+    // compare contents rather than prototype identity.
+    assert.deepEqual({ ...mapping.columnNames }, { ...DEFAULT_STATE_COLUMN_NAMES });
+    assert.deepEqual({ ...mapping.stateColumnMap }, {});
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -262,6 +264,57 @@ test("loadStateColumnMap reads queue.stateColumnMap per-state overrides (AC3)", 
   try {
     const mapping = loadStateColumnMap(dir);
     assert.equal(boardColumnForLoopState("final_approval_ready", mapping), "Ready for Review");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadStateColumnMap ignores unknown statusColumns keys (allow-list)", async () => {
+  const dir = await makeRepo(
+    "queue:\n  projectNumber: 5\n  statusColumns:\n    bogus_column: Nope\n    next_up: Todo\n",
+  );
+  try {
+    const mapping = loadStateColumnMap(dir);
+    // valid override applies
+    assert.equal(mapping.columnNames[LOGICAL_COLUMN.NEXT_UP], "Todo");
+    // unknown logical-column key is not copied in
+    assert.equal(Object.prototype.hasOwnProperty.call(mapping.columnNames, "bogus_column"), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadStateColumnMap ignores stateColumnMap entries with an unknown logical-column value", async () => {
+  const dir = await makeRepo(
+    "queue:\n  projectNumber: 5\n  stateColumnMap:\n    pr_draft: not_a_column\n    blocked_needs_user_decision: next_up\n",
+  );
+  try {
+    const mapping = loadStateColumnMap(dir);
+    // invalid value ignored — pr_draft keeps its default logical column (Next Up)
+    assert.equal(Object.prototype.hasOwnProperty.call(mapping.stateColumnMap, "pr_draft"), false);
+    assert.equal(boardColumnForLoopState("pr_draft", mapping), "Next Up");
+    // valid value applies
+    assert.equal(mapping.stateColumnMap["blocked_needs_user_decision"], "next_up");
+    assert.equal(boardColumnForLoopState("blocked_needs_user_decision", mapping), "Next Up");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadStateColumnMap is not vulnerable to prototype pollution via config keys", async () => {
+  const dir = await makeRepo(
+    'queue:\n  projectNumber: 5\n  statusColumns:\n    __proto__: { polluted: yes }\n  stateColumnMap:\n    __proto__: { polluted: yes }\n',
+  );
+  try {
+    const mapping = loadStateColumnMap(dir);
+    // Object.prototype must remain unpolluted.
+    assert.equal({}.polluted, undefined);
+    assert.equal(Object.prototype.polluted, undefined);
+    // The dangerous key is not copied into the result objects either.
+    assert.equal(mapping.columnNames.polluted, undefined);
+    assert.equal(mapping.stateColumnMap.polluted, undefined);
+    // Valid defaults still intact.
+    assert.equal(mapping.columnNames[LOGICAL_COLUMN.IN_PROGRESS], "In Progress");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

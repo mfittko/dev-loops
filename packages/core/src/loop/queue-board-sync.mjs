@@ -21,6 +21,12 @@ export const LOGICAL_COLUMN = Object.freeze({
   DONE: "done",
 });
 
+/** Allow-list of recognized logical column tokens (for config validation). */
+const KNOWN_LOGICAL_COLUMNS = new Set(Object.values(LOGICAL_COLUMN));
+
+/** Keys that must never be copied from untrusted config (prototype pollution). */
+const DANGEROUS_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 /** Default display name for each logical column (AC1 values). */
 export const DEFAULT_STATE_COLUMN_NAMES = Object.freeze({
   [LOGICAL_COLUMN.NEXT_UP]: "Next Up",
@@ -85,7 +91,9 @@ const DEFAULT_LOGICAL_COLUMN = LOGICAL_COLUMN.IN_PROGRESS;
 /**
  * Pure mapping: loop state → board column display name.
  *
- * @param {string} loopState - a lifecycle or inner loop state name.
+ * @param {string|null|undefined} loopState - a lifecycle or inner loop state
+ *   name. `null`, `undefined`, and any unrecognized value fall through to the
+ *   safe default logical column (IN_PROGRESS).
  * @param {{stateColumnMap?:Object, columnNames?:Object}} [mapping]
  *   Optional overrides. `stateColumnMap` overrides state→logical-column;
  *   `columnNames` overrides logical-column→display-name. Both fall back to
@@ -150,15 +158,29 @@ export function loadBoardConfig(repoRoot) {
  *
  * Returns a `{ stateColumnMap, columnNames }` shape consumable by
  * `boardColumnForLoopState`. Missing config yields the AC1 defaults.
+ *
+ * Hardened against untrusted `.devloops` input:
+ *   - `statusColumns` keys are allow-listed to the known logical columns;
+ *     unrecognized keys are ignored.
+ *   - `stateColumnMap` entries whose value is not a known logical column are
+ *     ignored.
+ *   - Dangerous keys (`__proto__`, `prototype`, `constructor`) are skipped and
+ *     results are built on null-prototype objects, so a malicious config key
+ *     cannot pollute Object.prototype.
  */
 export function loadStateColumnMap(repoRoot) {
   const { settings: queue } = readDevloopsSettings(repoRoot);
-  const columnNames = { ...DEFAULT_STATE_COLUMN_NAMES };
-  const stateColumnMap = {};
+  // Null-prototype objects: untrusted keys can never reach Object.prototype.
+  const columnNames = Object.assign(Object.create(null), DEFAULT_STATE_COLUMN_NAMES);
+  const stateColumnMap = Object.create(null);
 
   const statusColumns = queue?.statusColumns;
   if (statusColumns && typeof statusColumns === "object") {
-    for (const [logical, name] of Object.entries(statusColumns)) {
+    for (const logical of Object.keys(statusColumns)) {
+      if (DANGEROUS_KEYS.has(logical)) continue;
+      // Allow-list: only recognized logical columns may be renamed.
+      if (!KNOWN_LOGICAL_COLUMNS.has(logical)) continue;
+      const name = statusColumns[logical];
       if (typeof name === "string" && name.trim().length > 0) {
         columnNames[logical] = name.trim();
       }
@@ -167,10 +189,14 @@ export function loadStateColumnMap(repoRoot) {
 
   const stateMap = queue?.stateColumnMap;
   if (stateMap && typeof stateMap === "object") {
-    for (const [state, logical] of Object.entries(stateMap)) {
-      if (typeof logical === "string" && logical.trim().length > 0) {
-        stateColumnMap[state] = logical.trim();
-      }
+    for (const state of Object.keys(stateMap)) {
+      if (DANGEROUS_KEYS.has(state)) continue;
+      const logical = stateMap[state];
+      // Ignore values that are not a recognized logical column.
+      if (typeof logical !== "string") continue;
+      const trimmed = logical.trim();
+      if (!KNOWN_LOGICAL_COLUMNS.has(trimmed)) continue;
+      stateColumnMap[state] = trimmed;
     }
   }
 
