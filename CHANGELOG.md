@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.7
+
+### Fixed
+
+- **Deterministic, harness-aware dev-loops CLI invocation** (#801, #833). Pi runtime skills/agents now invoke the package-local `node <dev-loops-package-root>/cli/index.mjs`; the generated Claude tree pins `npx dev-loops@<version>` (version injected at generation time) so the plugin and CLI no longer drift.
+- **Round-cap Copilot-gate deadlock resolved** (#848). At the round cap with clean threads + green CI, the loop routes to a clean fallback instead of dead-ending at `waiting_for_copilot_review` when a lingering reviewer assignment / post-cap push leaves the head unreviewed. The pre-approval gate still reviews any post-cap head.
+- **Draft-gate ordering after external un-draft** (#836). Verified + regression-guarded: a non-draft PR without clean `draft_gate` evidence is routed to `reconcile_draft_gate` and cannot merge; the relayed-authorization deadlock is moot under the single-agent Claude harness.
+
+### Added
+
+- **Projects board reorder + Done-cleanup CLI** (#789). `project reorder move-to-top|move-after|order` (with `--dry-run`, diff-friendly output, cross-column fail-closed) and `project archive-done [--older-than]`.
+- **Loop-state-driven board status sync** (#793). Board Status column is derived from the loop state via a pure, config-driven mapping (`queue.statusColumns` / `queue.stateColumnMap`), opt-in, fail-open, reverse-safe.
+
+### Changed
+
+- **Arg parsing migrated to `node:util.parseArgs`** (#808). All hand-rolled `while/shift` parsers (49 scripts/modules + 3 core files) now use `parseArgs` via shared adapters, with CLI contracts preserved. (Index-based parsers tracked in #857.)
+
 ## 0.2.6
 
 ### Fixed
