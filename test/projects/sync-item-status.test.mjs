@@ -144,13 +144,17 @@ describe("sync-item-status", () => {
       process.exitCode = prevExitCode;
     });
 
-    it("--help prints usage to stdout without exiting non-zero", async () => {
+    it("--help prints usage to stdout and forces exit 0 (clears a leaked non-zero code)", async () => {
       const prevExitCode = process.exitCode;
+      // Seed a non-zero code to prove the --help path clears it rather than
+      // inheriting a pre-existing failure code from a prior test/runner.
+      process.exitCode = 7;
       const stdout = collectingStream();
       const stderr = collectingStream();
       await runCli(["--help"], { stdout, stderr, env: {} });
       assert.match(stdout.text(), /dev-loops project sync-status/);
-      assert.equal(process.exitCode ?? 0, prevExitCode ?? 0);
+      assert.equal(process.exitCode, 0);
+      process.exitCode = prevExitCode;
     });
   });
 });

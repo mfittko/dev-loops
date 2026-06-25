@@ -153,6 +153,9 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
   }
   if (args.help) {
     stdout.write(USAGE);
+    // Help is a success path: clear any pre-existing non-zero process.exitCode
+    // so help output can't inherit a leaked failure code.
+    process.exitCode = 0;
     return;
   }
 
@@ -187,6 +190,8 @@ if (isDirectCliRun(import.meta.url)) {
   runCli(process.argv.slice(2)).catch((error) => {
     // Best-effort: even an unexpected failure must not fail the caller.
     process.stdout.write(JSON.stringify({ ok: true, skipped: true, reason: error.message ?? "board sync failed" }) + "\n");
+    // Force the documented exit-0 contract even on this last-resort path.
+    process.exitCode = 0;
   });
 }
 
