@@ -26,7 +26,7 @@ The envelope is the primary handoff artifact — it is derived from resolver out
 
 **Construction sequence:**
 <!-- pi-only -->
-**CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` from this agent's own installed path: this agent is installed at `<package-root>/.pi/agents/dev-loop.agent.md`, so the package root is `../../..` from this agent's directory. (The `dev-loop` skill resolves it analogously from its own installed path.)
+**CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` from this agent's own installed path: this agent is installed at `<package-root>/.pi/agents/dev-loop.agent.md`, so the package root is `../..` from this agent's directory (`agents` → `.pi` → package root). (The `dev-loop` skill resolves it analogously from its own installed path.)
 <!-- /pi-only -->
 
 1. Run the deterministic startup resolver to produce the authoritative state bundle: `node <dev-loops-package-root>/cli/index.mjs loop startup --issue <n>` for issues, or `node <dev-loops-package-root>/cli/index.mjs loop startup --pr <n>` for PRs.
