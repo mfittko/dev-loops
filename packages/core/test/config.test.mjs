@@ -20,6 +20,7 @@ import {
   resolveGateAnglesDynamic,
   resolveWorkflowConfig,
   resolveLightMode,
+  resolveRequireFanoutEvidence,
 } from "../src/config/config.mjs";
 // ============================================================================
 // Schema validation tests (S1–S26)
@@ -2651,4 +2652,30 @@ describe("resolveGateAnglesDynamic", () => {
     assert.ok(result.recommendedAngles.includes("pr-description"));
   });
 
+});
+
+describe("gates.requireFanoutEvidence", () => {
+  test("defaults to false and resolveRequireFanoutEvidence reflects it", () => {
+    assert.equal(resolveRequireFanoutEvidence({}), false);
+    assert.equal(resolveRequireFanoutEvidence({ gates: {} }), false);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.requireFanoutEvidence, false);
+  });
+
+  test("accepts requireFanoutEvidence: true in full and file schemas", () => {
+    const full = DevLoopConfigSchema.safeParse({ version: 1, gates: { requireFanoutEvidence: true } });
+    assert.equal(full.success, true);
+    assert.equal(full.data.gates.requireFanoutEvidence, true);
+    assert.equal(resolveRequireFanoutEvidence(full.data), true);
+
+    const file = FileConfigSchema.safeParse({ version: 1, gates: { requireFanoutEvidence: true } });
+    assert.equal(file.success, true);
+    assert.equal(file.data.gates.requireFanoutEvidence, true);
+  });
+
+  test("rejects non-boolean requireFanoutEvidence", () => {
+    const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { requireFanoutEvidence: "yes" } });
+    assert.equal(bad.success, false);
+  });
 });

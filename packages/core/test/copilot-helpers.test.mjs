@@ -112,6 +112,54 @@ test("parseGateReviewCommentMarkerBody parses partial new-format markers", () =>
 });
 
 
+test("parseGateReviewCommentMarkerBody round-trips executionMode and inlineReason", () => {
+  const inlineBody = [
+    "### Gate review: `draft_gate`",
+    "",
+    "**Reviewed head SHA:** `abc1234`",
+    "**Verdict:** clean",
+    "**Execution mode:** inline_single_agent — small docs-only change",
+    "",
+    "**Findings summary:** no issues found",
+    "",
+    "**Next action:** mark ready for review",
+  ].join("\n");
+  const inline = parseGateReviewCommentMarkerBody(inlineBody);
+  assert.equal(inline.executionMode, "inline_single_agent");
+  assert.equal(inline.inlineReason, "small docs-only change");
+
+  const fanoutBody = inlineBody.replace("inline_single_agent — small docs-only change", "fanout_fanin");
+  const fanout = parseGateReviewCommentMarkerBody(fanoutBody);
+  assert.equal(fanout.executionMode, "fanout_fanin");
+  assert.equal(fanout.inlineReason, null);
+
+  // Markers without an execution-mode line surface null (back-compat).
+  const legacyBody = inlineBody.replace("**Execution mode:** inline_single_agent — small docs-only change\n", "");
+  const legacy = parseGateReviewCommentMarkerBody(legacyBody);
+  assert.equal(legacy.executionMode, null);
+  assert.equal(legacy.inlineReason, null);
+});
+
+test("summarizeGateReviewCommentMarkers surfaces executionMode and inlineReason per gate", () => {
+  const comments = [
+    {
+      id: 7,
+      updated_at: "2024-02-01T00:00:00Z",
+      body: [
+        "### Gate review: `draft_gate`",
+        "**Reviewed head SHA:** `abc1234`",
+        "**Verdict:** clean",
+        "**Execution mode:** inline_single_agent — quick fix",
+        "**Findings summary:** none",
+        "**Next action:** ready",
+      ].join("\n"),
+    },
+  ];
+  const summary = summarizeGateReviewCommentMarkers(comments, { headSha: "abc1234" });
+  assert.equal(summary.draft_gate.executionMode, "inline_single_agent");
+  assert.equal(summary.draft_gate.inlineReason, "quick fix");
+});
+
 test("summarizeGateReviewComments picks the most-recently-updated entry per gate", () => {
   const comments = [
     {

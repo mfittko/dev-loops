@@ -184,6 +184,11 @@ The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.
 Each log entry records the full disposition: severity, angle, summary, affected files, and
 resolved-in SHA (for findings resolved in a later pass).
 
+## Execution mode and fan-out evidence enforcement
+
+Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
+default `inline_single_agent`) via the [Gate comment command](../skills/copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. The opt-in `gates.requireFanoutEvidence` config (default `false`) makes the pre-merge evidence check fail closed for a required gate unless its recorded `executionMode` is `fanout_fanin` and a findings-log ledger exists for that gate + head SHA. Phases 2-3 — live context-builder/fan-out execution and dynamic angle resolution — are the follow-up that makes `fanout_fanin` producible.
+
 ## See also
 
 - [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md) — visible PR comment evidence format

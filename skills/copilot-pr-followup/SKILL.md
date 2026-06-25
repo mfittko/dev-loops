@@ -275,6 +275,8 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --next-action "<next action>" --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"defer":0}'
 ```
 
+`--execution-mode <fanout_fanin|inline_single_agent>` records how the gate review ran (default `inline_single_agent`). When the gate did not run via the fan-out/fan-in sub-loop ([Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md)), you MUST pass `--execution-mode inline_single_agent --inline-reason "<why>"` — silent inline runs are no longer allowed, and inline mode emits a stderr warning. The recorded `executionMode` is surfaced by `detect-checkpoint-evidence.mjs` and gated by `gates.requireFanoutEvidence`.
+
 Do NOT use `gh pr comment`, `gh api`, or `gh pr review` for gate comments.
 
 `--force --force-reason` on `upsert-checkpoint-verdict.mjs` is a narrow operator-authorized CI override for the helper itself, not the default gate path. Use it only when the helper refuses gate entry solely because the current head is `blocked_needs_user_decision` with `ciStatus="failure"`, and only after the user explicitly authorizes ignoring that current-head CI failure for this one gate-comment upsert. It does **not** bypass stale-head checks, unresolved-thread / unsettled-review refusal, non-draft `draft_gate` refusal, merge conflicts, or other legality checks.

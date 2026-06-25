@@ -53,6 +53,11 @@ const GatesConfig = z.strictObject({
   // `requireCi` is only behaviorally configurable for the draft gate.
   // preApproval always requires CI even if config repeats `requireCi`.
   preApproval: GateConfig.optional(),
+  // Opt-in fail-closed enforcement that a gate verdict was produced by the
+  // fan-out/fan-in review sub-loop (executionMode === "fanout_fanin" plus a
+  // durable findings-log ledger), not an inline single-agent run. Default
+  // false preserves current behavior. See docs/gate-review-sub-loop-contract.md.
+  requireFanoutEvidence: z.boolean().default(false),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -107,6 +112,7 @@ const FileGateConfig = GateConfig.partial();
 const FileGatesConfig = z.strictObject({
   draft: FileGateConfig.optional(),
   preApproval: FileGateConfig.optional(),
+  requireFanoutEvidence: z.boolean().optional(),
 });
 
 // Partial persona entries for file-level config (allows omitting fields)
@@ -813,6 +819,21 @@ export function resolveGateConfig(config, gate) {
       ? [...gateConfig.blockCleanOnFindingSeverities]
       : ["must-fix"],
   };
+}
+
+/**
+ * Resolve whether fan-out/fan-in review evidence is required for a gate verdict.
+ *
+ * Opt-in, defaults to false. When true, the pre-merge evidence check fails
+ * closed unless a required gate's recorded executionMode is "fanout_fanin" and
+ * a durable findings-log ledger exists for that gate + head SHA. See
+ * docs/gate-review-sub-loop-contract.md.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {boolean}
+ */
+export function resolveRequireFanoutEvidence(config) {
+  return config?.gates?.requireFanoutEvidence === true;
 }
 
 /**

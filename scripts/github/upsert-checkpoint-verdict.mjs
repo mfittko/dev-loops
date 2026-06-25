@@ -15,6 +15,8 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
+const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
+const DEFAULT_EXECUTION_MODE = "inline_single_agent";
 const MAX_GATE_COMMENT_TEXT_LENGTH = 2000;
 const MAX_GATE_COMMENT_EXCERPT_LENGTH = 120;
 const REMOVED_FLAGS = new Set([
@@ -49,6 +51,14 @@ Optional:
                                              (e.g. '{"must-fix":0,"worth-fixing-now":0}').
                                              Required for --verdict clean when
                                              blockCleanOnFindingSeverities is configured.
+  --execution-mode <fanout_fanin|inline_single_agent>
+                                            How the gate review was executed.
+                                            Defaults to inline_single_agent. Inline
+                                            runs (default or explicit) emit a stderr
+                                            warning that the fan-out/fan-in sub-loop
+                                            was not run; pass --inline-reason "<why>".
+  --inline-reason <text>                    Short reason recorded when the gate ran
+                                            inline (executionMode inline_single_agent).
 Output (stdout, JSON):
   {
     "ok": true,
@@ -86,6 +96,10 @@ function normalizeVerdict(value) {
 function normalizeHeadSha(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
+}
+function normalizeExecutionMode(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return GATE_EXECUTION_MODES.has(normalized) ? normalized : null;
 }
 function normalizeRequiredText(value, flag) {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -212,6 +226,8 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "findings-file": { type: "string" },
       "next-action": { type: "string" },
       "findings-severity-counts": { type: "string" },
+      "execution-mode": { type: "string" },
+      "inline-reason": { type: "string" },
     },
     allowPositionals: true,
     strict: false,
@@ -228,6 +244,8 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     findingsFile: undefined,
     nextAction: undefined,
     findingsSeverityCounts: undefined,
+    executionMode: undefined,
+    inlineReason: undefined,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -312,7 +330,30 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       options.findingsSeverityCounts = counts;
       continue;
     }
+    if (token.name === "execution-mode") {
+      const mode = normalizeExecutionMode(requireTokenValue(token, parseError));
+      if (!mode) {
+        throw parseError("--execution-mode must be one of: fanout_fanin, inline_single_agent");
+      }
+      options.executionMode = mode;
+      continue;
+    }
+    if (token.name === "inline-reason") {
+      const reason = collapseWhitespace(requireTokenValue(token, parseError));
+      if (reason.length === 0) {
+        throw parseError("--inline-reason must be a non-empty string");
+      }
+      options.inlineReason = smartTruncate(reason, MAX_GATE_COMMENT_EXCERPT_LENGTH);
+      continue;
+    }
     throw parseError(`Unknown argument: ${token.rawName}`);
+  }
+  // Default execution mode to inline_single_agent when omitted. inlineReason is
+  // only meaningful for inline mode; drop it for fanout_fanin to avoid recording
+  // a misleading reason.
+  options.executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
+  if (options.executionMode !== "inline_single_agent") {
+    options.inlineReason = undefined;
   }
   const missing = ["repo", "pr", "headSha", "verdict", "findingsSummary", "nextAction"]
     .filter((key) => options[key] === undefined);
@@ -344,12 +385,23 @@ function appendGateEvidenceNote(summary, note) {
   }
   return smartTruncate(`${normalizedSummary}; ${normalizedNote}`, MAX_GATE_COMMENT_TEXT_LENGTH);
 }
-export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities }) {
+function renderExecutionModeLine(executionMode, inlineReason) {
+  const mode = executionMode ?? DEFAULT_EXECUTION_MODE;
+  if (mode === "inline_single_agent") {
+    const reason = typeof inlineReason === "string" ? collapseWhitespace(inlineReason) : "";
+    return reason.length > 0
+      ? `**Execution mode:** inline_single_agent — ${reason}`
+      : "**Execution mode:** inline_single_agent";
+  }
+  return `**Execution mode:** ${mode}`;
+}
+export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason }) {
   const lines = [
     `### Gate review: \`${gate}\``,
     "",
     `**Reviewed head SHA:** \`${headSha}\``,
     `**Verdict:** ${verdict}`,
+    renderExecutionModeLine(executionMode, inlineReason),
   ];
   if ((verdict === "findings_present" || verdict === "blocked") && blockCleanOnFindingSeverities && blockCleanOnFindingSeverities.length > 0) {
     const sevs = blockCleanOnFindingSeverities.join(", ");
@@ -403,6 +455,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
       verdict: markerSameHead.verdict,
       findingsSummary: markerSameHead.findingsSummary ?? null,
       nextAction: markerSameHead.nextAction ?? null,
+      executionMode: markerSameHead.executionMode ?? null,
       contractComplete: markerSameHead.contractComplete === true,
     };
   }
@@ -414,6 +467,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
       verdict: strictSameHead.verdict,
       findingsSummary: strictSameHead.findingsSummary,
       nextAction: strictSameHead.nextAction,
+      executionMode: strictSameHead.executionMode ?? markerSameHead?.executionMode ?? null,
       contractComplete: true,
     };
   }
@@ -425,6 +479,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
       verdict: markerSameHead.verdict,
       findingsSummary: markerSameHead.findingsSummary ?? null,
       nextAction: markerSameHead.nextAction ?? null,
+      executionMode: markerSameHead.executionMode ?? null,
       contractComplete: markerSameHead.contractComplete === true,
     };
   }
@@ -606,12 +661,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const gateEvidence = selectGateEvidence(evidence, options.gate);
   const existing = summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
   const warning = detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
+  const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   if (
     existing
     && existing.contractComplete
     && existing.verdict === options.verdict
     && existing.findingsSummary === effectiveFindingsSummary
     && existing.nextAction === options.nextAction
+    && (existing.executionMode ?? DEFAULT_EXECUTION_MODE) === desiredExecutionMode
   ) {
     return {
       ok: true,
@@ -624,6 +681,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       commentId: existing.commentId,
       commentUrl: existing.commentUrl,
       blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
+      executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+      ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
       ...(warning ? { warning } : {}),
     };
   }
@@ -653,6 +712,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       commentId: updated.commentId,
       commentUrl: updated.commentUrl,
       blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
+      executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+      ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
       ...(warning ? { warning } : {}),
       ...(updateVerificationWarning ? { verificationWarning: updateVerificationWarning } : {}),
     };
@@ -688,9 +749,19 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     commentId: created.commentId,
     commentUrl: created.commentUrl,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
+    executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+    ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
     ...(warning ? { warning } : {}),
     ...(verificationWarning ? { verificationWarning } : {}),
   };
+}
+export function buildInlineExecutionWarning(executionMode, inlineReason) {
+  if ((executionMode ?? DEFAULT_EXECUTION_MODE) !== "inline_single_agent") {
+    return null;
+  }
+  const reason = typeof inlineReason === "string" ? inlineReason.trim() : "";
+  const base = "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop).";
+  return reason.length > 0 ? `${base} Reason: ${reason}` : base;
 }
 async function main() {
   let options;
@@ -705,8 +776,14 @@ async function main() {
     process.stdout.write(`${USAGE}\n`);
     return;
   }
+  const inlineWarning = buildInlineExecutionWarning(options.executionMode, options.inlineReason);
   try {
     const result = await upsertCheckpointVerdict(options);
+    // Emit the inline-execution warning only on success so the JSON error
+    // envelope on stderr stays clean and machine-parseable on failures.
+    if (inlineWarning) {
+      process.stderr.write(`${inlineWarning}\n`);
+    }
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);

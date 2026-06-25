@@ -9,9 +9,13 @@ import {
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
+import { access } from "node:fs/promises";
+import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { loadDevLoopConfig, resolveGateConfig, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
+import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
@@ -200,6 +204,8 @@ function emptyGateMarkerSummary() {
     verdict: null,
     findingsSummary: null,
     nextAction: null,
+    executionMode: null,
+    inlineReason: null,
     contractComplete: false,
     commentId: null,
     commentUrl: null,
@@ -216,13 +222,15 @@ function normalizeGateMarkerSummary(summary) {
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
     nextAction: summary.nextAction,
+    executionMode: summary.executionMode ?? null,
+    inlineReason: summary.inlineReason ?? null,
     contractComplete: summary.contractComplete === true,
     commentId: summary.commentId,
     commentUrl: summary.commentUrl,
     updatedAt: summary.updatedAt,
   };
 }
-export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null) {
+export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null) {
   const failures = [];
   if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
     failures.push("missing visible clean draft_gate comment");
@@ -235,6 +243,24 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     && preApproval.headSha === evidence.currentHeadSha
   )) {
     failures.push("missing visible clean current-head pre_approval_gate comment");
+  }
+  // Opt-in fail-closed fan-out evidence enforcement (gates.requireFanoutEvidence).
+  // When disabled (default), fanoutEnforcement is null and this block is skipped,
+  // preserving current behavior.
+  if (fanoutEnforcement && fanoutEnforcement.required) {
+    for (const gate of fanoutEnforcement.gates) {
+      if (gate.executionMode !== "fanout_fanin") {
+        failures.push(
+          `${gate.name}: requireFanoutEvidence is enabled but executionMode is "${gate.executionMode ?? "unset"}" (expected "fanout_fanin"); inline gate verdicts are not accepted`,
+        );
+        continue;
+      }
+      if (!gate.ledgerExists) {
+        failures.push(
+          `${gate.name}: requireFanoutEvidence is enabled but no findings-log ledger exists for the reviewed head (${gate.ledgerPath})`,
+        );
+      }
+    }
   }
   if (typeof unresolvedThreadCount === "number" && unresolvedThreadCount !== 0) {
     if (unresolvedThreadCount === -1) {
@@ -252,6 +278,46 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     ok: failures.length === 0,
     failures,
   };
+}
+async function ledgerExists(fullPath) {
+  try {
+    await access(fullPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+/**
+ * Build the opt-in fan-out evidence enforcement descriptor.
+ *
+ * Returns { required: false } when gates.requireFanoutEvidence is disabled
+ * (default). When enabled, records per-required-gate executionMode and whether
+ * the deterministic findings-log ledger exists for the reviewed head SHA so the
+ * pre-merge check can fail closed on inline verdicts or missing ledgers.
+ */
+async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd }) {
+  if (!resolveRequireFanoutEvidence(config)) {
+    return { required: false, gates: [] };
+  }
+  const draftRequired = resolveGateConfig(config, "draft").required;
+  const preApprovalRequired = resolveGateConfig(config, "preApproval").required;
+  const gateSpecs = [
+    { name: "draft_gate", marker: draftGateMarker, required: draftRequired },
+    { name: "pre_approval_gate", marker: preApprovalGateMarker, required: preApprovalRequired },
+  ].filter((spec) => spec.required && spec.marker.visible);
+  const gates = [];
+  for (const spec of gateSpecs) {
+    const headSha = spec.marker.headSha ?? currentHeadSha;
+    const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
+    const fullPath = path.resolve(cwd, ledgerPath);
+    gates.push({
+      name: spec.name,
+      executionMode: spec.marker.executionMode ?? null,
+      ledgerPath,
+      ledgerExists: await ledgerExists(fullPath),
+    });
+  }
+  return { required: true, gates };
 }
 export async function detectCheckpointEvidence(options, { env = process.env, ghCommand = "gh", cwd = process.cwd() } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
@@ -299,6 +365,25 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   const allComments = [...commentsPayload, ...prReviews];
   const commentSummary = summarizeGateReviewComments(allComments);
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
+  const draftGateMarker = normalizeGateMarkerSummary(markerSummary.draft_gate);
+  const preApprovalGateMarker = normalizeGateMarkerSummary(markerSummary.pre_approval_gate);
+  let config = null;
+  try {
+    ({ config } = await loadDevLoopConfig({ repoRoot: cwd }));
+  } catch {
+    // Non-fatal: config load failure leaves fan-out enforcement disabled
+    // (preserves default behavior). Other gate checks remain unaffected.
+    config = null;
+  }
+  const fanoutEnforcement = await buildFanoutEnforcement({
+    repo: options.repo,
+    pr: options.pr,
+    currentHeadSha,
+    draftGateMarker,
+    preApprovalGateMarker,
+    config,
+    cwd,
+  });
   return {
     ok: true,
     repo: options.repo,
@@ -306,9 +391,10 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
     currentHeadSha,
     draftGate: normalizeGateSummary(commentSummary.draft_gate),
     preApprovalGate: normalizeGateSummary(commentSummary.pre_approval_gate),
-    draftGateMarker: normalizeGateMarkerSummary(markerSummary.draft_gate),
-    preApprovalGateMarker: normalizeGateMarkerSummary(markerSummary.pre_approval_gate),
+    draftGateMarker,
+    preApprovalGateMarker,
     draftGateSatisfied: commentSummary.draft_gate?.verdict === "clean" && typeof commentSummary.draft_gate?.headSha === "string",
+    fanoutEnforcement,
     ...(runnerOwnership.status !== "skipped_no_async_run_id" ? { runnerOwnership } : {}),
     staleRunner: {
       status: staleRunnerDetection.status,
@@ -351,7 +437,7 @@ async function main() {
         ? [`exit signal recorded for run ${result.staleRunner.activeRun?.runId}: refuse to merge`]
         : [],
     };
-    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck);
+    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement);
     const output = { ...result, preMergeGateCheck, staleRunnerCheck };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({

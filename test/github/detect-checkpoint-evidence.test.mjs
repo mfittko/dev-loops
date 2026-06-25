@@ -49,6 +49,8 @@ test("parseGateReviewCommentBody parses the deterministic visible gate comment f
     verdict: "clean",
     findingsSummary: "no issues found",
     nextAction: "mark ready for review",
+    executionMode: null,
+    inlineReason: null,
   });
 });
 
@@ -74,6 +76,8 @@ test("parseGateReviewCommentMarkerBody accepts gate/head markers even when contr
     verdict: "clean",
     findingsSummary: null,
     nextAction: null,
+    executionMode: null,
+    inlineReason: null,
     contractComplete: false,
   });
 });
@@ -300,6 +304,8 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         verdict: "clean",
         findingsSummary: "no issues found",
         nextAction: "mark ready for review",
+        executionMode: null,
+        inlineReason: null,
         contractComplete: true,
         commentId: 42,
         commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-42",
@@ -311,12 +317,15 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         verdict: "clean",
         findingsSummary: "no issues found",
         nextAction: "await final human approval",
+        executionMode: null,
+        inlineReason: null,
         contractComplete: true,
         commentId: 43,
         commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-43",
         updatedAt: "2026-05-29T22:00:00Z",
       },
       draftGateSatisfied: true,
+      fanoutEnforcement: { required: false, gates: [] },
       preMergeGateCheck: {
         ok: true,
         failures: [],
@@ -815,6 +824,66 @@ test("buildPreMergeGateCheck passes with zero unresolved threads", () => {
   assert.deepEqual(result.failures, []);
 });
 
+function cleanEvidence() {
+  return {
+    currentHeadSha: "abc1234",
+    draftGate: { visible: true, verdict: "clean" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+  };
+}
+
+test("buildPreMergeGateCheck default (requireFanoutEvidence off) ignores executionMode", () => {
+  // No fanoutEnforcement argument => current behavior preserved.
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.failures, []);
+
+  // Explicit not-required descriptor also preserves behavior.
+  const result2 = buildPreMergeGateCheck(cleanEvidence(), 0, null, { required: false, gates: [] });
+  assert.equal(result2.ok, true);
+  assert.deepEqual(result2.failures, []);
+});
+
+test("buildPreMergeGateCheck fails closed when requireFanoutEvidence and executionMode is inline_single_agent", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "inline_single_agent", ledgerPath: "tmp/x.json", ledgerExists: true },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("pre_approval_gate") && f.includes("inline_single_agent")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck fails closed when requireFanoutEvidence and ledger is missing", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/gate-findings/o-r/pr-17/pre_approval_gate-abc1234.json", ledgerExists: false },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("no findings-log ledger") && f.includes("pre_approval_gate-abc1234.json")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck passes when requireFanoutEvidence and executionMode is fanout_fanin with ledger present", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      { name: "draft_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/a.json", ledgerExists: true },
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true },
+    ],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.failures, []);
+});
+
 test("detect-checkpoint-evidence fails pre-merge with unresolved human review threads", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-human-unresolved-"));
 
@@ -1089,6 +1158,128 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
     // The pre-approval gate evidence is visible with the correct head SHA
     assert.equal(payload.preApprovalGate.visible, true);
     assert.equal(payload.preApprovalGate.verdict, "clean");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+function gateMarkerComment({ gate, headSha, nextAction, executionMode, inlineReason, id, updatedAt }) {
+  const modeLine = inlineReason
+    ? `**Execution mode:** ${executionMode} — ${inlineReason}`
+    : `**Execution mode:** ${executionMode}`;
+  return {
+    id,
+    updated_at: updatedAt,
+    html_url: `https://github.com/owner/repo/pull/17#issuecomment-${id}`,
+    body: [
+      `### Gate review: \`${gate}\``,
+      "",
+      `**Reviewed head SHA:** \`${headSha}\``,
+      "**Verdict:** clean",
+      modeLine,
+      "",
+      "**Findings summary:** no issues found",
+      "",
+      `**Next action:** ${nextAction}`,
+    ].join("\n"),
+  };
+}
+
+function fanoutEvidenceGhEntries(executionMode, inlineReason = null) {
+  return [
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+      stdout: '{"headRefOid":"abc1234"}\n',
+    },
+    {
+      assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
+      stdout: `${JSON.stringify([
+        gateMarkerComment({ gate: "draft_gate", headSha: "abc1234", nextAction: "mark ready for review", executionMode, inlineReason, id: 42, updatedAt: "2026-05-29T21:00:00Z" }),
+        gateMarkerComment({ gate: "pre_approval_gate", headSha: "abc1234", nextAction: "await final human approval", executionMode, inlineReason, id: 43, updatedAt: "2026-05-29T22:00:00Z" }),
+      ])}\n`,
+    },
+    {
+      assertArgs: ["api", "graphql"],
+      stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n",
+    },
+  ];
+}
+
+async function writeLedger(tempDir, gate) {
+  const dir = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-17");
+  await import("node:fs/promises").then((fs) => fs.mkdir(dir, { recursive: true }));
+  await writeFile(path.join(dir, `${gate}-abc1234.json`), JSON.stringify({ gate, headSha: "abc1234", findings: [] }) + "\n", "utf8");
+}
+
+test("detect-checkpoint-evidence surfaces executionMode in gate markers", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-execmode-"));
+  try {
+    const env = await writeGhStub(tempDir, fanoutEvidenceGhEntries("inline_single_agent", "tiny change"));
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.draftGateMarker.executionMode, "inline_single_agent");
+    assert.equal(payload.draftGateMarker.inlineReason, "tiny change");
+    assert.equal(payload.preApprovalGateMarker.executionMode, "inline_single_agent");
+    // requireFanoutEvidence is not set in this tempDir => default false => enforcement off.
+    assert.equal(payload.fanoutEnforcement.required, false);
+    assert.deepEqual(payload.preMergeGateCheck.failures, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-checkpoint-evidence requireFanoutEvidence=true fails closed for inline_single_agent verdicts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-fanout-inline-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    await writeLedger(tempDir, "draft_gate");
+    await writeLedger(tempDir, "pre_approval_gate");
+    const env = await writeGhStub(tempDir, fanoutEvidenceGhEntries("inline_single_agent"));
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("inline_single_agent") && f.includes("requireFanoutEvidence")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-checkpoint-evidence requireFanoutEvidence=true fails closed when the ledger is missing", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-fanout-noledger-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    // No ledger written.
+    const env = await writeGhStub(tempDir, fanoutEvidenceGhEntries("fanout_fanin"));
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("no findings-log ledger")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-checkpoint-evidence requireFanoutEvidence=true passes for fanout_fanin with ledger present", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-fanout-pass-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    await writeLedger(tempDir, "draft_gate");
+    await writeLedger(tempDir, "pre_approval_gate");
+    const env = await writeGhStub(tempDir, fanoutEvidenceGhEntries("fanout_fanin"));
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.fanoutEnforcement.required, true);
+    assert.deepEqual(payload.preMergeGateCheck.failures, []);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -9,6 +9,7 @@
 const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_REVIEW_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
+const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 
 export function isCopilotLogin(login) {
   return typeof login === "string" && /^copilot(?:[^a-z]|$)/i.test(login);
@@ -63,6 +64,11 @@ function normalizeGateReviewHeadSha(value) {
   return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
 }
 
+function normalizeGateExecutionMode(value) {
+  const normalized = stripOptionalCodeTicks(value).toLowerCase();
+  return GATE_EXECUTION_MODES.has(normalized) ? normalized : null;
+}
+
 function parseGateReviewCommentFields(body) {
   if (typeof body !== "string" || body.trim().length === 0) {
     return null;
@@ -74,6 +80,8 @@ function parseGateReviewCommentFields(body) {
     verdict: null,
     findingsSummary: null,
     nextAction: null,
+    executionMode: null,
+    inlineReason: null,
   };
 
   for (const rawLine of body.split(/\r?\n/u)) {
@@ -110,6 +118,21 @@ function parseGateReviewCommentFields(body) {
     match = line.match(/^(?:[-*]\s*)?next\s+action\s*:\s*(.+)$/iu);
     if (match) {
       fields.nextAction = match[1].trim();
+      continue;
+    }
+
+    match = line.match(/^(?:[-*]\s*)?execution\s+mode\s*:\s*(.+)$/iu);
+    if (match) {
+      const rest = match[1].trim();
+      // Split on the first em-dash / en-dash / " - " separator to recover an
+      // optional inline reason: "inline_single_agent — <reason>".
+      const sepMatch = rest.match(/^(.*?)\s*(?:[—–]|\s-\s)\s*(.*)$/u);
+      const modeToken = sepMatch ? sepMatch[1].trim() : rest;
+      const reasonToken = sepMatch ? sepMatch[2].trim() : "";
+      fields.executionMode = normalizeGateExecutionMode(modeToken);
+      if (reasonToken.length > 0) {
+        fields.inlineReason = reasonToken;
+      }
       continue;
     }
   }
@@ -178,6 +201,8 @@ export function parseGateReviewCommentMarkerBody(body) {
     verdict: fields.verdict,
     findingsSummary: fields.findingsSummary,
     nextAction: fields.nextAction,
+    executionMode: fields.executionMode,
+    inlineReason: fields.inlineReason,
     contractComplete: Boolean(fields.verdict && fields.findingsSummary && fields.nextAction),
   };
 }
@@ -253,6 +278,8 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
       verdict: parsed.verdict,
       findingsSummary: parsed.findingsSummary,
       nextAction: parsed.nextAction,
+      executionMode: parsed.executionMode ?? null,
+      inlineReason: parsed.inlineReason ?? null,
       contractComplete: parsed.contractComplete,
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
       commentUrl: typeof comment?.html_url === "string" && comment.html_url.trim().length > 0 ? comment.html_url.trim() : null,
