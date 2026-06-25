@@ -130,7 +130,10 @@ function parseGateReviewCommentFields(body) {
       const modeToken = sepMatch ? sepMatch[1].trim() : rest;
       const reasonToken = sepMatch ? sepMatch[2].trim() : "";
       fields.executionMode = normalizeGateExecutionMode(modeToken);
-      if (reasonToken.length > 0) {
+      // Only record an inline reason for inline_single_agent. A trailing
+      // "— text" on a fanout_fanin (or invalid) mode line must not surface an
+      // inconsistent mode/reason pair, so leave inlineReason null otherwise.
+      if (reasonToken.length > 0 && fields.executionMode === "inline_single_agent") {
         fields.inlineReason = reasonToken;
       }
       continue;

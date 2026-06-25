@@ -140,6 +140,32 @@ test("parseGateReviewCommentMarkerBody round-trips executionMode and inlineReaso
   assert.equal(legacy.inlineReason, null);
 });
 
+test("parseGateReviewCommentMarkerBody only records inlineReason for inline_single_agent", () => {
+  const baseBody = (modeLine) => [
+    "### Gate review: `draft_gate`",
+    "",
+    "**Reviewed head SHA:** `abc1234`",
+    "**Verdict:** clean",
+    `**Execution mode:** ${modeLine}`,
+    "",
+    "**Findings summary:** no issues found",
+    "",
+    "**Next action:** mark ready for review",
+  ].join("\n");
+
+  // A fanout_fanin line with a trailing "— text" must NOT yield an inlineReason:
+  // the mode/reason pair would otherwise be inconsistent.
+  const fanout = parseGateReviewCommentMarkerBody(baseBody("fanout_fanin — ran the full sub-loop"));
+  assert.equal(fanout.executionMode, "fanout_fanin");
+  assert.equal(fanout.inlineReason, null);
+
+  // An invalid mode token with a trailing dash + text must also leave both
+  // fields clean (executionMode null, no inline reason leaking through).
+  const invalid = parseGateReviewCommentMarkerBody(baseBody("bogus_mode — some note"));
+  assert.equal(invalid.executionMode, null);
+  assert.equal(invalid.inlineReason, null);
+});
+
 test("summarizeGateReviewCommentMarkers surfaces executionMode and inlineReason per gate", () => {
   const comments = [
     {

@@ -245,8 +245,8 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     failures.push("missing visible clean current-head pre_approval_gate comment");
   }
   // Opt-in fail-closed fan-out evidence enforcement (gates.requireFanoutEvidence).
-  // When disabled (default), fanoutEnforcement is null and this block is skipped,
-  // preserving current behavior.
+  // When disabled (default), fanoutEnforcement is { required: false, gates: [] }
+  // so the `.required` guard skips this block, preserving current behavior.
   if (fanoutEnforcement && fanoutEnforcement.required) {
     for (const gate of fanoutEnforcement.gates) {
       if (gate.executionMode !== "fanout_fanin") {

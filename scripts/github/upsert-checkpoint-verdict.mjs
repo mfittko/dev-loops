@@ -56,9 +56,14 @@ Optional:
                                             Defaults to inline_single_agent. Inline
                                             runs (default or explicit) emit a stderr
                                             warning that the fan-out/fan-in sub-loop
-                                            was not run; pass --inline-reason "<why>".
-  --inline-reason <text>                    Short reason recorded when the gate ran
-                                            inline (executionMode inline_single_agent).
+                                            was not run and REQUIRE --inline-reason.
+  --inline-reason <text>                    REQUIRED when executionMode resolves to
+                                            inline_single_agent (the default mode):
+                                            short reason recorded for why the gate
+                                            ran inline. A bare call with neither
+                                            --execution-mode nor --inline-reason
+                                            errors. Optional and ignored (dropped)
+                                            for --execution-mode fanout_fanin.
 Output (stdout, JSON):
   {
     "ok": true,
