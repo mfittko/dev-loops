@@ -49,16 +49,13 @@ import { reconcileEntriesFromBoard, writeQueue, pendingEntries } from "./queue-s
  * @param {(repoRoot:string)=>{enabled:boolean}} [deps.loadBoardConfig]
  * @param {(repo:string, repoRoot:string, env:object, d:object)=>Promise<{ok:boolean, order:number[], reason:?string}>} [deps.resolveNextUpOrder]
  * @param {(repoRoot:string, queue:object)=>Promise<void>} [deps.writeQueue]
- * @param {object} [deps.env]
  * @param {(msg:string)=>void} [deps.log]
- * @param {object} [deps.boardDependencies] - forwarded to resolveNextUpOrder.
  * @returns {Promise<{queue:object, added:number[], boardConfigured:boolean, emptiness:(null|"queue_empty"|"board_empty"|"board_unavailable"), reason:(string|null)}>}
  */
 export async function reconcileBoardMembership(repoRoot, repo, queue, deps = {}) {
   const loadConfig = deps.loadBoardConfig ?? loadBoardConfig;
   const resolveOrder = deps.resolveNextUpOrder ?? resolveNextUpOrder;
   const persist = deps.writeQueue ?? writeQueue;
-  const env = deps.env ?? process.env;
   const log = typeof deps.log === "function" ? deps.log : (msg) => console.error(msg);
 
   let boardConfigured = false;
@@ -90,7 +87,10 @@ export async function reconcileBoardMembership(repoRoot, repo, queue, deps = {})
   if (boardConfigured) {
     let nextUp = [];
     try {
-      const result = await resolveOrder(repo, repoRoot, env, deps.boardDependencies ?? {});
+      // env/board dependencies use resolveNextUpOrder's own defaults
+      // (process.env / {}); the production caller never overrides them, and
+      // tests inject a stubbed resolveNextUpOrder.
+      const result = await resolveOrder(repo, repoRoot, process.env, {});
       reason = result?.reason ?? null;
       nextUp = Array.isArray(result?.order) ? result.order : [];
       // Fail-open contract: an empty order paired with a non-null reason means
