@@ -345,8 +345,12 @@ export function interpretLoopState(snapshot, refinementConfig) {
 
   // Round-cap enforcement: when maxCopilotRounds is configured and the review-round
   // count has been exhausted, stop re-requests before entering fix/reply-resolve routing.
-  // Gating here (before unresolved-thread checks) ensures round cap takes priority over
-  // the normal fix loop, including unresolved threads, pending CI, and CI failures.
+  // Gating here (before unresolved-thread checks) lets a CLEAN PR at the cap terminate as
+  // ROUND_CAP_CLEAN_FALLBACK ahead of the normal fix/wait routing. It does NOT blanket-
+  // override that routing: a NOT-clean PR (unresolved threads or non-green CI) with an
+  // in-flight request deliberately falls through to the normal fix/wait routing below
+  // (see the `!reviewInFlight` branch), and only a not-clean PR with no in-flight request
+  // hard-stops at ROUND_CAP_REACHED.
   //
   // Precedence at the cap: copilotReviewRoundCount counts COMPLETED rounds, so at
   // `>= maxRounds` every permitted Copilot round is already done and any lingering
