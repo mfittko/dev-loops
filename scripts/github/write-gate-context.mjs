@@ -309,7 +309,7 @@ function repoSlugFor(repo) {
   }
   for (const p of parts) {
     if (p === "." || p === ".." || /[\s\\]/.test(p)) {
-      throw new Error(`--repo segment ${JSON.stringify(p)} contains unsafe characters (dots, whitespace, or backslashes)`);
+      throw new Error(`--repo segment ${JSON.stringify(p)} is unsafe (a "." or ".." path segment, or contains whitespace/backslashes)`);
     }
   }
   return parts.join("-");
@@ -456,8 +456,16 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       tmpRoot,
     });
     const fullDiffPath = path.resolve(repoRoot, diffPath);
-    await mkdir(path.dirname(fullDiffPath), { recursive: true });
-    await writeFile(fullDiffPath, diffOutput.endsWith("\n") ? diffOutput : diffOutput + "\n", "utf8");
+    try {
+      await mkdir(path.dirname(fullDiffPath), { recursive: true });
+      await writeFile(fullDiffPath, diffOutput.endsWith("\n") ? diffOutput : diffOutput + "\n", "utf8");
+    } catch (err) {
+      // Best-effort: a diff-file write failure (disk, permissions) must not block
+      // the context artifact. Degrade to diffPath=null; reviewers reconstruct the
+      // diff with `git diff`. changedFiles (from nameStatusOutput) is unaffected.
+      process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
+      diffPath = null;
+    }
   }
 
   const writeResult = await writeGateContext(
