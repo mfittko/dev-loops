@@ -68,7 +68,7 @@
   },
   "dependencies": {
     "mermaid": "11.15.0",
-    "@dev-loops/core": "^0.2.8"
+    "@dev-loops/core": "^0.3.0"
   },
   "repository": {
     "type": "git",
