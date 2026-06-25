@@ -227,7 +227,7 @@ const GET_PROJECT_ITEMS_BY_CONTENT = [
   "query($projectId:ID!, $after:String) {",
   "  node(id:$projectId) {",
   "    ... on ProjectV2 {",
-  "      items(first:10, after:$after, orderBy:{field:POSITION, direction:ASC}) {",
+  "      items(first:100, after:$after, orderBy:{field:POSITION, direction:ASC}) {",
   "        pageInfo { hasNextPage endCursor }",
   "        nodes {",
   "          id",
@@ -240,33 +240,9 @@ const GET_PROJECT_ITEMS_BY_CONTENT = [
   "            }",
   "          }",
   "          content {",
-  "            ... on Issue { number repository { nameWithOwner } }",
-  "            ... on PullRequest { number repository { nameWithOwner } }",
+  "            ... on Issue { __typename number repository { nameWithOwner } }",
+  "            ... on PullRequest { __typename number repository { nameWithOwner } }",
   "          }",
-  "        }",
-  "      }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
-
-const GET_PROJECT_ITEM = [
-  "query($projectId:ID!, $itemId:ID!) {",
-  "  node(id:$projectId) {",
-  "    ... on ProjectV2 {",
-  "      item: item(id:$itemId) {",
-  "        id",
-  "        fieldValues(first:20) {",
-  "          nodes {",
-  "            ... on ProjectV2ItemFieldSingleSelectValue {",
-  "              field { ... on ProjectV2SingleSelectField { id name } }",
-  "              name",
-  "            }",
-  "          }",
-  "        }",
-  "        content {",
-  "          ... on Issue { number title url }",
-  "          ... on PullRequest { number title url }",
   "        }",
   "      }",
   "    }",
@@ -354,6 +330,39 @@ async function listAllFields(projectId, env, runChild) {
   return fields;
 }
 
+// ── Paginated item listing (position order) ──────────────────────────────
+
+async function fetchAllItems(projectId, env, runChild) {
+  const items = [];
+  let after = null;
+  while (true) {
+    const vars = { projectId };
+    if (after) vars.after = after;
+    const payload = await ghGraphql(GET_PROJECT_ITEMS_BY_CONTENT, vars, env, runChild);
+    const connection = payload?.data?.node?.items;
+    const nodes = connection?.nodes ?? [];
+    items.push(...nodes);
+    const pageInfo = connection?.pageInfo ?? {};
+    if (!pageInfo.hasNextPage) break;
+    if (!pageInfo.endCursor) {
+      throw Object.assign(
+        new Error("Invalid items payload: hasNextPage is true but endCursor is missing"),
+        { code: "GH_API_ERROR" },
+      );
+    }
+    after = pageInfo.endCursor;
+  }
+  return items;
+}
+
+function statusOf(node) {
+  const fvs = node?.fieldValues?.nodes ?? [];
+  for (const fv of fvs) {
+    if (fv && fv.field && fv.field.name === "Status") return fv.name;
+  }
+  return null;
+}
+
 // ── Exit code classification ────────────────────────────────────────────
 
 function classifyExitCode(err) {
@@ -414,80 +423,53 @@ async function main(args, { env = process.env, runChild } = {}) {
     );
   }
 
-  // 4. Find the item
-  let itemId;
-  let previousColumn = null;
-  let issueNumber = null;
-  let prNumber = null;
+  // 4. Find the item.
+  //
+  // Fetch the full board item list ONCE (paginated, position order) and resolve
+  // BOTH ref kinds against it. This reuses the proven pattern from
+  // reorder-queue-item / list-queue-items: a node-id ref matches by item.id, a
+  // number ref matches by content.number. Both are scoped to the requested repo
+  // so a cross-project ref fails closed with ITEM_NOT_FOUND. (The previous code
+  // used `ProjectV2.item` — a field that does not exist — for the node-id path,
+  // and a single non-paginated `items(first:10)` page for the number path, so it
+  // could not find items beyond the first page.)
+  const allItems = await fetchAllItems(project.id, env, child);
 
+  let match;
   if (itemRef.kind === "id") {
-    // Direct item node ID lookup
-    const itemPayload = await ghGraphql(GET_PROJECT_ITEM, {
-      projectId: project.id,
-      itemId: itemRef.value,
-    }, env, child);
-    const item = itemPayload?.data?.node?.item;
-    if (!item) {
+    match = allItems.find(
+      (it) => it.id === itemRef.value && it.content?.repository?.nameWithOwner === repo,
+    );
+    if (!match) {
       throw Object.assign(
-        new Error(`Item "${itemRef.value}" not found in project "${project.title}"`),
+        new Error(`Item "${itemRef.value}" not found in project "${project.title}" for repo "${repo}"`),
         { code: "ITEM_NOT_FOUND" },
       );
     }
-    itemId = item.id;
-    const fvs = item.fieldValues?.nodes ?? [];
-    for (const fv of fvs) {
-      if (fv && fv.field && fv.field.name === "Status") {
-        previousColumn = fv.name;
-        break;
-      }
-    }
-    if (item.content) {
-      if (item.content.__typename === "Issue") {
-        issueNumber = item.content.number;
-      } else {
-        prNumber = item.content.number;
-      }
-    }
   } else {
-    // Look up by issue/PR number in the project
-    const itemsPayload = await ghGraphql(GET_PROJECT_ITEMS_BY_CONTENT, {
-      projectId: project.id,
-    }, env, child);
-    const items = itemsPayload?.data?.node?.items?.nodes ?? [];
-
-    // Filter by matching repo exactly and item number (when known)
-    const matchingItems = items.filter((it) => {
-      if (!it.content) return false;
-      const repoMatch = it.content.repository?.nameWithOwner === repo;
-      if (itemRef.kind === "number") {
-        return repoMatch && it.content.number === itemRef.value;
-      }
-      return repoMatch;
-    });
-
-    if (matchingItems.length === 0) {
+    match = allItems.find(
+      (it) =>
+        it.content &&
+        it.content.repository?.nameWithOwner === repo &&
+        it.content.number === itemRef.value,
+    );
+    if (!match) {
       throw Object.assign(
         new Error(`Item #${itemRef.value} not found in project "${project.title}" for repo "${repo}"`),
         { code: "ITEM_NOT_FOUND" },
       );
     }
+  }
 
-    // Use the first match (by position order)
-    const match = matchingItems[0];
-    itemId = match.id;
-    const fvs = match.fieldValues?.nodes ?? [];
-    for (const fv of fvs) {
-      if (fv && fv.field && fv.field.name === "Status") {
-        previousColumn = fv.name;
-        break;
-      }
-    }
-    if (match.content) {
-      if (match.content.__typename === "Issue") {
-        issueNumber = match.content.number;
-      } else {
-        prNumber = match.content.number;
-      }
+  const itemId = match.id;
+  const previousColumn = statusOf(match);
+  let issueNumber = null;
+  let prNumber = null;
+  if (match.content) {
+    if (match.content.__typename === "PullRequest") {
+      prNumber = match.content.number;
+    } else {
+      issueNumber = match.content.number;
     }
   }
 

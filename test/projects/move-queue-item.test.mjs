@@ -18,6 +18,31 @@ function mockRunChild(responses) {
   };
 }
 
+// Variant of mockRunChild that records every gh invocation so tests can assert
+// on the exact GraphQL query/variables sent to `gh api graphql`.
+function recordingRunChild(responses, calls) {
+  let callIndex = 0;
+  return async (cmd, args, _env) => {
+    // Reconstruct the query + variables from the `--field key=value` args.
+    const fields = {};
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--field" && typeof args[i + 1] === "string") {
+        const eq = args[i + 1].indexOf("=");
+        if (eq !== -1) fields[args[i + 1].slice(0, eq)] = args[i + 1].slice(eq + 1);
+      }
+    }
+    calls.push({ cmd, args, query: fields.query, variables: fields });
+    if (callIndex >= responses.length) {
+      throw new Error(`Unexpected gh call #${callIndex + 1} (only ${responses.length} mocked)`);
+    }
+    const resp = responses[callIndex++];
+    if (resp.error) {
+      return { code: 1, stdout: "", stderr: resp.error };
+    }
+    return { code: 0, stdout: JSON.stringify(resp.payload), stderr: "" };
+  };
+}
+
 // ── Fixtures ────────────────────────────────────────────────────────────
 
 function userPayload() {
@@ -71,12 +96,6 @@ const EXISTING_PROJECT = {
 function getItemsByContentResponse(items) {
   return {
     data: { node: { items: { nodes: items, pageInfo: { hasNextPage: false, endCursor: null } } } },
-  };
-}
-
-function getItemResponse(item) {
-  return {
-    data: { node: { item } },
   };
 }
 
@@ -167,16 +186,15 @@ describe("move-queue-item", () => {
     });
 
     it("accepts item node ID", async () => {
-      const itemNode = {
-        id: "PVTI_42",
-        fieldValues: { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: "Backlog" }] },
-        content: { __typename: "Issue", number: 10, title: "Test", url: "https://github.com/mfittko/dev-loops/issues/10" },
-      };
       const responses = [
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
-        { payload: getItemResponse(itemNode) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode("PVTI_42", makeContent("Issue", 10), "Backlog"),
+          ]),
+        },
         { payload: updateItemFieldResponse() },
       ];
       const result = await main(
@@ -184,6 +202,7 @@ describe("move-queue-item", () => {
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
+      assert.equal(result.item.itemId, "PVTI_42");
       assert.equal(result.item.newColumn, "In Progress");
       assert.equal(result.item.issueNumber, 10);
     });
@@ -263,16 +282,15 @@ describe("move-queue-item", () => {
     });
 
     it("returns unchanged when already at target via item ID lookup", async () => {
-      const itemNode = {
-        id: "PVTI_42",
-        fieldValues: { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: "Done" }] },
-        content: { __typename: "Issue", number: 10, title: "Test", url: "https://github.com/mfittko/dev-loops/issues/10" },
-      };
       const responses = [
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
-        { payload: getItemResponse(itemNode) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode("PVTI_42", makeContent("Issue", 10), "Done"),
+          ]),
+        },
         // No mutation
       ];
       const result = await main(
@@ -393,7 +411,7 @@ describe("move-queue-item", () => {
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
-        { payload: getItemResponse(null) },
+        { payload: getItemsByContentResponse([]) },
       ];
       try {
         await main(
@@ -460,6 +478,138 @@ describe("move-queue-item", () => {
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
+    });
+  });
+
+  describe("regression — well-formed GraphQL for both lookup paths", () => {
+    // The original bug: the by-number path issued a single non-paginated
+    // `items(first:10)` page, so an item beyond the first page (e.g. #857 on a
+    // busy board) reported ITEM_NOT_FOUND even though it was on the board.
+    it("paginates item lookup by number across pages", async () => {
+      const firstPage = {
+        data: {
+          node: {
+            items: {
+              nodes: Array.from({ length: 3 }, (_, i) =>
+                makeItemNode(`PVTI_p1_${i}`, makeContent("Issue", 100 + i), "Done")),
+              pageInfo: { hasNextPage: true, endCursor: "CURSOR_1" },
+            },
+          },
+        },
+      };
+      const secondPage = {
+        data: {
+          node: {
+            items: {
+              nodes: [makeItemNode("PVTI_target", makeContent("Issue", 857), "Done")],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      };
+      const calls = [];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: "857", toColumn: "Next Up" },
+        {
+          env: {},
+          runChild: recordingRunChild(
+            [
+              { payload: userPayload() },
+              { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+              { payload: getFieldsResponse([STATUS_FIELD]) },
+              { payload: firstPage },
+              { payload: secondPage },
+              { payload: updateItemFieldResponse() },
+            ],
+            calls,
+          ),
+        },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.itemId, "PVTI_target");
+      assert.equal(result.item.issueNumber, 857);
+      assert.equal(result.item.previousColumn, "Done");
+      assert.equal(result.item.newColumn, "Next Up");
+
+      // The second item-list call must forward the endCursor — proves pagination.
+      const itemListCalls = calls.filter((c) => c.query && c.query.includes("orderBy:{field:POSITION"));
+      assert.equal(itemListCalls.length, 2, "expected two paginated item-list calls");
+      assert.equal(itemListCalls[1].variables.after, "CURSOR_1");
+    });
+
+    it("item-list query requests __typename and never references ProjectV2.item or an unused $itemId", async () => {
+      const calls = [];
+      await main(
+        { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+        {
+          env: {},
+          runChild: recordingRunChild(
+            [
+              { payload: userPayload() },
+              { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+              { payload: getFieldsResponse([STATUS_FIELD]) },
+              {
+                payload: getItemsByContentResponse([
+                  makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+                ]),
+              },
+              { payload: updateItemFieldResponse() },
+            ],
+            calls,
+          ),
+        },
+      );
+
+      const queries = calls.map((c) => c.query).filter(Boolean);
+      // No query may reference the non-existent ProjectV2.item field.
+      for (const q of queries) {
+        assert.ok(!/item:\s*item\(/.test(q), `query must not alias ProjectV2.item: ${q}`);
+        assert.ok(!/\bitem\(id:/.test(q), `query must not select ProjectV2.item(id:): ${q}`);
+        // A query may only declare $itemId if it actually uses it.
+        if (q.includes("$itemId:ID!")) {
+          assert.ok(q.includes("itemId:$itemId"), `query declares $itemId but never uses it: ${q}`);
+        }
+      }
+
+      // The item-resolution query must request __typename so issue/PR is
+      // classified correctly (the original query omitted it, so issueNumber
+      // was always null).
+      const itemListQuery = queries.find((q) => q.includes("orderBy:{field:POSITION"));
+      assert.ok(itemListQuery, "expected an item-list query");
+      assert.ok(itemListQuery.includes("__typename"), "item-list query must request __typename");
+    });
+
+    it("item ID lookup resolves from the paginated list (no ProjectV2.item query)", async () => {
+      const calls = [];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: "PVTI_target", toColumn: "Next Up" },
+        {
+          env: {},
+          runChild: recordingRunChild(
+            [
+              { payload: userPayload() },
+              { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+              { payload: getFieldsResponse([STATUS_FIELD]) },
+              {
+                payload: getItemsByContentResponse([
+                  makeItemNode("PVTI_target", makeContent("Issue", 42), "Backlog"),
+                ]),
+              },
+              { payload: updateItemFieldResponse() },
+            ],
+            calls,
+          ),
+        },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.itemId, "PVTI_target");
+      assert.equal(result.item.issueNumber, 42);
+      // The update mutation must target the resolved item id and field.
+      const mutationCall = calls.find((c) => c.query && c.query.includes("updateProjectV2ItemFieldValue"));
+      assert.ok(mutationCall, "expected an updateProjectV2ItemFieldValue mutation");
+      assert.equal(mutationCall.variables.itemId, "PVTI_target");
+      assert.equal(mutationCall.variables.fieldId, "PVTSSF_status");
+      assert.equal(mutationCall.variables.optionId, "opt2");
     });
   });
 
