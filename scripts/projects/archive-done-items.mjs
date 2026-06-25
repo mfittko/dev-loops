@@ -1,0 +1,407 @@
+#!/usr/bin/env node
+import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { runChild as _runChild } from "../_cli-primitives.mjs";
+
+const USAGE = `Usage: dev-loops project archive-done --repo <owner/name> --project <number|id> [--older-than <duration>] [--dry-run]
+
+Archive GitHub Projects V2 items whose issue/PR has been closed for at least the
+given duration. Operator-triggered (no webhooks). Uses archiveProjectV2Item.
+
+Options:
+  --repo <owner/name>     Required. Repository to scope the project search.
+  --project <number|id>   Required. Project number (integer) or node ID.
+  --older-than <duration> Closed-for threshold. Format: <n><unit> where unit is
+                          h (hours), d (days), or w (weeks). Default: 30d.
+  --dry-run               Print the intended archive mutation(s) without executing.
+  --help, -h              Show this help.
+
+Output (stdout):
+  JSON: { ok: true, olderThan, considered, archived: [{ itemId, issueNumber, prNumber, closedAt }] }
+  dry-run: { ok: true, dryRun: true, olderThan, mutations: [{ query, variables }] }
+
+Exit codes:
+  0 — success
+  1 — usage or argument error
+  2 — GitHub API error
+  3 — project not found
+`.trim();
+
+const VALID_ARGS = new Set(["--repo", "--project", "--older-than", "--dry-run", "--help", "-h"]);
+
+function parseArgs(argv) {
+  const args = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!VALID_ARGS.has(arg) && arg.startsWith("-")) {
+      throw Object.assign(new Error(`Unknown flag: ${arg}`), { code: "INVALID_ARGS", usage: USAGE });
+    }
+    if (arg === "--repo") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw Object.assign(new Error("--repo requires a value (owner/name)"), { code: "INVALID_REPO" });
+      }
+      args.repo = argv[++i];
+    } else if (arg === "--project") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw Object.assign(new Error("--project requires a value (number or node ID)"), { code: "INVALID_PROJECT" });
+      }
+      args.project = argv[++i];
+    } else if (arg === "--older-than") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw Object.assign(new Error("--older-than requires a value (e.g. 30d)"), { code: "INVALID_DURATION" });
+      }
+      args.olderThan = argv[++i];
+    } else if (arg === "--dry-run") {
+      args.dryRun = true;
+    } else if (arg === "--help" || arg === "-h") {
+      args.help = true;
+    } else {
+      throw Object.assign(new Error(`Unexpected argument: ${arg}`), { code: "INVALID_ARGS", usage: USAGE });
+    }
+  }
+  return args;
+}
+
+// ── Validation ───────────────────────────────────────────────────────────
+
+const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
+const REPO_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
+const GLOBAL_NODE_ID_RE = /^[A-Za-z0-9_]+$/;
+
+function validateRepo(repo) {
+  if (!repo || typeof repo !== "string") {
+    throw Object.assign(new Error("--repo is required"), { code: "INVALID_REPO" });
+  }
+  const slashIdx = repo.indexOf("/");
+  if (slashIdx === -1) {
+    throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
+  }
+  const owner = repo.slice(0, slashIdx);
+  const name = repo.slice(slashIdx + 1);
+  if (!owner || !name || !OWNER_RE.test(owner) || !REPO_NAME_RE.test(name)) {
+    throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
+  }
+  return repo;
+}
+
+function parseProjectRef(raw) {
+  if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
+    throw Object.assign(new Error("--project is required"), { code: "INVALID_PROJECT" });
+  }
+  const trimmed = raw.trim();
+  const asNum = Number(trimmed);
+  if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
+    return { kind: "number", value: asNum };
+  }
+  if (GLOBAL_NODE_ID_RE.test(trimmed) && trimmed !== "0") {
+    return { kind: "id", value: trimmed };
+  }
+  throw Object.assign(new Error(`--project must be a positive integer or a node ID, got "${raw}"`), { code: "INVALID_PROJECT" });
+}
+
+const DURATION_RE = /^(\d+)(h|d|w)$/;
+const UNIT_MS = {
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+  w: 7 * 24 * 60 * 60 * 1000,
+};
+
+function parseDuration(raw) {
+  if (!raw || typeof raw !== "string") {
+    throw Object.assign(new Error(`--older-than must be <n>(h|d|w), got "${raw}"`), { code: "INVALID_DURATION" });
+  }
+  const m = DURATION_RE.exec(raw.trim());
+  if (!m) {
+    throw Object.assign(new Error(`--older-than must be <n>(h|d|w), got "${raw}"`), { code: "INVALID_DURATION" });
+  }
+  const n = Number(m[1]);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw Object.assign(new Error(`--older-than must be a positive amount, got "${raw}"`), { code: "INVALID_DURATION" });
+  }
+  return n * UNIT_MS[m[2]];
+}
+
+// ── API helpers ──────────────────────────────────────────────────────────
+
+async function ghGraphql(query, vars, env, runChild = _runChild) {
+  const fieldArgs = [];
+  for (const [key, value] of Object.entries(vars)) {
+    fieldArgs.push("--field", `${key}=${value}`);
+  }
+  const result = await runChild("gh", ["api", "graphql", "--field", `query=${query}`, ...fieldArgs], env);
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || `exit code ${result.code}`;
+    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
+  }
+  const payload = parseJsonText(result.stdout);
+  if (payload.errors && payload.errors.length > 0) {
+    throw Object.assign(
+      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
+      { code: "GRAPHQL_ERROR" },
+    );
+  }
+  return payload;
+}
+
+// ── GraphQL fragments ────────────────────────────────────────────────────
+
+const GET_USER_ID = ["query($login:String!) {", "  user(login:$login) { id }", "}"].join("\n");
+const GET_ORG_ID = ["query($login:String!) {", "  organization(login:$login) { id }", "}"].join("\n");
+
+const LIST_USER_PROJECTS = [
+  "query($login:String!, $after:String) {",
+  "  user(login:$login) {",
+  "    projectsV2(first:50, after:$after) {",
+  "      pageInfo { hasNextPage endCursor }",
+  "      nodes { id number title url }",
+  "    }",
+  "  }",
+  "}",
+].join("\n");
+
+const LIST_ORG_PROJECTS = [
+  "query($login:String!, $after:String) {",
+  "  organization(login:$login) {",
+  "    projectsV2(first:50, after:$after) {",
+  "      pageInfo { hasNextPage endCursor }",
+  "      nodes { id number title url }",
+  "    }",
+  "  }",
+  "}",
+].join("\n");
+
+const GET_PROJECT_ITEMS = [
+  "query($projectId:ID!, $after:String) {",
+  "  node(id:$projectId) {",
+  "    ... on ProjectV2 {",
+  "      items(first:50, after:$after, orderBy:{field:POSITION, direction:ASC}) {",
+  "        pageInfo { hasNextPage endCursor }",
+  "        nodes {",
+  "          id",
+  "          isArchived",
+  "          fieldValues(first:20) {",
+  "            nodes {",
+  "              ... on ProjectV2ItemFieldSingleSelectValue {",
+  "                field { ... on ProjectV2SingleSelectField { id name } }",
+  "                name",
+  "              }",
+  "            }",
+  "          }",
+  "          content {",
+  "            ... on Issue { __typename number closed closedAt repository { nameWithOwner } }",
+  "            ... on PullRequest { __typename number closed closedAt repository { nameWithOwner } }",
+  "          }",
+  "        }",
+  "      }",
+  "    }",
+  "  }",
+  "}",
+].join("\n");
+
+const ARCHIVE_ITEM = [
+  "mutation($projectId:ID!, $itemId:ID!) {",
+  "  archiveProjectV2Item(input:{projectId:$projectId, itemId:$itemId}) {",
+  "    item { id }",
+  "  }",
+  "}",
+].join("\n");
+
+// ── Owner / project resolution ─────────────────────────────────────────────
+
+async function resolveOwner(login, env, runChild) {
+  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
+  if (userPayload?.data?.user?.id) return { id: userPayload.data.user.id, kind: "user" };
+  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
+  if (orgPayload?.data?.organization?.id) return { id: orgPayload.data.organization.id, kind: "org" };
+  throw Object.assign(new Error(`Could not resolve owner ID for "${login}"`), { code: "NO_USER_ID" });
+}
+
+async function listAllProjects(login, kind, env, runChild) {
+  const query = kind === "org" ? LIST_ORG_PROJECTS : LIST_USER_PROJECTS;
+  const projects = [];
+  let after = null;
+  while (true) {
+    const vars = { login };
+    if (after) vars.after = after;
+    const payload = await ghGraphql(query, vars, env, runChild);
+    const connection = kind === "org" ? payload?.data?.organization?.projectsV2 : payload?.data?.user?.projectsV2;
+    const nodes = connection?.nodes ?? [];
+    projects.push(...nodes);
+    const pageInfo = connection?.pageInfo ?? {};
+    if (!pageInfo.hasNextPage) break;
+    if (!pageInfo.endCursor) {
+      throw Object.assign(new Error("Invalid projects list payload: hasNextPage true but endCursor missing"), { code: "GH_API_ERROR" });
+    }
+    after = pageInfo.endCursor;
+  }
+  return projects;
+}
+
+async function fetchAllItems(projectId, env, runChild) {
+  const all = [];
+  let after = null;
+  while (true) {
+    const vars = { projectId };
+    if (after) vars.after = after;
+    const payload = await ghGraphql(GET_PROJECT_ITEMS, vars, env, runChild);
+    const connection = payload?.data?.node?.items;
+    const nodes = connection?.nodes ?? [];
+    all.push(...nodes);
+    const pageInfo = connection?.pageInfo ?? {};
+    if (!pageInfo.hasNextPage) break;
+    if (!pageInfo.endCursor) {
+      throw Object.assign(new Error("Invalid items payload: hasNextPage true but endCursor missing"), { code: "GH_API_ERROR" });
+    }
+    after = pageInfo.endCursor;
+  }
+  return all;
+}
+
+function statusOf(node) {
+  const fvs = node?.fieldValues?.nodes ?? [];
+  for (const fv of fvs) {
+    if (fv && fv.field && fv.field.name === "Status") return fv.name;
+  }
+  return null;
+}
+
+// Normalize a raw GraphQL item node into the shape selectArchivable expects.
+function normalizeItem(node) {
+  return {
+    id: node.id,
+    isArchived: Boolean(node.isArchived),
+    status: statusOf(node),
+    content: node.content
+      ? {
+          __typename: node.content.__typename,
+          number: node.content.number,
+          closed: Boolean(node.content.closed),
+          closedAt: node.content.closedAt ?? null,
+          repository: node.content.repository,
+        }
+      : null,
+  };
+}
+
+// ── Selection logic (pure) ────────────────────────────────────────────────
+
+// Select items whose issue/PR is closed and has been closed for >= olderThanMs.
+function selectArchivable(items, { now, olderThanMs }) {
+  return items.filter((it) => {
+    if (it.isArchived) return false;
+    const c = it.content;
+    if (!c || !c.closed || !c.closedAt) return false;
+    const closedAtMs = Date.parse(c.closedAt);
+    if (Number.isNaN(closedAtMs)) return false;
+    return now - closedAtMs >= olderThanMs;
+  });
+}
+
+// ── Exit code classification ────────────────────────────────────────────
+
+function classifyExitCode(err) {
+  if (err.code === "INVALID_REPO" || err.code === "INVALID_PROJECT" ||
+      err.code === "INVALID_DURATION" || err.code === "INVALID_ARGS") return 1;
+  if (err.code === "PROJECT_NOT_FOUND") return 3;
+  return 2;
+}
+
+// ── Main logic ──────────────────────────────────────────────────────────
+
+async function main(args, { env = process.env, runChild } = {}) {
+  const child = runChild ?? _runChild;
+  const repo = validateRepo(args.repo);
+  const [owner] = repo.split("/");
+  const projectRef = parseProjectRef(args.project);
+  const olderThanRaw = args.olderThan ?? "30d";
+  const olderThanMs = parseDuration(olderThanRaw);
+  const now = args.now ?? Date.now();
+
+  const { kind: ownerKind } = await resolveOwner(owner, env, child);
+  const projects = await listAllProjects(owner, ownerKind, env, child);
+  const project = projectRef.kind === "id"
+    ? projects.find((p) => p.id === projectRef.value)
+    : projects.find((p) => p.number === projectRef.value);
+  if (!project) {
+    throw Object.assign(
+      new Error(`Project ${projectRef.kind === "id" ? `"${projectRef.value}"` : `number ${projectRef.value}`} not found under owner "${owner}"`),
+      { code: "PROJECT_NOT_FOUND" },
+    );
+  }
+
+  const rawItems = await fetchAllItems(project.id, env, child);
+  // Only consider items whose content belongs to the target repo (single-repo scope).
+  const repoItems = rawItems
+    .filter((n) => n.content && n.content.repository?.nameWithOwner === repo)
+    .map(normalizeItem);
+
+  const archivable = selectArchivable(repoItems, { now, olderThanMs });
+
+  const mutations = archivable.map((it) => ({
+    query: ARCHIVE_ITEM,
+    variables: { projectId: project.id, itemId: it.id },
+  }));
+
+  if (args.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      olderThan: olderThanRaw,
+      considered: repoItems.length,
+      mutations,
+    };
+  }
+
+  const archived = [];
+  for (const it of archivable) {
+    const payload = await ghGraphql(ARCHIVE_ITEM, { projectId: project.id, itemId: it.id }, env, child);
+    if (!payload?.data?.archiveProjectV2Item?.item) {
+      throw Object.assign(new Error(`Failed to archive item ${it.id}`), { code: "MUTATION_FAILED" });
+    }
+    archived.push({
+      itemId: it.id,
+      issueNumber: it.content.__typename === "Issue" ? it.content.number : null,
+      prNumber: it.content.__typename === "PullRequest" ? it.content.number : null,
+      closedAt: it.content.closedAt,
+    });
+  }
+
+  return {
+    ok: true,
+    olderThan: olderThanRaw,
+    considered: repoItems.length,
+    archived,
+  };
+}
+
+// ── CLI entrypoint ──────────────────────────────────────────────────────
+
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+  let args;
+  try {
+    args = parseArgs(argv);
+  } catch (err) {
+    stderr.write(`${formatCliError(err)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (args.help) {
+    stdout.write(USAGE);
+    return;
+  }
+  try {
+    const result = await main(args, { env });
+    stdout.write(JSON.stringify(result) + "\n");
+  } catch (err) {
+    stderr.write(JSON.stringify({ ok: false, error: err.message, code: err.code ?? "UNKNOWN" }) + "\n");
+    process.exitCode = classifyExitCode(err);
+  }
+}
+
+if (isDirectCliRun(import.meta.url)) {
+  runCli(process.argv.slice(2)).catch((error) => {
+    process.stderr.write(JSON.stringify({ ok: false, error: error.message, code: error.code ?? "UNKNOWN" }) + "\n");
+    process.exitCode = 2;
+  });
+}
+
+export { main, parseDuration, selectArchivable };

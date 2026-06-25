@@ -52,6 +52,7 @@ const SUBCOMMAND_ROUTES = {
     add:     "scripts/projects/add-queue-item.mjs",
     move:    "scripts/projects/move-queue-item.mjs",
     reorder: "scripts/projects/reorder-queue-item.mjs",
+    "archive-done": "scripts/projects/archive-done-items.mjs",
     ensure:  "scripts/projects/ensure-queue-board.mjs",
   },
   queue: {
@@ -113,7 +114,8 @@ const SUBCOMMAND_DESCRIPTIONS = {
     list: "List queue board items",
     add: "Add issue/PR to queue board",
     move: "Move queue item between Status columns",
-    reorder: "Reorder queue board items",
+    reorder: "Reorder items (move-to-top/move-after/order, --dry-run)",
+    "archive-done": "Archive closed Done items older than a duration",
     ensure: "Create/repair queue board bootstrap surface",
   },
   queue: {

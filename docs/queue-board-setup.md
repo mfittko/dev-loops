@@ -82,6 +82,96 @@ Dev-loop queue wrappers will:
 
 Use `dev-loops project --help` to inspect the queue helper surface and per-subcommand `--help` for details.
 
+## Reordering board items
+
+`dev-loops project reorder` wraps the `updateProjectV2ItemPosition` mutation. In
+addition to the flag form (`--item [--after]`), it exposes three ergonomic
+subcommands. A `<ref>` is an issue/PR **number** or a project **item node ID**,
+and every form works for both issues and PRs.
+
+```sh
+# Move issue/PR #630 to the top of its current Status column
+dev-loops project reorder move-to-top 630 --repo mfittko/dev-loops --project 1
+
+# Move #630 immediately after #625
+dev-loops project reorder move-after 630 625 --repo mfittko/dev-loops --project 1
+
+# Set an explicit order: 103 first, then 101, then 102
+dev-loops project reorder order 103 101 102 --repo mfittko/dev-loops --project 1
+```
+
+The subcommand forms emit diff-friendly JSON with the column order **before** and
+**after** the change, plus the resolved item IDs:
+
+```json
+{
+  "ok": true,
+  "item": { "itemId": "PVTI_b", "issueNumber": 630, "status": "Next Up", "position": "top" },
+  "after_ref": null,
+  "before": [{ "itemId": "PVTI_a", "issueNumber": 625 }, { "itemId": "PVTI_b", "issueNumber": 630 }],
+  "after":  [{ "itemId": "PVTI_b", "issueNumber": 630 }, { "itemId": "PVTI_a", "issueNumber": 625 }]
+}
+```
+
+`order` returns a `moves` array (one entry per chained position mutation) plus the
+same `before`/`after` snapshots.
+
+### Dry run
+
+Add `--dry-run` to any form to print the intended GraphQL mutation(s) — including
+the chained mutations for `order` — without executing them:
+
+```sh
+dev-loops project reorder order 103 101 102 --repo mfittko/dev-loops --project 1 --dry-run
+```
+
+```json
+{
+  "ok": true,
+  "dryRun": true,
+  "mutations": [
+    { "query": "mutation(...) { updateProjectV2ItemPosition(...) }", "variables": { "projectId": "PVT_proj1", "itemId": "PVTI_3" } },
+    { "query": "...", "variables": { "projectId": "PVT_proj1", "itemId": "PVTI_1", "afterId": "PVTI_3" } }
+  ]
+}
+```
+
+A ref that does not resolve to an item in the target Project fails closed with a
+clear `ITEM_NOT_FOUND` error (exit code 3) — only items in the target Project can
+be reordered.
+
+## Archiving completed items
+
+`dev-loops project archive-done` removes finished work from the board. It archives
+items (via `archiveProjectV2Item`) whose issue or PR has been **closed** for at
+least the given duration. It is operator-triggered (no webhooks) and scoped to the
+single repo passed via `--repo`.
+
+```sh
+# Archive items whose issue/PR closed more than 30 days ago (default)
+dev-loops project archive-done --repo mfittko/dev-loops --project 1
+
+# Custom threshold (units: h = hours, d = days, w = weeks)
+dev-loops project archive-done --repo mfittko/dev-loops --project 1 --older-than 7d
+
+# Preview without mutating
+dev-loops project archive-done --repo mfittko/dev-loops --project 1 --dry-run
+```
+
+Output reports how many items were considered and which were archived:
+
+```json
+{
+  "ok": true,
+  "olderThan": "30d",
+  "considered": 12,
+  "archived": [{ "itemId": "PVTI_a", "issueNumber": 1, "prNumber": null, "closedAt": "2026-01-01T00:00:00Z" }]
+}
+```
+
+Open items (even if parked in the `Done` column) and already-archived items are
+never touched.
+
 
 ### Repairing drifted Status columns
 
