@@ -244,9 +244,9 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   )) {
     failures.push("missing visible clean current-head pre_approval_gate comment");
   }
-  // Opt-in fail-closed fan-out evidence enforcement (gates.requireFanoutEvidence).
-  // When disabled (default), fanoutEnforcement is { required: false, gates: [] }
-  // so the `.required` guard skips this block, preserving current behavior.
+  // Fail-closed fan-out evidence enforcement (gates.requireFanoutEvidence, ON by
+  // default / opt-out). When disabled or config-unavailable, fanoutEnforcement is
+  // { required: false, gates: [] } so the `.required` guard skips this block.
   if (fanoutEnforcement && fanoutEnforcement.required) {
     for (const gate of fanoutEnforcement.gates) {
       if (gate.executionMode !== "fanout_fanin") {
@@ -288,15 +288,19 @@ async function ledgerExists(fullPath) {
   }
 }
 /**
- * Build the opt-in fan-out evidence enforcement descriptor.
+ * Build the fan-out evidence enforcement descriptor.
  *
- * Returns { required: false } when gates.requireFanoutEvidence is disabled
- * (default). When enabled, records per-required-gate executionMode and whether
- * the deterministic findings-log ledger exists for the reviewed head SHA so the
- * pre-merge check can fail closed on inline verdicts or missing ledgers.
+ * Enforcement is ON by default (opt-out via gates.requireFanoutEvidence: false).
+ * Returns { required: false } when enforcement is disabled OR when config is
+ * unavailable (config === null after a failed load) — config-unavailable must
+ * fail open and never enable enforcement. When enabled, records per-required-gate
+ * executionMode and whether the deterministic findings-log ledger exists for the
+ * reviewed head SHA so the pre-merge check can fail closed on inline verdicts or
+ * missing ledgers.
  */
 async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd }) {
-  if (!resolveRequireFanoutEvidence(config)) {
+  // Fail open when config could not be loaded/validated (config === null).
+  if (config == null || !resolveRequireFanoutEvidence(config)) {
     return { required: false, gates: [] };
   }
   const draftRequired = resolveGateConfig(config, "draft").required;

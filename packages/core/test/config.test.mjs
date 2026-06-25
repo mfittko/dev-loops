@@ -2681,12 +2681,24 @@ describe("resolveGateAnglesDynamic", () => {
 });
 
 describe("gates.requireFanoutEvidence", () => {
-  test("defaults to false and resolveRequireFanoutEvidence reflects it", () => {
-    assert.equal(resolveRequireFanoutEvidence({}), false);
-    assert.equal(resolveRequireFanoutEvidence({ gates: {} }), false);
+  test("defaults to true (opt-out) and resolveRequireFanoutEvidence reflects it", () => {
+    // Default-on: enforcement is ON unless explicitly disabled. The `!== false`
+    // resolver semantics keep opt-out robust for programmatically-built config.
+    assert.equal(resolveRequireFanoutEvidence({}), true);
+    assert.equal(resolveRequireFanoutEvidence({ gates: {} }), true);
+    assert.equal(resolveRequireFanoutEvidence({ gates: { requireFanoutEvidence: true } }), true);
     const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
     assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.requireFanoutEvidence, true);
+    assert.equal(resolveRequireFanoutEvidence(parsed.data), true);
+  });
+
+  test("opt-out: explicit requireFanoutEvidence: false disables enforcement", () => {
+    assert.equal(resolveRequireFanoutEvidence({ gates: { requireFanoutEvidence: false } }), false);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { requireFanoutEvidence: false } });
+    assert.equal(parsed.success, true);
     assert.equal(parsed.data.gates.requireFanoutEvidence, false);
+    assert.equal(resolveRequireFanoutEvidence(parsed.data), false);
   });
 
   test("accepts requireFanoutEvidence: true in full and file schemas", () => {

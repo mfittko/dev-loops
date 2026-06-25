@@ -53,11 +53,12 @@ const GatesConfig = z.strictObject({
   // `requireCi` is only behaviorally configurable for the draft gate.
   // preApproval always requires CI even if config repeats `requireCi`.
   preApproval: GateConfig.optional(),
-  // Opt-in fail-closed enforcement that a gate verdict was produced by the
+  // Fail-closed enforcement that a gate verdict was produced by the
   // fan-out/fan-in review sub-loop (executionMode === "fanout_fanin" plus a
   // durable findings-log ledger), not an inline single-agent run. Default
-  // false preserves current behavior. See docs/gate-review-sub-loop-contract.md.
-  requireFanoutEvidence: z.boolean().default(false),
+  // true (opt-out): a clean gate verdict requires fan-out/fan-in evidence
+  // unless explicitly disabled. See docs/gate-review-sub-loop-contract.md.
+  requireFanoutEvidence: z.boolean().default(true),
   // Cap on how many scoped `review` reviewers the gate fan-out spawns in
   // parallel. When the resolved angle set exceeds this cap, the overflow runs
   // in sequential batches and the degradation is recorded in the gate evidence.
@@ -831,16 +832,19 @@ export function resolveGateConfig(config, gate) {
 /**
  * Resolve whether fan-out/fan-in review evidence is required for a gate verdict.
  *
- * Opt-in, defaults to false. When true, the pre-merge evidence check fails
+ * Default-on (opt-out): enforcement is ON unless `gates.requireFanoutEvidence`
+ * is explicitly set to false. When ON, the pre-merge evidence check fails
  * closed unless a required gate's recorded executionMode is "fanout_fanin" and
- * a durable findings-log ledger exists for that gate + head SHA. See
+ * a durable findings-log ledger exists for that gate + head SHA. Using a
+ * `!== false` test (rather than `=== true`) keeps the opt-out semantics robust
+ * for programmatically-built config objects that bypass schema defaulting. See
  * docs/gate-review-sub-loop-contract.md.
  *
  * @param {DevLoopConfig} config
  * @returns {boolean}
  */
 export function resolveRequireFanoutEvidence(config) {
-  return config?.gates?.requireFanoutEvidence === true;
+  return config?.gates?.requireFanoutEvidence !== false;
 }
 
 /** Default parallel fan-out reviewer cap (mirrors GatesConfig.maxFanoutReviewers). */

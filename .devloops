@@ -10,12 +10,13 @@ refinement:
   maxCopilotRounds: 2
 
 gates:
-  # Opt-in fail-closed enforcement that gate verdicts were produced by the
+  # Fail-closed enforcement that gate verdicts were produced by the
   # fan-out/fan-in review sub-loop (executionMode fanout_fanin + a findings-log
-  # ledger), not an inline single-agent run. Phases 2-3 (live fan-out + dynamic
-  # angle resolution) are the follow-up that makes fanout_fanin producible.
-  requireFanoutEvidence: false
+  # ledger), not an inline single-agent run. This repo runs enforcement on its
+  # own gates; dynamic angle resolution (below) scopes the fan-out per change.
+  requireFanoutEvidence: true
   draft:
+    dynamicAngles: true
     angles:
       - scope
       - coverage
@@ -39,6 +40,7 @@ gates:
       - must-fix
       - worth-fixing-now
   preApproval:
+    dynamicAngles: true
     angles:
       - dry
       - kiss

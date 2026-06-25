@@ -203,7 +203,7 @@ resolved-in SHA (for findings resolved in a later pass).
 ## Execution mode and fan-out evidence enforcement
 
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
-default `inline_single_agent`) via the [Gate comment command](../skills/copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. The opt-in `gates.requireFanoutEvidence` config (default `false`) makes the pre-merge evidence check fail closed for a required gate unless its recorded `executionMode` is `fanout_fanin` and a findings-log ledger exists for that gate + head SHA. Live context-builder/fan-out execution (the follow-up work tracked in epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
+default `inline_single_agent`) via the [Gate comment command](../skills/copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA, and the pre-merge evidence check fails closed for a required gate otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
 
 ## See also
 

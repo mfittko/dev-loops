@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -143,6 +143,10 @@ test("detect-checkpoint-evidence includes staleRunner and staleRunnerCheck in su
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-runner-ckpt-"));
 
   try {
+    // This test exercises stale-runner/staleRunnerCheck output, not fan-out
+    // evidence enforcement (now ON by default). Opt out so the inline clean gate
+    // comments pass the pre-merge check.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir);
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], {
       cwd: tempDir,
