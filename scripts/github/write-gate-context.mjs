@@ -313,11 +313,23 @@ function validatePathSegments({ pr, gate, headSha }) {
   if (gate !== "draft_gate" && gate !== "pre_approval_gate") {
     throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected draft_gate or pre_approval_gate)`);
   }
-  const prNum = typeof pr === "number" ? pr : Number(String(pr).trim());
-  if (!Number.isInteger(prNum) || prNum <= 0) {
+  // Require a CANONICAL positive integer: the trimmed string must be all digits
+  // (`/^\d+$/`) and > 0. This mirrors the CLI's parsePrNumber rule so the path
+  // builder cannot accept non-canonical numeric forms ("1e3" → 1000, "0x10" →
+  // 16, "1.5") that Number() would coerce to a DIFFERENT pr-<N> segment than the
+  // operator/CLI intended, breaking the deterministic producer/consumer
+  // round-trip. " 9 " trims to "9" and stays valid; numbers are stringified first.
+  const prStr = String(pr).trim();
+  const prNum = Number(prStr);
+  if (!/^\d+$/.test(prStr) || !Number.isInteger(prNum) || prNum <= 0) {
     throw new Error(`--pr segment ${JSON.stringify(pr)} is unsafe (expected a positive integer)`);
   }
-  const sha = String(headSha).trim();
+  // Lowercase the validated SHA so the path segment is case-canonical regardless
+  // of caller casing, matching the CLI's normalizeHeadSha. A mixed-case
+  // headRefOid (e.g. ABC123) must compute the SAME filename as its lowercase
+  // form (abc123) or readGateContext / the .diff lookup would miss it — a
+  // determinism bug.
+  const sha = String(headSha).trim().toLowerCase();
   if (!/^[0-9a-f]{7,64}$/i.test(sha)) {
     throw new Error(`--head-sha segment ${JSON.stringify(headSha)} is unsafe (expected a 7-64 character hex SHA)`);
   }

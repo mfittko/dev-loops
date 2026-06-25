@@ -70,9 +70,21 @@ test("buildGateContextPath rejects malformed repo", () => {
   assert.throws(() => buildGateContextPath({ repo: "../x/y", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name|unsafe/);
 });
 
-test("buildGateContextPath accepts valid pr/gate/headSha segments", () => {
+test("buildGateContextPath lowercases the headSha segment (case-canonical, matches normalizeHeadSha)", () => {
+  // A mixed-case headRefOid must compute the SAME filename as its lowercase form
+  // so readGateContext / the .diff lookup never misses it (determinism).
   const p = buildGateContextPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234def" });
-  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-7", "pre_approval_gate-ABC1234def.json"));
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-7", "pre_approval_gate-abc1234def.json"));
+  // Upper- and lower-case SHAs resolve to the same path.
+  assert.equal(
+    buildGateContextPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234DEF" }),
+    buildGateContextPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "abc1234def" }),
+  );
+});
+
+test("buildGateContextPath accepts a whitespace-padded canonical pr (trims to digits)", () => {
+  const p = buildGateContextPath({ repo: "owner/repo", pr: " 9 ", gate: "draft_gate", headSha: "abc1234" });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-9", "draft_gate-abc1234.json"));
 });
 
 test("buildGateContextPath rejects unsafe pr/gate/headSha segments", () => {
@@ -80,6 +92,11 @@ test("buildGateContextPath rejects unsafe pr/gate/headSha segments", () => {
   assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "1.5", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
   assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "../9", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
   assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 0, gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  // Non-canonical numeric forms that Number() would silently coerce to a DIFFERENT
+  // pr-<N> segment than the CLI's parsePrNumber (`/^\d+$/`) would accept.
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "1e3", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "0x10", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "abc", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
   assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "../../etc/passwd" }), /head-sha.*unsafe/);
   assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "xyz" }), /head-sha.*unsafe/);
 });
@@ -112,9 +129,13 @@ test("buildGateDiffPath rejects malformed repo (same safety as context path)", (
   assert.throws(() => buildGateDiffPath({ repo: "a b/c", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /unsafe/);
 });
 
-test("buildGateDiffPath accepts valid pr/gate/headSha segments", () => {
+test("buildGateDiffPath lowercases the headSha segment (case-canonical, matches the context path)", () => {
   const p = buildGateDiffPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234def" });
-  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-7", "pre_approval_gate-ABC1234def.diff"));
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-7", "pre_approval_gate-abc1234def.diff"));
+  // The .diff and .json siblings must agree on the lowercased SHA so a scoped
+  // reviewer that found the JSON also finds the diff.
+  const jsonPath = buildGateContextPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234def" });
+  assert.equal(path.basename(p, ".diff"), path.basename(jsonPath, ".json"));
 });
 
 test("buildGateDiffPath rejects unsafe pr/gate/headSha segments (same safety as context path)", () => {
@@ -122,6 +143,8 @@ test("buildGateDiffPath rejects unsafe pr/gate/headSha segments (same safety as 
   assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "1.5", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
   assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "../9", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
   assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 0, gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "1e3", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "0x10", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
   assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "../../etc/passwd" }), /head-sha.*unsafe/);
   assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "xyz" }), /head-sha.*unsafe/);
 });
