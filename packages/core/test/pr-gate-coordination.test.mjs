@@ -985,6 +985,35 @@ test("non-round-cap PR without draft_gate evidence is still blocked from final a
   assert.match(result.reason, /no gate exemptions, #579/i);
 });
 
+test("#836: a PR un-drafted externally before draft_gate ran is caught at the merge boundary (reconcile_draft_gate, #579) — the out-of-order transition is no longer silent", () => {
+  // #836 defect 2: a PR was marked ready-for-review outside the loop, so draft_gate never ran
+  // and no draft_gate comment exists. The original report was that "no detector caught the
+  // out-of-order transition." It is caught now: a non-draft PR with no clean draft_gate evidence
+  // (and not in the round-cap clean-fallback equivalence of #587) cannot reach final approval —
+  // it routes to reconcile_draft_gate and merge is forbidden.
+  const result = evaluatePrGateCoordination({
+    pr: 20326,
+    currentHeadSha: "abc123456789",
+    prDraft: false, // un-drafted externally
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "success",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 5, // NOT at the cap → the #587 round-cap draft-gate equivalence does not apply
+    draftGate: gate({ visible: false }), // draft_gate never ran
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.notEqual(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  assert.equal(result.draftGateAlreadySatisfied, false);
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY));
+  assert.match(result.reason, /no gate exemptions, #579/i);
+});
+
 
 // ── LOW_SIGNAL_CONVERGED gate routing tests ─────────────────────────────
 
