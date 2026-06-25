@@ -72,7 +72,7 @@ test("parsePostGateFindingsCliArgs rejects repo with dot segment", () => {
       "--repo", "./repo", "--pr", "1", "--gate", "draft_gate",
       "--head-sha", "abc12345", "--findings", "[]",
     ]);
-  }, /unsafe characters/);
+  }, /owner\/name/);
 });
 
 test("parsePostGateFindingsCliArgs rejects repo with double-dot segment", () => {
@@ -81,7 +81,7 @@ test("parsePostGateFindingsCliArgs rejects repo with double-dot segment", () => 
       "--repo", "owner/..", "--pr", "1", "--gate", "draft_gate",
       "--head-sha", "abc12345", "--findings", "[]",
     ]);
-  }, /unsafe characters/);
+  }, /owner\/name/);
 });
 
 test("parsePostGateFindingsCliArgs rejects repo with whitespace segment", () => {
@@ -90,7 +90,7 @@ test("parsePostGateFindingsCliArgs rejects repo with whitespace segment", () => 
       "--repo", "owner/re po", "--pr", "1", "--gate", "draft_gate",
       "--head-sha", "abc12345", "--findings", "[]",
     ]);
-  }, /unsafe characters/);
+  }, /owner\/name/);
 });
 
 test("parsePostGateFindingsCliArgs rejects malformed repo (no slash)", () => {
@@ -99,7 +99,7 @@ test("parsePostGateFindingsCliArgs rejects malformed repo (no slash)", () => {
       "--repo", "no-slash", "--pr", "1", "--gate", "draft_gate",
       "--head-sha", "abc12345", "--findings", "[]",
     ]);
-  }, /owner\/name format/);
+  }, /owner\/name/);
 });
 
 // ---------------------------------------------------------------------------
@@ -126,11 +126,23 @@ test("parseFindings rejects missing summary", () => {
 // Rendering: severity grouping + file refs
 // ---------------------------------------------------------------------------
 
+test("buildFindingsMarker is keyed by gate only (head-SHA independent)", () => {
+  const marker = buildFindingsMarker({ gate: "draft_gate" });
+  assert.equal(marker, "<!-- dev-loops:gate-findings gate=draft_gate -->");
+  // Marker must not embed the head SHA: different prefix lengths / full SHA for
+  // the same head must still match the single per-gate comment.
+  assert.ok(!marker.includes("head="));
+  assert.equal(
+    buildFindingsMarker({ gate: "draft_gate", headSha: "abc1234" }),
+    buildFindingsMarker({ gate: "draft_gate", headSha: "abc1234567890abcdef" }),
+  );
+});
+
 test("renderFindingsCommentBody groups by severity and renders file refs", () => {
   const findings = parseFindings(FINDINGS_JSON);
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
   // Hidden marker present.
-  assert.ok(body.includes(buildFindingsMarker({ gate: "draft_gate", headSha: "abc1234" })));
+  assert.ok(body.includes(buildFindingsMarker({ gate: "draft_gate" })));
   // Title and unwrapped head SHA (autolinkable, no backticks).
   assert.ok(body.includes("### Gate fan-out findings: draft_gate"));
   assert.ok(body.includes("Reviewed head: abc1234"));
@@ -151,7 +163,26 @@ test("renderFindingsCommentBody groups by severity and renders file refs", () =>
 test("renderFindingsCommentBody renders a no-findings note when empty", () => {
   const body = renderFindingsCommentBody({ gate: "pre_approval_gate", headSha: "deadbeef0", findings: [] });
   assert.ok(body.includes("No findings"));
-  assert.ok(body.includes(buildFindingsMarker({ gate: "pre_approval_gate", headSha: "deadbeef0" })));
+  assert.ok(body.includes(buildFindingsMarker({ gate: "pre_approval_gate" })));
+});
+
+test("renderFindingsCommentBody collapses multi-line/whitespace summary into one clean line", () => {
+  const findings = parseFindings(JSON.stringify([
+    {
+      severity: "must-fix",
+      angle: "scope",
+      summary: "First line\nsecond line\t\twith   extra    spaces\n\n  and a trailing newline\n",
+      disposition: "accepted\nfor-fix",
+    },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  // The whole finding renders as exactly one Markdown list line (no embedded newlines).
+  const listLine = body.split("\n").find(line => line.startsWith("- `scope`:"));
+  assert.ok(listLine, "expected a single list line for the finding");
+  assert.equal(
+    listLine,
+    "- `scope`: First line second line with extra spaces and a trailing newline — _accepted for-fix_",
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -196,7 +227,7 @@ test("postGateFindings updates the existing marked comment (idempotent, no dupli
   const repoRoot = await emptyRepoRoot();
   try {
     // Existing comment carries the marker but stale body → triggers PATCH, not a new create.
-    const marker = buildFindingsMarker({ gate: "draft_gate", headSha: "abc1234" });
+    const marker = buildFindingsMarker({ gate: "draft_gate" });
     const existingComment = { id: 55, html_url: "https://github.com/owner/repo/pull/42#issuecomment-55", body: `${marker}\nstale body` };
     const { env, ghPath } = await writeGhStub(tmpDir, [
       {
@@ -240,6 +271,38 @@ test("postGateFindings no-ops when the existing comment body already matches", a
     );
     assert.equal(result.action, "noop");
     assert.equal(result.commentId, 77);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("postGateFindings updates the same per-gate comment when re-run with a different head-SHA length (no duplicate)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
+  const repoRoot = await emptyRepoRoot();
+  try {
+    // Existing comment was created earlier with a SHORT head prefix; re-running
+    // now with the FULL SHA for the same gate must still match the gate-only
+    // marker and PATCH in place rather than creating a second comment.
+    const findings = parseFindings(FINDINGS_JSON);
+    const existingBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+    const existingComment = { id: 88, html_url: "https://github.com/owner/repo/pull/42#issuecomment-88", body: existingBody };
+    const { env, ghPath } = await writeGhStub(tmpDir, [
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
+        stdout: JSON.stringify([[existingComment]]) + "\n",
+      },
+      {
+        assertArgs: ["api", "-X", "PATCH", "repos/owner/repo/issues/comments/88", "-f"],
+        stdout: JSON.stringify({ id: 88, html_url: existingComment.html_url }) + "\n",
+      },
+    ]);
+    const result = await postGateFindings(
+      { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234567890abcdef0123", findings: FINDINGS_JSON },
+      { env, ghCommand: ghPath, repoRoot },
+    );
+    assert.equal(result.action, "updated");
+    assert.equal(result.commentId, 88);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });

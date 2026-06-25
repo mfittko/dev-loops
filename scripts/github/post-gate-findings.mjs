@@ -2,6 +2,7 @@
 import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --findings <json>
 Post (or idempotently update) a visible, marker-tagged PR issue comment that lists the
@@ -49,15 +50,15 @@ function normalizeHeadSha(value) {
   return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
 }
 
+// Validate via the centralized repo-slug validator shared by sibling GitHub
+// scripts (parseRepoSlug). It enforces owner/name structure and rejects unsafe
+// segments (".", "..", slashes, whitespace); we re-throw as a parseError so the
+// CLI usage banner is preserved.
 function validateRepo(repo) {
-  const parts = String(repo).split("/");
-  if (parts.length !== 2 || parts.some(p => p.length === 0)) {
-    throw parseError(`--repo must be in owner/name format, got: ${JSON.stringify(repo)}`);
-  }
-  for (const p of parts) {
-    if (p === "." || p === ".." || /[\s\\]/.test(p)) {
-      throw parseError(`--repo segment ${JSON.stringify(p)} contains unsafe characters (dots, whitespace, or backslashes)`);
-    }
+  try {
+    parseRepoSlug(repo);
+  } catch (error) {
+    throw parseError(error instanceof Error ? error.message : String(error));
   }
   return repo;
 }
@@ -150,15 +151,26 @@ export function parsePostGateFindingsCliArgs(argv) {
   return options;
 }
 
-// Hidden marker keyed by gate + head. Re-running for the same gate/head finds and
-// updates the same comment instead of posting a duplicate. The HTML comment is not
-// rendered by GitHub but is matched on the comment body.
-export function buildFindingsMarker({ gate, headSha }) {
-  return `<!-- dev-loops:gate-findings gate=${gate} head=${headSha} -->`;
+// Hidden marker keyed by GATE ONLY. There is exactly one findings comment per
+// gate, updated in place each run. The marker deliberately does NOT include the
+// head SHA: --head-sha accepts any 7-64 hex prefix, so keying on its literal
+// value would let a different prefix length (or the full SHA) for the same head
+// miss the marker and post a duplicate. The reviewed head is still shown in the
+// comment body for context. The HTML comment is not rendered by GitHub but is
+// matched on the comment body.
+export function buildFindingsMarker({ gate }) {
+  return `<!-- dev-loops:gate-findings gate=${gate} -->`;
+}
+
+// Collapse any run of whitespace (newlines, tabs, repeated spaces) to a single
+// space and trim. LLM-generated free text often carries embedded newlines, which
+// would otherwise break a single Markdown list item across lines.
+function sanitizeInline(value) {
+  return String(value).replace(/\s+/g, " ").trim();
 }
 
 export function renderFindingsCommentBody({ gate, headSha, findings }) {
-  const marker = buildFindingsMarker({ gate, headSha });
+  const marker = buildFindingsMarker({ gate });
   const lines = [
     marker,
     `### Gate fan-out findings: ${gate}`,
@@ -183,9 +195,12 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
     if (group.length === 0) continue;
     lines.push(`#### ${SEVERITY_LABELS[sev]} (${group.length})`);
     for (const finding of group) {
-      const dispositionSuffix = finding.disposition ? ` — _${finding.disposition}_` : "";
+      // Sanitize free-text fields so embedded newlines/whitespace don't break
+      // the single-line Markdown list item.
+      const summary = sanitizeInline(finding.summary);
+      const dispositionSuffix = finding.disposition ? ` — _${sanitizeInline(finding.disposition)}_` : "";
       // angle is a code/label literal → backticks; summary is prose.
-      lines.push(`- \`${finding.angle}\`: ${finding.summary}${dispositionSuffix}`);
+      lines.push(`- \`${finding.angle}\`: ${summary}${dispositionSuffix}`);
       if (Array.isArray(finding.files) && finding.files.length > 0) {
         // File refs as plain text path:line so they stay readable; paths use backticks.
         const refs = finding.files.map(f => `\`${f}\``).join(", ");
@@ -273,7 +288,7 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
       findingsCount: findings.length,
     };
   }
-  const marker = buildFindingsMarker({ gate: options.gate, headSha: options.headSha });
+  const marker = buildFindingsMarker({ gate: options.gate });
   const desiredBody = renderFindingsCommentBody({ gate: options.gate, headSha: options.headSha, findings });
   const comments = await listIssueComments({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   const existing = findMarkedComment(comments, marker);
