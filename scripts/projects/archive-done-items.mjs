@@ -352,6 +352,9 @@ function normalizeItem(node) {
 function selectArchivable(items, { now, olderThanMs }) {
   return items.filter((it) => {
     if (it.isArchived) return false;
+    // Only archive items in the Done column — a closed issue/PR parked in
+    // another column (Backlog/Next Up/In Progress) must be left untouched.
+    if (it.status !== "Done") return false;
     const c = it.content;
     if (!c || !c.closed || !c.closedAt) return false;
     const closedAtMs = Date.parse(c.closedAt);

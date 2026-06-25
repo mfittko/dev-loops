@@ -89,6 +89,14 @@ describe("archive-done — selectArchivable", () => {
     assert.strictEqual(selected.length, 0);
   });
 
+  it("excludes closed items that are not in the Done column", () => {
+    const items = [
+      item("D", { number: 4, closed: true, closedAt: new Date(now - 40 * 86400000).toISOString(), status: "Backlog" }),
+      item("E", { number: 5, closed: true, closedAt: new Date(now - 40 * 86400000).toISOString(), status: "In Progress" }),
+    ];
+    const selected = selectArchivable(items, { now, olderThanMs });
+    assert.strictEqual(selected.length, 0);
+  });
   it("excludes already-archived items", () => {
     const items = [
       { ...item("D", { number: 4, closed: true, closedAt: "2026-01-01T00:00:00Z" }), isArchived: true },
