@@ -22,6 +22,7 @@ import {
   resolveLightMode,
   resolveRequireFanoutEvidence,
   resolveMaxFanoutReviewers,
+  resolveGatePostFindingsComments,
   DEFAULT_MAX_FANOUT_REVIEWERS,
 } from "../src/config/config.mjs";
 // ============================================================================
@@ -2759,5 +2760,42 @@ describe("gates.maxFanoutReviewers", () => {
     assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 1000 } }), 8);
     assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 64 } }), 64);
     assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 1 } }), 1);
+  });
+});
+
+describe("gates.postFindingsComments", () => {
+  test("defaults to true (opt-out) and resolveGatePostFindingsComments reflects it", () => {
+    // Default-on: the findings comment is posted unless explicitly disabled. The
+    // `!== false` resolver semantics keep opt-out robust for programmatic config.
+    assert.equal(resolveGatePostFindingsComments({}), true);
+    assert.equal(resolveGatePostFindingsComments({ gates: {} }), true);
+    assert.equal(resolveGatePostFindingsComments({ gates: { postFindingsComments: true } }), true);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.postFindingsComments, true);
+    assert.equal(resolveGatePostFindingsComments(parsed.data), true);
+  });
+
+  test("opt-out: explicit postFindingsComments: false suppresses the comment", () => {
+    assert.equal(resolveGatePostFindingsComments({ gates: { postFindingsComments: false } }), false);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: false } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.postFindingsComments, false);
+    assert.equal(resolveGatePostFindingsComments(parsed.data), false);
+  });
+
+  test("accepts postFindingsComments in full and file schemas", () => {
+    const full = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: true } });
+    assert.equal(full.success, true);
+    assert.equal(full.data.gates.postFindingsComments, true);
+
+    const file = FileConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: false } });
+    assert.equal(file.success, true);
+    assert.equal(file.data.gates.postFindingsComments, false);
+  });
+
+  test("rejects non-boolean postFindingsComments", () => {
+    const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: "yes" } });
+    assert.equal(bad.success, false);
   });
 });

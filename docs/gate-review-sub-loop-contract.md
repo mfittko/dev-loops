@@ -116,10 +116,18 @@ logged as the durable disposition ledger **before** the visible PR comment is po
 The ledger is the source of truth for what the gate found; the visible PR comment is a
 summary for auditability.
 
-**Post-findings rule:** The consolidated findings must be posted as a visible
-PR comment (via the checkpoint verdict comment contract) **before** the fix cycle in
-Phase 4 begins. Fixes must not be applied until the auditable trail exists on
-the PR.
+**Post-findings rule:** The consolidated findings must be posted as a visible,
+marker-tagged PR comment via `post-gate-findings.mjs` (a consolidated comment listing
+each finding grouped by severity, with `file:line` refs) **before** the fix cycle in
+Phase 4 begins, so the findings are auditable and Copilot/humans are aware of them.
+Fixes must not be applied until the auditable trail exists on the PR. The helper is
+idempotent per `gate + head` (re-running updates the same comment instead of
+duplicating) and posts a brief "no findings" note when the set is empty. This comment
+is governed by `gates.postFindingsComments` (resolved via
+`resolveGatePostFindingsComments(config)`, default true / opt-out): when it is `false`
+the helper no-ops with a `skipped` result and the post step is skipped. The disposition
+ledger is written regardless — the opt-out only suppresses the PR comment, never the
+durable ledger.
 
 ### Phase 4 — Fix
 
