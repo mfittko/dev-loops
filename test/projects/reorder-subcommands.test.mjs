@@ -226,6 +226,42 @@ describe("reorder — order subcommand", () => {
   });
 });
 
+describe("reorder — order partial-failure recovery", () => {
+  it("reports how many moves were applied when a mid-sequence mutation fails", async () => {
+    const items = [
+      makeItemNode("PVTI_1", 101, "Issue", "Next Up"),
+      makeItemNode("PVTI_2", 102, "Issue", "Next Up"),
+      makeItemNode("PVTI_3", 103, "Issue", "Next Up"),
+    ];
+    // order 103 101 102: resolve each (3), before snapshot (1), mutation 1 ok, mutation 2 fails
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+      { payload: getItemsByContentResponse(items) }, // resolve 103
+      { payload: getItemsByContentResponse(items) }, // resolve 101
+      { payload: getItemsByContentResponse(items) }, // resolve 102
+      { payload: getItemsByContentResponse(items) }, // before snapshot
+      { payload: updatePositionResponse() }, // move 1 ok
+      { error: "boom" }, // move 2 fails
+    ];
+    const runChild = mockRunChild(responses);
+
+    await assert.rejects(
+      () => main(
+        { _subcommand: "order", _positional: ["103", "101", "102"], repo: "mfittko/dev-loops", project: "1" },
+        { runChild },
+      ),
+      (err) => {
+        assert.strictEqual(err.appliedMoves, 1);
+        assert.strictEqual(err.totalMoves, 3);
+        assert.match(err.message, /order partially applied: 1 of 3/);
+        assert.match(err.message, /re-run the same order command/);
+        return true;
+      },
+    );
+  });
+});
+
 // ── --dry-run ─────────────────────────────────────────────────────────────
 
 describe("reorder — --dry-run", () => {

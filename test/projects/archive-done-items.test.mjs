@@ -148,6 +148,10 @@ describe("archive-done — integration", () => {
     assert.strictEqual(result.archived[0].itemId, "A");
     assert.strictEqual(result.archived[0].issueNumber, 1);
     assert.strictEqual(countMutations(runChild.calls), 1);
+    // Output distinguishes all scanned board items from archive candidates.
+    assert.strictEqual(result.scanned, 2);
+    assert.strictEqual(result.archivable, 1);
+    assert.strictEqual("considered" in result, false);
   });
 
   it("--dry-run lists intended archive mutations without executing", async () => {
@@ -169,6 +173,8 @@ describe("archive-done — integration", () => {
     assert.ok(result.mutations[0].query.includes("archiveProjectV2Item"));
     assert.strictEqual(result.mutations[0].variables.itemId, "A");
     assert.strictEqual(countMutations(runChild.calls), 0);
+    assert.strictEqual(result.scanned, 1);
+    assert.strictEqual(result.archivable, 1);
   });
 
   it("defaults to 30d when --older-than is omitted", async () => {

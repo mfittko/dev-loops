@@ -116,6 +116,13 @@ The subcommand forms emit diff-friendly JSON with the column order **before** an
 `order` returns a `moves` array (one entry per chained position mutation) plus the
 same `before`/`after` snapshots.
 
+> **`order` is not atomic.** It applies N sequential `updateProjectV2ItemPosition`
+> mutations with no rollback. If it fails partway, the board is left partially
+> reordered and the thrown error reports how many moves completed (for example
+> `order partially applied: 1 of 3 moves completed`). Re-running the **same**
+> `order <ref1> <ref2> ...` command is idempotent and is the supported recovery
+> path — it re-applies the full target sequence.
+
 ### Dry run
 
 Add `--dry-run` to any form to print the intended GraphQL mutation(s) — including
@@ -158,16 +165,21 @@ dev-loops project archive-done --repo mfittko/dev-loops --project 1 --older-than
 dev-loops project archive-done --repo mfittko/dev-loops --project 1 --dry-run
 ```
 
-Output reports how many items were considered and which were archived:
+Output distinguishes the items scanned from the actual archive candidates:
 
 ```json
 {
   "ok": true,
   "olderThan": "30d",
-  "considered": 12,
+  "scanned": 12,
+  "archivable": 1,
   "archived": [{ "itemId": "PVTI_a", "issueNumber": 1, "prNumber": null, "closedAt": "2026-01-01T00:00:00Z" }]
 }
 ```
+
+- `scanned` — all board items belonging to the repo (open, closed, and archived).
+- `archivable` — the subset selected for archival by the closed-duration filter.
+- `archived` — the items actually archived (equals `archivable`, or empty under `--dry-run`).
 
 Open items (even if parked in the `Done` column) and already-archived items are
 never touched.

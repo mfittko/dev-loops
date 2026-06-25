@@ -592,10 +592,31 @@ async function mainSubcommand(args, { env, child, repo, owner, repoName, project
     return { ok: true, dryRun: true, mutations, before };
   }
 
-  for (const mutation of mutations) {
-    const payload = await ghGraphql(mutation.query, mutation.variables, env, child);
+  // NOTE: `order` applies N sequential position mutations and is NOT atomic. A
+  // mid-sequence failure leaves the board partially reordered; re-running the
+  // same `order` command is idempotent and is the supported recovery path. The
+  // thrown error reports how many moves were applied before failing.
+  for (let i = 0; i < mutations.length; i++) {
+    const mutation = mutations[i];
+    let payload;
+    try {
+      payload = await ghGraphql(mutation.query, mutation.variables, env, child);
+    } catch (err) {
+      if (subcommand === "order") {
+        err.message = `${err.message} (order partially applied: ${i} of ${mutations.length} moves completed; re-run the same order command to recover)`;
+        err.appliedMoves = i;
+        err.totalMoves = mutations.length;
+      }
+      throw err;
+    }
     if (!payload?.data?.updateProjectV2ItemPosition) {
-      throw Object.assign(new Error("Failed to reorder item"), { code: "MUTATION_FAILED" });
+      const detail = subcommand === "order"
+        ? ` (order partially applied: ${i} of ${mutations.length} moves completed; re-run the same order command to recover)`
+        : "";
+      throw Object.assign(new Error(`Failed to reorder item${detail}`), {
+        code: "MUTATION_FAILED",
+        ...(subcommand === "order" ? { appliedMoves: i, totalMoves: mutations.length } : {}),
+      });
     }
   }
 

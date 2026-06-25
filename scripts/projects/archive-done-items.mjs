@@ -16,8 +16,9 @@ Options:
   --help, -h              Show this help.
 
 Output (stdout):
-  JSON: { ok: true, olderThan, considered, archived: [{ itemId, issueNumber, prNumber, closedAt }] }
-  dry-run: { ok: true, dryRun: true, olderThan, mutations: [{ query, variables }] }
+  JSON: { ok: true, olderThan, scanned, archivable, archived: [{ itemId, issueNumber, prNumber, closedAt }] }
+  dry-run: { ok: true, dryRun: true, olderThan, scanned, archivable, mutations: [{ query, variables }] }
+  (scanned = all repo board items; archivable = items selected for archival)
 
 Exit codes:
   0 — success
@@ -346,7 +347,8 @@ async function main(args, { env = process.env, runChild } = {}) {
       ok: true,
       dryRun: true,
       olderThan: olderThanRaw,
-      considered: repoItems.length,
+      scanned: repoItems.length,
+      archivable: archivable.length,
       mutations,
     };
   }
@@ -368,7 +370,8 @@ async function main(args, { env = process.env, runChild } = {}) {
   return {
     ok: true,
     olderThan: olderThanRaw,
-    considered: repoItems.length,
+    scanned: repoItems.length,
+    archivable: archivable.length,
     archived,
   };
 }
