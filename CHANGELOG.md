@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 0.3.0
+
+### Added
+
+- **Gate fan-out/fan-in review sub-loop** (epic #867). The draft and pre-approval gates now run as a real fan-out: a context-builder resolves review angles, forks one scoped, read-only `review` agent per angle, and a fan-in step consolidates the per-angle verdicts into a disposition ledger. Verdicts record their execution mode (`--execution-mode fanout_fanin | inline_single_agent`, with `--inline-reason`; #875) so the audit trail shows how the gate was actually run. See [docs/gate-review-sub-loop-contract.md](docs/gate-review-sub-loop-contract.md).
+  - **Context-builder handoff + dynamic angles** (#880). A `write-gate-context` step emits the per-gate scope/diff artifact the forked reviewers consume, and angles are resolved dynamically (configurable `mandatory` set plus `gates.dynamicAngles`), bounded by `gates.maxFanoutReviewers` (default 8).
+  - **Forked scoped reviewers + fan-in consolidation** (#881). Per-angle `review` agents emit structured findings; `consolidateFanin` merges them and computes the `fanout_fanin` verdict against `blockCleanOnFindingSeverities` (`must-fix`, `worth-fixing-now`).
+  - **Full-diff + adversarial scoped review with scope widening** (#886, #885). The context-builder loads the full PR diff and adjacent code, and reviewers can request scope widening. Reviewers run adversarially against the complete change — this surfaced real defects (arg coercion, head-SHA casing, markdown injection, dead seams) that the prior single-pass review missed.
+- **Fan-out findings posted to the PR** (#888, #887). The gate posts a single marker-tagged, idempotent PR comment listing its findings so Copilot and humans see them, and the loop fixes/resolves its own findings as it does Copilot comments. Opt out with `gates.postFindingsComments: false` (default on).
+- **Configured board drives queue membership** (#884, #864). A configured GitHub Projects board's `Next Up` column is now the authoritative source of queue membership and ordering (not just status); emptiness reports a precise verdict (`queue_empty` / `board_empty` / `board_unavailable`) instead of a misleading generic message.
 
 ### Changed
 
-- **Gate fan-out evidence enforcement is now ON by default** (#879, epic #867 final phase). A clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA; the pre-merge evidence check fails closed otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. See [docs/gate-review-sub-loop-contract.md](docs/gate-review-sub-loop-contract.md).
+- **Gate fan-out evidence enforcement is now ON by default** (#882, #879, epic #867 final phase). A clean gate verdict requires the gate to have run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA; the pre-merge evidence check fails closed otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`.
+- **Board status auto-syncs on dev-loop transitions** (#883, #874). A linked issue's board Status column is synced on loop transitions (e.g. PR opened → `In Progress`, merged → `Done`) via local `gh` auth — best-effort and non-fatal. Repairs the `move-queue-item` lookup that passed numeric (not string) project/item refs.
 
 ## 0.2.8
 
