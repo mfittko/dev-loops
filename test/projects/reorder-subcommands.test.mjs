@@ -218,6 +218,25 @@ describe("reorder — order subcommand", () => {
     assert.strictEqual(countMutations(runChild.calls), 3);
     assert.deepStrictEqual(result.after.map((x) => x.itemId), ["PVTI_3", "PVTI_1", "PVTI_2"]);
   });
+
+  it("fails closed when refs span different Status columns (no mutation)", async () => {
+    const items = [
+      makeItemNode("PVTI_1", 101, "Issue", "Next Up"),
+      makeItemNode("PVTI_2", 102, "Issue", "In Progress"), // different column
+    ];
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+      { payload: getItemsByContentResponse(items) }, // single resolve fetch
+    ];
+    const runChild = mockRunChild(responses);
+
+    await assert.rejects(
+      () => main({ _subcommand: "order", _positional: ["101", "102"], repo: "mfittko/dev-loops", project: "1" }, { runChild }),
+      (err) => err.code === "MIXED_STATUS" && /same Status column/.test(err.message),
+    );
+    assert.strictEqual(countMutations(runChild.calls), 0, "no mutation on a mixed-status plan");
+  });
 });
 
 describe("reorder — order partial-failure recovery", () => {

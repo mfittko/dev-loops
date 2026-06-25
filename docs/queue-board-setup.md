@@ -166,8 +166,10 @@ be reordered.
 
 `dev-loops project archive-done` removes finished work from the board. It archives
 items (via `archiveProjectV2Item`) whose issue or PR has been **closed** for at
-least the given duration. It is operator-triggered (no webhooks) and scoped to the
-single repo passed via `--repo`.
+least the given duration. The closed state — not the board Status column — is the
+criterion (a closed issue/PR is "done" for cleanup purposes), so a closed item is
+archived regardless of which column it still sits in. It is operator-triggered (no
+webhooks) and scoped to the single repo passed via `--repo`.
 
 ```sh
 # Archive items whose issue/PR closed more than 30 days ago (default)

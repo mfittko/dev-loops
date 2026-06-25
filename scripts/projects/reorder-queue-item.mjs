@@ -609,6 +609,23 @@ async function mainSubcommand(args, { env, child, repo, project }) {
   const refs = positional.map((p) => parseItemRef(p));
   const resolved = refs.map((ref) => resolveFromItems(items, ref, repo));
 
+  // Reordering positions within a single Status column. The before/after snapshot is scoped
+  // to one column, and a cross-column move plan is misleading/invalid — so fail closed unless
+  // every resolved ref shares the first ref's Status (multi-ref subcommands only).
+  if (resolved.length > 1) {
+    const primaryStatus = resolved[0].status ?? null;
+    const offender = resolved.find((it) => (it.status ?? null) !== primaryStatus);
+    if (offender) {
+      throw Object.assign(
+        new Error(
+          `All reordered items must be in the same Status column as the first item (${primaryStatus ?? "(none)"}); ` +
+            `${offender.itemId} is in ${offender.status ?? "(none)"}.`,
+        ),
+        { code: "MIXED_STATUS" },
+      );
+    }
+  }
+
   // Build the ordered list of position moves, each { item, afterItem|null }.
   let plan;
   if (subcommand === "move-to-top") {
