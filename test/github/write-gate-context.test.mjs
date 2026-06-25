@@ -230,6 +230,7 @@ test("rationaleFromResolver maps recommended→kept and skipped→dropped with r
     recommendedAngles: ["gate-evidence", "docs"],
     skippedAngles: ["coverage"],
     reasons: { coverage: "DOCS_ONLY" },
+    dynamicAnglesActive: true,
   });
   assert.deepEqual(resolvedAngles, ["gate-evidence", "docs"]);
   assert.deepEqual(rationale.find((r) => r.angle === "gate-evidence"), {
@@ -238,6 +239,19 @@ test("rationaleFromResolver maps recommended→kept and skipped→dropped with r
   assert.deepEqual(rationale.find((r) => r.angle === "coverage"), {
     angle: "coverage", action: "dropped", reason: "DOCS_ONLY",
   });
+});
+
+test("rationaleFromResolver marks kept angles as static when dynamic resolution is inactive", () => {
+  const { rationale } = rationaleFromResolver({
+    recommendedAngles: ["gate-evidence", "coverage"],
+    skippedAngles: [],
+    reasons: {},
+    dynamicAnglesActive: false,
+  });
+  for (const r of rationale) {
+    assert.equal(r.action, "kept");
+    assert.equal(r.reason, "static pool (dynamic angle resolution inactive)");
+  }
 });
 
 test("rationaleFromResolver tolerates null/empty resolver output", () => {

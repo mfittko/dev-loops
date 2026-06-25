@@ -62,10 +62,14 @@ export function rationaleFromResolver(resolverResult) {
     ? resolverResult.skippedAngles
     : [];
   const reasons = resolverResult?.reasons ?? {};
+  const dynamicActive = resolverResult?.dynamicAnglesActive === true;
+  const keptReason = dynamicActive
+    ? "selected by dynamic angle resolver"
+    : "static pool (dynamic angle resolution inactive)";
 
   const rationale = [];
   for (const angle of recommended) {
-    rationale.push({ angle, action: "kept", reason: "selected by dynamic angle resolver" });
+    rationale.push({ angle, action: "kept", reason: keptReason });
   }
   for (const angle of skipped) {
     rationale.push({
