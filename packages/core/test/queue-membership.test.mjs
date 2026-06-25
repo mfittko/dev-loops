@@ -56,22 +56,66 @@ test("configured board + existing local entries: board adds only missing members
   assert.equal(queue.entries[0].status, "running");
 });
 
-test("configured board with empty Next Up reports 'board_empty', not 'queue_empty'", async () => {
+test("configured board with genuinely empty Next Up (reason null) reports 'board_empty', not 'queue_empty'", async () => {
   const queue = makeQueue([]);
   let written = null;
 
   const result = await reconcileBoardMembership("/repo", "owner/name", queue, {
     loadBoardConfig: () => ({ enabled: true }),
-    resolveNextUpOrder: async () => ({ ok: true, order: [], reason: "Next Up empty" }),
+    // Clean resolution that returns no items: reason is null, so this is a
+    // genuinely empty Next Up rather than a resolution failure.
+    resolveNextUpOrder: async () => ({ ok: true, order: [], reason: null }),
     writeQueue: async (_root, q) => { written = q; },
   });
 
   assert.equal(result.boardConfigured, true);
   assert.deepEqual(result.added, []);
   assert.equal(result.emptiness, "board_empty");
-  assert.equal(result.reason, "Next Up empty");
+  assert.equal(result.reason, null);
   // Nothing added → no write.
   assert.equal(written, null);
+});
+
+test("configured board + empty order WITH a reason (fail-open resolution failure) is NOT board_empty", async () => {
+  const queue = makeQueue([]);
+  let written = null;
+  const { log, lines } = captureLog();
+
+  const result = await reconcileBoardMembership("/repo", "owner/name", queue, {
+    loadBoardConfig: () => ({ enabled: true }),
+    // resolveNextUpOrder is fail-open: an API error yields ok:true, an empty
+    // order, AND a non-null reason. This must NOT be mistaken for an empty board.
+    resolveNextUpOrder: async () => ({ ok: true, order: [], reason: "GraphQL 502 Bad Gateway" }),
+    writeQueue: async (_root, q) => { written = q; },
+    log,
+  });
+
+  assert.equal(result.boardConfigured, true);
+  assert.deepEqual(result.added, []);
+  // Critical: a resolution failure must not be reported as board_empty.
+  assert.notEqual(result.emptiness, "board_empty");
+  assert.equal(result.emptiness, "board_unavailable");
+  assert.equal(result.reason, "GraphQL 502 Bad Gateway");
+  assert.equal(written, null);
+  // The real reason is logged so the failure is not silently swallowed.
+  assert.ok(lines.some((l) => l.includes("Next Up resolution failed") && l.includes("GraphQL 502 Bad Gateway")));
+});
+
+test("configured board + empty order WITH a reason but non-empty local queue falls through to running (emptiness null)", async () => {
+  const queue = makeQueue([createEntry(5, "issue")]);
+
+  const result = await reconcileBoardMembership("/repo", "owner/name", queue, {
+    loadBoardConfig: () => ({ enabled: true }),
+    resolveNextUpOrder: async () => ({ ok: true, order: [], reason: "board lookup failed" }),
+    writeQueue: async () => {},
+    log: () => {},
+  });
+
+  assert.equal(result.boardConfigured, true);
+  assert.deepEqual(result.added, []);
+  // Local queue has pending work: fail-open runs it rather than reporting empty.
+  assert.equal(result.emptiness, null);
+  assert.equal(result.reason, "board lookup failed");
 });
 
 test("unconfigured board + empty local queue reports 'queue_empty' (legacy behavior)", async () => {

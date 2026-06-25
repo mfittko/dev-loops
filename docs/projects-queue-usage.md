@@ -133,7 +133,7 @@ create or modify project/field structure.
 When a board is **configured** (`queue.projectNumber` or `queue.boardTitle` in `.devloops`),
 it is the **authoritative source of queue membership and ordering** — not just status:
 
-- **Configured and reachable**: `dev-loop queue run` resolves the board's `Next Up` column and
+- **Configured and reachable**: `dev-loops queue run` resolves the board's `Next Up` column and
   reconciles those items into `.pi/dev-loop-queue.json` (appending a queued entry for any
   `Next Up` issue not already present) before running. The board therefore drives **which**
   issues are worked and their order. Enqueue work via `dev-loops project add ... --status "Next Up"`
