@@ -1185,7 +1185,7 @@ test("interpretLoopState keeps WAITING_FOR_COPILOT_REVIEW when cap NOT reached w
   assert.equal(result.roundCapCleanEligible, false);
 });
 
-test("interpretLoopState routes to ROUND_CAP_REACHED when cap reached with unresolved threads and already-requested assignment", () => {
+test("interpretLoopState keeps UNRESOLVED_FEEDBACK_PRESENT (not a clean fallback) when cap reached with unresolved threads and an in-flight request", () => {
   const snapshot = {
     prExists: true,
     prNumber: 847,
@@ -1223,7 +1223,10 @@ test("interpretLoopState does not produce a clean fallback when cap reached with
   const refinementConfig = { maxCopilotRounds: 5 };
 
   const result = interpretLoopState(snapshot, refinementConfig);
-  assert.notEqual(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  // Not clean (failing CI) + in-flight request at the cap: falls through to the normal
+  // wait routing (threads are 0 and a request is in flight) → WAITING_FOR_COPILOT_REVIEW,
+  // never a clean fallback.
+  assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
   assert.equal(result.roundCapCleanEligible, false);
 });
 
