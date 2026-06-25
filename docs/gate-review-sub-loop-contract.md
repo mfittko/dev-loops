@@ -121,8 +121,9 @@ marker-tagged PR comment via `post-gate-findings.mjs` (a consolidated comment li
 each finding grouped by severity, with `file:line` refs) **before** the fix cycle in
 Phase 4 begins, so the findings are auditable and Copilot/humans are aware of them.
 Fixes must not be applied until the auditable trail exists on the PR. The helper is
-idempotent per `gate + head` (re-running updates the same comment instead of
-duplicating) and posts a brief "no findings" note when the set is empty. This comment
+idempotent per gate (exactly one comment per gate, updated in place on each run; the
+reviewed head is shown in the body) and posts a brief "no findings" note when the set
+is empty. This comment
 is governed by `gates.postFindingsComments` (resolved via
 `resolveGatePostFindingsComments(config)`, default true / opt-out): when it is `false`
 the helper no-ops with a `skipped` result and the post step is skipped. The disposition

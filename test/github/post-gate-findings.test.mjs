@@ -185,6 +185,25 @@ test("renderFindingsCommentBody collapses multi-line/whitespace summary into one
   );
 });
 
+test("renderFindingsCommentBody sanitizes file refs (collapses whitespace/newlines, drops empties)", () => {
+  const findings = parseFindings(JSON.stringify([
+    {
+      severity: "must-fix",
+      angle: "scope",
+      summary: "Scope too broad",
+      // File refs carrying embedded whitespace/newlines plus an all-whitespace entry.
+      files: ["src/a.mjs:12\n", "  src/b.mjs:\t34  ", "  \n  "],
+    },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  // The files sub-bullet renders as exactly one clean line (no embedded newlines/tabs).
+  const filesLine = body.split("\n").find(line => line.trimStart().startsWith("- files:"));
+  assert.ok(filesLine, "expected a single files sub-line for the finding");
+  assert.equal(filesLine, "  - files: `src/a.mjs:12`, `src/b.mjs: 34`");
+  // No stray empty backtick pair from the all-whitespace entry.
+  assert.ok(!body.includes("``"));
+});
+
 // ---------------------------------------------------------------------------
 // Idempotent create / update via stubbed gh
 // ---------------------------------------------------------------------------
@@ -333,6 +352,45 @@ test("postGateFindings is a skipped no-op when gates.postFindingsComments is fal
     assert.equal(result.action, "skipped");
     assert.match(result.reason, /postFindingsComments/);
     assert.equal(result.findingsCount, 3);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("postGateFindings falls back to default-on (posts) when the config fails to load/validate", async () => {
+  // loadDevLoopConfig never throws; a config that fails schema validation yields a
+  // non-empty errors array. We must treat that as config-unavailable and fall back to
+  // the default behavior (postFindingsComments default-on => proceed to post), NOT
+  // silently trust the malformed/partial config object.
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
+  const repoRoot = await emptyRepoRoot();
+  try {
+    // postFindingsComments must be a boolean; a string value fails validation.
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      "version: 1\ngates:\n  postFindingsComments: \"yes\"\n",
+      "utf8",
+    );
+    const { env, ghPath } = await writeGhStub(tmpDir, [
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
+        stdout: "[[]]\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/42/comments", "-f"],
+        assertArgContains: ["dev-loops:gate-findings"],
+        stdout: JSON.stringify({ id: 202, html_url: "https://github.com/owner/repo/pull/42#issuecomment-202" }) + "\n",
+      },
+    ]);
+    const result = await postGateFindings(
+      { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234", findings: FINDINGS_JSON },
+      { env, ghCommand: ghPath, repoRoot },
+    );
+    // Default-on fallback => the comment is created despite the malformed config.
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+    assert.equal(result.commentId, 202);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });

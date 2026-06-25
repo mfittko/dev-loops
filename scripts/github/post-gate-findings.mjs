@@ -6,8 +6,9 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --findings <json>
 Post (or idempotently update) a visible, marker-tagged PR issue comment that lists the
-consolidated gate fan-out findings, grouped by severity. Re-running for the same
-gate + head updates the existing comment instead of duplicating it.
+consolidated gate fan-out findings, grouped by severity. The comment is idempotent
+per gate: there is exactly one comment per gate, updated in place on each run
+(the reviewed head is shown in the body) instead of duplicating it.
 
 The disposition ledger (write-gate-findings-log.mjs) is the durable source of truth and is
 written regardless of this comment. This helper only posts the auditable PR summary, and
@@ -202,9 +203,17 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
       // angle is a code/label literal → backticks; summary is prose.
       lines.push(`- \`${finding.angle}\`: ${summary}${dispositionSuffix}`);
       if (Array.isArray(finding.files) && finding.files.length > 0) {
-        // File refs as plain text path:line so they stay readable; paths use backticks.
-        const refs = finding.files.map(f => `\`${f}\``).join(", ");
-        lines.push(`  - files: ${refs}`);
+        // File refs go inside backticks; sanitize each so embedded whitespace or
+        // newlines can't break the single Markdown list item, and drop any that
+        // sanitize to empty.
+        const refs = finding.files
+          .map(f => sanitizeInline(f))
+          .filter(f => f.length > 0)
+          .map(f => `\`${f}\``)
+          .join(", ");
+        if (refs.length > 0) {
+          lines.push(`  - files: ${refs}`);
+        }
       }
     }
     lines.push("");
@@ -275,7 +284,20 @@ async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
 
 export async function postGateFindings(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
   const findings = parseFindings(options.findings);
-  const { config } = await loadDevLoopConfig({ repoRoot });
+  // loadDevLoopConfig never throws: it returns { config, warnings, errors }.
+  // A non-empty errors array means the config could not be loaded/validated, so
+  // log it (stderr) and fall back to default behavior (config-unavailable →
+  // null → resolveGatePostFindingsComments defaults on → proceed to post),
+  // rather than trusting a malformed/partial config object. Mirrors how
+  // detect-checkpoint-evidence treats config-unavailable.
+  const { config: loadedConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
+  let config = loadedConfig;
+  if (Array.isArray(configErrors) && configErrors.length > 0) {
+    process.stderr.write(
+      `post-gate-findings: dev-loop config could not be loaded/validated; using default behavior. errors=${JSON.stringify(configErrors)}\n`,
+    );
+    config = null;
+  }
   if (!resolveGatePostFindingsComments(config)) {
     return {
       ok: true,
