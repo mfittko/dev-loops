@@ -63,6 +63,12 @@ const GatesConfig = z.strictObject({
   // parallel. When the resolved angle set exceeds this cap, the overflow runs
   // in sequential batches and the degradation is recorded in the gate evidence.
   maxFanoutReviewers: z.number().int().min(1).max(64).default(8),
+  // Post the consolidated gate fan-out findings as a visible, marker-tagged PR
+  // comment so they are auditable and Copilot/humans are aware of them. Default
+  // true (opt-out). The disposition ledger is written regardless; this flag only
+  // suppresses the PR comment when explicitly false. See
+  // docs/gate-review-sub-loop-contract.md.
+  postFindingsComments: z.boolean().default(true),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -119,6 +125,7 @@ const FileGatesConfig = z.strictObject({
   preApproval: FileGateConfig.optional(),
   requireFanoutEvidence: z.boolean().optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).optional(),
+  postFindingsComments: z.boolean().optional(),
 });
 
 // Partial persona entries for file-level config (allows omitting fields)
@@ -869,6 +876,24 @@ export function resolveMaxFanoutReviewers(config) {
     return raw;
   }
   return DEFAULT_MAX_FANOUT_REVIEWERS;
+}
+
+/**
+ * Resolve whether the consolidated gate fan-out findings should be posted as a
+ * visible, marker-tagged PR comment.
+ *
+ * Returns true (post the comment) unless `gates.postFindingsComments` is
+ * explicitly set to false. Using a `!== false` test (rather than `=== true`)
+ * keeps the opt-out semantics robust for programmatically-built config objects
+ * that bypass schema defaulting. The disposition ledger is written regardless;
+ * this flag only suppresses the auditable PR comment. See
+ * docs/gate-review-sub-loop-contract.md.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {boolean}
+ */
+export function resolveGatePostFindingsComments(config) {
+  return config?.gates?.postFindingsComments !== false;
 }
 
 /**
