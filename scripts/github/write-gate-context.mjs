@@ -292,7 +292,36 @@ export function parseWriteGateContextCliArgs(argv) {
  */
 export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
   const repoSlug = repoSlugFor(repo);
-  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.json`);
+}
+
+/**
+ * Validate the non-repo path components (gate, pr, headSha) that are
+ * interpolated into a filesystem path which is later `path.resolve()`d and
+ * read/written. Mirrors the repo-segment safety check in {@link repoSlugFor} so
+ * both path builders reject traversal sequences and odd filenames coming from
+ * untrusted inputs. Returns sanitized values for interpolation.
+ *
+ * @param {object} input
+ * @param {number|string} input.pr — must coerce to a positive integer
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha — 7-64 char hex SHA
+ * @returns {{ pr: number, gate: string, headSha: string }}
+ */
+function validatePathSegments({ pr, gate, headSha }) {
+  if (gate !== "draft_gate" && gate !== "pre_approval_gate") {
+    throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected draft_gate or pre_approval_gate)`);
+  }
+  const prNum = typeof pr === "number" ? pr : Number(String(pr).trim());
+  if (!Number.isInteger(prNum) || prNum <= 0) {
+    throw new Error(`--pr segment ${JSON.stringify(pr)} is unsafe (expected a positive integer)`);
+  }
+  const sha = String(headSha).trim();
+  if (!/^[0-9a-f]{7,64}$/i.test(sha)) {
+    throw new Error(`--head-sha segment ${JSON.stringify(headSha)} is unsafe (expected a 7-64 character hex SHA)`);
+  }
+  return { pr: prNum, gate, headSha: sha };
 }
 
 /**
@@ -331,7 +360,8 @@ function repoSlugFor(repo) {
  */
 export function buildGateDiffPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
   const repoSlug = repoSlugFor(repo);
-  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${pr}`, `${gate}-${headSha}.diff`);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.diff`);
 }
 
 /**
@@ -352,8 +382,17 @@ export function parseChangedFiles(nameStatusOutput) {
     const cols = trimmed.split("\t");
     if (cols.length < 2) continue;
     const status = cols[0].trim();
-    // Rename (Rxxx) and copy (Cxxx) entries carry old + new paths; record the new path.
-    const dest = /^[RC]\d*$/i.test(status) ? cols[cols.length - 1] : cols[1];
+    let dest;
+    if (/^[RC]\d*$/i.test(status)) {
+      // Rename (Rxxx) / copy (Cxxx) entries carry status + old + new paths and
+      // must have >= 3 columns; record the new (last) path. A malformed 2-column
+      // rename/copy row (e.g. "R100\told-path", missing the new path) is skipped
+      // rather than misrecording the OLD path as the changed file.
+      if (cols.length < 3) continue;
+      dest = cols[cols.length - 1];
+    } else {
+      dest = cols[1];
+    }
     const file = (dest ?? "").trim();
     if (file.length > 0) files.push(file);
   }

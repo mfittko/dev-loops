@@ -70,6 +70,20 @@ test("buildGateContextPath rejects malformed repo", () => {
   assert.throws(() => buildGateContextPath({ repo: "../x/y", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name|unsafe/);
 });
 
+test("buildGateContextPath accepts valid pr/gate/headSha segments", () => {
+  const p = buildGateContextPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234def" });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-7", "pre_approval_gate-ABC1234def.json"));
+});
+
+test("buildGateContextPath rejects unsafe pr/gate/headSha segments", () => {
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 1, gate: "../etc", headSha: "abc1234" }), /gate.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "1.5", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: "../9", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 0, gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "../../etc/passwd" }), /head-sha.*unsafe/);
+  assert.throws(() => buildGateContextPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "xyz" }), /head-sha.*unsafe/);
+});
+
 // ---------------------------------------------------------------------------
 // Diff path builder (mirrors buildGateContextPath, .diff extension)
 // ---------------------------------------------------------------------------
@@ -98,6 +112,20 @@ test("buildGateDiffPath rejects malformed repo (same safety as context path)", (
   assert.throws(() => buildGateDiffPath({ repo: "a b/c", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /unsafe/);
 });
 
+test("buildGateDiffPath accepts valid pr/gate/headSha segments", () => {
+  const p = buildGateDiffPath({ repo: "owner/repo", pr: 7, gate: "pre_approval_gate", headSha: "ABC1234def" });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-7", "pre_approval_gate-ABC1234def.diff"));
+});
+
+test("buildGateDiffPath rejects unsafe pr/gate/headSha segments (same safety as context path)", () => {
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "../etc", headSha: "abc1234" }), /gate.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "1.5", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "../9", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 0, gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "../../etc/passwd" }), /head-sha.*unsafe/);
+  assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "xyz" }), /head-sha.*unsafe/);
+});
+
 // ---------------------------------------------------------------------------
 // parseChangedFiles — full repo-relative paths from --name-status output
 // ---------------------------------------------------------------------------
@@ -110,6 +138,22 @@ test("parseChangedFiles parses M/A/D entries and tolerates blanks", () => {
 test("parseChangedFiles records destination path for renames/copies", () => {
   const out = "R100\tsrc/old.mjs\tsrc/new.mjs\nC75\tsrc/base.mjs\tsrc/copy.mjs\n";
   assert.deepEqual(parseChangedFiles(out), ["src/new.mjs", "src/copy.mjs"]);
+});
+
+test("parseChangedFiles records the new path for a well-formed 3-column rename/copy", () => {
+  assert.deepEqual(parseChangedFiles("R100\told\tnew\n"), ["new"]);
+  assert.deepEqual(parseChangedFiles("C75\ta\tb\n"), ["b"]);
+});
+
+test("parseChangedFiles skips a malformed 2-column rename/copy row (no new path)", () => {
+  // "R100\told" lacks the destination column; recording the OLD path would be wrong.
+  assert.deepEqual(parseChangedFiles("R100\told\n"), []);
+  assert.deepEqual(parseChangedFiles("C75\tonly-old\n"), []);
+  // Malformed rename row is skipped but valid neighbors are still recorded.
+  assert.deepEqual(
+    parseChangedFiles("R100\told\nM\tkept.mjs\nR50\tx\ty\n"),
+    ["kept.mjs", "y"],
+  );
 });
 
 test("parseChangedFiles returns empty for empty/non-string input", () => {
