@@ -292,14 +292,16 @@ async function ledgerExists(fullPath) {
  *
  * Enforcement is ON by default (opt-out via gates.requireFanoutEvidence: false).
  * Returns { required: false } when enforcement is disabled OR when config is
- * unavailable (config === null after a failed load) — config-unavailable must
+ * unavailable (config == null — null or undefined — after a failed load) — config-unavailable must
  * fail open and never enable enforcement. When enabled, records per-required-gate
  * executionMode and whether the deterministic findings-log ledger exists for the
  * reviewed head SHA so the pre-merge check can fail closed on inline verdicts or
  * missing ledgers.
  */
 async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd }) {
-  // Fail open when config could not be loaded/validated (config === null).
+  // Fail open when config could not be loaded/validated. `== null` covers both
+  // null and undefined; the loader only ever yields null on failure, but the
+  // loose check defensively treats an absent config as unavailable.
   if (config == null || !resolveRequireFanoutEvidence(config)) {
     return { required: false, gates: [] };
   }
