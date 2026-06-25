@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
 
 const USAGE = `Usage: dev-loops project archive-done --repo <owner/name> --project <number|id> [--older-than <duration>] [--dry-run]
 
@@ -27,36 +28,61 @@ Exit codes:
   3 — project not found
 `.trim();
 
-const VALID_ARGS = new Set(["--repo", "--project", "--older-than", "--dry-run", "--help", "-h"]);
-
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!VALID_ARGS.has(arg) && arg.startsWith("-")) {
-      throw Object.assign(new Error(`Unknown flag: ${arg}`), { code: "INVALID_ARGS", usage: USAGE });
+function parseCliArgs(argv) {
+  const requireValue = (token, message, code) => {
+    const v = token.value;
+    if (typeof v !== "string" || v.length === 0 || v.startsWith("-")) {
+      throw Object.assign(new Error(message), { code });
     }
-    if (arg === "--repo") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(new Error("--repo requires a value (owner/name)"), { code: "INVALID_REPO" });
-      }
-      args.repo = argv[++i];
-    } else if (arg === "--project") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(new Error("--project requires a value (number or node ID)"), { code: "INVALID_PROJECT" });
-      }
-      args.project = argv[++i];
-    } else if (arg === "--older-than") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw Object.assign(new Error("--older-than requires a value (e.g. 30d)"), { code: "INVALID_DURATION" });
-      }
-      args.olderThan = argv[++i];
-    } else if (arg === "--dry-run") {
-      args.dryRun = true;
-    } else if (arg === "--help" || arg === "-h") {
-      args.help = true;
-    } else {
-      throw Object.assign(new Error(`Unexpected argument: ${arg}`), { code: "INVALID_ARGS", usage: USAGE });
+    return v;
+  };
+
+  const args = {};
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      repo: { type: "string" },
+      project: { type: "string" },
+      "older-than": { type: "string" },
+      "dry-run": { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw Object.assign(new Error(`Unexpected argument: ${token.value}`), { code: "INVALID_ARGS", usage: USAGE });
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    switch (token.name) {
+      case "help":
+        if (token.value !== undefined) {
+          throw Object.assign(new Error(`Unknown flag: ${token.rawName}=${token.value}`), { code: "INVALID_ARGS", usage: USAGE });
+        }
+        args.help = true;
+        break;
+      case "repo":
+        args.repo = requireValue(token, "--repo requires a value (owner/name)", "INVALID_REPO");
+        break;
+      case "project":
+        args.project = requireValue(token, "--project requires a value (number or node ID)", "INVALID_PROJECT");
+        break;
+      case "older-than":
+        args.olderThan = requireValue(token, "--older-than requires a value (e.g. 30d)", "INVALID_DURATION");
+        break;
+      case "dry-run":
+        if (token.value !== undefined) {
+          throw Object.assign(new Error(`Unknown flag: ${token.rawName}=${token.value}`), { code: "INVALID_ARGS", usage: USAGE });
+        }
+        args.dryRun = true;
+        break;
+      default:
+        throw Object.assign(new Error(`Unknown flag: ${token.rawName}`), { code: "INVALID_ARGS", usage: USAGE });
     }
   }
   return args;
@@ -381,7 +407,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
   let args;
   try {
-    args = parseArgs(argv);
+    args = parseCliArgs(argv);
   } catch (err) {
     stderr.write(`${formatCliError(err)}\n`);
     process.exitCode = 1;
@@ -407,4 +433,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main, parseDuration, selectArchivable };
+export { main, parseCliArgs, parseDuration, selectArchivable };

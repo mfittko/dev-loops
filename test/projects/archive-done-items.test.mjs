@@ -2,9 +2,37 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   main,
+  parseCliArgs,
   parseDuration,
   selectArchivable,
 } from "../../scripts/projects/archive-done-items.mjs";
+
+// ── Pure unit: parseCliArgs ───────────────────────────────────────────────
+
+describe("archive-done — parseCliArgs", () => {
+  it("parses repo, project, older-than, and dry-run", () => {
+    const args = parseCliArgs(["--repo", "o/r", "--project", "3", "--older-than", "7d", "--dry-run"]);
+    assert.deepStrictEqual(args, { repo: "o/r", project: "3", olderThan: "7d", dryRun: true });
+  });
+  it("supports --help / -h", () => {
+    assert.strictEqual(parseCliArgs(["--help"]).help, true);
+    assert.strictEqual(parseCliArgs(["-h"]).help, true);
+  });
+  it("rejects an unknown flag", () => {
+    assert.throws(() => parseCliArgs(["--bogus"]), (e) => e.code === "INVALID_ARGS");
+  });
+  it("rejects an unexpected positional", () => {
+    assert.throws(() => parseCliArgs(["stray"]), (e) => e.code === "INVALID_ARGS");
+  });
+  it("requires a value for --repo / --project / --older-than", () => {
+    assert.throws(() => parseCliArgs(["--repo"]), (e) => e.code === "INVALID_REPO");
+    assert.throws(() => parseCliArgs(["--project"]), (e) => e.code === "INVALID_PROJECT");
+    assert.throws(() => parseCliArgs(["--older-than"]), (e) => e.code === "INVALID_DURATION");
+  });
+  it("rejects an explicit inline value on boolean --dry-run", () => {
+    assert.throws(() => parseCliArgs(["--dry-run=false"]), (e) => e.code === "INVALID_ARGS");
+  });
+});
 
 // ── Pure unit: parseDuration ──────────────────────────────────────────────
 
