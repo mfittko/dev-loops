@@ -849,16 +849,19 @@ export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
 /**
  * Resolve the parallel fan-out reviewer cap for the gate sub-loop.
  *
- * Returns the configured `gates.maxFanoutReviewers` when it is a positive
- * integer; otherwise the built-in default (8). The fan-out spawns at most this
- * many scoped `review` reviewers in parallel; overflow runs sequentially.
+ * Returns the configured `gates.maxFanoutReviewers` when it is an integer in
+ * the schema-bounded range 1..64; otherwise the built-in default (8). Clamping
+ * here (not just the Zod schema) keeps programmatically-constructed config
+ * objects that bypass schema validation within the same bound. The fan-out
+ * spawns at most this many scoped `review` reviewers in parallel; overflow runs
+ * sequentially.
  *
  * @param {DevLoopConfig} config
  * @returns {number}
  */
 export function resolveMaxFanoutReviewers(config) {
   const raw = config?.gates?.maxFanoutReviewers;
-  if (typeof raw === "number" && Number.isInteger(raw) && raw > 0) {
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 64) {
     return raw;
   }
   return DEFAULT_MAX_FANOUT_REVIEWERS;

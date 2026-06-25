@@ -2739,4 +2739,13 @@ describe("gates.maxFanoutReviewers", () => {
     assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: -3 } }), 8);
     assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: "x" } }), 8);
   });
+
+  test("resolver clamps out-of-schema-range values (programmatic config bypassing Zod)", () => {
+    // Schema bounds maxFanoutReviewers to 1..64; the resolver enforces the same
+    // bound for config objects constructed without schema validation.
+    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 65 } }), 8);
+    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 1000 } }), 8);
+    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 64 } }), 64);
+    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 1 } }), 1);
+  });
 });
