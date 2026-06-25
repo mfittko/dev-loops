@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.6
+
+### Fixed
+
+- **Claude plugin hooks are self-contained** (#843). The bundled PreToolUse/PostToolUse hooks
+  imported a bare `@dev-loops/core`, which is unresolvable from the marketplace plugin cache (no
+  `node_modules` there), so every hook crashed on load — the two PreToolUse gates were silently
+  failing open. The asset generator now emits a vendored, relative-import hook bundle
+  (`.claude/hooks/_*.mjs`) from the canonical core modules, drift-guarded by the no-drift check.
+- **Retrospective gate is opt-in for consumers** (#841). `extension-defaults.yaml` shipped
+  `requireRetrospective`/`requireRetrospectiveGate: true`, forcing the retrospective merge gate on
+  every consumer's product PRs against the code default and the contract. Both now default `false`;
+  the dev-loops repo opts in via its own `.devloops`.
+- **Dev mode is opt-in for consumers** (#846). `extension-defaults.yaml` shipped
+  `devModeDefault: true`, pushing every consumer's product phases into the loop's self-improvement
+  mode (which edits the loop's own skill/agent prompts). Now defaults `false`; the dev-loops repo
+  opts in via `.devloops`.
+
+### Added
+
+- **Merge-blocking PR-title gate** (#842). The gate pipeline now flags `WIP`/`[WIP]`/`DRAFT`/
+  `DO NOT MERGE`/`🚧` (case-insensitive) in the PR **title**, blocking the draft→ready transition
+  and — for non-draft PRs — entry to the pre-approval gate and final approval. Documented in the
+  merge-preconditions and PR-lifecycle contracts.
+- **Effective async-start mode is surfaced** (#834). The handoff envelope now reports
+  `asyncStartEffective` and `asyncStartRelaxedBy` alongside the unchanged configured
+  `asyncStartMode`, so the Claude harness relaxation (`required`→`allowed`) is visible instead of
+  reading as a contradiction.
+
+### Changed
+
+- **Deduplicated PR aggregation** (#809). The duplicated `listOpenPrs` helper is extracted into a
+  shared `scripts/loop/_loop-pr-aggregation.mjs` and reused by `conductor-monitor.mjs` and
+  `run-conductor-cycle.mjs`. No behavior change.
+
 ## 0.2.5
 
 ### Changed
