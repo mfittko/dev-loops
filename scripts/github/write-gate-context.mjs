@@ -4,7 +4,7 @@
  *
  * The gate-review context-builder (Phase 1 of the gate-review sub-loop) resolves
  * the dynamic review-angle set and writes a deterministic JSON handoff artifact
- * that downstream fan-out reviewers (Phase 3) consume. This module owns that
+ * that the downstream fork fan-out reviewers consume. This module owns that
  * artifact: a deterministic path builder, a writer, and a reader for round-trip
  * use, plus a thin context-builder entrypoint (`buildGateContext`) that derives
  * the angle set + rationale directly from the canonical resolver.
@@ -280,7 +280,7 @@ export function parseWriteGateContextCliArgs(argv) {
 /**
  * Build the deterministic artifact path for a gate-review context handoff.
  * Mirrors write-gate-findings-log.mjs buildLogPath. Exported for reuse by the
- * Phase 3 fan-out reviewers so producer and consumer agree on the path.
+ * fork fan-out reviewers so producer and consumer agree on the path.
  *
  * @param {object} input
  * @param {string} input.repo — owner/name
