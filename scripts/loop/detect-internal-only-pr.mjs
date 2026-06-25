@@ -3,8 +3,9 @@ import { statSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { parseArgs } from "node:util";
 
 const USAGE = `Usage: detect-internal-only-pr.mjs --repo <owner/name> --pr <number> [--config <path>]
 Detect whether a PR only touches internal tooling files (scripts, docs, tests, config)
@@ -118,7 +119,6 @@ function buildPatternMatchers(patterns) {
 }
 
 export function parseCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -126,29 +126,47 @@ export function parseCliArgs(argv) {
     config: undefined,
     labelCheck: false,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      config: { type: "string" },
+      "label-check": { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError);
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--config") {
-      options.config = requireOptionValue(args, "--config", parseError).trim();
+    if (token.name === "config") {
+      options.config = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--label-check") {
+    if (token.name === "label-check") {
       options.labelCheck = true;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
     throw parseError("detect-internal-only-pr requires both --repo <owner/name> and --pr <number>");

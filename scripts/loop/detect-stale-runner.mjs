@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, requireOptionValue } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId as resolveEnvRunId } from "@dev-loops/core/loop/run-context";
+import { parseArgs } from "node:util";
 import {
   detectStaleRunner,
   STALE_RUNNER_ERROR,
@@ -50,7 +51,6 @@ Exit codes:
   1  Argument error or stale/exit-signal condition detected`.trim();
 const parseError = buildParseError(USAGE);
 function parseCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -58,22 +58,40 @@ function parseCliArgs(argv) {
     staleRunnerMaxAgeMs: undefined,
     runId: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      "stale-runner-max-age-ms": { type: "string" },
+      "run-id": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError);
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--stale-runner-max-age-ms") {
-      const raw = requireOptionValue(args, "--stale-runner-max-age-ms", parseError).trim();
+    if (token.name === "stale-runner-max-age-ms") {
+      const raw = requireTokenValue(token, parseError).trim();
       const parsed = Number(raw);
       if (!Number.isFinite(parsed) || parsed <= 0) {
         throw parseError(`--stale-runner-max-age-ms must be a positive integer (ms), got: ${raw}`);
@@ -81,11 +99,11 @@ function parseCliArgs(argv) {
       options.staleRunnerMaxAgeMs = Math.floor(parsed);
       continue;
     }
-    if (token === "--run-id") {
-      options.runId = requireOptionValue(args, "--run-id", parseError).trim();
+    if (token.name === "run-id") {
+      options.runId = requireTokenValue(token, parseError).trim();
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
     throw parseError("detect-stale-runner requires both --repo <owner/name> and --pr <number>");

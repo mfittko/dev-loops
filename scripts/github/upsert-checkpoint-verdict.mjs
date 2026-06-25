@@ -2,7 +2,8 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
-import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { truncateText } from "@dev-loops/core/bash-exit-one";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
@@ -198,7 +199,24 @@ export function summarizeCheckpointVerdictText(value, limit = MAX_GATE_COMMENT_T
   return smartTruncate(verboseSummary ?? flat, limit);
 }
 export function parseUpsertCheckpointVerdictCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      gate: { type: "string" },
+      "head-sha": { type: "string" },
+      verdict: { type: "string" },
+      "findings-summary": { type: "string" },
+      "findings-file": { type: "string" },
+      "next-action": { type: "string" },
+      "findings-severity-counts": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     help: false,
     repo: undefined,
@@ -211,65 +229,70 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     nextAction: undefined,
     findingsSeverityCounts: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (REMOVED_FLAGS.has(token)) {
-      rejectRemovedFlag(token);
+    if (REMOVED_FLAGS.has(token.rawName)) {
+      rejectRemovedFlag(token.rawName);
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError);
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--gate") {
-      const gate = normalizeGateName(requireOptionValue(args, "--gate", parseError));
+    if (token.name === "gate") {
+      const gate = normalizeGateName(requireTokenValue(token, parseError));
       if (!gate) {
         throw parseError("--gate must be one of: draft_gate, pre_approval_gate");
       }
       options.gate = gate;
       continue;
     }
-    if (token === "--head-sha") {
-      const headSha = normalizeHeadSha(requireOptionValue(args, "--head-sha", parseError));
+    if (token.name === "head-sha") {
+      const headSha = normalizeHeadSha(requireTokenValue(token, parseError));
       if (!headSha) {
         throw parseError("--head-sha must be a 7-64 character hexadecimal SHA");
       }
       options.headSha = headSha;
       continue;
     }
-    if (token === "--verdict") {
-      const verdict = normalizeVerdict(requireOptionValue(args, "--verdict", parseError));
+    if (token.name === "verdict") {
+      const verdict = normalizeVerdict(requireTokenValue(token, parseError));
       if (!verdict) {
         throw parseError("--verdict must be one of: clean, findings_present, blocked");
       }
       options.verdict = verdict;
       continue;
     }
-    if (token === "--findings-summary") {
-      options.findingsSummary = normalizeRequiredText(requireOptionValue(args, "--findings-summary", parseError), "--findings-summary");
+    if (token.name === "findings-summary") {
+      options.findingsSummary = normalizeRequiredText(requireTokenValue(token, parseError), "--findings-summary");
       continue;
     }
-    if (token === "--findings-file") {
-      const rawPath = requireOptionValue(args, "--findings-file", parseError).trim();
+    if (token.name === "findings-file") {
+      const rawPath = requireTokenValue(token, parseError).trim();
       if (rawPath.length === 0) {
         throw parseError("--findings-file must be a non-empty path");
       }
       options.findingsFile = rawPath;
       continue;
     }
-    if (token === "--next-action") {
-      options.nextAction = normalizeRequiredText(requireOptionValue(args, "--next-action", parseError), "--next-action");
+    if (token.name === "next-action") {
+      options.nextAction = normalizeRequiredText(requireTokenValue(token, parseError), "--next-action");
       continue;
     }
-    if (token === "--findings-severity-counts") {
-      const raw = requireOptionValue(args, "--findings-severity-counts", parseError);
+    if (token.name === "findings-severity-counts") {
+      const raw = requireTokenValue(token, parseError);
       let parsed;
       try {
         parsed = JSON.parse(raw);
@@ -289,7 +312,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       options.findingsSeverityCounts = counts;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const missing = ["repo", "pr", "headSha", "verdict", "findingsSummary", "nextAction"]
     .filter((key) => options[key] === undefined);

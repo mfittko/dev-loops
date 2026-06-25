@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
-import { parsePositiveInteger, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -88,7 +89,13 @@ function rejectRemovedFlag(token) {
   );
 }
 export function parseWatchCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, pr: { type: "string" } },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     help: false,
     repo: undefined,
@@ -96,24 +103,29 @@ export function parseWatchCliArgs(argv) {
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     timeoutMs: COPILOT_REVIEW_WAIT_TIMEOUT_MS,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (REMOVED_FLAGS.has(token)) {
-      rejectRemovedFlag(token);
+    if (REMOVED_FLAGS.has(token.rawName)) {
+      rejectRemovedFlag(token.rawName);
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePositiveInteger(requireOptionValue(args, "--pr", parseError), "--pr", parseError);
+    if (token.name === "pr") {
+      options.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError);
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
     throw parseError("Watching Copilot review requires both --repo <owner/name> and --pr <number>");

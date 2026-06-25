@@ -3,9 +3,10 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { requireOptionValue, parsePositiveInteger } from "../_cli-primitives.mjs";
+import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { runContextEnv } from "@dev-loops/core/loop/run-context";
+import { parseArgs } from "node:util";
 
 // REPO_ROOT resolves to the git repo root (scripts/loop/info.mjs → scripts/ → repo/)
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)), "..");
@@ -27,16 +28,33 @@ Exit codes:
 const parseError = buildParseError(USAGE);
 
 function parseCliArgs(argv) {
-  const args = [...argv];
   const opts = { help: false, issue: undefined, pr: undefined, json: false, repo: undefined };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") { opts.help = true; return opts; }
-    if (token === "--json") { opts.json = true; continue; }
-    if (token === "--issue") { opts.issue = parsePositiveInteger(requireOptionValue(args, "--issue", parseError), "--issue", parseError); continue; }
-    if (token === "--pr") { opts.pr = parsePositiveInteger(requireOptionValue(args, "--pr", parseError), "--pr", parseError); continue; }
-    if (token === "--repo") { opts.repo = requireOptionValue(args, "--repo", parseError); continue; }
-    throw parseError(`Unknown argument: ${token}`);
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      json: { type: "boolean" },
+      issue: { type: "string" },
+      pr: { type: "string" },
+      repo: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") { opts.help = true; return opts; }
+    if (token.name === "json") { opts.json = true; continue; }
+    if (token.name === "issue") { opts.issue = parsePositiveInteger(requireTokenValue(token, parseError), "--issue", parseError); continue; }
+    if (token.name === "pr") { opts.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError); continue; }
+    if (token.name === "repo") { opts.repo = requireTokenValue(token, parseError); continue; }
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const modes = [opts.issue, opts.pr].filter(v => v !== undefined).length;
   if (modes > 1) throw parseError("--issue and --pr are mutually exclusive");

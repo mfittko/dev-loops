@@ -15,9 +15,10 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { requireOptionValue } from "../_cli-primitives.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { DebtSignalSchema } from "@dev-loops/core/debt/signal";
 import { clusterSignalsEnriched } from "@dev-loops/core/debt/cluster";
@@ -150,28 +151,44 @@ function buildReport(signalsCount, findingsCount, results) {
 // ============================================================================
 
 export async function runCli(argv) {
-  const args = [...argv];
   const options = { input: undefined, repo: undefined, dryRun: false, help: false };
 
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      input: { type: "string" },
+      repo: { type: "string" },
+      "dry-run": { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown flag: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       break;
     }
-    if (token === "--input") {
-      options.input = requireOptionValue(args, "--input", parseError);
+    if (token.name === "input") {
+      options.input = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError);
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--dry-run") {
+    if (token.name === "dry-run") {
       options.dryRun = true;
       continue;
     }
-    throw parseError(`Unknown flag: ${token}`);
+    throw parseError(`Unknown flag: ${token.rawName}`);
   }
 
   if (options.help) {

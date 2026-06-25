@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parsePrNumber, requireOptionValue } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> --findings <json> [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -89,7 +90,22 @@ function parseFindingsJson(raw) {
   });
 }
 export function parseWriteGateFindingsLogCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      gate: { type: "string" },
+      "head-sha": { type: "string" },
+      verdict: { type: "string" },
+      findings: { type: "string" },
+      "tmp-root": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     repo: undefined,
     pr: undefined,
@@ -99,46 +115,51 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     findings: undefined,
     tmpRoot: "tmp",
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       return { help: true };
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError);
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--gate") {
-      const gate = normalizeGate(requireOptionValue(args, "--gate", parseError));
+    if (token.name === "gate") {
+      const gate = normalizeGate(requireTokenValue(token, parseError));
       if (!gate) throw parseError("--gate must be draft_gate or pre_approval_gate");
       options.gate = gate;
       continue;
     }
-    if (token === "--head-sha") {
-      const sha = normalizeHeadSha(requireOptionValue(args, "--head-sha", parseError));
+    if (token.name === "head-sha") {
+      const sha = normalizeHeadSha(requireTokenValue(token, parseError));
       if (!sha) throw parseError("--head-sha must be a 7-64 character hex SHA");
       options.headSha = sha;
       continue;
     }
-    if (token === "--verdict") {
-      const verdict = normalizeVerdict(requireOptionValue(args, "--verdict", parseError));
+    if (token.name === "verdict") {
+      const verdict = normalizeVerdict(requireTokenValue(token, parseError));
       if (!verdict) throw parseError("--verdict must be clean, findings_present, or blocked");
       options.verdict = verdict;
       continue;
     }
-    if (token === "--findings") {
-      options.findings = requireOptionValue(args, "--findings", parseError);
+    if (token.name === "findings") {
+      options.findings = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--tmp-root") {
-      options.tmpRoot = requireOptionValue(args, "--tmp-root", parseError).trim();
+    if (token.name === "tmp-root") {
+      options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const missing = ["repo", "pr", "gate", "headSha", "verdict", "findings"]
     .filter(k => options[k] === undefined);

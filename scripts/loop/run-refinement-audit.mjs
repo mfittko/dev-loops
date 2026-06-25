@@ -2,7 +2,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePositiveInteger, requireOptionValue, runCommand } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, requireTokenValue, runCommand } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
 const DEFAULT_MAX_LINES = 1000;
 const DEFAULT_DUPLICATE_WINDOW_LINES = 4;
 const DEFAULT_BRANCH_THRESHOLD = 25;
@@ -43,7 +44,6 @@ const PRIORITY_ORDER = new Map([
   ["low", 2],
 ]);
 export function parseRefinementAuditCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     paths: undefined,
@@ -55,57 +55,79 @@ export function parseRefinementAuditCliArgs(argv) {
     thinWrapperMaxLines: DEFAULT_THIN_WRAPPER_MAX_LINES,
     output: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      paths: { type: "string" },
+      "paths-file": { type: "string" },
+      root: { type: "string" },
+      "max-lines": { type: "string" },
+      "duplicate-window-lines": { type: "string" },
+      "branch-threshold": { type: "string" },
+      "thin-wrapper-max-lines": { type: "string" },
+      output: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--paths") {
-      options.paths = requireOptionValue(args, "--paths", parseError, { flagPattern: /^-/u });
+    if (token.name === "paths") {
+      options.paths = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    if (token === "--paths-file") {
-      options.pathsFile = requireOptionValue(args, "--paths-file", parseError, { flagPattern: /^-/u });
+    if (token.name === "paths-file") {
+      options.pathsFile = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    if (token === "--root") {
-      options.root = requireOptionValue(args, "--root", parseError, { flagPattern: /^-/u });
+    if (token.name === "root") {
+      options.root = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    if (token === "--max-lines") {
-      options.maxLines = parsePositiveInteger(requireOptionValue(args, "--max-lines", parseError), "--max-lines", parseError);
+    if (token.name === "max-lines") {
+      options.maxLines = parsePositiveInteger(requireTokenValue(token, parseError), "--max-lines", parseError);
       continue;
     }
-    if (token === "--duplicate-window-lines") {
+    if (token.name === "duplicate-window-lines") {
       options.duplicateWindowLines = parsePositiveInteger(
-        requireOptionValue(args, "--duplicate-window-lines", parseError),
+        requireTokenValue(token, parseError),
         "--duplicate-window-lines",
         parseError,
       );
       continue;
     }
-    if (token === "--branch-threshold") {
+    if (token.name === "branch-threshold") {
       options.branchThreshold = parsePositiveInteger(
-        requireOptionValue(args, "--branch-threshold", parseError),
+        requireTokenValue(token, parseError),
         "--branch-threshold",
         parseError,
       );
       continue;
     }
-    if (token === "--thin-wrapper-max-lines") {
+    if (token.name === "thin-wrapper-max-lines") {
       options.thinWrapperMaxLines = parsePositiveInteger(
-        requireOptionValue(args, "--thin-wrapper-max-lines", parseError),
+        requireTokenValue(token, parseError),
         "--thin-wrapper-max-lines",
         parseError,
       );
       continue;
     }
-    if (token === "--output") {
-      options.output = requireOptionValue(args, "--output", parseError, { flagPattern: /^-/u });
+    if (token.name === "output") {
+      options.output = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.paths !== undefined && options.pathsFile !== undefined) {
     throw parseError("Specify exactly one of --paths or --paths-file");

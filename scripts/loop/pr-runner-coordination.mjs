@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import process from "node:process";
+import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, requireOptionValue } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId as resolveEnvRunId } from "@dev-loops/core/loop/run-context";
 import {
@@ -42,29 +43,47 @@ function parseCliArgs(argv) {
     return options;
   }
   options.command = command;
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args,
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      "run-id": { type: "string" },
+      "require-existing": { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError);
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--run-id") {
-      options.runId = requireOptionValue(args, "--run-id", parseError).trim();
+    if (token.name === "run-id") {
+      options.runId = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--require-existing") {
+    if (token.name === "require-existing") {
       options.requireExisting = true;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const validCommands = new Set(["status", "claim", "takeover", "assert", "release"]);
   if (!validCommands.has(options.command)) {

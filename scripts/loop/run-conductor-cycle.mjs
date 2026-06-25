@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { requireOptionValue } from "../_cli-primitives.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
 import {
   buildParseError,
   formatCliError,
@@ -14,6 +14,7 @@ import {
   buildHandoffContractForConductorAction,
 } from "./_handoff-contract.mjs";
 import { listOpenPrs } from "./_loop-pr-aggregation.mjs";
+import { parseArgs } from "node:util";
 export { listOpenPrs };
 const USAGE = `Usage: run-conductor-cycle.mjs --repo <owner/name>
 Poll all open PRs, detect state, and output an ordered action queue.`.trim();
@@ -63,22 +64,36 @@ export function actionRequiresApproval(action, autonomyStopAt = ["merge"]) {
 }
 const parseError = buildParseError(USAGE);
 export function parseCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined) {
     throw parseError("run-conductor-cycle requires --repo <owner/name>");

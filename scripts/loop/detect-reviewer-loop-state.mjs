@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
@@ -27,6 +28,20 @@ function parseBool(value, flag) {
 }
 export function parseDetectReviewerCliArgs(argv) {
   const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      input: { type: "string" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      "review-requested": { type: "string" },
+      "local-state": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     inputPath: undefined,
     repo: undefined,
@@ -35,36 +50,41 @@ export function parseDetectReviewerCliArgs(argv) {
     localStatePath: undefined,
     help: false,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw new Error(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--input") {
-      options.inputPath = requireOptionValue(args, "--input");
+    if (token.name === "input") {
+      options.inputPath = requireTokenValue(token);
       continue;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo").trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr"));
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token));
       continue;
     }
-    if (token === "--review-requested") {
+    if (token.name === "review-requested") {
       options.reviewRequestedOverride = parseBool(
-        requireOptionValue(args, "--review-requested"),
+        requireTokenValue(token),
         "--review-requested",
       );
       continue;
     }
-    if (token === "--local-state") {
-      options.localStatePath = requireOptionValue(args, "--local-state");
+    if (token.name === "local-state") {
+      options.localStatePath = requireTokenValue(token);
       continue;
     }
-    throw new Error(`Unknown argument: ${token}`);
+    throw new Error(`Unknown argument: ${token.rawName}`);
   }
   if (options.inputPath !== undefined) {
     if (options.repo !== undefined || options.pr !== undefined) {

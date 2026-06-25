@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { parseArgs } from "node:util";
 import {
   detectIssueRefinementArtifact,
   REFINEMENT_SOURCE,
@@ -33,36 +34,52 @@ Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectIssueRefinementArtifactCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
     issue: undefined,
     input: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      issue: { type: "string" },
+      input: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--issue") {
-      const value = requireOptionValue(args, "--issue", parseError);
+    if (token.name === "issue") {
+      const value = requireTokenValue(token, parseError);
       if (!/^\d+$/.test(value) || Number(value) === 0) {
         throw parseError("--issue must be a positive integer");
       }
       options.issue = Number(value);
       continue;
     }
-    if (token === "--input") {
-      options.input = requireOptionValue(args, "--input", parseError).trim();
+    if (token.name === "input") {
+      options.input = requireTokenValue(token, parseError).trim();
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const hasInput = typeof options.input === "string" && options.input.length > 0;
   const hasRemote = typeof options.repo === "string" && options.repo.length > 0 && Number.isInteger(options.issue);

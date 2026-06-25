@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { resolveAuthoritativeStartupResumeBundle } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { requireOptionValue, parsePositiveInteger } from "../_cli-primitives.mjs";
+import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
 import {
   isUnderWorktreePath,
@@ -23,6 +23,7 @@ import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
 import { loadDevLoopConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
+import { parseArgs } from "node:util";
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
   resolve-dev-loop-startup.mjs --pr <number>
@@ -96,32 +97,48 @@ const STRATEGY_ASYNC_DISPATCH = {
 };
 const parseError = buildParseError(USAGE);
 export function parseResolveDevLoopStartupCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     inputPath: undefined,
     issue: undefined,
     pr: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      input: { type: "string" },
+      issue: { type: "string" },
+      pr: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--input") {
-      options.inputPath = requireOptionValue(args, "--input", parseError);
+    if (token.name === "input") {
+      options.inputPath = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--issue") {
-      options.issue = parsePositiveInteger(requireOptionValue(args, "--issue", parseError), "--issue", parseError);
+    if (token.name === "issue") {
+      options.issue = parsePositiveInteger(requireTokenValue(token, parseError), "--issue", parseError);
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePositiveInteger(requireOptionValue(args, "--pr", parseError), "--pr", parseError);
+    if (token.name === "pr") {
+      options.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError);
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const modeCount = [options.inputPath, options.issue, options.pr].filter(v => v !== undefined).length;
   if (modeCount > 1) {

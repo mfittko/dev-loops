@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parseIssueNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectLinkedIssuePr } from "../github/detect-linked-issue-pr.mjs";
 import { detectCopilotSessionActivity } from "./detect-copilot-session-activity.mjs";
+import { parseArgs } from "node:util";
 const USAGE = `Usage: detect-initial-copilot-pr-state.mjs --repo <owner/name> --issue <number>
 Detect whether an assigned issue is still on the bootstrap-only Copilot draft PR
 or has moved into normal linked-PR follow-up.
@@ -79,27 +80,42 @@ const INITIAL_COPILOT_PR_FACTS_QUERY = [
 ].join("\n");
 const parseError = buildParseError(USAGE);
 export function parseDetectInitialCopilotPrStateCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
     issue: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      issue: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--issue") {
-      options.issue = parseIssueNumber(requireOptionValue(args, "--issue", parseError), parseError);
+    if (token.name === "issue") {
+      options.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.issue === undefined) {
     throw parseError("detect-initial-copilot-pr-state requires both --repo <owner/name> and --issue <number>");

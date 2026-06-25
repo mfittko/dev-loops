@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { parseArgs } from "node:util";
 
 const PI_PREPUSH_BYPASS_VAR = "PI_PREPUSH_BYPASS";
 const BLOCKED_REFS = ["refs/heads/main"];
@@ -61,11 +62,24 @@ function findBlockedRef(refs) {
 }
 
 export function parsePrePushGuardCliArgs(argv) {
-  const args = [...argv];
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") return { help: true };
-    throw parseError(`Unknown argument: ${token}`);
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") return { help: true };
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   return { help: false };
 }

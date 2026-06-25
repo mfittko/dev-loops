@@ -2,7 +2,8 @@
 import { readFile } from "node:fs/promises";
 
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parsePositiveInteger, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 
 export const FORBIDDEN_PROSE_PATTERNS = [
@@ -23,23 +24,34 @@ export function normalizeIssueNumber(value, label, parseError) {
 
 export function parseCheckerCliArgs(argv, usage, checkerName) {
   const parseError = buildParseError(usage);
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: { help: { type: "boolean", short: "h" }, input: { type: "string" }, json: { type: "boolean" } },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = { help: false, input: undefined, json: false };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--input") {
-      options.input = requireOptionValue(args, "--input", parseError, { flagPattern: /^-/u });
+    if (token.name === "input") {
+      options.input = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    if (token === "--json") {
+    if (token.name === "json") {
       options.json = true;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (typeof options.input !== "string" || options.input.trim().length === 0) {
     throw parseError(`${checkerName} requires --input <path>`);

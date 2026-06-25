@@ -3,7 +3,8 @@ import {
   DEFAULT_PORT,
   USAGE,
 } from "./constants.mjs";
-import { requireOptionValue } from "../../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { requireTokenValue } from "../../_cli-primitives.mjs";
 import { normalizeInspectionTarget } from "../_inspect-run-viewer-adapter.mjs";
 
 export function parseInspectRunViewerCliError(message) {
@@ -47,7 +48,6 @@ export function normalizeCliRepoOption(rawRepo) {
 }
 
 export function parseInspectRunViewerCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -60,48 +60,71 @@ export function parseInspectRunViewerCliArgs(argv) {
     restart: false,
   };
 
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "boolean" },
+      host: { type: "string" },
+      port: { type: "string" },
+      "allow-non-localhost": { type: "boolean" },
+      restart: { type: "boolean" },
+      "steering-state-file": { type: "string" },
+      "copilot-input": { type: "string" },
+      "reviewer-input": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseInspectRunViewerCliError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseInspectRunViewerCliError);
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseInspectRunViewerCliError);
       continue;
     }
-    if (token === "--pr") {
+    if (token.name === "pr") {
       throw parseInspectRunViewerCliError("--pr is no longer supported on the CLI; choose a PR with ?pr=<number> in the viewer URL");
     }
-    if (token === "--host") {
-      options.host = parseHost(requireOptionValue(args, "--host", parseInspectRunViewerCliError));
+    if (token.name === "host") {
+      options.host = parseHost(requireTokenValue(token, parseInspectRunViewerCliError));
       continue;
     }
-    if (token === "--port") {
-      options.port = parsePort(requireOptionValue(args, "--port", parseInspectRunViewerCliError));
+    if (token.name === "port") {
+      options.port = parsePort(requireTokenValue(token, parseInspectRunViewerCliError));
       continue;
     }
-    if (token === "--allow-non-localhost") {
+    if (token.name === "allow-non-localhost") {
       options.allowNonLocalhost = true;
       continue;
     }
-    if (token === "--restart") {
+    if (token.name === "restart") {
       options.restart = true;
       continue;
     }
-    if (token === "--steering-state-file") {
-      options.steeringStateFile = requireOptionValue(args, "--steering-state-file", parseInspectRunViewerCliError);
+    if (token.name === "steering-state-file") {
+      options.steeringStateFile = requireTokenValue(token, parseInspectRunViewerCliError);
       continue;
     }
-    if (token === "--copilot-input") {
-      options.copilotInputPath = requireOptionValue(args, "--copilot-input", parseInspectRunViewerCliError);
+    if (token.name === "copilot-input") {
+      options.copilotInputPath = requireTokenValue(token, parseInspectRunViewerCliError);
       continue;
     }
-    if (token === "--reviewer-input") {
-      options.reviewerInputPath = requireOptionValue(args, "--reviewer-input", parseInspectRunViewerCliError);
+    if (token.name === "reviewer-input") {
+      options.reviewerInputPath = requireTokenValue(token, parseInspectRunViewerCliError);
       continue;
     }
-    throw parseInspectRunViewerCliError(`Unknown argument: ${token}`);
+    throw parseInspectRunViewerCliError(`Unknown argument: ${token.rawName}`);
   }
 
   if (!options.help) {
