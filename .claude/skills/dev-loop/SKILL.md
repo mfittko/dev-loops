@@ -25,7 +25,7 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 
 > Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no read-only boundary and no separate async-subagent dispatch. See [Main Agent Contract](../docs/main-agent-contract.md).
 
-Resolve authoritative state via the startup resolver (`npx dev-loops@0.2.6 loop startup --issue <n>` for issues, `npx dev-loops@0.2.6 loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `npx dev-loops@0.2.6 loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
+Resolve authoritative state via the startup resolver (`npx dev-loops@0.2.7 loop startup --issue <n>` for issues, `npx dev-loops@0.2.7 loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `npx dev-loops@0.2.7 loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
 
 **Retrospective checkpoint gate:** the resolver reads `.pi/dev-loop-retrospective-checkpoint.json` and injects the state. When the checkpoint is `missing` and the repo config `workflow.requireRetrospective` (set via `.devloops` at repo root) is `true`, the resolver returns `needs_reconcile`. Complete or explicitly skip the retrospective before starting.
 
@@ -99,10 +99,10 @@ When `@dev-loops/core` is available again, switch back to the full helper. The f
 
 ## Read-only info shortcut
 
-Info/handoff requests can be served directly via `npx dev-loops@0.2.6 loop info` (read-only; no full dev-loop run required):
-- `npx dev-loops@0.2.6 loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
-- `npx dev-loops@0.2.6 loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
-- `npx dev-loops@0.2.6 loop info --issue <n> --json` — machine-readable JSON output
+Info/handoff requests can be served directly via `npx dev-loops@0.2.7 loop info` (read-only; no full dev-loop run required):
+- `npx dev-loops@0.2.7 loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
+- `npx dev-loops@0.2.7 loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
+- `npx dev-loops@0.2.7 loop info --issue <n> --json` — machine-readable JSON output
 
 ## Guard rules
 
