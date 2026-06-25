@@ -433,4 +433,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main, parseDuration, selectArchivable };
+export { main, parseCliArgs, parseDuration, selectArchivable };
