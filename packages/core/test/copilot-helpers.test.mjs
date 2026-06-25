@@ -180,6 +180,39 @@ test("summarizeGateReviewComments picks the most-recently-updated entry per gate
   assert.equal(summary.pre_approval_gate, null);
 });
 
+test("summarizeGateReviewComments surfaces executionMode and inlineReason on the strict summary", () => {
+  const comments = [
+    {
+      body: [
+        "### Gate review: `draft_gate`",
+        "**Reviewed head SHA:** `abc1234`",
+        "**Verdict:** clean",
+        "**Execution mode:** inline_single_agent — small docs-only change",
+        "**Findings summary:** no issues found",
+        "**Next action:** mark ready for review",
+      ].join("\n"),
+      id: 7,
+    },
+  ];
+
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate?.executionMode, "inline_single_agent");
+  assert.equal(summary.draft_gate?.inlineReason, "small docs-only change");
+});
+
+test("summarizeGateReviewComments defaults executionMode and inlineReason to null when absent", () => {
+  const comments = [
+    {
+      body: "gate: draft_gate\nhead sha reviewed: aaa1111\nverdict: clean\nfindings summary: ok\nnext action: mark ready for review",
+      id: 9,
+    },
+  ];
+
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate?.executionMode, null);
+  assert.equal(summary.draft_gate?.inlineReason, null);
+});
+
 test("summarizeGateReviewCommentMarkers filters by headSha when provided", () => {
   const comments = [
     {

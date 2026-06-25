@@ -364,6 +364,16 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   if (missing.length > 0) {
     throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict, --findings-summary (or --findings-file), and --next-action");
   }
+  // Contract (skills/copilot-pr-followup/SKILL.md): inline runs MUST pass
+  // --inline-reason. Inline is the default mode, so a complete call that resolves
+  // to inline without a reason errors here. fanout_fanin does not require a
+  // reason. Checked after required-field validation so an incomplete call still
+  // reports the missing-field error first.
+  if (options.executionMode === "inline_single_agent" && options.inlineReason === undefined) {
+    throw parseError(
+      "--inline-reason is required for executionMode inline_single_agent (the default). Pass --execution-mode fanout_fanin for fan-out/fan-in runs, or --inline-reason \"<why>\" to record why the gate ran inline.",
+    );
+  }
   try {
     parseRepoSlug(options.repo);
   } catch (error) {
@@ -456,6 +466,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
       findingsSummary: markerSameHead.findingsSummary ?? null,
       nextAction: markerSameHead.nextAction ?? null,
       executionMode: markerSameHead.executionMode ?? null,
+      inlineReason: markerSameHead.inlineReason ?? null,
       contractComplete: markerSameHead.contractComplete === true,
     };
   }
@@ -468,6 +479,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
       findingsSummary: strictSameHead.findingsSummary,
       nextAction: strictSameHead.nextAction,
       executionMode: strictSameHead.executionMode ?? markerSameHead?.executionMode ?? null,
+      inlineReason: strictSameHead.inlineReason ?? markerSameHead?.inlineReason ?? null,
       contractComplete: true,
     };
   }
@@ -480,6 +492,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
       findingsSummary: markerSameHead.findingsSummary ?? null,
       nextAction: markerSameHead.nextAction ?? null,
       executionMode: markerSameHead.executionMode ?? null,
+      inlineReason: markerSameHead.inlineReason ?? null,
       contractComplete: markerSameHead.contractComplete === true,
     };
   }
@@ -662,6 +675,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const existing = summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
   const warning = detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
   const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
+  // inlineReason is only meaningful for inline mode and is dropped for
+  // fanout_fanin at parse time, so normalize both sides to null when the
+  // resolved mode is not inline. This makes the noop short-circuit fire only
+  // when verdict/summary/nextAction/executionMode AND the inline reason all
+  // match, so a changed/added --inline-reason forces a comment update.
+  const desiredInlineReason = desiredExecutionMode === "inline_single_agent"
+    ? (options.inlineReason ?? null)
+    : null;
+  const existingInlineReason = (existing?.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent"
+    ? (existing?.inlineReason ?? null)
+    : null;
   if (
     existing
     && existing.contractComplete
@@ -669,6 +693,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && existing.findingsSummary === effectiveFindingsSummary
     && existing.nextAction === options.nextAction
     && (existing.executionMode ?? DEFAULT_EXECUTION_MODE) === desiredExecutionMode
+    && existingInlineReason === desiredInlineReason
   ) {
     return {
       ok: true,
@@ -682,7 +707,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       commentUrl: existing.commentUrl,
       blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
       executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
-      ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
+      ...(existingInlineReason ? { inlineReason: existingInlineReason } : {}),
       ...(warning ? { warning } : {}),
     };
   }

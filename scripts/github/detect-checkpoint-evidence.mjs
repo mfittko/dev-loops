@@ -367,14 +367,13 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
   const draftGateMarker = normalizeGateMarkerSummary(markerSummary.draft_gate);
   const preApprovalGateMarker = normalizeGateMarkerSummary(markerSummary.pre_approval_gate);
+  // loadDevLoopConfig never throws: it returns { config, warnings, errors }.
+  // A non-empty errors array means the config could not be loaded/validated, so
+  // treat it as config-unavailable and leave fan-out enforcement disabled
+  // (preserves default behavior). Other gate checks remain unaffected.
   let config = null;
-  try {
-    ({ config } = await loadDevLoopConfig({ repoRoot: cwd }));
-  } catch {
-    // Non-fatal: config load failure leaves fan-out enforcement disabled
-    // (preserves default behavior). Other gate checks remain unaffected.
-    config = null;
-  }
+  const { config: loadedConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot: cwd });
+  config = Array.isArray(configErrors) && configErrors.length > 0 ? null : loadedConfig;
   const fanoutEnforcement = await buildFanoutEnforcement({
     repo: options.repo,
     pr: options.pr,

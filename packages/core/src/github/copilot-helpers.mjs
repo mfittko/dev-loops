@@ -230,6 +230,8 @@ export function summarizeGateReviewComments(comments) {
       verdict: parsed.verdict,
       findingsSummary: parsed.findingsSummary,
       nextAction: parsed.nextAction,
+      executionMode: parsed.executionMode ?? null,
+      inlineReason: parsed.inlineReason ?? null,
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
       commentUrl: typeof comment?.html_url === "string" && comment.html_url.trim().length > 0 ? comment.html_url.trim() : null,
       updatedAt: typeof (comment?.updated_at ?? comment?.updatedAt) === "string"

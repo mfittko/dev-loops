@@ -380,6 +380,30 @@ describe("loader — graceful degradation", () => {
     }
   });
 
+  test("L1-validation: invalid .devloops returns non-empty errors without throwing", async () => {
+    // FIX C: loadDevLoopConfig never throws on a validation failure. Callers that
+    // previously wrapped it in try/catch expecting a throw must instead treat a
+    // non-empty errors array as "config unavailable".
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-invalid-"));
+    try {
+      // gates.requireFanoutEvidence must be a boolean; a string value fails schema validation.
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\ngates:\n  requireFanoutEvidence: \"yes\"\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      let result;
+      await assert.doesNotReject(async () => {
+        result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      });
+      assert.ok(Array.isArray(result.errors) && result.errors.length > 0, "validation failure should populate errors");
+      // config object is still returned (merged), so callers can inspect errors and decide.
+      assert.ok(result.config);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("L1b: a plain consumer (no .devloops) defaults the retrospective gate OFF (#841)", async () => {
     // The retrospective is a dev-loop-development artifact; shipped defaults must be permissive so
     // an ordinary consumer's product PRs do not carry the meta-process gate. extension-defaults

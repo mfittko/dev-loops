@@ -1268,6 +1268,26 @@ test("detect-checkpoint-evidence requireFanoutEvidence=true fails closed when th
   }
 });
 
+test("detect-checkpoint-evidence disables fan-out enforcement (non-fatal) when config fails to load", async () => {
+  // FIX C: loadDevLoopConfig never throws; it returns { config, warnings, errors }.
+  // A config that fails schema validation produces a non-empty errors array, which
+  // must be treated as config-unavailable => enforcement disabled, NOT a crash.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-badconfig-"));
+  try {
+    // requireFanoutEvidence must be a boolean; a string value fails validation.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: \"yes\"\n", "utf8");
+    const env = await writeGhStub(tempDir, fanoutEvidenceGhEntries("inline_single_agent"));
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+    // Enforcement disabled => the gate evidence is otherwise clean => exit 0.
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.fanoutEnforcement.required, false);
+    assert.deepEqual(payload.preMergeGateCheck.failures, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-checkpoint-evidence requireFanoutEvidence=true passes for fanout_fanin with ledger present", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-fanout-pass-"));
   try {
