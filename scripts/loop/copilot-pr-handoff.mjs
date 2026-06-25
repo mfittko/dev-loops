@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, normalizeTimestamp } from "../_core-helpers.mjs";
-import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import path from "node:path";
@@ -16,6 +16,7 @@ import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
   enforceExternalHealthyWaitTimeout,
 } from "@dev-loops/core/loop/timeout-policy";
+import { parseArgs } from "node:util";
 import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_REVIEW_WAIT_TIMEOUT_MS,
@@ -128,39 +129,55 @@ function rejectRemovedFlag(token) {
   );
 }
 export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
     pr: undefined,
     watchStatus: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      "watch-status": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (REMOVED_FLAGS.has(token)) {
-      rejectRemovedFlag(token);
+    if (REMOVED_FLAGS.has(token.rawName)) {
+      rejectRemovedFlag(token.rawName);
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError);
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--watch-status") {
-      const watchStatus = requireOptionValue(args, "--watch-status", parseError).trim().toLowerCase();
+    if (token.name === "watch-status") {
+      const watchStatus = requireTokenValue(token, parseError).trim().toLowerCase();
       if (!VALID_WATCH_STATUSES.has(watchStatus)) {
         throw parseError(`--watch-status must be one of: ${[...VALID_WATCH_STATUSES].join(", ")}`);
       }
       options.watchStatus = watchStatus;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.pr === undefined) {
     throw parseError("copilot-pr-handoff requires --pr <number>");

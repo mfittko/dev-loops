@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import {
   parsePrNumber,
-  requireOptionValue,
+  requireTokenValue,
 } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
@@ -34,7 +35,20 @@ Exit codes:
   1  Argument error or gh/runtime failure`.trim();
 const parseError = buildParseError(USAGE);
 export function parseReplyResolveThreadsCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      author: { type: "string" },
+      message: { type: "string" },
+      resolve: { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     help: false,
     repo: undefined,
@@ -43,33 +57,38 @@ export function parseReplyResolveThreadsCliArgs(argv) {
     message: undefined,
     resolve: false,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError);
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--author") {
-      options.author = requireOptionValue(args, "--author", parseError).trim();
+    if (token.name === "author") {
+      options.author = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--message") {
-      options.message = requireOptionValue(args, "--message", parseError);
+    if (token.name === "message") {
+      options.message = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--resolve") {
+    if (token.name === "resolve") {
       options.resolve = true;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
     throw parseError("Replying and resolving review threads requires both --repo <owner/name> and --pr <number>");

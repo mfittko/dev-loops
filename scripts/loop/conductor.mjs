@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { runConductorCycle } from "./run-conductor-cycle.mjs";
 import { runConductorMonitor } from "./conductor-monitor.mjs";
-import { requireOptionValue } from "../_cli-primitives.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@dev-loops/core/config";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { parseArgs } from "node:util";
 const USAGE = `Usage: conductor.mjs --repo <owner/name> [--auto-resume] [--cycle-only] [--monitor-only] [--require-retrospective]
 Unified conductor entrypoint for dev-loop lifecycle orchestration.`.trim();
 const parseError = buildParseError(USAGE);
@@ -43,7 +44,6 @@ function checkRetrospectiveGate(cwd, requireRetrospective) {
   }
 }
 function parseCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -52,33 +52,52 @@ function parseCliArgs(argv) {
     monitorOnly: false,
     requireRetrospective: false,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      "auto-resume": { type: "boolean" },
+      "cycle-only": { type: "boolean" },
+      "monitor-only": { type: "boolean" },
+      "require-retrospective": { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--auto-resume") {
+    if (token.name === "auto-resume") {
       options.autoResume = true;
       continue;
     }
-    if (token === "--cycle-only") {
+    if (token.name === "cycle-only") {
       options.cycleOnly = true;
       continue;
     }
-    if (token === "--monitor-only") {
+    if (token.name === "monitor-only") {
       options.monitorOnly = true;
       continue;
     }
-    if (token === "--require-retrospective") {
+    if (token.name === "require-retrospective") {
       options.requireRetrospective = true;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined) {
     throw parseError("conductor requires --repo <owner/name>");

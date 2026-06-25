@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError } from "../_core-helpers.mjs";
-import { parsePositiveInteger, requireOptionValue } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 
 import { isDirectCliRun, loadTreeFromInput, loadTreeOnline } from "./_refine-helpers.mjs";
@@ -30,7 +31,19 @@ Optional:
 const parseError = buildParseError(USAGE);
 
 export function parseRefineVerifyCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      issue: { type: "string" },
+      repo: { type: "string" },
+      input: { type: "string" },
+      json: { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     help: false,
     issue: undefined,
@@ -39,29 +52,34 @@ export function parseRefineVerifyCliArgs(argv) {
     json: false,
   };
 
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--issue") {
-      options.issue = parsePositiveInteger(requireOptionValue(args, "--issue", parseError), "Issue number", parseError);
+    if (token.name === "issue") {
+      options.issue = parsePositiveInteger(requireTokenValue(token, parseError), "Issue number", parseError);
       continue;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError, { flagPattern: /^-/u });
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    if (token === "--input") {
-      options.input = requireOptionValue(args, "--input", parseError, { flagPattern: /^-/u });
+    if (token.name === "input") {
+      options.input = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    if (token === "--json") {
+    if (token.name === "json") {
       options.json = true;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
 
   const hasIssueMode = options.issue !== undefined;

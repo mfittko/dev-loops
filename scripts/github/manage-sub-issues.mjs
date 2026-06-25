@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parsePositiveInteger, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 const USAGE = `Usage: manage-sub-issues.mjs <command> --repo <owner/name> --issue <number> [options]
 Deterministic helper for reading, linking, ordering, and verifying GitHub sub-issue trees.
@@ -76,37 +77,57 @@ export function parseManageSubIssuesCliArgs(argv) {
     expected: undefined,
     ordered: false,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args,
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      issue: { type: "string" },
+      child: { type: "string" },
+      order: { type: "string" },
+      expected: { type: "string" },
+      ordered: { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--issue") {
-      options.issue = parsePositiveInteger(requireOptionValue(args, "--issue", parseError), "Issue number", parseError);
+    if (token.name === "issue") {
+      options.issue = parsePositiveInteger(requireTokenValue(token, parseError), "Issue number", parseError);
       continue;
     }
-    if (token === "--child") {
-      options.child = parsePositiveInteger(requireOptionValue(args, "--child", parseError), "Issue number", parseError);
+    if (token.name === "child") {
+      options.child = parsePositiveInteger(requireTokenValue(token, parseError), "Issue number", parseError);
       continue;
     }
-    if (token === "--order") {
-      options.order = parseIssueList(requireOptionValue(args, "--order", parseError));
+    if (token.name === "order") {
+      options.order = parseIssueList(requireTokenValue(token, parseError));
       continue;
     }
-    if (token === "--expected") {
-      options.expected = parseIssueList(requireOptionValue(args, "--expected", parseError));
+    if (token.name === "expected") {
+      options.expected = parseIssueList(requireTokenValue(token, parseError));
       continue;
     }
-    if (token === "--ordered") {
+    if (token.name === "ordered") {
       options.ordered = true;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.issue === undefined) {
     throw parseError("Both --repo <owner/name> and --issue <number> are required");

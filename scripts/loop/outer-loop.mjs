@@ -2,7 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, parseJsonText } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
@@ -25,6 +25,7 @@ import {
   resolveEffectiveAsyncStartMode,
 } from "@dev-loops/core/loop/async-start-contract";
 import { loadDevLoopConfig, resolveConductorModel, resolveAutonomyStopAt, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { parseArgs } from "node:util";
 const USAGE = `Usage: outer-loop.mjs --repo <owner/name> --pr <number>
 Thin outer-loop wrapper for the Copilot PR remediation loop.
 Detects current PR state from both the Copilot inner loop and the reviewer
@@ -88,7 +89,6 @@ Exit codes:
   1  Argument error, gh/git failure, or indeterminate state`.trim();
 const parseError = buildParseError(USAGE);
 export function parseOuterLoopCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -97,33 +97,52 @@ export function parseOuterLoopCliArgs(argv) {
     copilotInputPath: undefined,
     reviewerInputPath: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      "checkpoint-dir": { type: "string" },
+      "copilot-input": { type: "string" },
+      "reviewer-input": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError);
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--checkpoint-dir") {
-      options.checkpointDir = requireOptionValue(args, "--checkpoint-dir", parseError);
+    if (token.name === "checkpoint-dir") {
+      options.checkpointDir = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--copilot-input") {
-      options.copilotInputPath = requireOptionValue(args, "--copilot-input", parseError);
+    if (token.name === "copilot-input") {
+      options.copilotInputPath = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--reviewer-input") {
-      options.reviewerInputPath = requireOptionValue(args, "--reviewer-input", parseError);
+    if (token.name === "reviewer-input") {
+      options.reviewerInputPath = requireTokenValue(token, parseError);
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!options.help) {
     if (options.repo === undefined || options.pr === undefined) {

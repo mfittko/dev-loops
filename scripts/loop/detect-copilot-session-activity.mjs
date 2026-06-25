@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parsePositiveInteger, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { parseArgs } from "node:util";
 const USAGE = `Usage: detect-copilot-session-activity.mjs --repo <owner/name> --branch <name> [--limit <number>]
 Detect Copilot GitHub Actions session activity on a branch.
 Required:
@@ -41,32 +42,48 @@ const COPILOT_RUN_NAME_PATTERNS = Object.freeze([
 ]);
 const parseError = buildParseError(USAGE);
 export function parseDetectCopilotSessionActivityCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
     branch: undefined,
     limit: DEFAULT_LIMIT,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      branch: { type: "string" },
+      limit: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--branch") {
-      options.branch = requireOptionValue(args, "--branch", parseError).trim();
+    if (token.name === "branch") {
+      options.branch = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--limit") {
-      options.limit = parsePositiveInteger(requireOptionValue(args, "--limit", parseError), "--limit", parseError);
+    if (token.name === "limit") {
+      options.limit = parsePositiveInteger(requireTokenValue(token, parseError), "--limit", parseError);
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.branch === undefined || options.branch.length === 0) {
     throw parseError("detect-copilot-session-activity requires both --repo <owner/name> and --branch <name>");

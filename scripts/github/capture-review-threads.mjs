@@ -8,7 +8,8 @@ import {
   parseReviewThreads,
   readInput,
 } from "../_core-helpers.mjs";
-import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 export const REVIEW_THREADS_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!) {",
@@ -49,7 +50,19 @@ Exit codes:
   1   Error
 `;
 export function parseCaptureCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      input: { type: "string" },
+      output: { type: "string" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     inputPath: undefined,
     outputPath: undefined,
@@ -57,29 +70,34 @@ export function parseCaptureCliArgs(argv) {
     pr: undefined,
     help: false,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw new Error(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--input") {
-      options.inputPath = requireOptionValue(args, "--input");
+    if (token.name === "input") {
+      options.inputPath = requireTokenValue(token);
       continue;
     }
-    if (token === "--output") {
-      options.outputPath = requireOptionValue(args, "--output");
+    if (token.name === "output") {
+      options.outputPath = requireTokenValue(token);
       continue;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo");
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token);
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr"));
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token));
       continue;
     }
-    throw new Error(`Unknown argument: ${token}`);
+    throw new Error(`Unknown argument: ${token.rawName}`);
   }
   const hasLiveArgs = options.repo !== undefined || options.pr !== undefined;
   const hasCompleteLiveArgs = options.repo !== undefined && options.pr !== undefined;

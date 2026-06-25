@@ -18,10 +18,11 @@ import { readFile } from "node:fs/promises";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { requireOptionValue } from "../_cli-primitives.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
+import { parseArgs } from "node:util";
 
 const USAGE = `Usage: build-handoff-envelope.mjs --input <path>
 Build a deterministic handoff envelope from startup resolver output and settings.
@@ -56,7 +57,6 @@ function parseFlagJson(raw, flagName, parseErrorFn) {
 }
 
 export function parseBuildHandoffEnvelopeCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     inputPath: undefined,
@@ -65,29 +65,47 @@ export function parseBuildHandoffEnvelopeCliArgs(argv) {
     repo: undefined,
   };
 
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      input: { type: "string" },
+      "gate-state": { type: "string" },
+      overrides: { type: "string" },
+      repo: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--input") {
-      options.inputPath = requireOptionValue(args, "--input", parseError);
+    if (token.name === "input") {
+      options.inputPath = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--gate-state") {
-      options.gateState = requireOptionValue(args, "--gate-state", parseError);
+    if (token.name === "gate-state") {
+      options.gateState = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--overrides") {
-      options.overrides = requireOptionValue(args, "--overrides", parseError);
+    if (token.name === "overrides") {
+      options.overrides = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError);
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError);
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
 
   if (!options.inputPath) {

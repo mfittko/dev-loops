@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { requireOptionValue } from "../_cli-primitives.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
+import { parseArgs } from "node:util";
 import {
   isUnderWorktreePath,
   parseMainWorktreePath,
@@ -30,27 +31,42 @@ Bypass:
   PI_PREFLIGHT_BYPASS=1   Skip all checks (for development/testing only).`.trim();
 const parseError = buildParseError(USAGE);
 export function parsePreFlightGateCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     expectedBranch: undefined,
     checkSubagents: false,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      "expected-branch": { type: "string" },
+      "check-subagents": { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--expected-branch") {
-      options.expectedBranch = requireOptionValue(args, "--expected-branch", parseError, { flagPattern: /^-/u });
+    if (token.name === "expected-branch") {
+      options.expectedBranch = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    if (token === "--check-subagents") {
+    if (token.name === "check-subagents") {
       options.checkSubagents = true;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   return options;
 }

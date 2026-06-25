@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import process from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import {
   STEERING_KIND,
   STEERING_RESULT,
@@ -31,7 +32,7 @@ import {
   withStateFileLock,
 } from "./_steering-state-file.mjs";
 import { formatCliError } from "../_core-helpers.mjs";
-import { requireOptionValue as readSharedOptionValue } from "../_cli-primitives.mjs";
+import { requireTokenValue as readSharedTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 const SUBMIT_USAGE = `Usage:
   steer-loop.mjs submit --repo <owner/name> --pr <number>
@@ -112,10 +113,9 @@ function runIdMismatchError(persistedRunId, requestedRunId) {
     `run-id mismatch: --state-file contains run ${JSON.stringify(persistedRunId)} but --run-id is ${JSON.stringify(requestedRunId)}. Use the correct --run-id or point --state-file at the right file.`
   );
 }
-function readRequiredOptionValue(args, flag, usage, { allowFlagLike = false } = {}) {
-  return readSharedOptionValue(
-    args,
-    flag,
+function readRequiredOptionValue(token, usage, { allowFlagLike = false } = {}) {
+  return readSharedTokenValue(
+    token,
     (message) => usageError(message, usage),
     { flagPattern: allowFlagLike ? /$^/u : /^--/u },
   );
@@ -139,7 +139,6 @@ function parsePositiveIntegerOption(raw, flag, usage) {
   return Number(raw);
 }
 export function parseSubmitCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -156,48 +155,74 @@ export function parseSubmitCliArgs(argv) {
     copilotInputPath: undefined,
     reviewerInputPath: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      "run-id": { type: "string" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      kind: { type: "string" },
+      directive: { type: "string" },
+      seq: { type: "string" },
+      "state-file": { type: "string" },
+      "loop-state": { type: "string" },
+      "apply-mode": { type: "string" },
+      "event-id": { type: "string" },
+      "copilot-input": { type: "string" },
+      "reviewer-input": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw usageError(`Unknown argument: ${token.value}`, SUBMIT_USAGE);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--run-id") {
-      options.runId = readRequiredOptionValue(args, "--run-id", SUBMIT_USAGE).trim();
+    if (token.name === "run-id") {
+      options.runId = readRequiredOptionValue(token, SUBMIT_USAGE).trim();
       validateSafeRunId(options.runId, SUBMIT_USAGE);
       continue;
     }
-    if (token === "--repo") {
-      options.repo = readRequiredOptionValue(args, "--repo", SUBMIT_USAGE).trim();
+    if (token.name === "repo") {
+      options.repo = readRequiredOptionValue(token, SUBMIT_USAGE).trim();
       parseRepoSlugOption(options.repo, SUBMIT_USAGE);
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePositiveIntegerOption(readRequiredOptionValue(args, "--pr", SUBMIT_USAGE), "--pr", SUBMIT_USAGE);
+    if (token.name === "pr") {
+      options.pr = parsePositiveIntegerOption(readRequiredOptionValue(token, SUBMIT_USAGE), "--pr", SUBMIT_USAGE);
       continue;
     }
-    if (token === "--kind") {
-      const val = readRequiredOptionValue(args, "--kind", SUBMIT_USAGE);
+    if (token.name === "kind") {
+      const val = readRequiredOptionValue(token, SUBMIT_USAGE);
       if (!VALID_KINDS.has(val)) {
         throw usageError(`--kind must be one of: ${[...VALID_KINDS].join(", ")}`, SUBMIT_USAGE);
       }
       options.kind = val;
       continue;
     }
-    if (token === "--directive") {
-      options.directive = readRequiredOptionValue(args, "--directive", SUBMIT_USAGE, { allowFlagLike: true }).trim();
+    if (token.name === "directive") {
+      options.directive = readRequiredOptionValue(token, SUBMIT_USAGE, { allowFlagLike: true }).trim();
       continue;
     }
-    if (token === "--seq") {
-      options.seq = parsePositiveIntegerOption(readRequiredOptionValue(args, "--seq", SUBMIT_USAGE), "--seq", SUBMIT_USAGE);
+    if (token.name === "seq") {
+      options.seq = parsePositiveIntegerOption(readRequiredOptionValue(token, SUBMIT_USAGE), "--seq", SUBMIT_USAGE);
       continue;
     }
-    if (token === "--state-file") {
-      options.stateFile = readRequiredOptionValue(args, "--state-file", SUBMIT_USAGE);
+    if (token.name === "state-file") {
+      options.stateFile = readRequiredOptionValue(token, SUBMIT_USAGE);
       continue;
     }
-    if (token === "--loop-state") {
-      const val = readRequiredOptionValue(args, "--loop-state", SUBMIT_USAGE);
+    if (token.name === "loop-state") {
+      const val = readRequiredOptionValue(token, SUBMIT_USAGE);
       if (!VALID_LOOP_STATES.has(val)) {
         throw usageError(`--loop-state must be one of: ${[...VALID_LOOP_STATES].join(", ")}`, SUBMIT_USAGE);
       }
@@ -205,27 +230,27 @@ export function parseSubmitCliArgs(argv) {
       options.loopStateExplicit = true;
       continue;
     }
-    if (token === "--apply-mode") {
-      const val = readRequiredOptionValue(args, "--apply-mode", SUBMIT_USAGE);
+    if (token.name === "apply-mode") {
+      const val = readRequiredOptionValue(token, SUBMIT_USAGE);
       if (!VALID_APPLY_MODES.has(val)) {
         throw usageError(`--apply-mode must be one of: ${[...VALID_APPLY_MODES].join(", ")}`, SUBMIT_USAGE);
       }
       options.applyMode = val;
       continue;
     }
-    if (token === "--event-id") {
-      options.eventId = readRequiredOptionValue(args, "--event-id", SUBMIT_USAGE);
+    if (token.name === "event-id") {
+      options.eventId = readRequiredOptionValue(token, SUBMIT_USAGE);
       continue;
     }
-    if (token === "--copilot-input") {
-      options.copilotInputPath = readRequiredOptionValue(args, "--copilot-input", SUBMIT_USAGE);
+    if (token.name === "copilot-input") {
+      options.copilotInputPath = readRequiredOptionValue(token, SUBMIT_USAGE);
       continue;
     }
-    if (token === "--reviewer-input") {
-      options.reviewerInputPath = readRequiredOptionValue(args, "--reviewer-input", SUBMIT_USAGE);
+    if (token.name === "reviewer-input") {
+      options.reviewerInputPath = readRequiredOptionValue(token, SUBMIT_USAGE);
       continue;
     }
-    throw usageError(`Unknown argument: ${token}`, SUBMIT_USAGE);
+    throw usageError(`Unknown argument: ${token.rawName}`, SUBMIT_USAGE);
   }
   if (!options.help) {
     if ((options.repo === undefined) !== (options.pr === undefined)) {
@@ -250,7 +275,6 @@ export function parseSubmitCliArgs(argv) {
   return options;
 }
 export function parseStatusCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -258,31 +282,49 @@ export function parseStatusCliArgs(argv) {
     runId: undefined,
     stateFile: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      "run-id": { type: "string" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      "state-file": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw usageError(`Unknown argument: ${token.value}`, STATUS_USAGE);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--run-id") {
-      options.runId = readRequiredOptionValue(args, "--run-id", STATUS_USAGE).trim();
+    if (token.name === "run-id") {
+      options.runId = readRequiredOptionValue(token, STATUS_USAGE).trim();
       validateSafeRunId(options.runId, STATUS_USAGE);
       continue;
     }
-    if (token === "--repo") {
-      options.repo = readRequiredOptionValue(args, "--repo", STATUS_USAGE).trim();
+    if (token.name === "repo") {
+      options.repo = readRequiredOptionValue(token, STATUS_USAGE).trim();
       parseRepoSlugOption(options.repo, STATUS_USAGE);
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePositiveIntegerOption(readRequiredOptionValue(args, "--pr", STATUS_USAGE), "--pr", STATUS_USAGE);
+    if (token.name === "pr") {
+      options.pr = parsePositiveIntegerOption(readRequiredOptionValue(token, STATUS_USAGE), "--pr", STATUS_USAGE);
       continue;
     }
-    if (token === "--state-file") {
-      options.stateFile = readRequiredOptionValue(args, "--state-file", STATUS_USAGE);
+    if (token.name === "state-file") {
+      options.stateFile = readRequiredOptionValue(token, STATUS_USAGE);
       continue;
     }
-    throw usageError(`Unknown argument: ${token}`, STATUS_USAGE);
+    throw usageError(`Unknown argument: ${token.rawName}`, STATUS_USAGE);
   }
   if (!options.help) {
     if ((options.repo === undefined) !== (options.pr === undefined)) {
@@ -298,7 +340,6 @@ export function parseStatusCliArgs(argv) {
   return options;
 }
 export function parsePromoteCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -307,39 +348,58 @@ export function parsePromoteCliArgs(argv) {
     stateFile: undefined,
     loopState: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      "run-id": { type: "string" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      "state-file": { type: "string" },
+      "loop-state": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw usageError(`Unknown argument: ${token.value}`, PROMOTE_USAGE);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--run-id") {
-      options.runId = readRequiredOptionValue(args, "--run-id", PROMOTE_USAGE).trim();
+    if (token.name === "run-id") {
+      options.runId = readRequiredOptionValue(token, PROMOTE_USAGE).trim();
       validateSafeRunId(options.runId, PROMOTE_USAGE);
       continue;
     }
-    if (token === "--repo") {
-      options.repo = readRequiredOptionValue(args, "--repo", PROMOTE_USAGE).trim();
+    if (token.name === "repo") {
+      options.repo = readRequiredOptionValue(token, PROMOTE_USAGE).trim();
       parseRepoSlugOption(options.repo, PROMOTE_USAGE);
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePositiveIntegerOption(readRequiredOptionValue(args, "--pr", PROMOTE_USAGE), "--pr", PROMOTE_USAGE);
+    if (token.name === "pr") {
+      options.pr = parsePositiveIntegerOption(readRequiredOptionValue(token, PROMOTE_USAGE), "--pr", PROMOTE_USAGE);
       continue;
     }
-    if (token === "--state-file") {
-      options.stateFile = readRequiredOptionValue(args, "--state-file", PROMOTE_USAGE);
+    if (token.name === "state-file") {
+      options.stateFile = readRequiredOptionValue(token, PROMOTE_USAGE);
       continue;
     }
-    if (token === "--loop-state") {
-      const val = readRequiredOptionValue(args, "--loop-state", PROMOTE_USAGE);
+    if (token.name === "loop-state") {
+      const val = readRequiredOptionValue(token, PROMOTE_USAGE);
       if (!VALID_LOOP_STATES.has(val)) {
         throw usageError(`--loop-state must be one of: ${[...VALID_LOOP_STATES].join(", ")}`, PROMOTE_USAGE);
       }
       options.loopState = val;
       continue;
     }
-    throw usageError(`Unknown argument: ${token}`, PROMOTE_USAGE);
+    throw usageError(`Unknown argument: ${token.rawName}`, PROMOTE_USAGE);
   }
   if (!options.help) {
     if ((options.repo === undefined) !== (options.pr === undefined)) {

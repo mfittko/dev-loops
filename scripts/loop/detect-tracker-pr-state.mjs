@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildParseError, formatCliError, parseJsonText } from "../_core-helpers.mjs";
-import { requireOptionValue } from "../_cli-primitives.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
 import {
   interpretTrackerPrState,
   normalizeTrackerPrSnapshot,
@@ -51,22 +52,36 @@ Exit codes:
   1  Argument error or runtime failure`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectTrackerPrCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     inputPath: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      input: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--input") {
-      options.inputPath = requireOptionValue(args, "--input", parseError);
+    if (token.name === "input") {
+      options.inputPath = requireTokenValue(token, parseError);
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.inputPath === undefined) {
     throw parseError("--input <path> is required");

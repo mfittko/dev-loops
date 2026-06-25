@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { access, open, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { requireOptionValue } from "../_cli-primitives.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
@@ -14,6 +14,7 @@ import {
 } from "./_handoff-contract.mjs";
 import { interpretLoopState, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { listOpenPrs } from "./_loop-pr-aggregation.mjs";
+import { parseArgs } from "node:util";
 const USAGE = `Usage: conductor-monitor.mjs --repo <owner/name> [--auto-resume]
 Aggregate Copilot-loop status across all open PRs in one repo.
 Required:
@@ -113,27 +114,42 @@ const MANUAL_REASON = {
   HANDOFF_CONTRACT_MISMATCH: "handoff_contract_mismatch",
 };
 function parseCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
     autoResume: false,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      "auto-resume": { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--auto-resume") {
+    if (token.name === "auto-resume") {
       options.autoResume = true;
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined) {
     throw parseError("conductor-monitor requires --repo <owner/name>");

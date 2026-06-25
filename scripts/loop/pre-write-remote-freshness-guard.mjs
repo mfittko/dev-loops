@@ -1,17 +1,33 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { requireOptionValue, runCommand } from "../_cli-primitives.mjs";
+import { requireTokenValue, runCommand } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
 
 const USAGE = `Usage: pre-write-remote-freshness-guard.mjs --branch <name>\nRefresh remote branch state before starting local file writes.`;
 const parseError = buildParseError(USAGE);
 
 export function parseRemoteFreshnessGuardCliArgs(argv) {
-  const args = [...argv], options = { help: false, branch: undefined };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") { options.help = true; return options; }
-    if (token === "--branch") { options.branch = requireOptionValue(args, "--branch", parseError, { flagPattern: /^-/u }); continue; }
-    throw parseError(`Unknown argument: ${token}`);
+  const options = { help: false, branch: undefined };
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      branch: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") { options.help = true; return options; }
+    if (token.name === "branch") { options.branch = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.branch === undefined) throw parseError("--branch <name> is required");
   return options;

@@ -3,11 +3,13 @@ import test from "node:test";
 
 import { buildParseError } from "../../scripts/_core-helpers.mjs";
 import {
+  parseCliTokens,
   parseIssueNumber,
   parseNonNegativeInteger,
   parsePositiveInteger,
   parsePrNumber,
   requireOptionValue,
+  requireTokenValue,
   runChild,
   runCommand,
 } from "../../scripts/_cli-primitives.mjs";
@@ -29,6 +31,71 @@ test("requireOptionValue uses provided parseError", () => {
   assert.throws(
     () => requireOptionValue([], "--repo", (message) => Object.assign(new Error(message), { usage: "usage" })),
     (error) => error.message === "Missing value for --repo" && error.usage === "usage",
+  );
+});
+
+// ── requireTokenValue / parseCliTokens (node:util.parseArgs adapters, #808) ──
+
+test("requireTokenValue returns the token value", () => {
+  assert.equal(requireTokenValue({ rawName: "--repo", value: "owner/name" }), "owner/name");
+});
+
+test("requireTokenValue rejects a missing value with the legacy message", () => {
+  assert.throws(
+    () => requireTokenValue({ rawName: "--repo", value: undefined }, (m) => Object.assign(new Error(m), { usage: "u" })),
+    (error) => error.message === "Missing value for --repo" && error.usage === "u",
+  );
+});
+
+test("requireTokenValue rejects an empty value", () => {
+  assert.throws(
+    () => requireTokenValue({ rawName: "--repo", value: "" }),
+    (error) => error.message === "Missing value for --repo",
+  );
+});
+
+test("requireTokenValue rejects a flag-like value (default --flagPattern)", () => {
+  assert.throws(
+    () => requireTokenValue({ rawName: "--repo", value: "--pr" }),
+    (error) => error.message === "Missing value for --repo",
+  );
+});
+
+test("requireTokenValue accepts a single-dash value under the default pattern but rejects it under /^-/", () => {
+  // Default /^--/ only rejects double-dash values, so a single-dash value passes.
+  assert.equal(requireTokenValue({ rawName: "--branch", value: "-x" }), "-x");
+  // A stricter /^-/ pattern rejects it (the short-flag-like case).
+  assert.throws(
+    () => requireTokenValue({ rawName: "--branch", value: "-x" }, null, { flagPattern: /^-/u }),
+    (error) => error.message === "Missing value for --branch",
+  );
+});
+
+test("parseCliTokens collects option values and rejects unknown flags / positionals", () => {
+  const options = { repo: { type: "string" }, json: { type: "boolean" } };
+  const { values, positionals } = parseCliTokens(["--repo", "owner/name", "--json"], options);
+  assert.equal(values.get("repo"), "owner/name");
+  assert.equal(values.get("json"), true);
+  assert.deepEqual(positionals, []);
+
+  assert.throws(() => parseCliTokens(["--bogus"], options), (e) => e.message === "Unknown argument: --bogus");
+  assert.throws(() => parseCliTokens(["extra"], options), (e) => e.message === "Unknown argument: extra");
+});
+
+test("parseCliTokens sets a bare boolean flag true but honors an explicit =false", () => {
+  const options = { json: { type: "boolean" } };
+  assert.equal(parseCliTokens(["--json"], options).values.get("json"), true);
+  assert.equal(parseCliTokens(["--json=false"], options).values.get("json"), false);
+  assert.equal(parseCliTokens(["--json=true"], options).values.get("json"), true);
+});
+
+test("parseCliTokens keeps positionals when allowed and rejects flag-like option values", () => {
+  const options = { repo: { type: "string" } };
+  const { positionals } = parseCliTokens(["cmd"], options, null, { allowPositionals: true });
+  assert.deepEqual(positionals, ["cmd"]);
+  assert.throws(
+    () => parseCliTokens(["--repo", "--json"], options),
+    (e) => e.message === "Missing value for --repo",
   );
 });
 

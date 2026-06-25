@@ -3,7 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parsePositiveInteger, requireOptionValue } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildDraftReviewPayload } from "@dev-loops/core/loop/reviewer-loop-state";
 const HELP = `Usage: stage-reviewer-draft.mjs --repo <owner/name> --pr <number> --review-file <path> [--local-state-output <path>]
@@ -19,7 +20,19 @@ Exit codes:
   1   Error
 `;
 export function parseStageDraftCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      "review-file": { type: "string" },
+      "local-state-output": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     repo: undefined,
     pr: undefined,
@@ -27,29 +40,34 @@ export function parseStageDraftCliArgs(argv) {
     localStateOutput: undefined,
     help: false,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw new Error(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo").trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token).trim();
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePositiveInteger(requireOptionValue(args, "--pr"), "--pr");
+    if (token.name === "pr") {
+      options.pr = parsePositiveInteger(requireTokenValue(token), "--pr");
       continue;
     }
-    if (token === "--review-file") {
-      options.reviewFile = requireOptionValue(args, "--review-file");
+    if (token.name === "review-file") {
+      options.reviewFile = requireTokenValue(token);
       continue;
     }
-    if (token === "--local-state-output") {
-      options.localStateOutput = requireOptionValue(args, "--local-state-output");
+    if (token.name === "local-state-output") {
+      options.localStateOutput = requireTokenValue(token);
       continue;
     }
-    throw new Error(`Unknown argument: ${token}`);
+    throw new Error(`Unknown argument: ${token.rawName}`);
   }
   if (!options.repo || !options.pr || !options.reviewFile) {
     throw new Error(

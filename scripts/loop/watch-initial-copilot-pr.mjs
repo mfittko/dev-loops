@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
+import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parseIssueNumber, requireOptionValue } from "../_cli-primitives.mjs";
+import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectInitialCopilotPrState, LINKED_PR_STATE } from "./detect-initial-copilot-pr-state.mjs";
 import { enforcePersistentInternalWaitTimeout } from "@dev-loops/core/loop/timeout-policy";
@@ -94,7 +95,6 @@ export async function watchCopilotRunUntilComplete(
   });
 }
 export function parseWatchInitialCopilotPrCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -102,24 +102,40 @@ export function parseWatchInitialCopilotPrCliArgs(argv) {
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     timeoutMs: COPILOT_FIRST_DURABLE_WAIT_TIMEOUT_MS,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      issue: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (REMOVED_FLAGS.has(token)) {
-      rejectRemovedFlag(token);
+    if (REMOVED_FLAGS.has(token.rawName)) {
+      rejectRemovedFlag(token.rawName);
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--issue") {
-      options.issue = parseIssueNumber(requireOptionValue(args, "--issue", parseError), parseError);
+    if (token.name === "issue") {
+      options.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.issue === undefined) {
     throw parseError("watch-initial-copilot-pr requires both --repo <owner/name> and --issue <number>");

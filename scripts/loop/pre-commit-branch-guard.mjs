@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { requireOptionValue, runCommand } from "../_cli-primitives.mjs";
+import { requireTokenValue, runCommand } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
 import {
   isUnderWorktreePath, parseMainWorktreePath, isMainCheckout,
 } from "@dev-loops/core/loop/worktree-guard";
@@ -13,15 +14,31 @@ Verify the current git branch identity and/or worktree isolation before local co
 const parseError = buildParseError(USAGE);
 
 export function parseBranchGuardCliArgs(argv) {
-  const args = [...argv];
   const options = { help: false, expectedBranch: undefined, requireWorktree: false, blockMainCheckout: false };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") { options.help = true; return options; }
-    if (token === "--expected-branch") { options.expectedBranch = requireOptionValue(args, "--expected-branch", parseError, { flagPattern: /^-/u }); continue; }
-    if (token === "--require-worktree") { options.requireWorktree = true; continue; }
-    if (token === "--block-main-checkout") { options.blockMainCheckout = true; continue; }
-    throw parseError(`Unknown argument: ${token}`);
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      "expected-branch": { type: "string" },
+      "require-worktree": { type: "boolean" },
+      "block-main-checkout": { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") { options.help = true; return options; }
+    if (token.name === "expected-branch") { options.expectedBranch = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
+    if (token.name === "require-worktree") { options.requireWorktree = true; continue; }
+    if (token.name === "block-main-checkout") { options.blockMainCheckout = true; continue; }
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.expectedBranch === undefined) { throw parseError("--expected-branch <name> is required"); }
   return options;

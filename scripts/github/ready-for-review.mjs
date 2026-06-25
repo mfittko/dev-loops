@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, summarizeGateReviewComments, summarizeGateReviewCommentMarkers } from "../_core-helpers.mjs";
-import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
@@ -10,13 +11,21 @@ const parseError = buildParseError(USAGE);
 const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, state, mergeStateStatus, title } } }`;
 
 export function parseReadyForReviewCliArgs(argv) {
-  const args = [...argv], opts = { help: false, repo: undefined, pr: undefined };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") { opts.help = true; return opts; }
-    if (token === "--repo") { opts.repo = requireOptionValue(args, "--repo", parseError).trim(); continue; }
-    if (token === "--pr") { opts.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError); continue; }
-    throw parseError(`Unknown argument: ${token}`);
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, pr: { type: "string" } },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  const opts = { help: false, repo: undefined, pr: undefined };
+  for (const token of tokens) {
+    if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
+    if (token.kind !== "option") continue;
+    if (token.name === "help") { opts.help = true; return opts; }
+    if (token.name === "repo") { opts.repo = requireTokenValue(token, parseError).trim(); continue; }
+    if (token.name === "pr") { opts.pr = parsePrNumber(requireTokenValue(token, parseError), parseError); continue; }
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!opts.repo || opts.pr === undefined) throw parseError("ready-for-review requires --repo and --pr");
   parseRepoSlug(opts.repo);

@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { parseCliTokens } from "../cli/primitives.mjs";
+
 export function createDefaultPhaseManifest(phase) {
   return {
     phase,
@@ -134,44 +136,18 @@ export async function ensurePhaseFiles(projectRoot, phase, patch = {}) {
   };
 }
 
-function requireOptionValue(args, flag) {
-  const value = args.shift();
-
-  if (typeof value !== "string" || value.length === 0 || value.startsWith("--")) {
-    throw new Error(`Missing value for ${flag}`);
-  }
-
-  return value;
-}
-
 export function parseCliArgs(argv) {
-  const args = [...argv];
+  const { values } = parseCliTokens(argv, {
+    "project-root": { type: "string" },
+    phase: { type: "string" },
+    patch: { type: "string" },
+  });
+
   const options = {
-    projectRoot: process.cwd(),
-    phase: undefined,
-    patch: {},
+    projectRoot: values.has("project-root") ? values.get("project-root") : process.cwd(),
+    phase: values.get("phase"),
+    patch: values.has("patch") ? JSON.parse(values.get("patch")) : {},
   };
-
-  while (args.length > 0) {
-    const token = args.shift();
-
-    if (token === "--project-root") {
-      options.projectRoot = requireOptionValue(args, "--project-root");
-      continue;
-    }
-
-    if (token === "--phase") {
-      options.phase = requireOptionValue(args, "--phase");
-      continue;
-    }
-
-    if (token === "--patch") {
-      options.patch = JSON.parse(requireOptionValue(args, "--patch"));
-      continue;
-    }
-
-    throw new Error(`Unknown argument: ${token}`);
-  }
 
   if (!options.phase) {
     throw new Error("Missing required --phase <phase-name> argument");

@@ -2,9 +2,10 @@
 import { lstat, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
-import { requireOptionValue } from "../_cli-primitives.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
 
 const DEFAULT_SCAN_PATHS = Object.freeze([
   "README.md",
@@ -52,26 +53,34 @@ function parseError(message) {
 }
 
 export function parseValidateLinksCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: { help: { type: "boolean", short: "h" }, root: { type: "string" } },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     help: false,
     repoRoot: resolveDefaultRepoRoot(),
   };
 
-  while (args.length > 0) {
-    const token = args.shift();
-
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-
-    if (token === "--root") {
-      options.repoRoot = path.resolve(requireOptionValue(args, "--root"));
+    if (token.name === "root") {
+      options.repoRoot = path.resolve(requireTokenValue(token));
       continue;
     }
-
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
 
   return options;

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parseIssueNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 const ISSUE_JSON_FIELDS = "number,title,body,url,state";
 const USAGE = `Usage: resolve-tracker-local-spec.mjs (--repo <owner/name> --issue <number> | --issue-url <github-issue-url>)
@@ -60,32 +61,48 @@ export function parseGitHubIssueUrl(value) {
   };
 }
 export function parseResolveTrackerLocalSpecCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      issue: { type: "string" },
+      "issue-url": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
   const options = {
     help: false,
     repo: undefined,
     issue: undefined,
     issueUrl: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = requireOptionValue(args, "--repo", parseError).trim();
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token === "--issue") {
-      options.issue = parseIssueNumber(requireOptionValue(args, "--issue", parseError), parseError);
+    if (token.name === "issue") {
+      options.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--issue-url") {
-      options.issueUrl = requireOptionValue(args, "--issue-url", parseError).trim();
+    if (token.name === "issue-url") {
+      options.issueUrl = requireTokenValue(token, parseError).trim();
       continue;
     }
-    throw parseError(`Unknown argument: ${token}`);
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const usingIssueUrl = typeof options.issueUrl === "string";
   const usingRepoIssue = options.repo !== undefined || options.issue !== undefined;

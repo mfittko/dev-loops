@@ -1,5 +1,6 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { parseArgs } from "node:util";
 
 export const DEFAULT_OUTPUT_LIMIT = 4000;
 
@@ -79,23 +80,40 @@ export async function appendBashExitOneRecord(logPath, record) {
 }
 
 export function parseCliArgs(argv) {
-  const args = [...argv];
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      log: { type: "string" },
+      record: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
   let logPath;
   let recordJson;
 
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--log") {
-      logPath = args.shift();
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw new Error(`Unknown argument: ${token.value}`);
+    }
+
+    if (token.kind !== "option") {
       continue;
     }
 
-    if (token === "--record") {
-      recordJson = args.shift();
+    if (token.name === "log") {
+      logPath = token.value;
       continue;
     }
 
-    throw new Error(`Unknown argument: ${token}`);
+    if (token.name === "record") {
+      recordJson = token.value;
+      continue;
+    }
+
+    throw new Error(`Unknown argument: ${token.rawName}`);
   }
 
   if (!logPath) {

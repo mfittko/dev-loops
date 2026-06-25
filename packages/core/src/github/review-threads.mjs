@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 
+import { parseCliTokens } from "../cli/primitives.mjs";
+
 function normalizeId(value, fallback) {
   if (typeof value === "string" && value.trim().length > 0) {
     return value.trim();
@@ -266,34 +268,14 @@ export function classifyReviewThreadsSignal(parsedResult, isCopilotLoginFn) {
 }
 
 
-function requireOptionValue(args, flag) {
-  const value = args.shift();
-
-  if (typeof value !== "string" || value.length === 0 || value.startsWith("--")) {
-    throw new Error(`Missing value for ${flag}`);
-  }
-
-  return value;
-}
-
 export function parseCliArgs(argv) {
-  const args = [...argv];
-  const options = {
-    inputPath: undefined,
+  const { values } = parseCliTokens(argv, {
+    input: { type: "string" },
+  });
+
+  return {
+    inputPath: values.get("input"),
   };
-
-  while (args.length > 0) {
-    const token = args.shift();
-
-    if (token === "--input") {
-      options.inputPath = requireOptionValue(args, "--input");
-      continue;
-    }
-
-    throw new Error(`Unknown argument: ${token}`);
-  }
-
-  return options;
 }
 
 export async function readInput({ inputPath, stdin = process.stdin } = {}) {
