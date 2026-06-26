@@ -104,6 +104,18 @@ const QueueConfig = z.strictObject({
   archiveOlderThanDays: z.number().int().positive().optional(),
 });
 
+/**
+ * Worktree lifecycle config (#909): which gitignored files/dirs to provision
+ * into a fresh worktree from the main checkout. Entries are repo-relative
+ * literal paths OR glob patterns. `copyOnInit` → `fs.cp` (isolated per
+ * worktree); `linkOnInit` → absolute symlink into the main checkout (read-only
+ * data). Both optional; empty/absent is a valid no-op.
+ */
+const WorktreeConfig = z.strictObject({
+  copyOnInit: z.array(z.string().trim().min(1)).optional(),
+  linkOnInit: z.array(z.string().trim().min(1)).optional(),
+});
+
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */
 const InternalPatternsConfig = z.array(z.string().trim().min(1)).min(1);
 
@@ -152,6 +164,7 @@ export const DevLoopConfigSchema = z.strictObject({
   queue: QueueConfig.optional(),
   personas: PersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
+  worktree: WorktreeConfig.optional(),
 });
 
 // ============================================================================
@@ -193,6 +206,7 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
     "^\\.github/",
     "^test/",
   ]),
+  worktree: Object.freeze({ copyOnInit: Object.freeze([]), linkOnInit: Object.freeze([]) }),
 });
 
 // ============================================================================
@@ -212,6 +226,7 @@ export const FileConfigSchema = z.strictObject({
   queue: QueueConfig.partial().optional(),
   personas: FilePersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
+  worktree: WorktreeConfig.partial().optional(),
 });
 
 // ============================================================================
@@ -1053,6 +1068,26 @@ const DEFAULT_INTERNAL_PATH_PATTERNS = BUILT_IN_DEFAULTS.internalPathPatterns;
  * @param {DevLoopConfig} config
  * @returns {string[]}
  */
+/**
+ * Resolve the worktree lifecycle config from the merged dev-loop config.
+ *
+ * Returns `{ copyOnInit, linkOnInit }` with empty-array defaults when the
+ * config omits the `worktree` section or either list. Entries are trimmed,
+ * repo-relative literal paths or glob patterns expanded against the main
+ * checkout at provision time. See scripts/loop/provision-worktree.mjs.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {{ copyOnInit: string[], linkOnInit: string[] }}
+ */
+export function resolveWorktreeConfig(config) {
+  const wt = config?.worktree;
+  const list = (v) =>
+    Array.isArray(v)
+      ? v.map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
+      : [];
+  return { copyOnInit: list(wt?.copyOnInit), linkOnInit: list(wt?.linkOnInit) };
+}
+
 export function resolveInternalPathPatterns(config) {
   if (
     config?.internalPathPatterns &&

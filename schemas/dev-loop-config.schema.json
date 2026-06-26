@@ -127,6 +127,29 @@
       "additionalProperties": {
         "$ref": "#/$defs/personaEntry"
       }
+    },
+    "worktree": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Worktree lifecycle automation. Provision gitignored files/dirs into a fresh worktree from the main checkout. Entries are repo-relative literal paths or glob patterns; directories recurse. Empty/absent is a no-op.",
+      "properties": {
+        "copyOnInit": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Paths/globs copied into the worktree (isolated per worktree — use for mutable files). Do not target node_modules."
+        },
+        "linkOnInit": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Paths/globs symlinked (absolute) into the main checkout (shared — use only for read-only data). Do not target node_modules."
+        }
+      }
     }
   },
   "$defs": {

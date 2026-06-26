@@ -6,18 +6,104 @@ This document is the canonical repo-level owner for local worktree usage guidanc
 `dev-loops`.
 
 Use it to keep local mutation work isolated, predictable, and easy to clean up.
-This guidance covers where worktrees live, when to create or reuse them, how to
-handle dependencies inside them, and how to clean them up after the work is done.
-It does not add new automation.
+This guidance covers where worktrees live, how to create-or-reuse and provision
+them in one step (`ensure-worktree.mjs`), how to handle dependencies inside them,
+and how loop-owned worktrees are cleaned up after merge (`cleanup-worktree.mjs`).
+The raw `git worktree` commands remain documented as the underlying mechanism.
 
 ## Canonical location and naming
 
-- Create local worktrees under `tmp/worktrees/<issue-or-branch-slug>/`.
-- Prefer a stable slug derived from the active issue or branch, such as
-  `issue-374-worktree-guidance`.
-- Treat this as the canonical location for repo-local worktrees.
+- Loop-owned worktrees live under the namespaced path
+  `tmp/worktrees/dev-loops/<kind>-<number>` — e.g. `tmp/worktrees/dev-loops/issue-909`,
+  `tmp/worktrees/dev-loops/pr-908`. **No branch suffix:** the path is recomputable
+  from the issue/PR number alone, which is what lets cleanup find it.
+- A single resolver, `resolveWorktreePath({ repoRoot, kind, number })` in
+  `packages/core/src/loop/handoff-envelope.mjs`, is the sole source of truth for
+  create, provision, and cleanup.
+- The `dev-loops/` namespace marks loop-owned worktrees so cleanup can only ever
+  remove its own — a hand-made `tmp/worktrees/my-experiment` is never touched.
 - Deprecate ad hoc locations such as `tmp/copilot-loop/`, repo-root `worktrees/`,
   and `/private/tmp/...` for normal repository worktree usage.
+
+## Lifecycle automation
+
+The worktree lifecycle is owned end to end: **create + provision** in one
+command → **post-merge cleanup**. The two entrypoints below are the DEFAULT
+path; the raw `git worktree add` / `git worktree remove` commands are the
+underlying mechanism, not the operator interface.
+
+### Create (or reuse) + provision: `ensure-worktree.mjs`
+
+This is the lifecycle entrypoint. It resolves the canonical namespaced path,
+`git fetch`es the base remote, creates the worktree if absent (or reuses it if
+one already exists at that exact path — idempotent; a different branch at the
+path is reported as a conflict rather than clobbered), then provisions it
+(below) in the same step:
+
+```sh
+node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \
+  [--branch <name>] [--base <ref, default origin/main>]
+```
+
+It prints `{ ok, path, created|reused, provision: { actions, summary } }` (the
+full `provisionWorktree()` result, not just its summary). Provisioning is
+fail-soft (a warning never aborts the worktree); a `git worktree add` failure is
+a hard error. It does **not** run `npm install` (see dependencies below).
+
+### Auto-provisioning (`.devloops` `worktree` section)
+
+`ensure-worktree.mjs` invokes this automatically; `provision-worktree.mjs` is
+available standalone for re-provisioning an existing worktree.
+
+A fresh worktree contains only tracked files, so gitignored runtime files the
+app/tests need (a config file, a large read-only dataset) are absent. Configure
+which ones to bring in from the main checkout:
+
+```yaml
+# .devloops
+worktree:
+  copyOnInit:          # mutable → copied (isolated per worktree)
+    - config/app.yml
+    - .env.test
+    - 'config/*.local.yml'   # glob patterns supported
+  linkOnInit:          # large/read-only → symlinked (no duplication)
+    - data/large-dataset
+```
+
+- Entries are repo-relative **literal paths or glob patterns** (native
+  `fsp.glob`). A directory (literal or matched) recurses.
+- `copyOnInit` → `fs.cp` (recursive), isolated per worktree — use for files a run
+  may write to. `linkOnInit` → **absolute** symlink into the main checkout, shared
+  across worktrees — use **only for read-only data** (a symlinked dir is one
+  underlying directory; never link anything a run mutates).
+- Sources resolve against the main checkout, never cwd. Every resolved path must
+  resolve **inside** the main checkout or it is rejected with a log line
+  (path-traversal guard).
+- **Fail-soft:** a missing source or an empty glob logs one warning and continues
+  — provisioning never aborts init. Idempotent on worktree reuse.
+- **Opt-in:** empty/absent by default; no baked-in file list.
+- **Not for `node_modules`.** A copied/symlinked `node_modules` goes stale the
+  moment a branch changes a dependency and can break native builds — use the
+  `npm ci`-in-worktree path below. Provisioning does **not** run `npm install`.
+
+Run manually with:
+
+```sh
+node scripts/loop/provision-worktree.mjs --worktree-path <p> --repo-root <p>
+```
+
+### Post-merge cleanup
+
+After a successful merge, the canonical worktree is removed automatically:
+
+```sh
+node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p>)
+```
+
+It resolves the canonical path via the shared resolver, runs `git worktree remove
+--force` + `git worktree prune` from the main checkout, and **refuses any path not
+under `tmp/worktrees/dev-loops/`**. Git errors are logged but never fatal, so
+cleanup can't break a merge-completion flow.
 
 ## Default rule: use a worktree for mutating local work
 
@@ -29,20 +115,20 @@ It does not add new automation.
 
 ## Create or reuse flow
 
-1. **Always fetch first:** `git fetch origin` before creating or reusing any worktree.
-   Never create a worktree from a stale local `origin/main` reference.
-2. Before creating anything, run `git worktree list`.
-2. Reuse an existing matching branch/worktree when the path and branch already fit
-   the task.
-3. When no matching worktree exists, create one in the canonical location, for
-   example:
+**Default:** run `ensure-worktree.mjs` (above). It fetches the base remote,
+reuses an existing worktree at the canonical path or creates one from
+`origin/main`, provisions it, and reports a conflict instead of clobbering. Then
+do the local editing, validation, commit, and PR follow-up work from that
+worktree rather than from the main checkout.
 
-   ```sh
-   git worktree add -b <branch> tmp/worktrees/<issue-or-branch-slug> origin/main
-   ```
+```sh
+node scripts/loop/ensure-worktree.mjs --repo-root <p> --issue <n>
+```
 
-4. Do the local editing, validation, commit, and PR follow-up work from that
-   worktree rather than from the main checkout.
+**Underlying mechanism** (what `ensure-worktree.mjs` runs for you — use directly
+only when the entrypoint is unavailable): always `git fetch origin` first (never
+create from a stale `origin/main`), check `git worktree list`, then
+`git worktree add -b <branch> tmp/worktrees/dev-loops/<kind>-<number> origin/main`.
 
 ## Dependency and install expectations
 
@@ -65,20 +151,18 @@ It does not add new automation.
 
 ## Cleanup and prune flow
 
-- After a PR is merged or the work is abandoned, remove the worktree with:
+**Default:** after a PR is merged (or the work is abandoned), run
+`cleanup-worktree.mjs` (see [Post-merge cleanup](#post-merge-cleanup) above). It
+resolves the canonical path, removes the worktree, prunes, and refuses any path
+not under `tmp/worktrees/dev-loops/`:
 
-  ```sh
-  git worktree remove --force <path>
-  ```
+```sh
+node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>)
+```
 
-- After removal, run:
-
-  ```sh
-  git worktree prune
-  ```
-
-- Cleanup should happen promptly after merge so stale worktrees do not accumulate
-  under `tmp/worktrees/`.
+**Underlying mechanism** (what cleanup runs for you):
+`git worktree remove --force <path>` then `git worktree prune`. Clean up promptly
+after merge so stale worktrees do not accumulate under `tmp/worktrees/`.
 
 ## Fallback when worktrees are unavailable
 
@@ -91,6 +175,7 @@ It does not add new automation.
 
 ## Non-goals
 
-- No new worktree automation scripts.
-- No runtime behavior changes to loop helpers.
+- No Windows symlink support (`linkOnInit` assumes POSIX).
+- No default provisioning file list — provisioning is opt-in per repo.
+- Not a `node_modules` mirroring mechanism — deps belong to `npm ci`-in-worktree.
 - No expansion of this guidance into a second backlog or planning system.

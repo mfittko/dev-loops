@@ -453,8 +453,8 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
       const allPaths = parseAllWorktreePaths(worktreeOutput);
       if (!isUnderWorktreePath(effectiveCwd)) {
         const reason = mainPath !== null && isMainCheckout(effectiveCwd, mainPath)
-          ? `Local implementation requires worktree isolation. Current directory is the main git checkout (${mainPath}). Create a worktree under tmp/worktrees/<slug>/ and re-run.`
-          : "Local implementation requires worktree isolation. Current directory is not under tmp/worktrees/. Create a worktree and re-run.";
+          ? `Local implementation requires worktree isolation. Current directory is the main git checkout (${mainPath}). Run \`node scripts/loop/ensure-worktree.mjs --repo-root ${mainPath} --issue <n>\` to create+provision the worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`
+          : "Local implementation requires worktree isolation. Current directory is not under tmp/worktrees/. Run `node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>` to create+provision a worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.";
         return {
           ok: true,
           bundleKind: "needs_reconcile",
@@ -466,7 +466,7 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
         };
       }
       if (!isListedWorktree(effectiveCwd, allPaths)) {
-        const reason = `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`git worktree add\` and re-run.`;
+        const reason = `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\` and re-run.`;
         return {
           ok: true,
           bundleKind: "needs_reconcile",
