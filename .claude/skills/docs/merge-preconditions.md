@@ -34,7 +34,10 @@ A marker is allowed only while the PR is still in draft; it must be removed befo
 
 ## Post-merge
 
-- Remove merged worktree: `git worktree remove --force <path> && git worktree prune`
+- Remove merged worktree (canonical): `node scripts/loop/cleanup-worktree.mjs --repo-root <main> (--issue <n> | --pr <n>)`.
+  It resolves the namespaced path, runs `git worktree remove --force <path> && git worktree prune` (the underlying
+  mechanism) from the main checkout, and refuses any path not under `tmp/worktrees/dev-loops/`. See
+  [worktree guidance](../../docs/worktree-guidance.md).
 - Clean up stale branches
 
 ## Cross-references

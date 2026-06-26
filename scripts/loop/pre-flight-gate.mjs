@@ -95,7 +95,8 @@ function checkWorktreeIsolation({ cwd, env, gitCommand = "git" }) {
         guidance:
           `Current directory appears to be the main git checkout (${mainWorktreePath}).\n` +
           "Local implementation requires worktree isolation. Create a worktree:\n" +
-          "  git worktree add -b <branch> tmp/worktrees/<slug>/ origin/main\n" +
+          "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
+          "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
           "Then re-run from the worktree directory.",
         mainWorktreePath,
       };
@@ -105,7 +106,8 @@ function checkWorktreeIsolation({ cwd, env, gitCommand = "git" }) {
       error: "not_in_worktree",
       guidance:
         "Local implementation requires worktree isolation. Create a worktree:\n" +
-        "  git worktree add -b <branch> tmp/worktrees/<slug>/ origin/main\n" +
+        "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
+        "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
         "Then re-run from the worktree directory.",
       mainWorktreePath: mainWorktreePath ?? undefined,
     };
@@ -118,7 +120,8 @@ function checkWorktreeIsolation({ cwd, env, gitCommand = "git" }) {
       guidance:
         "Current directory is under tmp/worktrees/ but is not a real git worktree.\n" +
         "Create a worktree with:\n" +
-        "  git worktree add -b <branch> tmp/worktrees/<slug>/ origin/main\n" +
+        "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
+        "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
         "Then re-run from the worktree directory.",
       mainWorktreePath: mainWorktreePath ?? undefined,
     };

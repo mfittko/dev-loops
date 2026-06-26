@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, lstatSync, readlinkSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, lstatSync, readlinkSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -145,6 +145,26 @@ test("provision: rejects a path-traversal source", async () => {
     assert.equal(res.summary.rejected, 1);
     assert.equal(res.summary.copied, 0);
     assert.ok(!existsSync(path.join(fx.worktreePath, "secret")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provision: rejects a source that is a symlink escaping the main checkout", async () => {
+  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/leak\n");
+  try {
+    // outside the repo: a real secret
+    mkdirSync(path.join(fx.base, "outside"), { recursive: true });
+    writeFileSync(path.join(fx.base, "outside/secret"), "leak");
+    // lexically-inside source path, but it's a symlink pointing outside repoRoot
+    mkdirSync(path.join(fx.repoRoot, "config"));
+    symlinkSync(path.join(fx.base, "outside/secret"), path.join(fx.repoRoot, "config/leak"));
+
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.equal(res.ok, true);
+    assert.equal(res.summary.rejected, 1);
+    assert.equal(res.summary.copied, 0);
+    assert.ok(!existsSync(path.join(fx.worktreePath, "config/leak")));
   } finally {
     fx.cleanup();
   }

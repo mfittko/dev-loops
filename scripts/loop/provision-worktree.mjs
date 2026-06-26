@@ -106,6 +106,25 @@ async function pathExists(p) {
   }
 }
 
+/**
+ * The lexical `inside()` guard in expandEntry can't see through symlinks: a
+ * source that is itself a symlink (or sits under a symlinked dir) pointing
+ * OUTSIDE repoRoot resolves clean lexically but escapes on realpath. Re-check
+ * the realpath here BEFORE any copy/link. Returns true when the resolved
+ * source is genuinely inside repoRoot. Non-existent source → treat as inside
+ * (the copy/link helpers handle missing sources with their own warning).
+ */
+async function realpathInside(src, repoRoot) {
+  let real;
+  try {
+    real = await fsp.realpath(src);
+  } catch {
+    return true; // missing/broken — let the copy/link helper report it
+  }
+  const realRoot = await fsp.realpath(repoRoot).catch(() => repoRoot);
+  return real === realRoot || real.startsWith(realRoot + path.sep);
+}
+
 /** Copy: idempotent skip when dest already exists (worktree reuse). */
 async function provisionCopy(src, dest, logWarn) {
   if (!(await pathExists(src))) {
@@ -163,6 +182,14 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
         continue;
       }
       for (const src of matches) {
+        // Symlink-aware traversal guard: a source whose realpath escapes the
+        // main checkout is rejected before any copy/link (the lexical inside()
+        // above cannot see through symlinks).
+        if (!(await realpathInside(src, root))) {
+          logWarn(`rejected (symlink escapes main checkout): ${entry} → ${src}`);
+          actions.push({ mode: "reject", reason: "traversal", entry, src });
+          continue;
+        }
         const dest = path.join(dst, path.relative(root, src));
         const res = kind === "copy"
           ? await provisionCopy(src, dest, logWarn)

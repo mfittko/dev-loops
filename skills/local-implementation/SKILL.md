@@ -72,7 +72,13 @@ For the `local_implementation` strategy, before any planning or implementation m
 node scripts/loop/pre-flight-gate.mjs --expected-branch <working-branch> --check-subagents
 ```
 
-Before creating or reusing a worktree for local implementation, always run `git fetch origin` first. Always create worktrees from a freshly fetched `origin/main`. The fetched `origin/main` is the authoritative base for all worktree creation.
+Before creating or reusing a worktree for local implementation, use the canonical lifecycle entrypoint, which fetches the base remote, then creates-or-reuses the worktree at its namespaced path and provisions it in one step:
+
+```sh
+node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>
+```
+
+This creates (or reuses) the worktree at `tmp/worktrees/dev-loops/<kind>-<n>` from a freshly fetched `origin/main` (the authoritative base for all worktree creation) and provisions its gitignored runtime files. Raw `git worktree add -b <branch> tmp/worktrees/dev-loops/<kind>-<n> origin/main` is the underlying mechanism `ensure-worktree.mjs` runs for you. See [worktree guidance](../../docs/worktree-guidance.md).
 
 This validates:
 - Worktree isolation (current directory is under `tmp/worktrees/`)
