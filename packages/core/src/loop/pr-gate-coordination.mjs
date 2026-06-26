@@ -1440,6 +1440,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       reason: `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${ciStatus === "crediblyGreen" ? "credibly green" : "green"} CI, so \`pre_approval_gate\` fallback is now the next legal boundary (it reviews the current post-cap head; no further Copilot re-request is permitted).`,
       mergeStateStatus,
       conflictFiles,
+      refinementArtifact,
       gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds }),
     copilotReviewRoundCount,
     });
