@@ -1,4 +1,6 @@
-# Plan — Issue #895: make the gate fan-out actually fork from the context-builder
+# Plan — Issue #895: build-once neutral context bundle for the gate fan-out (no fork)
+
+> Heading note: the approved design is **no fork** — build a neutral bundle once and seed independent reviewers (see §0). The "fork" wording retained in §§1–12 below is the superseded investigation record, kept deliberately for history.
 
 Status: refinement plan (READ-ONLY analysis; not implemented)
 Source issue: mfittko/dev-loops#895 (bug) — owner decision recorded in the issue comment "Converged design (operator-approved)": resolve by building a NEUTRAL context bundle ONCE (deterministic script) and seeding each independent reviewer with it — **no fork primitive, no Workflow dependency**. (An earlier "Option 1: fork via the Workflow tool" framing was explored and then superseded — see §0 for the governing design and §§1–12 for that investigation history.)
