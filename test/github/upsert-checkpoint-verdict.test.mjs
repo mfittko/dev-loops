@@ -1676,7 +1676,7 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
   }
 });
 
-test("upsert-checkpoint-verdict fails closed when draft_gate is forbidden on a non-draft PR", async () => {
+test("upsert-checkpoint-verdict treats stale clean draft_gate evidence on a non-draft PR as an idempotent no-op (#891)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-draft-forbidden-"));
 
   try {
@@ -1728,11 +1728,15 @@ test("upsert-checkpoint-verdict fails closed when draft_gate is forbidden on a n
       "--next-action", "mark ready for review",
     ], { env });
 
-    assert.equal(result.code, 1);
-    assert.equal(result.stdout, "");
-    const payload = JSON.parse(result.stderr);
-    assert.equal(payload.ok, false);
-    assert.match(payload.error, /Cannot enter/);
+    // The PR already carries clean draft_gate evidence (on an earlier head). The
+    // draft gate is a one-time boundary and the pre-merge check accepts any-head
+    // clean draft evidence, so re-posting is an idempotent no-op rather than a
+    // hard failure. (#891)
+    assert.equal(result.code, 0);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.action, "noop");
+    assert.equal(payload.draftGateAlreadySatisfied, true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1872,11 +1876,14 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
   }
 });
 
-test("upsert-checkpoint-verdict rejects draft_gate when draftGateAlreadySatisfied is true", async () => {
+test("upsert-checkpoint-verdict treats draft_gate as an idempotent no-op when already satisfied (#891)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-already-satisfied-"));
 
   try {
-    // Simulate a non-draft PR with an existing clean draft_gate comment
+    // Simulate a non-draft PR with an existing clean draft_gate comment. The draft
+    // gate is a one-time boundary already passed; the pre-merge check accepts this
+    // evidence, so re-posting must be an idempotent no-op (not a hard error that
+    // dead-ends scripted callers). (#891)
     const cleanDraftGateComment = {
       id: 101,
       body: [
@@ -1910,13 +1917,85 @@ test("upsert-checkpoint-verdict rejects draft_gate when draftGateAlreadySatisfie
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
     ], { env });
 
-    assert.equal(result.code, 1);
-    assert.equal(result.stdout, "");
-    const payload = JSON.parse(result.stderr);
-    assert.equal(payload.ok, false);
-    assert.match(payload.error, /Cannot enter draft_gate on owner\/repo#17/);
-    assert.match(payload.error, /draft gate was already satisfied/);
-    assert.match(payload.error, /Do not re-post draft_gate/);
+    assert.equal(result.code, 0);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.action, "noop");
+    assert.equal(payload.draftGateAlreadySatisfied, true);
+    assert.equal(payload.gate, "draft_gate");
+    assert.match(payload.reason, /already satisfied/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict posts draft_gate on a ready PR via a draft transition, preserving execution mode (#891)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-draft-transition-"));
+
+  try {
+    // A non-draft PR with NO draft_gate evidence and green CI. RUN_DRAFT_GATE is
+    // forbidden on a ready PR, so the poster transitions the PR back to draft,
+    // posts the verdict (preserving --execution-mode fanout_fanin), then restores
+    // ready — instead of dead-ending the operator. (#891)
+    // Claims (order-independent) matching: the two coordination passes share
+    // identical `pr view` args and are claimed in listed order (isDraft:false
+    // before isDraft:true).
+    const { env: claimsEnvRaw } = await writeGhStubHelper(tempDir, [
+      // 1) first coordination pass: ready PR, green CI, no draft evidence
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        issueComments: [],
+      }),
+      // 2) convertPrToDraft: resolve PR node id, then convert mutation
+      {
+        assertArgs: ["api", "graphql", "-f", "-F"],
+        assertArgContains: ["number=17", "pullRequest(number: $number)"],
+        stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":false}}}}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "-f", "-F"],
+        assertArgContains: ["pullRequestId=PR_kwDOScHU78000017", "convertPullRequestToDraft"],
+        stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
+      },
+      // 3) recursive upsert: second coordination pass, now a draft PR
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        issueComments: [],
+      }),
+      // 4) post the draft_gate comment
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["body=### Gate review: `draft_gate`"],
+        stdout: '{"id":501,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-501"}\n',
+      },
+      // 5) restore ready state
+      {
+        assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"],
+        stdout: "",
+      },
+    ], { matchMode: "claims" });
+    const env = { ...claimsEnvRaw, PI_SUBAGENT_RUN_ID: "" };
+
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: "abc1234",
+      verdict: "clean",
+      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+      findingsSummary: "no issues found",
+      nextAction: "mark ready for review",
+      executionMode: "fanout_fanin",
+    }, { env, repoRoot: tempDir });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+    assert.equal(result.gate, "draft_gate");
+    assert.equal(result.draftTransition, true);
+    assert.equal(result.executionMode, "fanout_fanin");
+    assert.equal(result.commentId, 501);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -545,6 +545,39 @@ async function verifyComment({ repo, commentId }, { env, ghCommand }) {
   }
 }
 
+// Post a draft_gate verdict on a PR that is currently READY (non-draft) by
+// briefly transitioning it back to draft, posting the verdict (which is only
+// legal while the PR is a draft), then restoring the ready state. The caller's
+// options — verdict, execution mode (e.g. fanout_fanin), findings, ledger — are
+// preserved verbatim by re-entering upsertCheckpointVerdict once the PR is a
+// draft. Unlike `reconcile-draft-gate` (which posts an inline verdict and so
+// cannot satisfy requireFanoutEvidence on draft_gate), this preserves fanout
+// evidence. On any failure mid-transition the PR is best-effort restored to
+// ready before rethrowing. (#891)
+async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot }) {
+  const { convertPrToDraft, markPrReady } = await import("./reconcile-draft-gate.mjs");
+  const conversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+  let result;
+  try {
+    // The PR is now a draft, so RUN_DRAFT_GATE is the legal action. Re-enter with
+    // the caller's full options; prIsDraft is now true so this branch is skipped.
+    result = await upsertCheckpointVerdict(options, { env, ghCommand, repoRoot });
+  } catch (error) {
+    if (conversion.alreadyDraft !== true) {
+      try {
+        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+      } catch {
+        // Best-effort restore; surface the original error.
+      }
+    }
+    throw error;
+  }
+  if (conversion.alreadyDraft !== true) {
+    await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+  }
+  return { ...result, draftTransition: true };
+}
+
 export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even
@@ -613,14 +646,47 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
   }
   const requestedGateAction = resolveGateAction(options.gate);
+  const prIsDraft = Boolean(coordinationContext.prData?.isDraft);
   if (options.gate === "draft_gate" && coordination.draftGateAlreadySatisfied) {
-    throw new Error(
-      `Cannot enter draft_gate on ${options.repo}#${options.pr}: draft gate was already satisfied ` +
-      `(clean evidence exists, PR is no longer draft). ` +
-      `Do not re-post draft_gate. The draft→ready transition was already recorded.`,
-    );
+    // The draft gate is a one-time boundary: a non-draft PR with clean draft_gate
+    // evidence (on any head) has already passed it, and the pre-merge gate check
+    // accepts that evidence. Re-posting is therefore a no-op, not an error —
+    // return idempotent success so scripted/automated callers are not dead-ended
+    // by a hard throw. (#891)
+    const satisfied = coordinationContext.gateEvidence?.draftGate ?? {};
+    return {
+      ok: true,
+      action: "noop",
+      reason: "draft_gate already satisfied (clean evidence exists; draft→ready boundary recorded)",
+      repo: options.repo,
+      pr: options.pr,
+      gate: "draft_gate",
+      headSha: canonicalHeadSha,
+      currentHeadSha: evidence.currentHeadSha,
+      draftGateAlreadySatisfied: true,
+      ...(satisfied.commentId != null ? { commentId: satisfied.commentId } : {}),
+      ...(satisfied.commentUrl ? { commentUrl: satisfied.commentUrl } : {}),
+    };
   }
   const gateActionForbidden = coordination.forbiddenActions.includes(requestedGateAction);
+  // Draft gate can only be posted while the PR is a draft (RUN_DRAFT_GATE is
+  // forbidden once the PR is ready). A PR opened directly as ready — or any ready
+  // PR that still needs clean draft_gate evidence for the pre-merge check — would
+  // otherwise dead-end: the poster refuses, yet the pre-merge gate check fails
+  // closed on "missing visible clean draft_gate comment". Rather than force the
+  // operator to manually toggle the PR back to draft, perform the
+  // draft→post→ready transition here, preserving the caller's verdict, execution
+  // mode (e.g. fanout_fanin), findings, and ledger. This is the fanout-aware
+  // analogue of `reconcile-draft-gate` (which only posts inline and so cannot
+  // satisfy requireFanoutEvidence on draft_gate). (#891)
+  if (
+    options.gate === "draft_gate"
+    && gateActionForbidden
+    && !prIsDraft
+    && !coordination.draftGateAlreadySatisfied
+  ) {
+    return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot });
+  }
   if (gateActionForbidden) {
     throw new Error(buildGateEntryRefusalError({ options, coordination }));
   }
