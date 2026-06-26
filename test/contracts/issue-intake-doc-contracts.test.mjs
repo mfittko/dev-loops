@@ -86,7 +86,7 @@ test("issue-intake surface requires unattended resume-from-state behavior when a
   assert.match(content, /automatically resume\/restart follow-up when continuation is feasible/i);
   assert.match(content, /New PRs in this workflow must be opened as \*\*draft\*\* PRs first/i);
   assert.match(content, /Do not create a fresh PR directly in ready-for-review state/i);
-  assert.match(content, /node <resolved-skill-scripts>\/github\/create-draft-pr\.mjs --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
+  assert.match(content, /node <resolved-skill-scripts>\/github\/create-pr\.mjs --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.doesNotMatch(content, /gh pr create --draft --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.match(content, /pre-existing PR.*not.*stop-by-default condition/is);
   assert.match(content, /continue unattended until the human approval checkpoint/i);

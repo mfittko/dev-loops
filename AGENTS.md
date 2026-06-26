@@ -14,7 +14,7 @@
 - Prefer the GitHub-first routed path for branch/PR/CI/review work; use local implementation only when explicitly requested.
 - Use `npm run verify` as the default local validation path.
 - When creating GitHub issues via `gh issue create`, always include `--assignee @me` so the new artifact is self-assigned.
-- When creating PRs in this repo, use `dev-loops pr create-draft --assignee @me ...` so draft-first is enforced mechanically while preserving self-assignment.
+- When creating PRs in this repo, use the canonical `dev-loops pr create ...` path (always draft + always self-assigned; `--assignee @me` is the default) — never raw `gh pr create`.
 - Never start implementation (file mutation, branch creation, PR creation) without explicit instruction. "Queue," "add to list," "track," "note" are NOT implementation triggers. Only proceed when the user says "start," "go," "implement," "do it," "work on," or equivalent imperative. Confirm if unsure.
 - All work must originate from a tracked artifact: a GitHub issue (tracker-first) or a persisted markdown plan file (local-planning). See [Artifact Authority Contract](skills/docs/artifact-authority-contract.md) for canonical mode definitions and settings. No work may originate from a PR or direct local change unless explicitly requested.
 - Implement one phase at a time; if durable repo docs explicitly record a reprioritization exception, follow [Implementation State](docs/IMPLEMENTATION_STATE.md) and the active phase doc.
