@@ -48,6 +48,18 @@ async function collectFiles(dir, extensions) {
   return out;
 }
 
+// Existence check that fails loudly: true if the path exists, false ONLY on ENOENT,
+// rethrow any other stat error (permissions/I/O) so the guard never silently skips.
+async function pathExists(rel) {
+  try {
+    await stat(path.join(repoRoot, rel));
+    return true;
+  } catch (err) {
+    if (err && err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
 test("user-facing identity surface carries no stale pi-dev-loops identity reference", async () => {
   // Each surface declares the extensions it owns: docs dirs scan Markdown, `.github/` also scans
   // workflow/config YAML. `collectFiles` already skips missing directories, so no pre-filtering is
@@ -63,7 +75,7 @@ test("user-facing identity surface carries no stale pi-dev-loops identity refere
   ).flat();
   const rootDocs = ["README.md", "AGENTS.md", "extension/README.md"];
   for (const rel of rootDocs) {
-    if (await stat(path.join(repoRoot, rel)).then(() => true).catch(() => false)) {
+    if (await pathExists(rel)) {
       docFiles.push(rel);
     }
   }
@@ -87,7 +99,7 @@ test("user-facing identity surface carries no stale pi-dev-loops identity refere
   // Guard the guard: the allow-listed historical artifact must still exist, so the exclusion
   // stays meaningful and does not silently mask a moved/renamed doc.
   for (const rel of HISTORICAL_ARTIFACT_ALLOWLIST) {
-    const exists = await stat(path.join(repoRoot, rel)).then(() => true).catch(() => false);
+    const exists = await pathExists(rel);
     assert.ok(exists, `historical-artifact allowlist entry should exist: ${rel}`);
   }
 });
