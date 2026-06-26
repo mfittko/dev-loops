@@ -126,7 +126,7 @@ test("no dev-loops-owned PI_* env var remains: all renamed to DEVLOOPS_* (no ali
   // guard file (its allowlist literals would self-match).
   const files = (
     await Promise.all(
-      ["cli", "lib", "scripts", "packages", "agents", "skills", "extension", "test", ".claude"].map(
+      ["cli", "lib", "scripts", "packages", "agents", "skills", "extension", "test", "docs", ".claude"].map(
         collectTextFiles,
       ),
     )
