@@ -81,6 +81,12 @@ overrides to `.devloops` (`.yml`/`.json` extensions are also accepted). Packaged
 ship with the extension (`.pi/dev-loop/defaults.yaml`); you only need to override the keys
 you want to change.
 
+## 5. Node version floor
+
+The minimum supported Node version was raised **`>=20` → `>=24`** (both `dev-loops` and
+`@dev-loops/core`). Consumers running Node < 24 must upgrade — `npm install` will warn (or
+fail under `engine-strict`) otherwise.
+
 ## See also
 
 - [`CHANGELOG.md`](../CHANGELOG.md) — the `PI_*`→`DEVLOOPS_*` env-var rename entry records the full mapping.

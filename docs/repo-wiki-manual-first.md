@@ -47,7 +47,7 @@ Helper entrypoint:
 
 For both paths:
 
-- Node.js 20+ for the npm wrapper (matches the repository engine requirement)
+- Node.js 24+ for the npm wrapper (matches the repository engine requirement)
 - Node.js 24+ if you use the local-helper fallback (the pinned commit requires it)
 - git and npm available locally
 - network access to `https://github.com/mfittko/repo-wiki.git` (fallback path) and the public npm registry (primary path)

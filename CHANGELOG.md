@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **BREAKING: Node floor raised `>=20` → `>=24`** (#911). `engines.node` is now `>=24` in both `dev-loops` and `@dev-loops/core` (the latter previously declared no floor). CI already runs Node 24; this makes the supported floor explicit and unlocks Node 24 stdlib (e.g. native `fsp.glob`/`path.matchesGlob`). Consumers on Node < 24 must upgrade.
+
 ### Added
 
 - **Consumer migration guide** (#769): [`docs/migrating-to-dev-loops.md`](docs/migrating-to-dev-loops.md) walks existing `pi-dev-loops` consumers through every breaking change — package name (`pi-dev-loops`→`dev-loops`, `@pi-dev-loops/core`→`@dev-loops/core`), repo slug, the full `PI_*`→`DEVLOOPS_*` env-var mapping (a deliberate clean break with no aliases), and the `.devloops` config location. Linked from the README. The env vars are not shimmed by design (`0.x`, YAGNI); the legacy `.pi/dev-loop/settings.yaml` config path still loads with a deprecation warning.

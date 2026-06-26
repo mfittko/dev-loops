@@ -10,7 +10,7 @@ test("package metadata exposes the extension entrypoint and root extension test 
 
   assert.deepEqual(packageJson.pi.extensions, ["./extension/index.ts"]);
   assert.equal(packageJson.bin["dev-loops"], "./cli/index.mjs");
-  assert.match(packageJson.engines.node, />=20/);
+  assert.match(packageJson.engines.node, />=24/);
   assert.equal(typeof packageJson.peerDependencies["@earendil-works/pi-coding-agent"], "string");
   assert.equal(typeof packageJson.peerDependencies["@earendil-works/pi-tui"], "string");
   assert.equal(typeof packageJson.scripts["test:extension"], "string");
@@ -44,7 +44,7 @@ test("extension README documents the supported command, install, and verificatio
   }
 
   for (const runtimePattern of [
-    /Node[^\n]*>=20/i,
+    /Node[^\n]*>=24/i,
     /source-loaded/i,
     /package\.json` `pi\.skills`/i,
     /agents\/\*\.agent\.md/i,

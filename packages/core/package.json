@@ -2,6 +2,9 @@
   "name": "@dev-loops/core",
   "version": "0.3.0",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "description": "Shared deterministic support package for dev-loop skills, repo-local scripts, and GitHub automation.",
   "exports": {
     "./bash-exit-one": "./src/bash-exit-one.mjs",

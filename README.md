@@ -89,7 +89,7 @@ pi install git:github.com/mfittko/dev-loops    # global
 pi install -l git:github.com/mfittko/dev-loops # project-local
 ```
 
-The CLI requires Node `>=20` and a GitHub-authenticated `gh` CLI for repository workflows. See [Requirements](#requirements).
+The CLI requires Node `>=24` and a GitHub-authenticated `gh` CLI for repository workflows. See [Requirements](#requirements).
 
 ## Docker
 
@@ -253,7 +253,7 @@ See [Extension Documentation](./extension/README.md) for the full command and pa
 
 ## Requirements
 
-- Node `>=20`
+- Node `>=24`
 - `gh` installed and authenticated for GitHub/Copilot workflows
 - `pi-subagents` for async workflow assumptions
 - A Pi host that satisfies peer dependencies on `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`
