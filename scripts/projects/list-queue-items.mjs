@@ -3,7 +3,8 @@ import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 
-const USAGE = `Usage: dev-loops project list --repo <owner/name> --project <number|id> [--column <name>] [--limit <n>]
+const USAGE = `Usage: dev-loops queue list --repo <owner/name> --project <number|id> [--column <name>] [--limit <n>]
+       (dev-loops project list … is a back-compat alias)
 
 List GitHub Projects V2 items filtered by Status column, ordered by position
 ascending. Returns machine-readable JSON.

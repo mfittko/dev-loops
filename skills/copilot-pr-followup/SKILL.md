@@ -322,7 +322,7 @@ The canonical checkpoint verdict comment contract is [Gate Review Comment Contra
 - **CI prerequisite:** resolve the draft gate config first (`resolveGateConfig(config, "draft")`). When `requireCi=true` (default), wait for green current-head CI before entering `draft_gate`. When `requireCi=false`, the draft gate may proceed without green CI. This draft-only override does **not** relax `pre_approval_gate`; final approval and merge readiness still require green current-head CI.
 - **Pass criteria:** all configured draft gate angles pass; all findings at severities in `blockCleanOnFindingSeverities` are addressed; validation passes; no unrelated files are included.
 - **Next step after passing:** mark the PR ready for review.
-- **Board status sync (best-effort, after ready-for-review):** once the PR is created/marked ready for review, sync the linked issue's board item to "In Progress" so the queue board reflects active work without a manual `dev-loops queue add --column`:
+- **Board status sync (best-effort, after ready-for-review):** once the PR is created/marked ready for review, sync the linked issue's board item to "In Progress" so the queue board reflects active work without a manual `dev-loops queue sync-status --to-column <col>`:
   ```sh
   node <resolved-skill-scripts>/projects/sync-item-status.mjs --repo <owner/name> --item <linked-issue> --to-column "In Progress"
   ```
@@ -408,7 +408,7 @@ node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name
 
 Board and threshold resolve from `.devloops` (`queue.projectNumber`/`queue.boardTitle`, `queue.archiveOlderThanDays`, default 7d), using local `gh` auth — no CI, cron, or PAT. This step is best-effort and NON-FATAL: ignore any failure and never let it block the merge or the retrospective.
 
-Alongside the archive step, sync the linked issue's board item to "Done" so the queue board reflects the merge without a manual `dev-loops queue add --column`:
+Alongside the archive step, sync the linked issue's board item to "Done" so the queue board reflects the merge without a manual `dev-loops queue sync-status --to-column <col>`:
 
 ```sh
 node <resolved-skill-scripts>/projects/sync-item-status.mjs --repo <owner/name> --item <linked-issue> --to-column "Done"

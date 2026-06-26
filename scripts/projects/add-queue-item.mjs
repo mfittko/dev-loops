@@ -4,6 +4,7 @@ import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 
 const USAGE = `Usage: dev-loops queue add --repo <owner/name> --project <number|id> --item <number>
+       dev-loops project add … (back-compat alias for "queue add")
 
 Add an existing issue or PR to a GitHub Projects V2 board.
 

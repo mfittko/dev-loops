@@ -3,7 +3,8 @@ import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 
-const USAGE = `Usage: dev-loops project move --repo <owner/name> --project <number|id> --item <number|node-id> --to-column <name>
+const USAGE = `Usage: dev-loops queue move --repo <owner/name> --project <number|id> --item <number|node-id> --to-column <name>
+       (dev-loops project move … is a back-compat alias)
 
 Move a GitHub Projects V2 item between Status columns.
 

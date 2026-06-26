@@ -6,7 +6,8 @@ import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 
-const USAGE = `Usage: dev-loops project archive-done --repo <owner/name> [--project <number|id>] [--older-than <duration>] [--dry-run]
+const USAGE = `Usage: dev-loops queue archive-done --repo <owner/name> [--project <number|id>] [--older-than <duration>] [--dry-run]
+       (dev-loops project archive-done … is a back-compat alias)
 
 Archive GitHub Projects V2 items whose issue/PR has been closed for at least the
 given duration. Operator-triggered (no webhooks). Uses archiveProjectV2Item.
