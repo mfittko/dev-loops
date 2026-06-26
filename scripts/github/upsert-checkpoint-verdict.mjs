@@ -42,6 +42,17 @@ Required:
                                             alternative to --findings-summary
                                             (preserves newlines; takes precedence
                                             when both are present)
+  --findings-json <path>                    Read STRUCTURED consolidated fan-in
+                                            findings from a JSON file (array of
+                                            { angle, verdict?, findings:[{severity,
+                                            summary, file?, line?, disposition?}] }).
+                                            Renders a readable per-angle breakdown
+                                            (newlines preserved); the findings
+                                            summary line carries a single-line
+                                            digest. Takes precedence over
+                                            --findings-summary/--findings-file for
+                                            the rendered body. Intended for
+                                            --execution-mode fanout_fanin.
   --next-action <text>
 Optional:
   --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
@@ -229,6 +240,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       verdict: { type: "string" },
       "findings-summary": { type: "string" },
       "findings-file": { type: "string" },
+      "findings-json": { type: "string" },
       "next-action": { type: "string" },
       "findings-severity-counts": { type: "string" },
       "execution-mode": { type: "string" },
@@ -247,6 +259,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     verdict: undefined,
     findingsSummary: undefined,
     findingsFile: undefined,
+    findingsJson: undefined,
     nextAction: undefined,
     findingsSeverityCounts: undefined,
     executionMode: undefined,
@@ -310,6 +323,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       options.findingsFile = rawPath;
       continue;
     }
+    if (token.name === "findings-json") {
+      const rawPath = requireTokenValue(token, parseError).trim();
+      if (rawPath.length === 0) {
+        throw parseError("--findings-json must be a non-empty path");
+      }
+      options.findingsJson = rawPath;
+      continue;
+    }
     if (token.name === "next-action") {
       options.nextAction = normalizeRequiredText(requireTokenValue(token, parseError), "--next-action");
       continue;
@@ -362,12 +383,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   }
   const missing = ["repo", "pr", "headSha", "verdict", "findingsSummary", "nextAction"]
     .filter((key) => options[key] === undefined);
-  if (options.findingsFile) {
+  // --findings-file and --findings-json each provide the findings body, so either
+  // satisfies the findingsSummary requirement.
+  if (options.findingsFile || options.findingsJson) {
     const fsIdx = missing.indexOf("findingsSummary");
     if (fsIdx !== -1) missing.splice(fsIdx, 1);
   }
   if (missing.length > 0) {
-    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict, --findings-summary (or --findings-file), and --next-action");
+    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict, --findings-summary (or --findings-file or --findings-json), and --next-action");
   }
   // Contract (skills/copilot-pr-followup/SKILL.md): inline runs MUST pass
   // --inline-reason. Inline is the default mode, so a complete call that resolves
@@ -400,6 +423,128 @@ function appendGateEvidenceNote(summary, note) {
   }
   return smartTruncate(`${normalizedSummary}; ${normalizedNote}`, MAX_GATE_COMMENT_TEXT_LENGTH);
 }
+const STRUCTURED_FINDINGS_SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
+// Sanitize free text for a single-line markdown bullet. Collapse whitespace
+// (LLM text often carries embedded newlines, which would split a bullet across
+// lines) and neutralize HTML-comment delimiters so a finding field cannot smuggle
+// a hidden marker into the rendered body. Mirrors post-gate-findings.mjs.
+function sanitizeStructuredInline(value) {
+  return String(value)
+    .replace(/\s+/gu, " ")
+    .replace(/<!--/gu, "&lt;!--")
+    .replace(/-->/gu, "--&gt;")
+    .trim();
+}
+// Sanitize text rendered inside an inline backtick code span (angle labels,
+// file refs): additionally strip backticks so an embedded backtick cannot close
+// the span and break out into raw markdown.
+function sanitizeStructuredCodeSpan(value) {
+  return sanitizeStructuredInline(String(value).replace(/`/gu, ""));
+}
+// Normalize the structured per-angle findings input into a deterministic,
+// render-ready shape. Accepts the consolidated fan-in shape:
+//   [{ angle, verdict?, findings: [{ severity, summary, file?, line?, disposition? }], disposition? }]
+// Returns null when there is nothing structural to render (so the caller falls
+// back to the free-text findings summary).
+function normalizeStructuredFindings(input) {
+  if (!Array.isArray(input) || input.length === 0) {
+    return null;
+  }
+  const angles = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      continue;
+    }
+    const angle = typeof raw.angle === "string" ? raw.angle.trim() : "";
+    if (angle.length === 0) {
+      continue;
+    }
+    const findingsInput = Array.isArray(raw.findings) ? raw.findings : [];
+    const findings = [];
+    for (const f of findingsInput) {
+      if (!f || typeof f !== "object" || Array.isArray(f)) {
+        continue;
+      }
+      const summary = typeof f.summary === "string" ? f.summary.trim() : "";
+      if (summary.length === 0) {
+        continue;
+      }
+      const entry = {
+        severity: typeof f.severity === "string" ? f.severity.trim() : "",
+        summary,
+      };
+      if (typeof f.file === "string" && f.file.trim().length > 0) {
+        entry.file = f.file.trim();
+      }
+      if (typeof f.line === "number" && Number.isFinite(f.line)) {
+        entry.line = f.line;
+      }
+      if (typeof f.disposition === "string" && f.disposition.trim().length > 0) {
+        entry.disposition = f.disposition.trim();
+      }
+      findings.push(entry);
+    }
+    // Sort findings by severity (must-fix first) for deterministic output,
+    // preserving input order within a severity.
+    findings.sort(
+      (a, b) =>
+        STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(a.severity)
+        - STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(b.severity),
+    );
+    const verdict = typeof raw.verdict === "string" && raw.verdict.trim().length > 0
+      ? raw.verdict.trim()
+      : (findings.length > 0 ? "findings_present" : "clean");
+    angles.push({ angle, verdict, findings });
+  }
+  return angles.length > 0 ? angles : null;
+}
+// Render the consolidated per-angle fan-in findings as a readable, multi-line
+// markdown block: one section per angle (angle label + per-angle verdict),
+// nested findings carrying severity and an optional file:line reference. Newlines
+// are intentionally PRESERVED — this block is NOT run through collapseWhitespace /
+// summarizeCheckpointVerdictText. The whole block is bounded by
+// MAX_GATE_COMMENT_TEXT_LENGTH. The leading single-line digest is what the marker
+// parser captures for the `**Findings summary:**` field; the structured body is
+// nested below it and is deliberately written so no nested line matches a gate
+// field regex (no `verdict:` / `next action:` / `execution mode:` line starts).
+function renderStructuredFindings(angles) {
+  const lines = [];
+  for (const { angle, verdict, findings } of angles) {
+    const angleLabel = sanitizeStructuredCodeSpan(angle);
+    lines.push(`- \`${angleLabel}\` → ${sanitizeStructuredInline(verdict)}`);
+    for (const finding of findings) {
+      const severity = sanitizeStructuredInline(finding.severity) || "finding";
+      const summary = sanitizeStructuredInline(finding.summary);
+      let location = "";
+      if (finding.file) {
+        const fileRef = sanitizeStructuredCodeSpan(finding.file);
+        const lineRef = Number.isFinite(finding.line) ? `:${finding.line}` : "";
+        if (fileRef.length > 0) {
+          location = ` (\`${fileRef}${lineRef}\`)`;
+        }
+      }
+      const dispositionSuffix = finding.disposition
+        ? ` — _${sanitizeStructuredInline(finding.disposition)}_`
+        : "";
+      lines.push(`  - [${severity}] ${summary}${location}${dispositionSuffix}`);
+    }
+  }
+  return smartTruncate(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH);
+}
+// Build the single-line digest shown on the `**Findings summary:**` line when a
+// structured per-angle block is rendered. The marker/parse contract requires this
+// line to carry non-empty, single-line content (parseGateReviewCommentFields
+// captures only the remainder of this one line), so the structured block below it
+// is purely presentational.
+function buildStructuredFindingsDigest(angles) {
+  const totalFindings = angles.reduce((sum, a) => sum + a.findings.length, 0);
+  const angleWord = angles.length === 1 ? "angle" : "angles";
+  if (totalFindings === 0) {
+    return `${angles.length} ${angleWord} reviewed; no findings (see per-angle breakdown below).`;
+  }
+  const findingWord = totalFindings === 1 ? "finding" : "findings";
+  return `${angles.length} ${angleWord} reviewed; ${totalFindings} ${findingWord} (see per-angle breakdown below).`;
+}
 function renderExecutionModeLine(executionMode, inlineReason) {
   const mode = executionMode ?? DEFAULT_EXECUTION_MODE;
   if (mode === "inline_single_agent") {
@@ -410,7 +555,7 @@ function renderExecutionModeLine(executionMode, inlineReason) {
   }
   return `**Execution mode:** ${mode}`;
 }
-export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason }) {
+export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings }) {
   const lines = [
     `### Gate review: \`${gate}\``,
     "",
@@ -422,9 +567,26 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
     const sevs = blockCleanOnFindingSeverities.join(", ");
     lines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
   }
+  // When structured per-angle fan-in data is supplied, render it as a readable
+  // multi-line block. The `**Findings summary:**` line still carries a non-empty
+  // single-line digest so the marker/parse contract (which captures only that
+  // one line) keeps round-tripping; the structured breakdown is nested below it
+  // with newlines preserved (NOT collapsed to a run-on line).
+  const angles = normalizeStructuredFindings(structuredFindings);
+  if (angles) {
+    lines.push(
+      "",
+      `**Findings summary:** ${buildStructuredFindingsDigest(angles)}`,
+      "",
+      renderStructuredFindings(angles),
+    );
+  } else {
+    lines.push(
+      "",
+      `**Findings summary:** ${findingsSummary}`,
+    );
+  }
   lines.push(
-    "",
-    `**Findings summary:** ${findingsSummary}`,
     "",
     `**Next action:** ${nextAction}`,
   );
@@ -775,6 +937,34 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       );
     }
   }
+  // Structured per-angle findings (consolidated fan-in shape) take precedence
+  // over the free-text summary: when present, the verdict comment renders a
+  // multi-line per-angle breakdown and the `**Findings summary:**` line carries a
+  // single-line digest (so the marker/parse contract still round-trips).
+  let structuredFindings = null;
+  if (options.findingsJson) {
+    let raw;
+    try {
+      raw = await readFile(options.findingsJson, "utf8");
+    } catch (err) {
+      throw new Error(`Cannot read --findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`--findings-json "${options.findingsJson}" is not valid JSON`);
+    }
+    // Accept either a bare array of per-angle entries or an object wrapping it
+    // under `angles` / `findings` (defensive against caller shape drift).
+    const candidate = Array.isArray(parsed)
+      ? parsed
+      : (Array.isArray(parsed?.angles) ? parsed.angles : (Array.isArray(parsed?.findings) ? parsed.findings : null));
+    structuredFindings = normalizeStructuredFindings(candidate);
+    if (!structuredFindings) {
+      throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable per-angle findings (expected a non-empty array of { angle, findings } entries)`);
+    }
+  }
   if (options.findingsFile) {
     try {
       const fileContent = await readFile(options.findingsFile, "utf8");
@@ -790,13 +980,19 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       throw new Error(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  const effectiveFindingsSummary = options.findingsFile
-    ? options.findingsSummary
-    : appendGateEvidenceNote(options.findingsSummary, coordination.gateEvidenceNote ?? null);
+  // The findings-summary the comment is compared/round-tripped against. With a
+  // structured render this is the single-line digest (what the marker parser
+  // recovers from the `**Findings summary:**` line); otherwise the free-text path.
+  const effectiveFindingsSummary = structuredFindings
+    ? buildStructuredFindingsDigest(structuredFindings)
+    : (options.findingsFile
+      ? options.findingsSummary
+      : appendGateEvidenceNote(options.findingsSummary, coordination.gateEvidenceNote ?? null));
   const desiredBody = renderGateReviewCommentBody({
     ...options,
     headSha: canonicalHeadSha,
     findingsSummary: effectiveFindingsSummary,
+    structuredFindings,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
   });
   const gateEvidence = selectGateEvidence(evidence, options.gate);

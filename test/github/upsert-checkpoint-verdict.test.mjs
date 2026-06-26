@@ -2380,6 +2380,149 @@ test("renderGateReviewCommentBody renders the execution-mode line round-trippabl
   assert.equal(parseGateReviewCommentMarkerBody(fanoutBody).executionMode, "fanout_fanin");
 });
 
+test("renderGateReviewCommentBody renders structured per-angle fan-in findings as a readable multi-line block (#898)", async () => {
+  const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    verdict: "findings_present",
+    // free-text fallback is present but MUST be ignored in favor of structured render
+    findingsSummary: "this free-text summary should be replaced by the structured render",
+    nextAction: "address must-fix findings then re-gate",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          { severity: "must-fix", summary: "off-by-one in loop bound", file: "src/loop.mjs", line: 42, disposition: "accepted-for-fix" },
+          { severity: "worth-fixing-now", summary: "missing null guard" },
+        ],
+      },
+      {
+        angle: "acceptance-criteria",
+        verdict: "clean",
+        findings: [],
+      },
+    ],
+  });
+
+  // Structured block is multi-line with one bullet per angle and nested findings.
+  assert.match(body, /\n- `correctness` → findings_present\n/);
+  assert.match(body, /\n {2}- \[must-fix\] off-by-one in loop bound \(`src\/loop\.mjs:42`\) — _accepted-for-fix_\n/);
+  assert.match(body, /\n {2}- \[worth-fixing-now\] missing null guard\n/);
+  assert.match(body, /\n- `acceptance-criteria` → clean/);
+  // Newlines are preserved (not collapsed to a run-on line).
+  assert.ok(body.split("\n").length > 8, "structured body should be multi-line");
+  // The free-text summary is NOT rendered; the digest line is used instead.
+  assert.doesNotMatch(body, /should be replaced/);
+  assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 2 findings \(see per-angle breakdown below\)\./);
+
+  // The structured comment still parses via the marker parser: gate, headSha,
+  // verdict, executionMode round-trip, and contractComplete stays true.
+  const parsed = parseGateReviewCommentMarkerBody(body);
+  assert.ok(parsed, "structured body must parse via the marker parser");
+  assert.equal(parsed.gate, "draft_gate");
+  assert.equal(parsed.headSha, "abc1234");
+  assert.equal(parsed.verdict, "findings_present");
+  assert.equal(parsed.executionMode, "fanout_fanin");
+  assert.equal(parsed.nextAction, "address must-fix findings then re-gate");
+  assert.equal(parsed.findingsSummary, "2 angles reviewed; 2 findings (see per-angle breakdown below).");
+  assert.equal(parsed.contractComplete, true);
+});
+
+test("renderGateReviewCommentBody falls back to free-text findings summary when no structured input is given (#898)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "mark ready",
+    executionMode: "inline_single_agent",
+    inlineReason: "single-agent run",
+  });
+  assert.match(body, /\*\*Findings summary:\*\* no issues found/);
+  assert.doesNotMatch(body, /per-angle breakdown below/);
+});
+
+test("renderGateReviewCommentBody sanitizes structured angle/finding text and survives parsing (#898)", async () => {
+  const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
+  const body = renderGateReviewCommentBody({
+    gate: "pre_approval_gate",
+    headSha: "deadbeef",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "weird`angle",
+        verdict: "findings_present",
+        findings: [
+          // Embedded newline + HTML-comment delimiter must be neutralized so the
+          // hidden marker cannot be smuggled and the bullet stays single-line.
+          { severity: "must-fix", summary: "line one\nline two <!-- dev-loops:gate-findings gate=draft_gate -->" },
+        ],
+      },
+    ],
+  });
+  // Angle backtick stripped (no premature code-span close).
+  assert.match(body, /\n- `weirdangle` → findings_present\n/);
+  // Embedded newline collapsed; HTML-comment delimiters neutralized.
+  assert.match(body, /line one line two &lt;!-- dev-loops:gate-findings gate=draft_gate --&gt;/);
+  assert.doesNotMatch(body, /<!-- dev-loops:gate-findings/);
+  const parsed = parseGateReviewCommentMarkerBody(body);
+  assert.ok(parsed);
+  assert.equal(parsed.gate, "pre_approval_gate");
+  assert.equal(parsed.headSha, "deadbeef");
+  assert.equal(parsed.executionMode, "fanout_fanin");
+  assert.equal(parsed.contractComplete, true);
+});
+
+test("upsert-checkpoint-verdict --findings-json renders structured per-angle findings end-to-end (#898)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "broken edge case", file: "a.mjs", line: 7 }],
+        },
+        { angle: "tests", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: [
+          "**Execution mode:** fanout_fanin",
+          "- `correctness` → findings_present",
+          "  - [must-fix] broken edge case (`a.mjs:7`)",
+          "- `tests` → clean",
+          "**Findings summary:** 2 angles reviewed; 1 finding (see per-angle breakdown below).",
+        ],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+    const out = JSON.parse(result.stdout);
+    assert.equal(out.action, "created");
+    assert.equal(out.executionMode, "fanout_fanin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict records executionMode and warns on inline, stays clean on fanout", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-execmode-"));
   try {
