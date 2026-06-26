@@ -88,7 +88,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const options = parsePrePushGuardCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return { ok: true, help: true }; }
 
-  if (env[DEVLOOPS_PREPUSH_BYPASS_VAR] === "1") {
+  if ((env[DEVLOOPS_PREPUSH_BYPASS_VAR] ?? "").trim() === "1") {
     stdout.write(JSON.stringify({ ok: true, bypassed: true, reason: `${DEVLOOPS_PREPUSH_BYPASS_VAR}=1` }) + "\n");
     return { ok: true, bypassed: true };
   }

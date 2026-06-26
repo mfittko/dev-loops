@@ -68,6 +68,16 @@ test("runCli bypasses with DEVLOOPS_PREPUSH_BYPASS=1", async () => {
   assert.equal(result.bypassed, true);
 });
 
+test("runCli bypasses with whitespace-padded DEVLOOPS_PREPUSH_BYPASS (trim consistency)", async () => {
+  const stdin = new PassThrough();
+  stdin.end("refs/heads/main abc refs/heads/main def\n");
+  const stderr = { write: () => {} };
+  const env = { DEVLOOPS_PREPUSH_BYPASS: " 1" };
+  const result = await runCli([], { stdout: { write: () => {} }, stderr, stdin, env });
+  assert.ok(result.ok);
+  assert.equal(result.bypassed, true);
+});
+
 test("runCli handles empty stdin gracefully", async () => {
   const stdin = new PassThrough();
   stdin.end("");
