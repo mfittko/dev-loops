@@ -199,6 +199,12 @@ Key surfaces:
 
 Full details: [Extension Documentation](./extension/README.md) and `.pi/dev-loop/defaults.yaml`.
 
+### Migrating from an earlier release
+
+Upgrading an install from before the rename to `dev-loops`? The package name, repo slug,
+and all `PI_*` environment variables changed (the env vars are a clean break — no aliases).
+See the [migration guide](./docs/migrating-to-dev-loops.md) for the full change list.
+
 ## Package surface
 
 The `dev-loops` package ships both a standalone CLI and a Pi extension. Consumer repos should prefer pinned Pi package installs; global npm installs are optional, not part of the Pi runtime contract.
