@@ -413,7 +413,13 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed when Copilot rou
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
     const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.lifecycleState, "ready_to_rerequest_review");
+    // #896: a post-cap clean head (rounds exhausted, zero unresolved threads,
+    // green CI) is now correctly interpreted as round_cap_clean_fallback rather
+    // than dead-ending at ready_to_rerequest_review. Because this PR still lacks
+    // any clean draft_gate evidence, the #579 no-exemptions post-pass keeps the
+    // gate boundary at draft_gate_needed (reconcile_draft_gate) — never a
+    // rerequest dead-end at the round cap.
+    assert.equal(parsed.lifecycleState, "round_cap_clean_fallback");
     assert.equal(parsed.gateBoundary, "draft_gate_needed");
     assert.equal(parsed.nextAction, "reconcile_draft_gate");
     assert.equal(parsed.gateEvidenceNote, null);
@@ -422,6 +428,79 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed when Copilot rou
     assert.ok(parsed.forbiddenActions.includes("await_final_human_approval"));
     assert.ok(parsed.forbiddenActions.includes("declare_merge_ready"));
     assert.match(parsed.reason, /no gate exemptions, #579/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state routes a post-cap clean head to pre_approval (round_cap_clean_fallback, #896)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-896-fallback-"));
+
+  try {
+    // Non-draft PR. Copilot reviewed 5 older heads (cap = built-in default 5).
+    // Current head "def567" has NO Copilot review, zero unresolved threads, green
+    // CI, and a clean draft_gate comment on the SAME current head (so no round
+    // reset). The deadlock (#896) would have produced ready_to_rerequest_review +
+    // a forbidden pre_approval; the fix routes to round_cap_clean_fallback and
+    // permits run_pre_approval_gate.
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
+        stdout: jsonLine({
+          number: 266,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: "def56789abcdef",
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          reviews: [
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "1111111111111111111111111111111111111111" }, submittedAt: "2026-05-31T20:00:00Z" },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "2222222222222222222222222222222222222222" }, submittedAt: "2026-05-31T20:05:00Z" },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "3333333333333333333333333333333333333333" }, submittedAt: "2026-05-31T20:10:00Z" },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "4444444444444444444444444444444444444444" }, submittedAt: "2026-05-31T20:15:00Z" },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "5555555555555555555555555555555555555555" }, submittedAt: "2026-05-31T20:20:00Z" },
+          ],
+        }),
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"], stdout: jsonLine({ users: [], teams: [] }) },
+      { assertArgs: ["api", "graphql", "pr=266"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
+      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
+        stdout: jsonLine([[
+          {
+            id: 21,
+            body: ["Gate review: draft_gate", "Reviewed head SHA: def56789abcdef", "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+            html_url: "https://example.test/comment/21",
+            updated_at: "2026-05-31T19:00:00Z",
+          },
+        ]]),
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/266/reviews?per_page=100"], stdout: '[]\n' },
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.lifecycleState, "round_cap_clean_fallback");
+    // No contract-complete pre_approval marker exists for the post-cap head yet,
+    // so the boundary normalizes to pre_approval_gate_needed — but the key point is
+    // run_pre_approval_gate is PERMITTED (the #896 deadlock is gone), not a rerequest
+    // the round cap forbids.
+    assert.equal(parsed.gateBoundary, "pre_approval_gate_needed");
+    assert.equal(parsed.nextAction, "run_pre_approval_gate");
+    assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+    assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
+    // The cap forbids any further Copilot (re-)request — no rerequest dead-end.
+    assert.ok(!parsed.allowedNextActions.includes("request_copilot_review"));
+    assert.ok(!parsed.allowedNextActions.includes("rerequest_copilot_review"));
+    // request-copilot-review and detect agree on the round count (5) and cap.
+    assert.equal(parsed.copilotReviewRoundCount, 5);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

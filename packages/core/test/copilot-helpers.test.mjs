@@ -7,6 +7,7 @@ import {
   normalizeTimestamp,
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,
+  resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
@@ -570,4 +571,56 @@ test("summarizeCopilotReviews draftGateResetAtMs does not affect non-Copilot rev
   // Human review ignored, only Copilot after reset counts
   assert.equal(result.copilotReviewPresent, true);
   assert.equal(result.completedCopilotReviewRounds, 1);
+});
+
+// ── resolveDraftGateRoundResetMs: shared round-cap reset source (#896) ──────
+// detect-pr-gate-coordination-state and request-copilot-review both derive the
+// draft-gate round reset from this single helper, so the two scripts agree on the
+// completed Copilot round count (and therefore on round-cap-reached). These tests
+// pin that shared contract.
+
+test("resolveDraftGateRoundResetMs returns the re-pass timestamp when draft_gate is clean on an EARLIER head (#896)", () => {
+  const ms = resolveDraftGateRoundResetMs({
+    draftGate: { verdict: "clean", headSha: "aaa1111", updatedAt: "2026-05-31T20:00:00Z" },
+    currentHeadSha: "def56789abcdef",
+  });
+  assert.equal(ms, normalizeTimestamp("2026-05-31T20:00:00Z"));
+});
+
+test("resolveDraftGateRoundResetMs returns null when the clean draft_gate is on the CURRENT head (no reset)", () => {
+  const ms = resolveDraftGateRoundResetMs({
+    draftGate: { verdict: "clean", headSha: "def5678", updatedAt: "2026-05-31T20:00:00Z" },
+    currentHeadSha: "def56789abcdef",
+  });
+  assert.equal(ms, null);
+});
+
+test("resolveDraftGateRoundResetMs returns null when the draft_gate is not clean or absent", () => {
+  assert.equal(resolveDraftGateRoundResetMs({
+    draftGate: { verdict: "findings_present", headSha: "aaa1111", updatedAt: "2026-05-31T20:00:00Z" },
+    currentHeadSha: "def56789abcdef",
+  }), null);
+  assert.equal(resolveDraftGateRoundResetMs({ draftGate: null, currentHeadSha: "def56789abcdef" }), null);
+  assert.equal(resolveDraftGateRoundResetMs({}), null);
+});
+
+test("resolveDraftGateRoundResetMs + summarizeCopilotReviews agree on the reset-adjusted round count (#896 consistency)", () => {
+  // Five Copilot rounds; a clean draft_gate re-passed on an earlier head at 20:00Z.
+  // Both scripts apply the same reset, so only the two post-reset rounds count.
+  const reviews = [
+    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "h1" }, submittedAt: "2026-05-31T18:00:00Z" },
+    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "h2" }, submittedAt: "2026-05-31T19:00:00Z" },
+    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "h3" }, submittedAt: "2026-05-31T19:30:00Z" },
+    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "h4" }, submittedAt: "2026-05-31T21:00:00Z" },
+    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "def56789abcdef" }, submittedAt: "2026-05-31T22:00:00Z" },
+  ];
+  const draftGate = { verdict: "clean", headSha: "aaa1111", updatedAt: "2026-05-31T20:00:00Z" };
+  const currentHeadSha = "def56789abcdef";
+
+  const resetMs = resolveDraftGateRoundResetMs({ draftGate, currentHeadSha });
+  const reset = summarizeCopilotReviews(reviews, { headSha: currentHeadSha, draftGateResetAtMs: resetMs });
+  const raw = summarizeCopilotReviews(reviews, { headSha: currentHeadSha });
+
+  assert.equal(raw.completedCopilotReviewRounds, 5);
+  assert.equal(reset.completedCopilotReviewRounds, 2);
 });

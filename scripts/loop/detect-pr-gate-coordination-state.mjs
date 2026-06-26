@@ -6,13 +6,13 @@ import {
   formatCliError,
   isCopilotLogin,
   isDirectCliRun,
-  normalizeTimestamp,
   parseJsonText,
   parseReviewThreads,
+  resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveGateConfig, resolveRefinement, resolveRefinementConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -303,18 +303,13 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const gateEvidence = await detectCheckpointEvidence(options, runtime);
   // When draft gate was re-passed on a different head, use its timestamp
   // to reset the Copilot round count — only reviews after the re-pass count.
-  // Use prefix matching for the head SHA comparison so shortened SHAs (7+)
-  // from gate comments match the full headRefOid.
-  const draftGateHeadSha = gateEvidence.draftGate?.headSha;
-  const draftGateOnCurrentHead = typeof draftGateHeadSha === "string"
-    && typeof currentHeadSha === "string"
-    && currentHeadSha.startsWith(draftGateHeadSha);
-  const draftGateResetAtMs = gateEvidence.draftGate?.verdict === "clean"
-    && typeof draftGateHeadSha === "string"
-    && !draftGateOnCurrentHead
-    && typeof gateEvidence.draftGate?.updatedAt === "string"
-    ? normalizeTimestamp(gateEvidence.draftGate.updatedAt)
-    : null;
+  // Shared with request-copilot-review so both scripts compute the same
+  // completed round count / cap (#896). Prefix matching for the head SHA lets
+  // shortened SHAs (7+) from gate comments match the full headRefOid.
+  const draftGateResetAtMs = resolveDraftGateRoundResetMs({
+    draftGate: gateEvidence.draftGate,
+    currentHeadSha,
+  });
   const reviewSummary = summarizeCopilotReviews(prData?.reviews, { headSha: currentHeadSha, draftGateResetAtMs });
   const reviewRequestStatus = requestedReviewers.requested
     ? "requested"
@@ -338,8 +333,19 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   if (gateEvidence.currentHeadSha !== currentHeadSha) {
     throw new Error(`PR head changed while loading gate coordination facts for ${options.repo}#${options.pr}; refuse to evaluate mixed-head gate state.`);
   }
-  const interpretation = interpretLoopState(snapshot);
-  const disposition = summarizeLoopInterpretation(interpretation);
+  // Resolve the refinement config (round cap, low-signal heuristic) and feed it to
+  // the interpreter. Without it, the interpreter cannot see maxCopilotRounds and so
+  // never resolves ROUND_CAP_CLEAN_FALLBACK — a post-cap clean head would fall to
+  // READY_TO_REREQUEST_REVIEW, dead-ending the loop at the round cap (#896). This
+  // keeps the gate-coordination interpretation consistent with the standalone
+  // detect-copilot-loop-state path and with request-copilot-review's cap logic.
+  const interpreterRepoRoot = runtime.repoRoot ?? process.cwd();
+  const interpreterConfigResult = await loadDevLoopConfig({ repoRoot: interpreterRepoRoot });
+  const interpreterRefinementConfig = (Array.isArray(interpreterConfigResult.errors) && interpreterConfigResult.errors.length > 0)
+    ? resolveRefinement({ version: 1 })
+    : resolveRefinement(interpreterConfigResult.config ?? { version: 1 });
+  const interpretation = interpretLoopState(snapshot, interpreterRefinementConfig);
+  const disposition = summarizeLoopInterpretation(interpretation, interpreterRefinementConfig);
   const mergeStateStatus = typeof prData?.mergeStateStatus === "string" && prData.mergeStateStatus.trim().length > 0
     ? prData.mergeStateStatus.trim().toUpperCase()
     : null;
@@ -362,6 +368,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     interpretation,
     disposition,
     refinementArtifact,
+    refinementConfig: interpreterRefinementConfig,
   };
 }
 
@@ -429,9 +436,13 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     && typeof (context.snapshot?.copilotReviewRoundCount) === "number"
     && context.snapshot?.copilotReviewRoundCount >= maxCopilotRounds;
   const sameHeadCleanConverged = context.interpretation?.sameHeadCleanConverged ?? false;
+  // Round-cap clean fallback (#896): the interpreter resolved a clean post-cap head
+  // (zero unresolved threads + green CI) that Copilot will not re-review. The formal
+  // request guard must not fire here — pre_approval_gate reviews the post-cap head.
+  const roundCapCleanFallback = context.interpretation?.roundCapCleanEligible ?? false;
   const copilotReviewEverFormallyRequested = copilotReviewRequestStatus === "none"
     && guardBoundaries.has(result.gateBoundary)
-    && !(roundCapReached && sameHeadCleanConverged)
+    && !(roundCapReached && (sameHeadCleanConverged || roundCapCleanFallback))
     ? await fetchCopilotEverFormallyRequested(
         { repo: context.repo, pr: context.pr },
         runtime,
@@ -442,7 +453,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount ?? 0,
     copilotReviewEverFormallyRequested,
     maxCopilotRounds,
-    sameHeadCleanConverged: context.interpretation?.sameHeadCleanConverged ?? false,
+    sameHeadCleanConverged,
+    roundCapCleanFallback,
     gateBoundary: result.gateBoundary,
   })) {
     result.gateBoundary = PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW;

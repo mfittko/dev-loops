@@ -306,6 +306,39 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
   return summary;
 }
 
+/**
+ * Resolve the draft-gate round-reset timestamp (ms) used to suppress stale Copilot
+ * review rounds from the count (#896 consistency).
+ *
+ * When the draft gate was re-passed clean on a DIFFERENT head than the current one,
+ * only Copilot reviews submitted after that re-pass should count toward the round
+ * cap. Returning the re-pass `updatedAt` (ms) lets {@link summarizeCopilotReviews}
+ * drop earlier rounds. Returns null when no reset applies (no clean draft gate, or
+ * the clean draft gate is already on the current head).
+ *
+ * Both detect-pr-gate-coordination-state and request-copilot-review must derive the
+ * reset identically, or the two scripts disagree on the completed round count and
+ * the cap (the inconsistency reported in #896). This is the single shared source.
+ *
+ * @param {object} params
+ * @param {{ verdict?: string|null, headSha?: string|null, updatedAt?: string|null }|null} params.draftGate
+ * @param {string|null} params.currentHeadSha
+ * @returns {number|null} reset timestamp in ms, or null
+ */
+export function resolveDraftGateRoundResetMs({ draftGate, currentHeadSha } = {}) {
+  const draftGateHeadSha = typeof draftGate?.headSha === "string" ? draftGate.headSha : null;
+  const draftGateOnCurrentHead = typeof draftGateHeadSha === "string"
+    && typeof currentHeadSha === "string"
+    && currentHeadSha.startsWith(draftGateHeadSha);
+  if (draftGate?.verdict === "clean"
+    && typeof draftGateHeadSha === "string"
+    && !draftGateOnCurrentHead
+    && typeof draftGate?.updatedAt === "string") {
+    return normalizeTimestamp(draftGate.updatedAt);
+  }
+  return null;
+}
+
 export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs } = {}) {
   const allReviews = Array.isArray(reviews) ? reviews : [];
   const copilotReviews = allReviews.filter((review) => isCopilotLogin(review?.author?.login));
