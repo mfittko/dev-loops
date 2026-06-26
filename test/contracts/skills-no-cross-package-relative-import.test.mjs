@@ -14,11 +14,14 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)))
 const SCAN_DIR = "skills";
 
 // Detect a real ESM import (static, side-effect, or dynamic) whose specifier is a relative
-// path reaching into `packages/core`. The leading `..` and `from`/`import` keyword keep
-// prose mentions of the path in comments/strings from being false positives.
+// path reaching into `packages/core`. The leading relative segment and the `from`/`import`
+// keyword keep prose mentions of the path in comments/strings from being false positives.
+// The optional `(?:\.\/)+` prefix also catches `./..`-style equivalents (e.g.
+// `"./../../packages/core/..."`) that are still relative paths but would otherwise bypass a
+// detector anchored solely on a leading `..`.
 const RELATIVE_CORE_STATIC_OR_SIDE_EFFECT_RE =
-  /\b(?:from|import)\s+['"]\.\.[^'"]*packages\/core[^'"]*['"]/;
-const RELATIVE_CORE_DYNAMIC_RE = /\bimport\(\s*['"]\.\.[^'"]*packages\/core/;
+  /\b(?:from|import)\s+['"](?:\.\/)*\.\.[^'"]*packages\/core[^'"]*['"]/;
+const RELATIVE_CORE_DYNAMIC_RE = /\bimport\(\s*['"](?:\.\/)*\.\.[^'"]*packages\/core/;
 
 function importsCoreViaRelativePath(content) {
   return (
@@ -85,7 +88,28 @@ test("importsCoreViaRelativePath detects static, side-effect, and dynamic relati
     true,
     "dynamic import must be caught",
   );
+  // A leading `./` (or repeated `./`) before `..` is still an equivalent relative path and
+  // must be caught so it cannot be used to bypass the guard.
+  assert.equal(
+    importsCoreViaRelativePath('import { x } from "./../../packages/core/src/x.mjs";'),
+    true,
+    "./..-prefixed static import must be caught",
+  );
+  assert.equal(
+    importsCoreViaRelativePath('import "././../../packages/core/src/x.mjs";'),
+    true,
+    "repeated ./ prefix before .. must be caught",
+  );
+  assert.equal(
+    importsCoreViaRelativePath("await import('./../../packages/core/src/x.mjs');"),
+    true,
+    "./..-prefixed dynamic import must be caught",
+  );
   // The package specifier is the sanctioned form and must NOT trip the detector.
+  assert.equal(
+    importsCoreViaRelativePath('import { x } from "@dev-loops/core/loop/phase-files";'),
+    false,
+  );
   assert.equal(
     importsCoreViaRelativePath('import { x } from "@dev-loops/core/bash-exit-one";'),
     false,
