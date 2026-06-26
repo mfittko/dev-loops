@@ -28,7 +28,11 @@ const parseError = buildParseError(USAGE);
 const READY_FLAG_PATTERN = /^--ready(?:$|=)/u;
 const DRAFT_FLAG_PATTERN = /^--draft(?:=(.*))?$/iu;
 const DRAFT_TRUE_VALUE_PATTERN = /^(?:true|1)$/iu;
-const ASSIGNEE_FLAG_PATTERN = /^--assignee(?:$|=)/u;
+// Detect both the long `--assignee`/`--assignee=<login>` forms and the `-a`
+// short flag that `gh pr create` documents, so an explicit assignee in either
+// form suppresses the `--assignee @me` default (otherwise a caller passing
+// `-a <login>` would get a conflicting `--assignee @me` injected). (#894)
+const ASSIGNEE_FLAG_PATTERN = /^(?:--assignee(?:$|=)|-a$)/u;
 const DEFAULT_ASSIGNEE = "@me";
 const CLOSING_KEYWORD_PATTERN = /Closes\s+#\d+|Fixes\s+#\d+/i;
 const MAX_BODY_SCAN_BYTES = 16 * 1024;

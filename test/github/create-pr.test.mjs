@@ -237,6 +237,16 @@ test("buildCreatePrArgs honors --assignee=<login> form without adding a default"
   );
 });
 
+test("buildCreatePrArgs honors the -a short assignee flag and does not inject a conflicting default (#894)", () => {
+  assert.deepEqual(
+    buildCreatePrArgs(["--repo", "owner/repo", "-a", "octocat"]),
+    {
+      help: false,
+      ghArgs: ["pr", "create", "--repo", "owner/repo", "-a", "octocat", "--draft"],
+    },
+  );
+});
+
 test("buildCreatePrArgs avoids adding a duplicate --draft", () => {
   assert.deepEqual(
     buildCreatePrArgs(["--draft", "--repo", "owner/repo", "--assignee", "@me"]),
