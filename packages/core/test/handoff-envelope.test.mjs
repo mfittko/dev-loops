@@ -745,7 +745,7 @@ test("cwd: derived from repoRoot + issue slug", () => {
     { ...defaultOptions, repoRoot: "/home/user/repo" }
   );
 
-  assert.equal(env.cwd, "/home/user/repo/tmp/worktrees/issue-42");
+  assert.equal(env.cwd, "/home/user/repo/tmp/worktrees/dev-loops/issue-42");
 });
 
 test("cwd: null when no repoRoot or explicit cwd", () => {

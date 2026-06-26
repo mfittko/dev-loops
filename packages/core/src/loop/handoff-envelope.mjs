@@ -318,11 +318,36 @@ function deriveCwd(bundle, options = {}) {
   if (root) {
     const slug = buildWorktreeSlug(artifact, kind);
     if (slug) {
-      return `${root}/tmp/worktrees/${slug}`;
+      return `${root}/tmp/worktrees/dev-loops/${slug}`;
     }
   }
 
   return null;
+}
+
+/** Repo-relative root for loop-owned worktrees. The `dev-loops/` namespace */
+/** marks them so cleanup can only ever remove its own (issue #909). */
+export const WORKTREE_NAMESPACE = "tmp/worktrees/dev-loops";
+
+/**
+ * Resolve the canonical, namespaced worktree path for an issue/PR. Sole source
+ * of truth shared by create, provision, and cleanup. No branch suffix, so the
+ * path is recomputable from the issue/PR number alone.
+ *
+ * @param {{ repoRoot: string, kind: "issue"|"pr", number: number }} args
+ * @returns {string} Absolute path `<repoRoot>/tmp/worktrees/dev-loops/<kind>-<number>`
+ */
+export function resolveWorktreePath({ repoRoot, kind, number } = {}) {
+  const root = normalizeString(repoRoot);
+  if (!root) throw new Error("resolveWorktreePath: repoRoot is required and must be a non-empty string");
+  const k = typeof kind === "string" ? kind.trim().toLowerCase() : "";
+  if (k !== DEV_LOOP_TARGET_KIND.ISSUE && k !== DEV_LOOP_TARGET_KIND.PR) {
+    throw new Error(`resolveWorktreePath: kind must be "issue" or "pr", got "${kind}"`);
+  }
+  if (!Number.isInteger(number) || number < 1) {
+    throw new Error(`resolveWorktreePath: number must be a positive integer, got ${number}`);
+  }
+  return `${root}/${WORKTREE_NAMESPACE}/${k}-${number}`;
 }
 
 function flattenSlugSegment(s) {
@@ -331,13 +356,13 @@ function flattenSlugSegment(s) {
 }
 
 function buildWorktreeSlug(artifact, kind) {
+  // Canonical naming is namespaced + no branch suffix (issue #909) so the path
+  // is recomputable from the issue/PR number alone (cleanup can find it).
   if (kind === DEV_LOOP_TARGET_KIND.ISSUE && Number.isInteger(artifact.issue) && artifact.issue > 0) {
-    const branch = normalizeString(artifact.branch);
-    return branch ? `issue-${artifact.issue}-${flattenSlugSegment(branch)}` : `issue-${artifact.issue}`;
+    return `issue-${artifact.issue}`;
   }
   if (kind === DEV_LOOP_TARGET_KIND.PR && Number.isInteger(artifact.pr) && artifact.pr > 0) {
-    const branch = normalizeString(artifact.branch);
-    return branch ? `pr-${artifact.pr}-${flattenSlugSegment(branch)}` : `pr-${artifact.pr}`;
+    return `pr-${artifact.pr}`;
   }
   if (kind === DEV_LOOP_TARGET_KIND.LOCAL_BRANCH) {
     const branch = normalizeString(artifact.branch);

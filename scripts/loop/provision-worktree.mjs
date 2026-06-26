@@ -1,0 +1,200 @@
+#!/usr/bin/env node
+/**
+ * Provision a freshly-created worktree with the gitignored files/dirs the app
+ * and tests need, copied/symlinked from the main checkout per `.devloops`
+ * `worktree.copyOnInit` / `worktree.linkOnInit` (issue #909).
+ *
+ * - Sources resolve against the main checkout (`--repo-root`), never cwd.
+ * - Entries are repo-relative literal paths OR glob patterns (native fsp.glob).
+ * - copy = `fs.cp(recursive)`; link = absolute symlink into the main checkout.
+ * - Every resolved source MUST resolve inside the main checkout (traversal guard).
+ * - Fail-soft: a missing source / empty glob logs one warning and continues.
+ * - Idempotent: skips a dest that is already correct.
+ * - Does NOT run npm install (deps belong to `npm ci`-in-worktree).
+ *
+ * Prints a JSON summary of actions to stdout. Never throws on a per-entry
+ * problem; exits 0 unless its own arguments are invalid.
+ */
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { loadDevLoopConfig, resolveWorktreeConfig } from "@dev-loops/core/config";
+
+const USAGE = `Usage:
+  provision-worktree.mjs --worktree-path <p> --repo-root <p>
+Provision a worktree with gitignored files/dirs from the main checkout,
+driven by .devloops worktree.copyOnInit / worktree.linkOnInit.
+Required:
+  --worktree-path <p>   Absolute path to the target worktree.
+  --repo-root <p>       Absolute path to the main checkout (source of files).
+Optional:
+  -h, --help            Show this help.
+Output (stdout, JSON):
+  { "ok": true, "actions": [ { "mode": "copy"|"link"|"skip"|"reject", ... } ],
+    "summary": { "copied": n, "linked": n, "skipped": n, "rejected": n,
+                 "warnings": n } }`.trim();
+
+const parseError = buildParseError(USAGE);
+
+export function parseProvisionWorktreeCliArgs(argv) {
+  const options = { help: false, worktreePath: undefined, repoRoot: undefined };
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      "worktree-path": { type: "string" },
+      "repo-root": { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
+    if (token.kind !== "option") continue;
+    if (token.name === "help") {
+      options.help = true;
+      return options;
+    }
+    if (token.name === "worktree-path") {
+      options.worktreePath = requireTokenValue(token, parseError, { flagPattern: /^-/u });
+      continue;
+    }
+    if (token.name === "repo-root") {
+      options.repoRoot = requireTokenValue(token, parseError, { flagPattern: /^-/u });
+      continue;
+    }
+    throw parseError(`Unknown argument: ${token.rawName}`);
+  }
+  if (!options.worktreePath) throw parseError("Missing required --worktree-path");
+  if (!options.repoRoot) throw parseError("Missing required --repo-root");
+  return options;
+}
+
+/**
+ * Resolve a repo-relative entry (literal or glob) to matched absolute sources
+ * inside repoRoot. Returns `{ matches: string[], traversal: string[] }`.
+ * `traversal` holds matches that escaped repoRoot (rejected by caller).
+ */
+async function expandEntry(entry, repoRoot) {
+  const matches = [];
+  const traversal = [];
+  const isGlob = /[*?[\]{}]/.test(entry);
+  const inside = (abs) => abs === repoRoot || abs.startsWith(repoRoot + path.sep);
+
+  if (isGlob) {
+    // native fsp.glob (Node >=22) — expand against the main checkout.
+    for await (const rel of fsp.glob(entry, { cwd: repoRoot })) {
+      const abs = path.resolve(repoRoot, rel);
+      (inside(abs) ? matches : traversal).push(abs);
+    }
+  } else {
+    const abs = path.resolve(repoRoot, entry);
+    (inside(abs) ? matches : traversal).push(abs);
+  }
+  return { matches, traversal };
+}
+
+async function pathExists(p) {
+  try {
+    await fsp.lstat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Copy: idempotent skip when dest already exists (worktree reuse). */
+async function provisionCopy(src, dest, logWarn) {
+  if (!(await pathExists(src))) {
+    logWarn(`copyOnInit source missing, skipping: ${src}`);
+    return { mode: "skip", reason: "source-missing", src, dest };
+  }
+  if (await pathExists(dest)) return { mode: "skip", reason: "exists", src, dest };
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+  await fsp.cp(src, dest, { recursive: true });
+  return { mode: "copy", src, dest };
+}
+
+/** Symlink: absolute link into the main checkout. Idempotent when correct. */
+async function provisionLink(src, dest, logWarn) {
+  if (!(await pathExists(src))) {
+    logWarn(`linkOnInit source missing, skipping: ${src}`);
+    return { mode: "skip", reason: "source-missing", src, dest };
+  }
+  const existing = await fsp.readlink(dest).catch(() => null);
+  if (existing !== null) {
+    if (path.resolve(path.dirname(dest), existing) === src) {
+      return { mode: "skip", reason: "exists", src, dest };
+    }
+    return { mode: "skip", reason: "dest-conflict", src, dest };
+  }
+  if (await pathExists(dest)) return { mode: "skip", reason: "dest-conflict", src, dest };
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+  await fsp.symlink(src, dest); // absolute target — survives worktree moves under tmp/
+  return { mode: "link", src, dest };
+}
+
+export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig = loadDevLoopConfig } = {}) {
+  const root = path.resolve(repoRoot);
+  const dst = path.resolve(worktreePath);
+  const actions = [];
+  const warnings = [];
+  const logWarn = (msg) => {
+    warnings.push(msg);
+    process.stderr.write(`[provision-worktree] WARN ${msg}\n`);
+  };
+
+  const { config } = await loadConfig({ repoRoot: root });
+  const { copyOnInit, linkOnInit } = resolveWorktreeConfig(config);
+
+  for (const [entries, kind] of [[copyOnInit, "copy"], [linkOnInit, "link"]]) {
+    for (const entry of entries) {
+      const { matches, traversal } = await expandEntry(entry, root);
+      for (const abs of traversal) {
+        logWarn(`rejected (outside main checkout): ${entry} → ${abs}`);
+        actions.push({ mode: "reject", reason: "traversal", entry, src: abs });
+      }
+      if (matches.length === 0 && traversal.length === 0) {
+        logWarn(`no match for ${kind}OnInit entry: ${entry}`);
+        actions.push({ mode: "skip", reason: "no-match", entry });
+        continue;
+      }
+      for (const src of matches) {
+        const dest = path.join(dst, path.relative(root, src));
+        const res = kind === "copy"
+          ? await provisionCopy(src, dest, logWarn)
+          : await provisionLink(src, dest, logWarn);
+        actions.push({ entry, ...res });
+      }
+    }
+  }
+
+  const summary = { copied: 0, linked: 0, skipped: 0, rejected: 0, warnings: warnings.length };
+  for (const a of actions) {
+    if (a.mode === "copy") summary.copied++;
+    else if (a.mode === "link") summary.linked++;
+    else if (a.mode === "skip") summary.skipped++;
+    else if (a.mode === "reject") summary.rejected++;
+  }
+  return { ok: true, actions, summary };
+}
+
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
+  const options = parseProvisionWorktreeCliArgs(argv);
+  if (options.help) {
+    stdout.write(`${USAGE}\n`);
+    return;
+  }
+  const result = await provisionWorktree(options);
+  stdout.write(`${JSON.stringify(result)}\n`);
+}
+
+if (isDirectCliRun(import.meta.url)) {
+  runCli().catch((error) => {
+    process.stderr.write(`${formatCliError(error)}\n`);
+    process.exitCode = 1;
+  });
+}
