@@ -10,6 +10,7 @@ Canonical owner for agent stop / wait / block conditions across all workflow fam
 | `done` lifecycle state | all | Terminal stop |
 | `approval_ready` without explicit merge auth | `final_approval` | Stop at approval gate |
 | `merge_ready` without explicit merge auth | all | Stop at `waiting_for_merge_authorization` |
+| `autonomy.humanMergeOnly: true` | all | Always stop at merge for human action, even with explicit merge auth — agent never runs `gh pr merge` (see [Merge preconditions](merge-preconditions.md)) |
 | Ambiguous / contradictory state | all | Fail closed to `needs_reconcile` |
 | Missing authoritative startup inputs | `dev-loop` | Fail closed |
 

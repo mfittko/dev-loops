@@ -162,6 +162,7 @@ function normalizeLifecycleState(value) {
  *   hasUnresolvedThreads, // boolean: unresolved review threads exist
  *   preApprovalGatePassed, // boolean: current-head pre_approval_gate clean
  *   mergeAuthorized,    // boolean: explicit merge authorization granted
+ *   humanMergeOnly,     // boolean: repo invariant — agent may never merge (fails closed)
  *   isMerged,           // boolean: PR has been merged
  * }
  * ```
@@ -194,8 +195,17 @@ export function resolveLifecycleState(input = {}) {
     hasUnresolvedThreads = false,
     preApprovalGatePassed = false,
     mergeAuthorized = false,
+    humanMergeOnly = false,
     isMerged = false,
   } = input;
+
+  // Fail closed: when the repo enforces human-only merge, the agent is never
+  // cleared to advance to the merge action — the per-run mergeAuthorized signal
+  // is ignored. Also fail closed on a non-boolean `mergeAuthorized` (only an
+  // exact `true` clears merge), matching the authoritative
+  // `resolveEffectiveMergeAuthorized` gate. An already-merged PR (isMerged) is
+  // still terminal below.
+  const effectiveMergeAuthorized = humanMergeOnly !== true && mergeAuthorized === true;
 
   // 1. Explicit phase override — canonical or fail closed
   if (phase !== null && phase !== undefined) {
@@ -212,7 +222,9 @@ export function resolveLifecycleState(input = {}) {
   }
 
   // 3. Merge authorized with pre-approval + linked PR → merge
-  if (mergeAuthorized && preApprovalGatePassed && hasLinkedPr) {
+  // (humanMergeOnly forces effectiveMergeAuthorized=false above, so the loop
+  // stays at the pre_approval_gate human-merge handoff instead.)
+  if (effectiveMergeAuthorized && preApprovalGatePassed && hasLinkedPr) {
     return buildResult(LIFECYCLE_STATE.MERGE);
   }
 

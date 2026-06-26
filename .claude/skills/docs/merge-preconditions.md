@@ -32,6 +32,23 @@ A marker is allowed only while the PR is still in draft; it must be removed befo
 - `"Merge authorized if gates green"` is valid explicit authorization
 - Implied approval from prior turns is not sufficient
 
+### `autonomy.humanMergeOnly` — fixed human-only merge (non-overridable)
+
+When a repo sets `autonomy.humanMergeOnly: true` in `.devloops`, merge is a fixed
+human action and this authorization step is **non-overridable**:
+
+- `resolveAutonomyStopAt` always includes `merge`, even if `stopAt` is set to `[]`.
+- The effective merge authorization fails closed: `resolveEffectiveMergeAuthorized`
+  returns `false` regardless of the `mergeAuthorized` envelope flag or an explicit
+  "merge" instruction. The lifecycle resolver therefore never advances to the merge
+  state and parks at the `pre_approval_gate` human-merge handoff.
+- The agent still runs the full mechanical pre-merge evidence check and reports
+  merge-ready + gate evidence, then hands off to a human to perform `gh pr merge`.
+  The agent **never** runs `gh pr merge` itself.
+
+This makes human-gated merge an enforced repo invariant, not a per-run default an
+explicit instruction can unlock.
+
 ## Post-merge
 
 - Remove merged worktree (canonical): `node scripts/loop/cleanup-worktree.mjs --repo-root <main> (--issue <n> | --pr <n>)`.

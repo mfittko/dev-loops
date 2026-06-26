@@ -13,6 +13,9 @@ import {
 import {
   resolveConductorModel,
   resolveAutonomyStopAt,
+  resolveHumanMergeOnly,
+  resolveEffectiveMergeAuthorized,
+  resolveEffectiveMergeAuthorizedFromLoad,
   resolveRefinementConfig,
   resolveRefinement,
   resolveGateConfig,
@@ -248,6 +251,25 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
+  test("S19b: autonomy.humanMergeOnly accepted as boolean; absent → undefined (issue #910)", () => {
+    const set = DevLoopConfigSchema.safeParse({
+      version: 1,
+      autonomy: { stopAt: [], humanMergeOnly: true },
+    });
+    assert.ok(set.success, "humanMergeOnly: true should parse");
+    assert.equal(set.data.autonomy.humanMergeOnly, true);
+
+    const absent = DevLoopConfigSchema.safeParse({ version: 1, autonomy: { stopAt: ["merge"] } });
+    assert.ok(absent.success);
+    assert.equal(absent.data.autonomy.humanMergeOnly, undefined);
+
+    const bad = DevLoopConfigSchema.safeParse({
+      version: 1,
+      autonomy: { stopAt: ["merge"], humanMergeOnly: "yes" },
+    });
+    assert.ok(!bad.success, "non-boolean humanMergeOnly rejected");
+  });
+
   test("S20: root is null", () => {
     const result = DevLoopConfigSchema.safeParse(null);
     assert.ok(!result.success);
@@ -343,6 +365,10 @@ describe("BUILT_IN_DEFAULTS", () => {
 
   test("autonomy.stopAt is [merge]", () => {
     assert.deepEqual(BUILT_IN_DEFAULTS.autonomy.stopAt, ["merge"]);
+  });
+
+  test("autonomy.humanMergeOnly defaults to false", () => {
+    assert.equal(BUILT_IN_DEFAULTS.autonomy.humanMergeOnly, false);
   });
 
   test("workflow defaults exist and use required async start with false boolean gates by default", () => {
@@ -1549,6 +1575,69 @@ describe("role resolution", () => {
         autonomy: { stopAt: ["refinement", "draft-pr", "pre-approval", "merge"] },
       });
       assert.deepEqual(result, ["refinement", "draft-pr", "pre-approval", "merge"]);
+    });
+
+    // humanMergeOnly — fixed, non-overridable human-merge rule (issue #910)
+    test("resolveHumanMergeOnly defaults to false when absent", () => {
+      assert.equal(resolveHumanMergeOnly({ version: 1 }), false);
+      assert.equal(resolveHumanMergeOnly({ version: 1, autonomy: { stopAt: ["merge"] } }), false);
+    });
+
+    test("resolveHumanMergeOnly is true when set", () => {
+      assert.equal(
+        resolveHumanMergeOnly({ version: 1, autonomy: { stopAt: [], humanMergeOnly: true } }),
+        true
+      );
+    });
+
+    test("resolveAutonomyStopAt always includes 'merge' when humanMergeOnly true (even with stopAt: [])", () => {
+      const result = resolveAutonomyStopAt({
+        version: 1,
+        autonomy: { stopAt: [], humanMergeOnly: true },
+      });
+      assert.ok(result.includes("merge"), "merge must be a forced human stop");
+    });
+
+    test("resolveAutonomyStopAt does not duplicate 'merge' when already present + humanMergeOnly", () => {
+      const result = resolveAutonomyStopAt({
+        version: 1,
+        autonomy: { stopAt: ["merge"], humanMergeOnly: true },
+      });
+      assert.deepEqual(result, ["merge"]);
+    });
+
+    test("resolveEffectiveMergeAuthorized returns false when humanMergeOnly true even if mergeAuthorized true", () => {
+      const config = { version: 1, autonomy: { stopAt: ["merge"], humanMergeOnly: true } };
+      assert.equal(resolveEffectiveMergeAuthorized(true, config), false);
+      assert.equal(resolveEffectiveMergeAuthorized(false, config), false);
+    });
+
+    test("resolveEffectiveMergeAuthorized honors mergeAuthorized when humanMergeOnly false/absent", () => {
+      assert.equal(resolveEffectiveMergeAuthorized(true, { version: 1 }), true);
+      assert.equal(resolveEffectiveMergeAuthorized(false, { version: 1 }), false);
+      // fail closed on a non-boolean signal
+      assert.equal(resolveEffectiveMergeAuthorized("yes", { version: 1 }), false);
+    });
+
+    test("resolveEffectiveMergeAuthorizedFromLoad fails closed when the config load has errors", () => {
+      // The .devloops that would declare humanMergeOnly may be the very file that
+      // failed to load — never grant merge authorization from an unverified config.
+      assert.equal(
+        resolveEffectiveMergeAuthorizedFromLoad(true, { config: { version: 1 }, errors: [new Error("invalid YAML")] }),
+        false,
+      );
+    });
+
+    test("resolveEffectiveMergeAuthorizedFromLoad honors the gate when load is clean", () => {
+      // clean load, no humanMergeOnly → honors the flag
+      assert.equal(resolveEffectiveMergeAuthorizedFromLoad(true, { config: { version: 1 }, errors: [] }), true);
+      // clean load, humanMergeOnly → still false
+      assert.equal(
+        resolveEffectiveMergeAuthorizedFromLoad(true, { config: { version: 1, autonomy: { humanMergeOnly: true } }, errors: [] }),
+        false,
+      );
+      // missing errors array treated as clean
+      assert.equal(resolveEffectiveMergeAuthorizedFromLoad(true, { config: { version: 1 } }), true);
     });
 
     // Refinement resolution

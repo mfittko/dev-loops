@@ -97,6 +97,11 @@
               "merge"
             ]
           }
+        },
+        "humanMergeOnly": {
+          "type": "boolean",
+          "description": "When true, merge is a fixed human-only action: the agent never runs `gh pr merge`, `resolveAutonomyStopAt` always includes \"merge\", and any per-run merge authorization is ignored (fails closed).",
+          "default": false
         }
       }
     },

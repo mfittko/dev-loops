@@ -330,6 +330,46 @@ test("resolveLifecycleState: pre-approval + merge authorized without linked PR �
   assert.equal(result.state, LIFECYCLE_STATE.ISSUE_INTAKE);
 });
 
+test("resolveLifecycleState: humanMergeOnly fails closed — merge authorized but NOT merge (issue #910)", () => {
+  // The fixed repo invariant: even with mergeAuthorized + pre-approval + linked
+  // PR, the agent is never cleared to merge. It stays at the human-merge handoff
+  // (pre_approval_gate) rather than advancing to the terminal merge action.
+  const result = resolveLifecycleState({
+    hasLinkedPr: true,
+    hasUnresolvedThreads: false,
+    preApprovalGatePassed: true,
+    mergeAuthorized: true,
+    humanMergeOnly: true,
+  });
+  assert.notEqual(result.state, LIFECYCLE_STATE.MERGE);
+  assert.equal(result.state, LIFECYCLE_STATE.PRE_APPROVAL_GATE);
+  assert.equal(result.isTerminal, false);
+});
+
+test("resolveLifecycleState: fails closed on a non-boolean mergeAuthorized (only true clears merge)", () => {
+  // A non-boolean truthy mergeAuthorized must NOT advance to MERGE, matching the
+  // authoritative resolveEffectiveMergeAuthorized gate (#910 round-2).
+  const result = resolveLifecycleState({
+    hasLinkedPr: true,
+    hasUnresolvedThreads: false,
+    preApprovalGatePassed: true,
+    mergeAuthorized: "yes",
+    humanMergeOnly: false,
+  });
+  assert.notEqual(result.state, LIFECYCLE_STATE.MERGE);
+});
+
+test("resolveLifecycleState: humanMergeOnly does not block an already-merged PR (terminal)", () => {
+  const result = resolveLifecycleState({
+    hasLinkedPr: true,
+    isMerged: true,
+    mergeAuthorized: true,
+    humanMergeOnly: true,
+  });
+  assert.equal(result.state, LIFECYCLE_STATE.MERGE);
+  assert.equal(result.isTerminal, true);
+});
+
 test("resolveLifecycleState: merge authorized without pre-approval → earlier phase", () => {
   // merge authorization alone without pre-approval gate shouldn't jump to merge
   const result = resolveLifecycleState({

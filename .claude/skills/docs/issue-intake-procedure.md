@@ -224,6 +224,10 @@ gh pr edit <pr-number> --repo <resolved-repo> --title "..." --body-file <body-fi
 gh pr ready <pr-number> --repo <resolved-repo>
 gh pr review <pr-number> --repo <resolved-repo> --approve --body "..."
 node <resolved-skill-scripts>/github/detect-checkpoint-evidence.mjs --repo <resolved-repo> --pr <pr-number>
+```
+
+The merge itself is gated, not implied by the lines above. Before any `gh pr merge`, follow [Merge Preconditions](./merge-preconditions.md): all preconditions (green CI, clean `draft_gate` + current-head `pre_approval_gate`, zero unresolved threads, explicit merge authorization) must hold. Critically, when `autonomy.humanMergeOnly: true` is set, merge is a fixed human-only action — `resolveEffectiveMergeAuthorized` fails closed, the agent **never** runs `gh pr merge`, and instead reports merge-ready + gate evidence and hands off to a human. Only when **not** `humanMergeOnly` and merge is explicitly authorized may the agent run:
+```sh
 gh pr merge <pr-number> --repo <resolved-repo> --squash --delete-branch
 ```
 
