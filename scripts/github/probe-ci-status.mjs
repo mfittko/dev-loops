@@ -30,7 +30,7 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed",
     "settled": bool, "ciStatus": "success"|"failure"|"pending"|"none",
-    "failedChecks": [{ "name": "..." }], "headSha": "...", "attempts": N }
+    "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N }
 Statuses:
   success    Combined CI is green (or no checks present — see no-checks rule)
   failure    At least one check/status failed (failedChecks populated)
@@ -194,7 +194,7 @@ async function fetchPrHeadSha({ repo, pr }, { env, ghCommand }) {
  * fabricate green. On fetchError, ciStatus is forced to "pending" so the watch
  * keeps polling (and a persistent error settles as "timeout", never success).
  *
- * @returns {{ ciStatus: "success"|"failure"|"pending"|"none", noChecks: boolean, fetchError: boolean, failedChecks: Array<{name:string}> }}
+ * @returns {{ ciStatus: "success"|"failure"|"pending"|"none", noChecks: boolean, fetchError: boolean, failedChecks: Array<{ name: string, conclusion?: string }> }}
  */
 async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, ghCommand }) {
   const [checkRunsResult, statusesResult] = await Promise.all([

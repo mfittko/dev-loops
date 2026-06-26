@@ -307,6 +307,16 @@ test("runWatchCycle keeps a pending CI watch boundary non-terminal", async () =>
   assert.equal(result.watchStatus, "timeout");
   assert.equal(result.cycleDisposition, "pending");
   assert.equal(result.terminal, false);
+  // A quiet CI-watch timeout is a HEALTHY_WAIT (mirrors the Copilot-watch
+  // timeout), and the trace records the CI watcher helper + ciWatchArgs.
+  assert.equal(result.contractTrace.stopReason.classification, "healthy_wait");
+  assert.equal(result.contractTrace.waitStrategy.helper, "scripts/github/probe-ci-status.mjs");
+  assert.equal(result.contractTrace.waitStrategy.mode, "persistent_watch");
+  assert.equal(result.contractTrace.waitStrategy.effectiveTimeoutMs, 1_800_000);
+  assert.equal(result.contractTrace.stateRefresh.observedStatus, "timeout");
+  assert.equal(result.contractTrace.orchestration.ciWatchArgs.repo, "owner/repo");
+  assert.equal(result.contractTrace.orchestration.ciWatchArgs.pr, 17);
+  assert.equal(result.contractTrace.orchestration.effectiveWatchArgs.timeoutMs, 1_800_000);
 });
 
 test("runWatchCycle preserves done loopDisposition for stop states without invoking the watcher", async () => {

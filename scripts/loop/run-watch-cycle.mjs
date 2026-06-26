@@ -127,16 +127,33 @@ function buildWatchCycleContractTrace({
   cycleDisposition,
   sessionActivity = null,
   workflowRunWatch = null,
+  ciWatchArgs = null,
+  ciWatchStatus = null,
 }) {
-  const boundaryClassification = handoff.action !== "watch"
-    ? (handoff.loopDisposition === "blocked"
+  // The CI-watch branch (waiting_for_ci) routes through probe-ci-status.mjs even
+  // though handoff.action !== "watch". It is an observational wait, so it mirrors
+  // the Copilot watch classification: a quiet timeout is a HEALTHY_WAIT, while
+  // success/failure/changed route a follow-up. Without this the boundary-action
+  // path below would misclassify a CI timeout as routed_followup.
+  const isCiWatch = ciWatchArgs !== null;
+  const isWatchBoundary = handoff.action === "watch" || isCiWatch;
+  const observedStatus = isCiWatch ? ciWatchStatus : watchStatus;
+  const boundaryClassification = isWatchBoundary
+    ? (observedStatus === "timeout" || observedStatus === "idle"
+      ? DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.HEALTHY_WAIT
+      : DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.ROUTED_FOLLOWUP)
+    : handoff.loopDisposition === "blocked"
       ? DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.BLOCKED
       : handoff.terminal
         ? DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.TERMINAL
-        : DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.ROUTED_FOLLOWUP)
-    : watchStatus === "changed"
-      ? DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.ROUTED_FOLLOWUP
-      : DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.HEALTHY_WAIT;
+        : DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.ROUTED_FOLLOWUP;
+  const healthyWait = boundaryClassification === DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.HEALTHY_WAIT;
+  const helper = handoff.action === "watch"
+    ? "scripts/github/probe-copilot-review.mjs"
+    : isCiWatch
+      ? "scripts/github/probe-ci-status.mjs"
+      : null;
+  const effectiveArgs = isCiWatch ? ciWatchArgs : watchArgs;
   return {
     handoff: {
       action: handoff.action,
@@ -145,38 +162,37 @@ function buildWatchCycleContractTrace({
       terminal: Boolean(handoff.terminal),
     },
     waitStrategy: {
-      helper: handoff.action === "watch" ? "scripts/github/probe-copilot-review.mjs" : null,
-      mode: handoff.action === "watch"
-        ? "persistent_watch"
-        : "not_applicable",
-      effectiveTimeoutMs: watchArgs?.timeoutMs ?? null,
-      effectivePollIntervalMs: watchArgs?.pollIntervalMs ?? null,
+      helper,
+      mode: isWatchBoundary ? "persistent_watch" : "not_applicable",
+      effectiveTimeoutMs: effectiveArgs?.timeoutMs ?? null,
+      effectivePollIntervalMs: effectiveArgs?.pollIntervalMs ?? null,
       timeoutPolicyClassification: watchTimeoutPolicy?.classification ?? null,
     },
     orchestration: {
       emittedWatchArgs: handoff.watchArgs ?? null,
-      effectiveWatchArgs: watchArgs,
+      effectiveWatchArgs: effectiveArgs,
+      ciWatchArgs,
       sessionActivity,
       workflowRunWatch,
     },
-    stateRefresh: handoff.action === "watch"
+    stateRefresh: isWatchBoundary
       ? {
           boundaryKind: "post_watch_or_probe",
-          observedStatus: watchStatus,
+          observedStatus,
           refreshRequired: true,
-          refreshReason: watchStatus === "changed"
-            ? "Watch boundaries with fresh activity require an authoritative state refresh before routing the follow-up path."
-            : "Healthy watch boundaries are observational only; refresh authoritative state before treating timeout/idle as stop or completion.",
+          refreshReason: healthyWait
+            ? "Healthy watch boundaries are observational only; refresh authoritative state before treating timeout/idle as stop or completion."
+            : "Watch boundaries with fresh activity require an authoritative state refresh before routing the follow-up path.",
         }
       : null,
     stopReason: {
       classification: boundaryClassification,
       terminal: Boolean(handoff.terminal),
       cycleDisposition,
-      reason: handoff.action === "watch"
-        ? (watchStatus === "changed"
-          ? "Fresh watcher activity requires follow-up instead of staying in a healthy wait boundary."
-          : "Quiet watcher boundaries remain healthy waits and must not be treated as terminal completion by themselves.")
+      reason: isWatchBoundary
+        ? (healthyWait
+          ? "Quiet watcher boundaries remain healthy waits and must not be treated as terminal completion by themselves."
+          : "Fresh watcher activity requires follow-up instead of staying in a healthy wait boundary.")
         : handoff.nextAction,
     },
   };
@@ -297,10 +313,10 @@ export async function runWatchCycle(
     result.terminal = false;
     result.contractTrace = buildWatchCycleContractTrace({
       handoff,
-      watchArgs: result.watchArgs ?? null,
       watchTimeoutPolicy: result.watchTimeoutPolicy ?? null,
-      watchStatus: ciWatch.status,
       cycleDisposition: result.cycleDisposition,
+      ciWatchArgs,
+      ciWatchStatus: ciWatch.status,
     });
     return result;
   }
