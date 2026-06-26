@@ -592,7 +592,19 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
     throw error;
   }
   if (conversion.alreadyDraft !== true) {
-    await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+    try {
+      await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+    } catch (restoreError) {
+      // The verdict WAS posted successfully; only the ready-restore failed. Make that
+      // explicit so the caller does not re-post the gate (the comment already exists)
+      // and knows the PR may be left in draft until restored. (#891, Copilot review)
+      throw new Error(
+        `draft_gate verdict was posted to ${options.repo}#${options.pr} (comment ${result.commentId ?? "?"}), ` +
+        `but restoring the PR to ready failed; it may be left in draft. Do not re-post the gate — re-run ` +
+        `\`gh pr ready ${options.pr}\` (or the dev-loop) to restore ready. Cause: ` +
+        `${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
+      );
+    }
     process.stderr.write(`[draft_gate] restored ${options.repo}#${options.pr} to ready after posting draft_gate evidence.\n`);
   }
   return { ...result, draftTransition: true };
@@ -699,11 +711,18 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // mode (e.g. fanout_fanin), findings, and ledger. This is the fanout-aware
   // analogue of `reconcile-draft-gate` (which only posts inline and so cannot
   // satisfy requireFanoutEvidence on draft_gate). (#891)
+  //
+  // Trigger ONLY when coordination explicitly allows RECONCILE_DRAFT_GATE — i.e. the
+  // state machine determined this ready PR genuinely needs draft-gate evidence
+  // reconciled (a converged/merge-progression state with no clean draft evidence).
+  // RUN_DRAFT_GATE is forbidden on a ready PR in many OTHER states too (merge
+  // conflicts, waiting-for-CI, unresolved feedback, blocked); converting those to
+  // draft would be wrong, so we must NOT key off `gateActionForbidden` alone. (#891)
   if (
     options.gate === "draft_gate"
-    && gateActionForbidden
     && !prIsDraft
     && !coordination.draftGateAlreadySatisfied
+    && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
   ) {
     return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot });
   }
