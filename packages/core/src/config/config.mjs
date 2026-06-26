@@ -75,6 +75,11 @@ const AutonomyConfig = z.strictObject({
   stopAt: z.array(
     z.enum(["refinement", "draft-pr", "pre-approval", "merge"])
   ),
+  // When true, merge is a fixed, non-overridable human action: the agent never
+  // runs `gh pr merge`, `resolveAutonomyStopAt` always includes "merge", and
+  // any per-run merge authorization (envelope flag / explicit instruction) is
+  // ignored — it fails closed. See resolveHumanMergeOnly / resolveEffectiveMergeAuthorized.
+  humanMergeOnly: z.boolean().optional(),
 });
 
 const WorkflowConfig = z.strictObject({
@@ -178,7 +183,7 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
   models: Object.freeze({}),
   refinement: Object.freeze({ fanOut: 3, mode: "parallel", maxCopilotRounds: 5, stopOnLowSignal: false, lowSignalRoundThreshold: 3, lowSignalMaxComments: 2 }),
   gates: Object.freeze({}),
-  autonomy: Object.freeze({ stopAt: Object.freeze(["merge"]) }),
+  autonomy: Object.freeze({ stopAt: Object.freeze(["merge"]), humanMergeOnly: false }),
   workflow: Object.freeze({
     asyncStartMode: "required",
     requireRetrospective: false,
@@ -742,10 +747,47 @@ export function resolveConductorModel(config) {
  * @returns {string[]}
  */
 export function resolveAutonomyStopAt(config) {
-  if (config?.autonomy?.stopAt && Array.isArray(config.autonomy.stopAt)) {
-    return [...config.autonomy.stopAt];
+  const base = (config?.autonomy?.stopAt && Array.isArray(config.autonomy.stopAt))
+    ? [...config.autonomy.stopAt]
+    : ["merge"];
+  // Fail closed: humanMergeOnly forces a human stop at merge regardless of
+  // what stopAt is configured (even an explicit []).
+  if (resolveHumanMergeOnly(config) && !base.includes("merge")) {
+    base.push("merge");
   }
-  return ["merge"];
+  return base;
+}
+
+/**
+ * Resolve the fixed human-merge-only invariant from the merged dev-loop config.
+ *
+ * When true, the agent must never perform the merge itself: `gh pr merge` is a
+ * human-only action and any per-run merge authorization is ignored. Defaults to
+ * false (the agent may merge once authorized).
+ *
+ * @param {DevLoopConfig} config
+ * @returns {boolean}
+ */
+export function resolveHumanMergeOnly(config) {
+  return config?.autonomy?.humanMergeOnly === true;
+}
+
+/**
+ * Authoritative gate: resolve the effective merge authorization for the agent.
+ *
+ * This is the single chokepoint that decides whether the agent is cleared to
+ * run `gh pr merge`. When `humanMergeOnly` is set on the repo config, this
+ * ALWAYS returns false — the per-run `mergeAuthorized` flag (envelope flag or
+ * explicit "merge" instruction) cannot override the repo invariant. Fails
+ * closed: a non-boolean `mergeAuthorized` is treated as not authorized.
+ *
+ * @param {boolean} mergeAuthorized per-run authorization signal
+ * @param {DevLoopConfig} config merged dev-loop config
+ * @returns {boolean}
+ */
+export function resolveEffectiveMergeAuthorized(mergeAuthorized, config) {
+  if (resolveHumanMergeOnly(config)) return false;
+  return mergeAuthorized === true;
 }
 
 const DEFAULT_REFINEMENT_CONFIG = BUILT_IN_DEFAULTS.refinement;

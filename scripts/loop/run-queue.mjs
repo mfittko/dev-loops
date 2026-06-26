@@ -20,6 +20,7 @@ import { computeParallelSchedule } from "@dev-loops/core/loop/queue-parallel";
 import { readQueue } from "@dev-loops/core/loop/queue-state";
 import { reconcileBoardMembership } from "@dev-loops/core/loop/queue-membership";
 import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
+import { loadDevLoopConfig, resolveEffectiveMergeAuthorized } from "@dev-loops/core/config";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -181,9 +182,21 @@ async function main() {
     console.error("Parallel dispatch via async subagents not yet wired; falling back to sequential.");
   }
 
+  // Authoritative merge-authorization gate: when the repo enforces
+  // humanMergeOnly, --merge-authorized is ignored (fails closed) so the queue
+  // driver never auto-merges. Fail-open on config load errors → treat the
+  // configured flag as-is rather than silently auto-merging.
+  let effectiveMergeAuthorized = args.mergeAuthorized;
+  try {
+    const { config } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    effectiveMergeAuthorized = resolveEffectiveMergeAuthorized(args.mergeAuthorized, config);
+  } catch {
+    // config unavailable: keep the explicit flag (no humanMergeOnly to enforce)
+  }
+
   const result = await runQueue(REPO_ROOT, args.repo, {
     ...DEFAULT_QUEUE_DRIVER_OPTIONS,
-    mergeAuthorized: args.mergeAuthorized,
+    mergeAuthorized: effectiveMergeAuthorized,
     reDispatchMaxRetries: args.reDispatchMaxRetries,
   });
 
