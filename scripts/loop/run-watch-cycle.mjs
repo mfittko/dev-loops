@@ -275,7 +275,12 @@ export async function runWatchCycle(
   // dead-end at action:"stop". Route it to the helper-owned CI watcher
   // (CircleCI / GH Actions / external commit-status), not gh run watch.
   if (handoff.action !== "watch" && handoff.state === STATE.WAITING_FOR_CI) {
-    const ciTimeoutMs = determineWatchTimeout(EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY.defaultTimeoutMs);
+    // Mirror determineWatchTimeout but with a CI-specific context label so
+    // timeout diagnostics read "CI wait" instead of "Copilot review wait".
+    const ciTimeoutMs = enforceExternalHealthyWaitTimeout({
+      timeoutMs: EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY.defaultTimeoutMs,
+      contextLabel: "CI wait",
+    });
     const ciWatchArgs = {
       repo: options.repo,
       pr: options.pr,

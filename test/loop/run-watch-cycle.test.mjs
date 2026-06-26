@@ -276,6 +276,9 @@ test("runWatchCycle routes a waiting_for_ci boundary to the provider-agnostic CI
   assert.equal(copilotWatcherCalled, false);
   assert.equal(ciWatchArgs.repo, "owner/repo");
   assert.equal(ciWatchArgs.pr, 17);
+  // CI wait path uses the external-healthy-wait policy default (CI-specific
+  // label only changes diagnostics; the effective budget is unchanged).
+  assert.equal(ciWatchArgs.timeoutMs, 1_800_000);
   assert.equal(result.watchStatus, "failure");
   assert.equal(result.ciWatch.status, "failure");
   assert.deepEqual(result.ciWatch.failedChecks, [{ name: "circleci/build" }]);

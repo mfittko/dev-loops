@@ -155,6 +155,21 @@ function extractPrVisibleCheckNames(statusCheckRollup) {
     .filter((name) => typeof name === "string" && name.length > 0);
 }
 
+// Failing commit-status contexts (state "failure"/"error"), e.g. CircleCI which
+// reports through the status API rather than as check-runs.
+function extractFailedStatusContexts(statuses) {
+  if (!Array.isArray(statuses)) return [];
+  return statuses
+    .filter((s) => {
+      const state = typeof s?.state === "string" ? s.state.toLowerCase() : "";
+      return state === "failure" || state === "error";
+    })
+    .map((s) => ({
+      name: typeof s?.context === "string" && s.context.length > 0 ? s.context : "unknown",
+      conclusion: typeof s?.state === "string" ? s.state.toLowerCase() : "",
+    }));
+}
+
 async function fetchPrHeadSha({ repo, pr }, { env, ghCommand }) {
   const payload = await ghJson(
     ghCommand,
@@ -213,6 +228,7 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
 
   let commitStatus = null;
   let statusesCount = 0;
+  let statusFailures = [];
   let statusesError = statusesResult.code !== 0;
   if (statusesResult.code === 0) {
     try {
@@ -220,6 +236,7 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
       if (Array.isArray(payload?.statuses)) {
         commitStatus = normalizeHeadScopedCommitStatus(payload);
         statusesCount = payload.statuses.length;
+        statusFailures = extractFailedStatusContexts(payload.statuses);
       } else {
         statusesError = true; // exit 0 but no statuses array → malformed payload, not empty
       }
@@ -237,7 +254,16 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
         commitStatus: commitStatus ?? "none",
         checkRunsUnsupportedCompleted: checkRunsSignal?.unsupportedCompleted ?? false,
       }).overallStatus;
-  const failedChecks = (checkRunsSignal?.failureDetails ?? []).map((name) => ({ name }));
+  // Provider-agnostic failure reporting: check-runs failures AND failing
+  // commit-status contexts (e.g. CircleCI reports via the status API with NO
+  // check-runs). Without the status side, a CircleCI failure would surface
+  // ciStatus "failure" with an empty failedChecks.
+  const failedChecks = fetchError
+    ? []
+    : [
+        ...(checkRunsSignal?.failureDetails ?? []).map((name) => ({ name })),
+        ...statusFailures,
+      ];
   // No-checks: zero check-runs AND zero commit-statuses, observed cleanly (no
   // fetchError) AND with no PR-visible expected checks. If statusCheckRollup
   // lists expected checks the providers haven't reported yet, that is pending
@@ -254,14 +280,18 @@ function buildAttemptBudget(timeoutMs, pollIntervalMs) {
   if (timeoutMs === 0) {
     return 1;
   }
-  return Math.max(1, Math.ceil(timeoutMs / pollIntervalMs));
+  // Polls land at t=0, interval, 2*interval, ... so floor(timeout/interval)+1
+  // polls fit inside the budget (the first poll costs no delay).
+  return Math.max(1, Math.floor(timeoutMs / pollIntervalMs) + 1);
 }
 
+// Attempt 1 polls immediately (t=0); attempt N waits (N-1)*pollIntervalMs from
+// the watch start, capped by the total timeout budget.
 function buildPollDelayMs(watchStartedAtMs, timeoutMs, pollIntervalMs, attempt, nowMs) {
-  if (timeoutMs === 0) {
+  if (timeoutMs === 0 || attempt <= 1) {
     return 0;
   }
-  const scheduledAtMs = watchStartedAtMs + Math.min(timeoutMs, attempt * pollIntervalMs);
+  const scheduledAtMs = watchStartedAtMs + Math.min(timeoutMs, (attempt - 1) * pollIntervalMs);
   return Math.max(0, scheduledAtMs - nowMs);
 }
 
@@ -320,7 +350,10 @@ export async function watchCiStatus(
   const graceFloor = options.timeoutMs === 0 ? 1 : NO_CHECKS_GRACE_POLLS;
   let consecutiveNoChecks = 0;
   for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
-    if (!(options.timeoutMs === 0 && attempt === 1)) {
+    // Attempt 1 polls at t=0 (CI may already be terminal); sleep only between
+    // subsequent polls so the watcher never burns a full interval before its
+    // first observation.
+    if (attempt > 1) {
       const pollDelayMs = buildPollDelayMs(
         watchStartedAtMs,
         options.timeoutMs,
@@ -363,8 +396,12 @@ export async function watchCiStatus(
         status: "changed",
       });
     }
+    // Use the per-poll currentNames (not the baseline): statusCheckRollup may
+    // start empty and later populate expected checks for the SAME head SHA. With
+    // the stale baseline names this head would look check-less and wrongly settle
+    // none->success; currentNames keeps it pending until the checks report.
     const state = await fetchHeadCiState(
-      { repo: options.repo, headSha: currentSha, prVisibleCheckNames },
+      { repo: options.repo, headSha: currentSha, prVisibleCheckNames: currentNames },
       { env, ghCommand },
     );
     consecutiveNoChecks = state.noChecks ? consecutiveNoChecks + 1 : 0;
@@ -376,13 +413,31 @@ export async function watchCiStatus(
       });
     }
   }
-  // Budget exhausted while still pending. A zero-timeout single check reports
-  // the live "pending" state; a real watch budget reports "timeout".
-  const finalState = await fetchHeadCiState(
-    { repo: options.repo, headSha: baselineSha, prVisibleCheckNames },
+  // Budget exhausted while still pending. Re-resolve the head before the final
+  // fetch: the head may have advanced during the last delay (short-circuit to
+  // "changed" so the caller re-baselines), and the rollup may have populated
+  // expected checks for the same SHA (use the current names, not baseline).
+  // A zero-timeout single check reports the live "pending" state; a real watch
+  // budget reports "timeout".
+  const { headSha: finalSha, prVisibleCheckNames: finalNames } = await fetchPrHeadSha(
+    { repo: options.repo, pr: options.pr },
     { env, ghCommand },
   );
-  return settledResult({ ...finalState, headSha: baselineSha, attempts: attemptBudget }, {
+  if (finalSha !== baselineSha) {
+    const changedState = await fetchHeadCiState(
+      { repo: options.repo, headSha: finalSha, prVisibleCheckNames: finalNames },
+      { env, ghCommand },
+    );
+    return settledResult({ ...changedState, headSha: finalSha, attempts: attemptBudget }, {
+      settled: false,
+      status: "changed",
+    });
+  }
+  const finalState = await fetchHeadCiState(
+    { repo: options.repo, headSha: finalSha, prVisibleCheckNames: finalNames },
+    { env, ghCommand },
+  );
+  return settledResult({ ...finalState, headSha: finalSha, attempts: attemptBudget }, {
     settled: false,
     status: options.timeoutMs === 0 ? "pending" : "timeout",
   });
