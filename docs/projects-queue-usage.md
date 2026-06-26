@@ -151,6 +151,15 @@ This posture keeps the queue resilient: a transient GitHub API outage or misconf
 does not block the run. Board state is read at dispatch time; the queue does not continuously
 sync local state to board state.
 
+### Completion is reflected, never fabricated
+
+The queue runner is a **deterministic adapter** over the board — it is **not** the orchestration
+harness. It moves an item to **Done** (and marks the entry `done`) only as a reflection of a
+**real terminal signal** supplied by an orchestrator (e.g. the item's linked PR merged), never as
+a side effect of a resolve/run pass. When no orchestrator is wired into the current harness,
+`dev-loops queue run` is a **no-op**: it leaves every board column unchanged and reports
+`reason: "no-orchestrator"` rather than fabricating completion for unperformed work (#913).
+
 ## See also
 
 - [Projects Queue Contract](./projects-queue-contract.md) — formal board contract

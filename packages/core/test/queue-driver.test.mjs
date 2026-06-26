@@ -458,6 +458,75 @@ test("runQueue records fallback board transition on failure", async () => {
   }
 });
 
+// ── #913: adapter must not fabricate `done` without an orchestrator ──
+
+test("runQueue with no orchestrator is a no-op: no entry marked done, board unchanged (#913)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-noorch-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "queue:\n  projectNumber: 7\n");
+    const queue = {
+      version: 1,
+      entries: [createEntry(911, "issue"), createEntry(909, "issue"), createEntry(912, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    const moves = [];
+    // No `runEntry` supplied — exactly the CLI default path that fabricated done.
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: false,
+      queueBoardSyncDependencies: {
+        moveQueueItem: async (args) => {
+          moves.push({ ...args });
+          return { ok: true, item: { newColumn: args.toColumn } };
+        },
+      },
+    });
+
+    assert.equal(result.noop, true);
+    assert.equal(result.reason, "no-orchestrator");
+    assert.deepEqual(result.results, []);
+    // Board columns untouched — not a single move was issued.
+    assert.equal(moves.length, 0);
+    // Every entry left exactly where it was; none fabricated to done.
+    for (const e of result.queue.entries) {
+      assert.equal(e.status, "queued");
+      assert.equal(e.pr, null);
+      assert.equal(e.runId, null);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue reflects a real merged-PR terminal signal to Done (#913 legit path)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-merged-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "queue:\n  projectNumber: 7\n");
+    const queue = { version: 1, entries: [createEntry(101, "issue")] };
+    await writeQueue(dir, queue);
+
+    const moves = [];
+    // An orchestrator supplies a verifiable terminal signal (PR) and merge is
+    // authorized — the adapter correctly reflects that to Done.
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async () => ({ ok: true, pr: 555 }),
+      queueBoardSyncDependencies: {
+        moveQueueItem: async (args) => {
+          moves.push({ ...args });
+          return { ok: true, item: { newColumn: args.toColumn } };
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.queue.entries[0].status, "done");
+    assert.equal(moves[moves.length - 1].toColumn, "Done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("runQueue reorders ready entries by board Next Up order", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-order-"));
   try {

@@ -57,6 +57,28 @@ export async function runQueue(repoRoot, repo, options = {}) {
   const opts = { ...DEFAULT_QUEUE_DRIVER_OPTIONS, ...options };
   const queue = await readQueue(repoRoot);
 
+  // Data-integrity guard (#913): this driver is a deterministic ADAPTER over the
+  // board, not the orchestration harness. Completion (`done` / move to Done) may
+  // only ever REFLECT a real terminal signal supplied by an orchestrator via
+  // `runEntry` (e.g. a merged PR). With no `runEntry` wired in the current
+  // harness there is nothing that can produce a verifiable terminal state, so
+  // the run MUST be a no-op: leave every entry and board column untouched and
+  // report the reason. Previously the missing-orchestrator path fell back to a
+  // fabricated `{ ok: true, pr: null }` per entry, which silently marked an
+  // entire Next Up `done` and moved it to Done without any work happening.
+  if (typeof opts.runEntry !== "function") {
+    return {
+      ok: true,
+      noop: true,
+      reason: "no-orchestrator",
+      message:
+        "queue run is a deterministic adapter with no orchestrator wired (no runEntry); " +
+        "leaving board columns unchanged. Items move to Done only on a real terminal signal.",
+      results: [],
+      queue,
+    };
+  }
+
   // Config-driven loop-state → board-column mapping (#793, AC1/AC3). Loaded
   // once per run; resolves logical columns to configured display names, with
   // the AC1 defaults when no `queue.statusColumns`/`queue.stateColumnMap` is set.
@@ -135,9 +157,9 @@ export async function runQueue(repoRoot, repo, options = {}) {
     await syncColumn(entry.target, columnFor("implementation"));
 
     try {
-      const entryResult = opts.runEntry
-        ? await opts.runEntry(entry, repo, opts)
-        : { ok: true, pr: null };
+      // runEntry is guaranteed a function here (guarded at function entry):
+      // the adapter never fabricates a terminal result for an undispatched item.
+      const entryResult = await opts.runEntry(entry, repo, opts);
 
       if (entryResult.ok) {
         if (entryResult.pr) {
