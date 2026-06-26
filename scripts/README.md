@@ -70,7 +70,7 @@ Failure behavior:
 
 ### `scripts/github/create-pr.mjs`
 
-Canonical wrapper around `gh pr create`. Every PR opened through this tool is ALWAYS a draft and ALWAYS self-assigned. Never call raw `gh pr create` to open a PR. (`dev-loops pr create` dispatches here; the legacy `dev-loops pr create-draft` subcommand still works as a deprecated alias.)
+Canonical wrapper around `gh pr create`. Every PR opened through this tool is ALWAYS a draft and is always assigned — self-assigned by default (`--assignee @me` when none is given), while still honoring an explicit `--assignee <login>`. Never call raw `gh pr create` to open a PR. (`dev-loops pr create` dispatches here; the legacy `dev-loops pr create-draft` subcommand still works as a deprecated alias.)
 
 Usage:
 - `node scripts/github/create-pr.mjs [gh pr create args...]`
@@ -78,7 +78,7 @@ Usage:
 
 Contract:
 - injects exactly one `--draft` when the caller did not already supply it (draft is the only mode)
-- defaults `--assignee @me` when no `--assignee` is provided (always self-assigned); honors an explicit `--assignee <login>`
+- self-assigns by default (defaults `--assignee @me` when no `--assignee` is provided); honors an explicit `--assignee <login>` when one is given
 - rejects `--ready` before invoking `gh`; use `gh pr ready` later after draft-gate approval
 - forwards every other argument to `gh pr create` unchanged and in order
 - preserves the underlying `gh pr create` stdout, stderr, and exit code without wrapping success output

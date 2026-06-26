@@ -20,7 +20,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **PR self-assignment is now mechanically enforced** (#894). The draft-PR wrapper is renamed `scripts/github/create-draft-pr.mjs` → `scripts/github/create-pr.mjs` (`dev-loops pr create-draft` → `dev-loops pr create`, with the old subcommand kept as a deprecated alias). It now defaults `--assignee @me` when no `--assignee` is given, so every PR opened through the canonical path is ALWAYS a draft and ALWAYS self-assigned — closing the silent gap where unassigned PRs (e.g. #889, #892, #893) missed the owner's assignee inbox. A new contract guard (`test/contracts/canonical-pr-creation-contract.test.mjs`) fails if any skill/agent procedure doc instructs opening a PR with raw `gh pr create`.
+- **PR self-assignment is now mechanically enforced** (#894). The draft-PR wrapper is renamed `scripts/github/create-draft-pr.mjs` → `scripts/github/create-pr.mjs` (`dev-loops pr create-draft` → `dev-loops pr create`, with the old subcommand kept as a deprecated alias). It now defaults `--assignee @me` when no `--assignee` is given (while still honoring an explicit `--assignee <login>`), so every PR opened through the canonical path is ALWAYS a draft and is always assigned — self-assigned by default — closing the silent gap where unassigned PRs (e.g. #889, #892, #893) missed the owner's assignee inbox. A new contract guard (`test/contracts/canonical-pr-creation-contract.test.mjs`) fails if any skill/agent procedure doc instructs opening a PR with raw `gh pr create`.
 
 ## 0.2.8
 

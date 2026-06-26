@@ -13,7 +13,14 @@ import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
 import test from "node:test";
 
-const fromRepoRoot = (relativePath) => new URL(`../../${relativePath}`, import.meta.url);
+const repoRootUrl = new URL("../../", import.meta.url);
+const fromRepoRoot = (relativePath) => new URL(relativePath, repoRootUrl);
+
+// Stable repo-root-relative path (e.g. `skills/foo/SKILL.md`), so allowlist
+// entries are unambiguous and two files sharing trailing segments can never
+// collide.
+const toRepoRelativePath = (fileUrl) =>
+  decodeURIComponent(fileUrl.pathname).slice(decodeURIComponent(repoRootUrl.pathname).length);
 
 // Directories whose `*.md` procedure docs are subject to the guard.
 const GUARDED_ROOTS = ["skills", "agents"];
@@ -98,7 +105,7 @@ test("no skill/agent procedure doc instructs raw `gh pr create` to open a PR (#8
     }
     for await (const fileUrl of walkMarkdown(rootUrl)) {
       const content = await readFile(fileUrl, "utf8");
-      const relPath = decodeURIComponent(fileUrl.pathname).split("/").slice(-3).join("/");
+      const relPath = toRepoRelativePath(fileUrl);
       const allow = ALLOWLIST[relPath] ?? [];
       const offenders = findRawGhPrCreateInstructions(content, { allow });
       if (offenders.length > 0) {
