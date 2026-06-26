@@ -213,7 +213,7 @@ export async function buildImporterIndex(repoFiles, repoRoot) {
     if (!isSourceFile(file)) continue;
     // Skip minified artifacts: they are stripped from the final bundle anyway and
     // are not meaningful import sources, so reading them here is wasted I/O/memory
-    // on repos with large minified files. (Copilot review)
+    // on repos with large minified files.
     if (/\.min\.[a-z0-9]+$/i.test(file)) continue;
     let source;
     try {
