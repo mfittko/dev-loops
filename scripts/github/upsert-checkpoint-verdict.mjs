@@ -42,14 +42,26 @@ Required:
                                             alternative to --findings-summary
                                             (preserves newlines; takes precedence
                                             when both are present)
-  --findings-json <path>                    Read STRUCTURED consolidated fan-in
-                                            findings from a JSON file (array of
-                                            { angle, verdict?, findings:[{severity,
-                                            summary, file?, line?, disposition?}] }).
-                                            Renders a readable per-angle breakdown
-                                            (newlines preserved); the findings
-                                            summary line carries a single-line
-                                            digest. Takes precedence over
+  --findings-json <path>                    Read STRUCTURED fan-out review
+                                            findings from a JSON file. PRIMARY
+                                            shape is the per-angle review-results
+                                            array (array of { angle, verdict?,
+                                            findings:[{severity, summary, file?,
+                                            line?, disposition?}] } — the same
+                                            per-angle objects that feed
+                                            consolidateFanin). A FLAT per-finding
+                                            array (array of { severity, summary,
+                                            angle?, file?|files?, line?,
+                                            disposition? } — consolidateFanin's
+                                            OUTPUT / toFindingsLogShape) is also
+                                            accepted and is GROUPED by each
+                                            finding's .angle. A non-empty input
+                                            matching NEITHER shape is rejected
+                                            (no silent all-clean). Renders a
+                                            readable per-angle breakdown (newlines
+                                            preserved); the findings summary line
+                                            carries a single-line digest. Takes
+                                            precedence over
                                             --findings-summary/--findings-file for
                                             the rendered body. Intended for
                                             --execution-mode fanout_fanin.
@@ -441,60 +453,163 @@ function sanitizeStructuredInline(value) {
 function sanitizeStructuredCodeSpan(value) {
   return sanitizeStructuredInline(String(value).replace(/`/gu, ""));
 }
-// Normalize the structured per-angle findings input into a deterministic,
-// render-ready shape. Accepts the consolidated fan-in shape:
-//   [{ angle, verdict?, findings: [{ severity, summary, file?, line?, disposition? }], disposition? }]
-// Returns null when there is nothing structural to render (so the caller falls
-// back to the free-text findings summary).
+// Normalize a single finding object into a deterministic render entry, or null
+// when it carries no usable summary.
+function normalizeStructuredFinding(f) {
+  if (!f || typeof f !== "object" || Array.isArray(f)) {
+    return null;
+  }
+  const summary = typeof f.summary === "string" ? f.summary.trim() : "";
+  if (summary.length === 0) {
+    return null;
+  }
+  const entry = {
+    severity: typeof f.severity === "string" ? f.severity.trim() : "",
+    summary,
+  };
+  if (typeof f.file === "string" && f.file.trim().length > 0) {
+    entry.file = f.file.trim();
+  } else if (Array.isArray(f.files)) {
+    // Flat consolidated findings (toFindingsLogShape) carry a `files` array
+    // rather than a single `file`; surface the first entry as the location ref.
+    const file = f.files.find((x) => typeof x === "string" && x.trim().length > 0);
+    if (file) {
+      entry.file = file.trim();
+    }
+  }
+  if (typeof f.line === "number" && Number.isFinite(f.line)) {
+    entry.line = f.line;
+  }
+  if (typeof f.disposition === "string" && f.disposition.trim().length > 0) {
+    entry.disposition = f.disposition.trim();
+  }
+  return entry;
+}
+// Sort findings by severity (must-fix first) for deterministic output,
+// preserving input order within a severity.
+function sortStructuredFindings(findings) {
+  findings.sort(
+    (a, b) =>
+      STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(a.severity)
+      - STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(b.severity),
+  );
+  return findings;
+}
+// Does this item look like a NESTED per-angle entry (consolidateFanin's INPUT
+// shape: { angle, verdict?, findings: [...] })? It must carry a `findings`
+// ARRAY — that, not the presence of an `angle` string, is what distinguishes a
+// per-angle section from a single flat finding.
+function looksLikePerAngleEntry(item) {
+  return Boolean(item) && typeof item === "object" && !Array.isArray(item) && Array.isArray(item.findings);
+}
+// Does this item look like a FLAT per-finding entry (consolidateFanin's OUTPUT /
+// toFindingsLogShape shape: { severity, summary, angle?, file?/files?, ... })? It
+// carries a summary (and typically a severity) but NO nested `findings` array.
+function looksLikeFlatFinding(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return false;
+  }
+  if (Array.isArray(item.findings)) {
+    return false;
+  }
+  return typeof item.summary === "string" && item.summary.trim().length > 0;
+}
+// Build a render-ready per-angle section from a nested entry.
+function buildAngleSectionFromNested(raw) {
+  const angle = typeof raw.angle === "string" ? raw.angle.trim() : "";
+  if (angle.length === 0) {
+    return null;
+  }
+  const findings = [];
+  for (const f of raw.findings) {
+    const entry = normalizeStructuredFinding(f);
+    if (entry) {
+      findings.push(entry);
+    }
+  }
+  sortStructuredFindings(findings);
+  const verdict = typeof raw.verdict === "string" && raw.verdict.trim().length > 0
+    ? raw.verdict.trim()
+    : (findings.length > 0 ? "findings_present" : "clean");
+  return { angle, verdict, findings };
+}
+// Group a FLAT per-finding array into per-angle sections, keyed by each
+// finding's `.angle` field (findings without an angle are grouped under a
+// shared "general" bucket so they are NOT dropped). The verdict for each
+// section is derived from whether it carries findings.
+function groupFlatFindingsByAngle(input) {
+  const order = [];
+  const byAngle = new Map();
+  for (const f of input) {
+    const entry = normalizeStructuredFinding(f);
+    if (!entry) {
+      continue;
+    }
+    const angle = typeof f.angle === "string" && f.angle.trim().length > 0
+      ? f.angle.trim()
+      : "general";
+    if (!byAngle.has(angle)) {
+      byAngle.set(angle, []);
+      order.push(angle);
+    }
+    byAngle.get(angle).push(entry);
+  }
+  const angles = [];
+  for (const angle of order) {
+    const findings = sortStructuredFindings(byAngle.get(angle));
+    angles.push({
+      angle,
+      verdict: findings.length > 0 ? "findings_present" : "clean",
+      findings,
+    });
+  }
+  return angles;
+}
+// Normalize the structured findings input into a deterministic, render-ready
+// per-angle shape. Accepts BOTH recognizable shapes without silently zeroing
+// findings:
+//   1. NESTED per-angle (consolidateFanin INPUT):
+//        [{ angle, verdict?, findings: [{ severity, summary, file?, line?, disposition? }] }]
+//      → rendered one section per angle.
+//   2. FLAT per-finding (consolidateFanin OUTPUT / toFindingsLogShape):
+//        [{ severity, summary, angle?, file?|files?, line?, disposition? }]
+//      → GROUPED by each finding's `.angle` into per-angle sections.
+// Returns null when the input is empty/non-array (caller falls back to the
+// free-text summary). THROWS when the input is non-empty but matches NEITHER
+// shape, so a wrong input shape can never silently render an all-clean verdict.
 function normalizeStructuredFindings(input) {
   if (!Array.isArray(input) || input.length === 0) {
     return null;
   }
-  const angles = [];
-  for (const raw of input) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      continue;
-    }
-    const angle = typeof raw.angle === "string" ? raw.angle.trim() : "";
-    if (angle.length === 0) {
-      continue;
-    }
-    const findingsInput = Array.isArray(raw.findings) ? raw.findings : [];
-    const findings = [];
-    for (const f of findingsInput) {
-      if (!f || typeof f !== "object" || Array.isArray(f)) {
-        continue;
-      }
-      const summary = typeof f.summary === "string" ? f.summary.trim() : "";
-      if (summary.length === 0) {
-        continue;
-      }
-      const entry = {
-        severity: typeof f.severity === "string" ? f.severity.trim() : "",
-        summary,
-      };
-      if (typeof f.file === "string" && f.file.trim().length > 0) {
-        entry.file = f.file.trim();
-      }
-      if (typeof f.line === "number" && Number.isFinite(f.line)) {
-        entry.line = f.line;
-      }
-      if (typeof f.disposition === "string" && f.disposition.trim().length > 0) {
-        entry.disposition = f.disposition.trim();
-      }
-      findings.push(entry);
-    }
-    // Sort findings by severity (must-fix first) for deterministic output,
-    // preserving input order within a severity.
-    findings.sort(
-      (a, b) =>
-        STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(a.severity)
-        - STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(b.severity),
+  const recognizable = input.filter((item) => looksLikePerAngleEntry(item) || looksLikeFlatFinding(item));
+  if (recognizable.length === 0) {
+    throw new Error(
+      "--findings-json input is non-empty but matches neither recognized shape: "
+      + "a per-angle array ([{ angle, verdict?, findings: [...] }]) or a flat "
+      + "per-finding array ([{ severity, summary, angle?, ... }]). Refusing to "
+      + "render an all-clean verdict from unrecognized findings.",
     );
-    const verdict = typeof raw.verdict === "string" && raw.verdict.trim().length > 0
-      ? raw.verdict.trim()
-      : (findings.length > 0 ? "findings_present" : "clean");
-    angles.push({ angle, verdict, findings });
+  }
+  const nestedCount = recognizable.filter(looksLikePerAngleEntry).length;
+  let angles;
+  if (nestedCount > 0) {
+    // Treat as per-angle. Any flat items mixed in are ambiguous; reject rather
+    // than guess (mixing the two shapes is not a supported producer output).
+    if (nestedCount !== recognizable.length) {
+      throw new Error(
+        "--findings-json input mixes per-angle entries (with a nested `findings` "
+        + "array) and flat per-finding entries; supply one shape or the other.",
+      );
+    }
+    angles = [];
+    for (const raw of recognizable) {
+      const section = buildAngleSectionFromNested(raw);
+      if (section) {
+        angles.push(section);
+      }
+    }
+  } else {
+    angles = groupFlatFindingsByAngle(recognizable);
   }
   return angles.length > 0 ? angles : null;
 }
@@ -960,9 +1075,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const candidate = Array.isArray(parsed)
       ? parsed
       : (Array.isArray(parsed?.angles) ? parsed.angles : (Array.isArray(parsed?.findings) ? parsed.findings : null));
-    structuredFindings = normalizeStructuredFindings(candidate);
+    try {
+      structuredFindings = normalizeStructuredFindings(candidate);
+    } catch (err) {
+      throw new Error(`--findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
     if (!structuredFindings) {
-      throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable per-angle findings (expected a non-empty array of { angle, findings } entries)`);
+      throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
     }
   }
   if (options.findingsFile) {

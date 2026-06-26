@@ -2479,6 +2479,126 @@ test("renderGateReviewCommentBody sanitizes structured angle/finding text and su
   assert.equal(parsed.contractComplete, true);
 });
 
+test("renderGateReviewCommentBody renders NESTED per-angle findings input correctly (#898)", async () => {
+  const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: "bad bound", file: "x.mjs", line: 3 }],
+      },
+      { angle: "tests", verdict: "clean", findings: [] },
+    ],
+  });
+  assert.match(body, /\n- `correctness` → findings_present\n/);
+  assert.match(body, /\n {2}- \[must-fix\] bad bound \(`x\.mjs:3`\)\n/);
+  assert.match(body, /\n- `tests` → clean/);
+  assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 1 finding \(see per-angle breakdown below\)\./);
+  const parsed = parseGateReviewCommentMarkerBody(body);
+  assert.ok(parsed);
+  assert.equal(parsed.contractComplete, true);
+});
+
+test("renderGateReviewCommentBody groups FLAT per-finding input by angle without dropping findings (#898)", async () => {
+  const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
+  // This is consolidateFanin's OUTPUT / toFindingsLogShape: a FLAT array where
+  // each finding carries its own `.angle` (and `files`, not `file`). Before the
+  // fix this shape silently rendered every angle clean (findings dropped).
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      { severity: "must-fix", angle: "correctness", summary: "off-by-one", files: ["src/loop.mjs"], disposition: "accepted-for-fix" },
+      { severity: "worth-fixing-now", angle: "correctness", summary: "missing guard" },
+      { severity: "defer", angle: "style", summary: "naming nit" },
+      // A finding without an angle must still be rendered (grouped under "general").
+      { severity: "must-fix", summary: "no-angle finding" },
+    ],
+  });
+  // Findings are NOT dropped: grouped per angle.
+  assert.match(body, /\n- `correctness` → findings_present\n/);
+  assert.match(body, /\n {2}- \[must-fix\] off-by-one \(`src\/loop\.mjs`\) — _accepted-for-fix_\n/);
+  assert.match(body, /\n {2}- \[worth-fixing-now\] missing guard\n/);
+  assert.match(body, /\n- `style` → findings_present\n/);
+  assert.match(body, /\n {2}- \[defer\] naming nit\n/);
+  assert.match(body, /\n- `general` → findings_present\n/);
+  assert.match(body, /\n {2}- \[must-fix\] no-angle finding\n/);
+  // 3 angles (correctness, style, general), 4 findings total — none dropped.
+  assert.match(body, /\*\*Findings summary:\*\* 3 angles reviewed; 4 findings \(see per-angle breakdown below\)\./);
+  const parsed = parseGateReviewCommentMarkerBody(body);
+  assert.ok(parsed);
+  assert.equal(parsed.contractComplete, true);
+});
+
+test("renderGateReviewCommentBody throws on a non-empty unrecognizable structured shape (no silent all-clean) (#898)", () => {
+  assert.throws(
+    () =>
+      renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: "abc1234",
+        verdict: "findings_present",
+        findingsSummary: "ignored",
+        nextAction: "fix",
+        executionMode: "fanout_fanin",
+        // Items carry neither a nested `findings` array nor a `summary` — neither
+        // recognized shape. Must throw, not silently render all-clean.
+        structuredFindings: [{ angle: "correctness", note: "oops" }, { foo: "bar" }],
+      }),
+    /matches neither recognized shape/,
+  );
+});
+
+test("renderGateReviewCommentBody throws when nested and flat shapes are mixed (#898)", () => {
+  assert.throws(
+    () =>
+      renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: "abc1234",
+        verdict: "findings_present",
+        findingsSummary: "ignored",
+        nextAction: "fix",
+        executionMode: "fanout_fanin",
+        structuredFindings: [
+          { angle: "a", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] },
+          { severity: "must-fix", angle: "b", summary: "y" },
+        ],
+      }),
+    /mixes per-angle entries .* and flat per-finding entries/,
+  );
+});
+
+test("upsert-checkpoint-verdict --findings-json rejects an unrecognizable non-empty shape (#898)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-bad-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    // Non-empty array whose items match neither shape (no nested findings, no summary).
+    await writeFile(findingsPath, JSON.stringify([{ angle: "correctness", note: "oops" }]), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /matches neither recognized shape/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict --findings-json renders structured per-angle findings end-to-end (#898)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-"));
   try {
