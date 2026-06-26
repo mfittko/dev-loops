@@ -124,7 +124,7 @@ async function resolvePrNodeId({ repo, pr }, { env, ghCommand }) {
   }
   return { id: prData.id, isDraft: prData.isDraft };
 }
-async function convertPrToDraft({ repo, pr }, { env, ghCommand }) {
+export async function convertPrToDraft({ repo, pr }, { env, ghCommand }) {
   const resolvedPr = await resolvePrNodeId({ repo, pr }, { env, ghCommand });
   if (resolvedPr.isDraft === true) {
     return {
@@ -154,7 +154,7 @@ async function convertPrToDraft({ repo, pr }, { env, ghCommand }) {
     alreadyDraft: false,
   };
 }
-async function markPrReady({ repo, pr }, { env, ghCommand }) {
+export async function markPrReady({ repo, pr }, { env, ghCommand }) {
   const result = await runChild(ghCommand, [
     "pr", "ready", String(pr),
     "--repo", repo,
