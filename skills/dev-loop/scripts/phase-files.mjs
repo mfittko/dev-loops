@@ -13,9 +13,9 @@ export {
   uniqueSortedStrings,
   upsertPhaseIndex,
   writeJson,
-} from "../../../packages/core/src/loop/phase-files.mjs";
+} from "@dev-loops/core/loop/phase-files";
 
-import { runCli } from "../../../packages/core/src/loop/phase-files.mjs";
+import { runCli } from "@dev-loops/core/loop/phase-files";
 
 const invokedAsScript = process.argv[1]
   ? import.meta.url === pathToFileURL(process.argv[1]).href

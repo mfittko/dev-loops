@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Skill shims import `@dev-loops/core` via its package specifier** (#890). `skills/dev-loop/scripts/log-bash-exit-1.mjs` and `phase-files.mjs` previously reached into core through cross-package relative paths (`../../../packages/core/src/...`), which are broken on disk for npm consumers because the published `dev-loops` package ships `skills/` but not `packages/core/`. They now import via the `@dev-loops/core` `exports` map. A contract test guards against reintroducing relative cross-package imports under `skills/`.
 - **Draft-gate deadlock on ready PRs resolved** (#891). Posting a `draft_gate` verdict on a PR that is already ready-for-review (e.g. opened directly as ready) no longer dead-ends. `upsert-checkpoint-verdict` now (a) treats an already-satisfied draft gate as an idempotent no-op instead of a hard error, and (b) when a ready PR still needs clean draft-gate evidence, performs the draft→post→ready transition automatically — preserving the caller's execution mode (`fanout_fanin`), findings, and ledger. This is the fanout-aware analogue of `reconcile-draft-gate` (which only posts inline and so cannot satisfy `requireFanoutEvidence` on the draft gate).
 
 ## 0.2.8
