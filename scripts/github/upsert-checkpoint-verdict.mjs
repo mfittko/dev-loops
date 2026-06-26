@@ -23,7 +23,8 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>]
+const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>]
+The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin.
 Create or update the visible checkpoint verdict comment for a gate/head pair.
 Same-head reruns are idempotent: if a visible marker already exists for the same
 \`gate + headSha\`, this helper updates it in place when correction is needed and
@@ -692,7 +693,7 @@ function renderExecutionModeLine(executionMode, inlineReason) {
   }
   return `**Execution mode:** ${mode}`;
 }
-export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings }) {
+export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, gateEvidenceNote }) {
   const lines = [
     `### Gate review: \`${gate}\``,
     "",
@@ -711,9 +712,16 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
   // with newlines preserved (NOT collapsed to a run-on line).
   const angles = normalizeStructuredFindings(structuredFindings);
   if (angles) {
+    // Build the single-line digest and append the gate-evidence note (parity with
+    // the free-text appendGateEvidenceNote path), so a structured verdict carries
+    // the gate-evidence note (e.g. the round-cap / round-exhaustion fallback note)
+    // on the `**Findings summary:**` line just like a free-text verdict does.
+    // appendGateEvidenceNote keeps this a single, length-bounded line, preserving
+    // the marker/parse contract. The per-angle bullets below are unaffected.
+    const structuredSummary = appendGateEvidenceNote(buildStructuredFindingsDigest(angles), gateEvidenceNote ?? null);
     lines.push(
       "",
-      `**Findings summary:** ${buildStructuredFindingsDigest(angles)}`,
+      `**Findings summary:** ${structuredSummary}`,
       "",
       renderStructuredFindings(angles),
     );
@@ -1128,7 +1136,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // structured render this is the single-line digest (what the marker parser
   // recovers from the `**Findings summary:**` line); otherwise the free-text path.
   const effectiveFindingsSummary = structuredFindings
-    ? buildStructuredFindingsDigest(structuredFindings)
+    ? appendGateEvidenceNote(buildStructuredFindingsDigest(structuredFindings), coordination.gateEvidenceNote ?? null)
     : (options.findingsFile
       ? options.findingsSummary
       : appendGateEvidenceNote(options.findingsSummary, coordination.gateEvidenceNote ?? null));
@@ -1137,6 +1145,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     headSha: canonicalHeadSha,
     findingsSummary: effectiveFindingsSummary,
     structuredFindings,
+    // In structured mode the renderer rebuilds the digest internally and appends
+    // this note, so the rendered `**Findings summary:**` line matches
+    // effectiveFindingsSummary (the value used for the noop/round-trip compare).
+    gateEvidenceNote: coordination.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
   });
   const gateEvidence = selectGateEvidence(evidence, options.gate);

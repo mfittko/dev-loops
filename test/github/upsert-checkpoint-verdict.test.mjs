@@ -2739,6 +2739,135 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
   }
 });
 
+test("upsert-checkpoint-verdict --findings-json structured verdict carries the gateEvidenceNote on the summary line (parity with free-text, #898)", async () => {
+  // Parity check for the Copilot review finding: in structured (--findings-json)
+  // mode the `**Findings summary:**` line must also carry coordination's
+  // gateEvidenceNote (here the round-exhaustion / pre_approval_gate fallback
+  // note), exactly like the free-text appendGateEvidenceNote path. The same PR
+  // state as the free-text round-cap test drives coordination to emit the note.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-note-"));
+  const roundExhaustionNote = "Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.";
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "worth-fixing-now", summary: "minor nit worth noting" }],
+        },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
+        stdout: JSON.stringify({
+          number: 17,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: "abc1234",
+          reviews: [
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "1111111111111111111111111111111111111111" } },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", submittedAt: "2026-05-31T20:05:00Z", commit: { oid: "2222222222222222222222222222222222222222" } },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", submittedAt: "2026-05-31T20:10:00Z", commit: { oid: "3333333333333333333333333333333333333333" } },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", submittedAt: "2026-05-31T20:15:00Z", commit: { oid: "4444444444444444444444444444444444444444" } },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", submittedAt: "2026-05-31T20:20:00Z", commit: { oid: "5555555555555555555555555555555555555555" } },
+          ],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "pr=17"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: '{"headRefOid":"abc1234"}\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([[{
+          id: 91,
+          body: [
+            "### Gate review: `draft_gate`",
+            "",
+            "**Reviewed head SHA:** `abc1234`",
+            "**Verdict:** clean",
+            "",
+            "**Findings summary:** no issues found",
+            "",
+            "**Next action:** mark ready for review",
+          ].join("\n"),
+          html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+          updated_at: "2026-05-31T19:55:00Z",
+        }]])}\n`,
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: [
+          "body=### Gate review: `pre_approval_gate`",
+          "**Execution mode:** fanout_fanin",
+          "- `correctness` → findings_present",
+          // The structured single-line digest carries the gateEvidenceNote.
+          `**Findings summary:** 1 angle reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`,
+        ],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "pre_approval_gate",
+      "--head-sha", "abc1234",
+      "--verdict", "findings_present",
+      "--findings-json", findingsPath,
+      "--next-action", "address findings then re-gate",
+      "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const out = JSON.parse(result.stdout);
+    assert.equal(out.action, "created");
+    assert.equal(out.executionMode, "fanout_fanin");
+
+    // Unit-level parity + round-trip: rendering a structured body with the same
+    // gateEvidenceNote puts the note on the single-line digest AND the marker
+    // parser recovers that exact summary line (parse contract stays intact).
+    const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
+    const expectedSummaryLine = `1 angle reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`;
+    const body = renderGateReviewCommentBody({
+      gate: "pre_approval_gate",
+      headSha: "abc1234",
+      verdict: "findings_present",
+      findingsSummary: "free-text fallback (ignored in structured mode)",
+      nextAction: "address findings then re-gate",
+      executionMode: "fanout_fanin",
+      gateEvidenceNote: roundExhaustionNote,
+      structuredFindings: [
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: "minor nit worth noting" }] },
+      ],
+    });
+    assert.match(body, /\*\*Findings summary:\*\* 1 angle reviewed; 1 finding \(see per-angle breakdown below\)\.; Copilot review rounds exhausted/);
+    // The structured per-angle bullet is unchanged by carrying the note.
+    assert.match(body, /\n- `correctness` → findings_present\n/);
+    const parsed = parseGateReviewCommentMarkerBody(body);
+    assert.ok(parsed, "structured body with gateEvidenceNote must parse via the marker parser");
+    assert.equal(parsed.contractComplete, true);
+    assert.equal(parsed.gate, "pre_approval_gate");
+    assert.equal(parsed.verdict, "findings_present");
+    assert.equal(parsed.findingsSummary, expectedSummaryLine);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict records executionMode and warns on inline, stays clean on fanout", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-execmode-"));
   try {
