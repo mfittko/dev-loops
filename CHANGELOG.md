@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **`queue run` no longer fabricates `done` for undispatched items** (#913, data-integrity). The queue driver is a deterministic adapter over the board, not the orchestration harness — but its missing-orchestrator path fell back to a per-entry `{ ok: true, pr: null }`, which silently marked every `Next Up` item `done` and moved it to **Done** with `pr: null`/`runId: null` in ~1s without any work happening (a single resolve pass would "complete" an entire backlog untouched). The driver now requires a verifiable terminal signal (an orchestrator-supplied result, e.g. a merged PR) before reflecting an item to Done; with no orchestrator wired (`runEntry`) in the current harness, `dev-loops queue run` is a no-op that leaves every board column unchanged and reports `reason: "no-orchestrator"`. The legit reflect path (real merged PR → Done) is preserved.
+
 ### Changed
 
 - **Queue management surfaced under `dev-loops queue`** (#912). The queue board management commands (`add`, `list`, `reorder`, `move`, `sync-status`, `archive-done`, `ensure`) are now discoverable and runnable under `dev-loops queue <sub>` alongside the existing `queue run` — `dev-loops queue --help` lists them all with one-line descriptions. They delegate to the same `scripts/projects/*.mjs` implementations; `dev-loops project <sub>` is retained as a back-compat alias group (lowest-churn: the routing table is data-driven, so `queue` reuses the existing script mappings). Flag consistency: `queue add` now accepts `--column <name>` for the Status column (matching `queue list`), with `--status <name>` kept as a back-compat alias. `move`/`sync-status` keep their distinct `--to-column`. Removes the only reason to hand-write `gh api graphql` for queue work.
