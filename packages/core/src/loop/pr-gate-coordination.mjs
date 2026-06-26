@@ -479,6 +479,11 @@ function buildResult({
  * @param {number} params.copilotReviewRoundCount
  * @param {number|null} params.maxCopilotRounds
  * @param {boolean} params.sameHeadCleanConverged
+ * @param {boolean} [params.roundCapCleanFallback=false] - interpreter resolved the
+ *   round-cap clean fallback (#896): rounds exhausted + clean threads + green CI on
+ *   the current head, including a post-cap head Copilot has not (and will not)
+ *   re-review. No further Copilot round is permitted, so the formal-request guard
+ *   must not fire — the pre_approval_gate reviews the post-cap head (per #848).
  * @param {string} params.gateBoundary - current gate boundary
  * @returns {boolean}
  */
@@ -488,6 +493,7 @@ export function shouldGuardCopilotReviewRequest({
   copilotReviewEverFormallyRequested = false,
   maxCopilotRounds = null,
   sameHeadCleanConverged = false,
+  roundCapCleanFallback = false,
   gateBoundary,
 }) {
   const gateBoundariesRequiringCopilotFormalRequest = new Set([
@@ -513,12 +519,17 @@ export function shouldGuardCopilotReviewRequest({
   if (copilotReviewEverFormallyRequested) {
     return false;
   }
-  // Round-cap clean fallback: exhausted rounds + clean converged
-  // does not require a formal re-request.
+  // Round-cap clean fallback: exhausted rounds + clean converged does not require
+  // a formal re-request. This covers two shapes of "clean at the cap":
+  //  - sameHeadCleanConverged: the current head itself carries a clean Copilot review;
+  //  - roundCapCleanFallback (#896): the head is clean (zero unresolved threads + green
+  //    CI) but Copilot has NOT reviewed THIS head (e.g. a post-cap commit). No further
+  //    Copilot round is permitted, so forcing a formal request would dead-end the loop;
+  //    the pre_approval_gate reviews the post-cap head instead (per #848).
   const roundCapReached = maxCopilotRounds !== null
     && typeof copilotReviewRoundCount === "number"
     && copilotReviewRoundCount >= maxCopilotRounds;
-  if (roundCapReached && sameHeadCleanConverged) {
+  if (roundCapReached && (sameHeadCleanConverged || roundCapCleanFallback)) {
     return false;
   }
   return true;
@@ -1262,6 +1273,152 @@ function evaluatePrGateCoordinationCore(input = {}) {
       mergeStateStatus,
       conflictFiles,
       gateEvidenceNote: roundCapReached ? roundExhaustionGateEvidenceNote : null,
+    copilotReviewRoundCount,
+    });
+  }
+
+  // Round-cap clean fallback (#896, #848): the Copilot review round cap is
+  // exhausted and the current head is clean (zero unresolved threads + green CI)
+  // — including a POST-CAP head Copilot has not (and will not) re-review, since
+  // no further Copilot round is permitted. Re-requesting review is illegal here,
+  // so this MUST NOT dead-end at READY_TO_REREQUEST_REVIEW. It routes to the
+  // pre_approval_gate, which reviews the post-cap head itself (per #848). The CI
+  // guards below still hold (failing / credibly-green CI blocks), and conflicts /
+  // blocked states are handled earlier, so genuinely-blocked states still forbid
+  // pre_approval. Mirrors LOW_SIGNAL_CONVERGED routing with round-cap reasoning.
+  if (effectiveLifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK) {
+    if (ciStatus === "failure" || ciStatus === "crediblyGreen") {
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+      pushUnique(forbiddenActions, postDraftForbidden);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: STATE.BLOCKED_NEEDS_USER_DECISION,
+        loopDisposition: DISPOSITION.BLOCKED,
+        gateBoundary: PR_CHECKPOINT.BLOCKED,
+        draftGateAlreadySatisfied: true,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        reason: ciStatus === "crediblyGreen"
+          ? "The Copilot round cap is exhausted, but the current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
+          : "The Copilot round cap is exhausted, but the current head still has failing CI, so gate progression remains blocked until the failing checks are fixed and revalidated.",
+        mergeStateStatus,
+        conflictFiles,
+          refinementArtifact,
+      });
+    }
+    if (ciStatus === "pending" || ciStatus === "none") {
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_CI]);
+      pushUnique(forbiddenActions, postDraftForbidden);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: STATE.WAITING_FOR_CI,
+        loopDisposition: DISPOSITION.PENDING,
+        gateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+        draftGateAlreadySatisfied: true,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
+        reason: "The Copilot round cap is exhausted, but the current head does not yet have green or credibly green CI, so `pre_approval_gate` remains illegal until CI settles.",
+        mergeStateStatus,
+        conflictFiles,
+          refinementArtifact,
+      });
+    }
+    if (preApprovalGate.currentHeadClean) {
+      const titleMarkers = findBlockingTitleMarkers(prTitle);
+      if (titleMarkers.length > 0) {
+        return buildTitleMarkerBlockedResult({
+          input,
+          currentHeadSha,
+          draftGateAlreadySatisfied: true,
+          draftGate,
+          preApprovalGate,
+          mergeStateStatus,
+          conflictFiles,
+          markers: titleMarkers,
+          refinementArtifact,
+        });
+      }
+      if (requireRetrospectiveGate) {
+        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint);
+        if (!retrospectiveGate.approved) {
+          return buildRetrospectiveGatePendingResult({
+            input,
+            currentHeadSha,
+            draftGateAlreadySatisfied: true,
+            draftGate,
+            preApprovalGate,
+            mergeStateStatus,
+            conflictFiles,
+            reason: `Merge remains blocked: retrospective_gate_pending. ${retrospectiveGate.reason}`,
+            refinementArtifact,
+          });
+        }
+      }
+
+      // Round-cap clean fallback is accepted as the draft-gate equivalent (#587),
+      // so a clean pre_approval_gate at the cap reaches final approval even without
+      // separate clean draft_gate evidence.
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL]);
+      pushUnique(forbiddenActions, [
+        PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+        PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+        PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+        PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+      ]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: effectiveLifecycleState,
+        loopDisposition: loopDisposition ?? DISPOSITION.CLEAN_CONVERGED,
+        gateBoundary: PR_CHECKPOINT.FINAL_APPROVAL_READY,
+        draftGateAlreadySatisfied: true,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+        reason: `Round-cap clean fallback accepted as draft gate equivalent (${copilotReviewRoundCount}/${maxCopilotRounds} rounds, zero unresolved threads, ${ciStatus === "crediblyGreen" ? "credibly green" : "green"} CI). The current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`,
+        mergeStateStatus,
+        conflictFiles,
+          refinementArtifact,
+      });
+    }
+    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE]);
+    pushUnique(forbiddenActions, [
+      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+    ]);
+    return buildResult({
+      repo: input.repo ?? null,
+      pr: Number.isInteger(input.pr) ? input.pr : null,
+      currentHeadSha,
+      lifecycleState: effectiveLifecycleState,
+      loopDisposition: loopDisposition ?? DISPOSITION.CLEAN_CONVERGED,
+      gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+      draftGateAlreadySatisfied: true,
+      draftGate,
+      preApprovalGate,
+      allowedNextActions,
+      forbiddenActions,
+      nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+      reason: `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${ciStatus === "crediblyGreen" ? "credibly green" : "green"} CI, so \`pre_approval_gate\` fallback is now the next legal boundary (it reviews the current post-cap head; no further Copilot re-request is permitted).`,
+      mergeStateStatus,
+      conflictFiles,
+      gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds }),
     copilotReviewRoundCount,
     });
   }

@@ -6,7 +6,9 @@ import {
   isCopilotLogin,
   isDirectCliRun,
   parseReviewThreads,
+  resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
+  summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
@@ -121,7 +123,7 @@ function parseRequestedReviewersPayload(text) {
     requested: users.some((user) => isCopilotLogin(user?.login)),
   };
 }
-function parseReviewsPayload(text) {
+function parseReviewsPayload(text, { draftGateResetAtMs = null } = {}) {
   let payload;
   try {
     payload = JSON.parse(text);
@@ -131,7 +133,10 @@ function parseReviewsPayload(text) {
   const headSha = typeof payload?.headRefOid === "string" && payload.headRefOid.trim().length > 0
     ? payload.headRefOid.trim()
     : null;
-  const reviewSummary = summarizeCopilotReviews(payload?.reviews, { headSha });
+  // Apply the draft-gate round reset so the completed round count matches what
+  // detect-pr-gate-coordination-state computes (#896): when the draft gate has
+  // re-passed clean on an earlier head, only reviews after that re-pass count.
+  const reviewSummary = summarizeCopilotReviews(payload?.reviews, { headSha, draftGateResetAtMs });
   return {
     prData: payload,
     headSha,
@@ -166,6 +171,51 @@ async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghComman
   }
   return parseReviewsPayload(result.stdout);
 }
+
+// Re-derive the completed Copilot round count with the draft-gate round reset
+// applied, mirroring detect-pr-gate-coordination-state so both scripts agree on the
+// completed count and therefore on round-cap-reached (#896). A clean draft_gate
+// re-pass on an earlier head resets the count, so post-reset reviews must not be
+// counted toward the cap.
+//
+// Queried lazily — only when the raw (un-reset) count has already hit the cap — so
+// the common (under-cap) request path keeps its existing gh-call contract and adds
+// no API round-trip. Uses a single issue-comments fetch (the same source the gate
+// detector uses for the latest clean draft_gate marker), not the full checkpoint-
+// evidence pipeline, to keep the added surface minimal. Best-effort: a fetch failure
+// falls back to the raw count, so the cap is never silently disabled.
+async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh" } = {}, before) {
+  try {
+    const currentHeadSha = typeof before?.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
+      ? before.prData.headRefOid.trim()
+      : null;
+    const result = await runChild(
+      ghCommand,
+      ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
+      env,
+    );
+    if (result.code !== 0) {
+      return before.completedCopilotReviewRounds ?? 0;
+    }
+    let comments;
+    try {
+      const payload = JSON.parse(result.stdout);
+      comments = Array.isArray(payload) ? payload.flat() : [];
+    } catch {
+      return before.completedCopilotReviewRounds ?? 0;
+    }
+    const gateSummary = summarizeGateReviewComments(comments);
+    const draftGateResetAtMs = resolveDraftGateRoundResetMs({ draftGate: gateSummary?.draft_gate, currentHeadSha });
+    if (draftGateResetAtMs == null) {
+      return before.completedCopilotReviewRounds ?? 0;
+    }
+    const adjusted = parseReviewsPayload(JSON.stringify(before.prData ?? {}), { draftGateResetAtMs });
+    return adjusted.completedCopilotReviewRounds ?? 0;
+  } catch {
+    return before.completedCopilotReviewRounds ?? 0;
+  }
+}
+
 async function fetchCopilotReviewState(options, runtime) {
   const requestedReviewers = await fetchRequestedReviewers(options, runtime);
   const reviews = await fetchCopilotReviewIds(options, runtime);
@@ -434,7 +484,18 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
     }
   } catch {
   }
-  if ((before.completedCopilotReviewRounds ?? 0) >= maxRounds
+  // Reconcile the completed-round count with detect-pr-gate-coordination-state (#896):
+  // when the raw count has reached the cap, re-derive it with the draft-gate round
+  // reset applied. A clean draft_gate re-pass on an earlier head resets the count, so
+  // a post-reset PR that detect reports as under-cap must NOT be refused here as
+  // cap-reached. Only query checkpoint evidence on this (at/over-cap) path.
+  let completedRounds = before.completedCopilotReviewRounds ?? 0;
+  if (completedRounds >= maxRounds
+      && !before.requested
+      && !before.hasPendingReviewOnCurrentHead) {
+    completedRounds = await resolveDraftGateAdjustedRounds(options, { env, ghCommand }, before);
+  }
+  if (completedRounds >= maxRounds
       && !before.requested
       && !before.hasPendingReviewOnCurrentHead) {
     if (!options.forceRerequestReview) {
@@ -451,9 +512,9 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
           repo: options.repo,
           pr: options.pr,
           reviewer: "Copilot",
-          completedRounds: before.completedCopilotReviewRounds,
+          completedRounds,
           maxRounds,
-          detail: `Round cap of ${maxRounds} reached with ${before.completedCopilotReviewRounds} completed rounds. No further re-requests will be made.`,
+          detail: `Round cap of ${maxRounds} reached with ${completedRounds} completed rounds. No further re-requests will be made.`,
         };
       }
     }
@@ -471,8 +532,8 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
         repo: options.repo,
         pr: options.pr,
         reviewer: "Copilot",
-        detail: `Round cap of ${maxRounds} reached with ${before.completedCopilotReviewRounds} completed rounds. --force-rerequest-review was supplied but commit SHA data is unavailable, so change-since-last-review could not be evaluated.`,
-        completedRounds: before.completedCopilotReviewRounds,
+        detail: `Round cap of ${maxRounds} reached with ${completedRounds} completed rounds. --force-rerequest-review was supplied but commit SHA data is unavailable, so change-since-last-review could not be evaluated.`,
+        completedRounds,
         maxRounds,
       };
     }
@@ -484,7 +545,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
         pr: options.pr,
         reviewer: "Copilot",
         detail: "No changes since last Copilot review. --force-rerequest-review requires new commits on the PR head.",
-        completedRounds: before.completedCopilotReviewRounds,
+        completedRounds,
         maxRounds,
       };
     }

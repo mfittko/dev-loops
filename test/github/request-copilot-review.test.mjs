@@ -944,6 +944,12 @@ test("request-copilot-review --force-rerequest-review allows re-request when cap
         stdout: '{"headRefOid":"newsha","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}},{"id":"r-2","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}},{"id":"r-3","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha3"}},{"id":"r-4","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha4"}},{"id":"r-5","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha5"}}]}\n',
       },
       {
+        // #896: cap reached on the raw count → re-derive with the draft-gate round
+        // reset. No clean draft_gate comment here, so the count is unchanged (5).
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: "[[]]\n",
+      },
+      {
         assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
@@ -986,6 +992,12 @@ test("request-copilot-review --force-rerequest-review refuses when cap reached a
         // 5 reviews, last review commit.oid matches current headRefOid ("currentsha")
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
         stdout: '{"headRefOid":"currentsha","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}},{"id":"r-2","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}},{"id":"r-3","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha3"}},{"id":"r-4","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha4"}},{"id":"r-5","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"currentsha"}}]}\n',
+      },
+      {
+        // #896: cap reached on the raw count → re-derive with the draft-gate round
+        // reset. No clean draft_gate comment here, so the count is unchanged (5).
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: "[[]]\n",
       },
     ]);
 

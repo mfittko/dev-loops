@@ -296,6 +296,117 @@ test("round-cap exhaustion opens the pre-approval gate window even without a cur
   assert.match(result.reason, /pre_approval_gate/i);
 });
 
+// #896: a post-cap commit leaves the head unreviewed by Copilot. The interpreter
+// resolves ROUND_CAP_CLEAN_FALLBACK (clean threads + green CI at the cap), and the
+// coordinator must route that to the pre_approval_gate — which reviews the post-cap
+// head itself (#848) — NOT dead-end at a rerequest the round cap forbids.
+test("round_cap_clean_fallback routes a post-cap clean head to pre_approval_gate, not a rerequest dead-end (#896)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 892,
+    currentHeadSha: "ef84bca2deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    // post-cap head Copilot never reviewed → not same-head-clean-converged
+    sameHeadCleanConverged: false,
+    ciStatus: "success",
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    // draft_gate evidence on an earlier head (round-cap clean fallback is the
+    // draft-gate equivalent, #587); pre_approval not yet run on the new head.
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.lifecycleState, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  // The round cap forbids any further Copilot (re-)request from this state.
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  assert.equal(result.draftGateAlreadySatisfied, true);
+  assert.match(result.reason, /round limit is exhausted/i);
+  assert.match(result.reason, /pre_approval_gate/i);
+});
+
+test("round_cap_clean_fallback with clean current-head pre_approval reaches final approval (#896)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 892,
+    currentHeadSha: "ef84bca2deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: false,
+    ciStatus: "success",
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: true, headSha: "ef84bca2", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "ef84bca2", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+  // round-cap clean fallback is the draft-gate equivalent (#587): no separate
+  // clean draft_gate evidence required.
+  assert.equal(result.draftGateAlreadySatisfied, true);
+  assert.match(result.reason, /round-cap clean fallback/i);
+});
+
+test("round_cap_clean_fallback still blocks on failing CI — genuinely-blocked states hold (#896)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 892,
+    currentHeadSha: "ef84bca2deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: false,
+    ciStatus: "failure",
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+// #896: the formal-request guard must not fire for a round-cap clean fallback —
+// a post-cap clean head Copilot will not re-review. sameHeadCleanConverged is false
+// here (Copilot did not review THIS head), so the pre-#896 escape would not apply;
+// the explicit roundCapCleanFallback signal carries it.
+test("guard returns false for round-cap clean fallback even without same-head clean converged (#896)", () => {
+  assert.equal(shouldGuardCopilotReviewRequest({
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    sameHeadCleanConverged: false,
+    roundCapCleanFallback: true,
+    gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  }), false);
+});
+
+// Guard backward-compat: without the roundCapCleanFallback signal and without
+// same-head clean convergence, the guard still fires at the cap (a not-clean cap
+// head must still get a formal request path; #896 must not blanket-disable it).
+test("guard still fires at the cap without a clean-fallback signal (#896 backward compat)", () => {
+  assert.equal(shouldGuardCopilotReviewRequest({
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    sameHeadCleanConverged: false,
+    roundCapCleanFallback: false,
+    gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  }), true);
+});
+
 test("missing ciStatus fails closed to wait_for_ci instead of reopening gate progression", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,
