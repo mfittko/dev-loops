@@ -485,13 +485,20 @@ function normalizeStructuredFinding(f) {
   }
   return entry;
 }
-// Sort findings by severity (must-fix first) for deterministic output,
-// preserving input order within a severity.
+// Map a severity to its sort rank. Known severities follow
+// STRUCTURED_FINDINGS_SEVERITY_ORDER (must-fix → worth-fixing-now → defer);
+// unknown/missing severities map to a LARGE rank so they sort LAST, never
+// before must-fix. (indexOf alone would give an unknown severity rank -1,
+// floating it ABOVE must-fix and hiding the highest-priority items below it.)
+function severitySortRank(severity) {
+  const idx = STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(severity);
+  return idx === -1 ? STRUCTURED_FINDINGS_SEVERITY_ORDER.length : idx;
+}
+// Sort findings by severity (must-fix first, unknown/missing last) for
+// deterministic output, preserving input order within a severity.
 function sortStructuredFindings(findings) {
   findings.sort(
-    (a, b) =>
-      STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(a.severity)
-      - STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(b.severity),
+    (a, b) => severitySortRank(a.severity) - severitySortRank(b.severity),
   );
   return findings;
 }
@@ -514,12 +521,14 @@ function looksLikeFlatFinding(item) {
   }
   return typeof item.summary === "string" && item.summary.trim().length > 0;
 }
-// Build a render-ready per-angle section from a nested entry.
+// Build a render-ready per-angle section from a nested entry. A missing/blank
+// angle is NOT dropped — its findings still matter for the verdict — so it is
+// rendered under a `general` fallback label (consistent with the flat-grouping
+// angleless→`general` bucket). Dropping it would let a non-empty structured
+// payload silently degrade to the free-text path and hide findings.
 function buildAngleSectionFromNested(raw) {
-  const angle = typeof raw.angle === "string" ? raw.angle.trim() : "";
-  if (angle.length === 0) {
-    return null;
-  }
+  const trimmedAngle = typeof raw.angle === "string" ? raw.angle.trim() : "";
+  const angle = trimmedAngle.length > 0 ? trimmedAngle : "general";
   const findings = [];
   for (const f of raw.findings) {
     const entry = normalizeStructuredFinding(f);
@@ -581,8 +590,15 @@ function normalizeStructuredFindings(input) {
   if (!Array.isArray(input) || input.length === 0) {
     return null;
   }
-  const recognizable = input.filter((item) => looksLikePerAngleEntry(item) || looksLikeFlatFinding(item));
-  if (recognizable.length === 0) {
+  // A gate verdict comment must NEVER silently hide/drop findings. If ANY item
+  // in a non-empty payload is neither a recognizable per-angle entry nor a
+  // recognizable flat finding, THROW rather than filter-and-proceed — an
+  // unrecognized item (producer drift, malformed entry) could otherwise carry a
+  // dropped finding the reviewer never sees.
+  const unrecognized = input.filter(
+    (item) => !looksLikePerAngleEntry(item) && !looksLikeFlatFinding(item),
+  );
+  if (unrecognized.length === input.length) {
     throw new Error(
       "--findings-json input is non-empty but matches neither recognized shape: "
       + "a per-angle array ([{ angle, verdict?, findings: [...] }]) or a flat "
@@ -590,26 +606,32 @@ function normalizeStructuredFindings(input) {
       + "render an all-clean verdict from unrecognized findings.",
     );
   }
-  const nestedCount = recognizable.filter(looksLikePerAngleEntry).length;
+  if (unrecognized.length > 0) {
+    throw new Error(
+      "--findings-json input contains "
+      + `${unrecognized.length} of ${input.length} item(s) that match neither a `
+      + "per-angle entry (with a nested `findings` array) nor a flat per-finding "
+      + "entry (with a non-empty `summary`). Refusing to silently drop them from a "
+      + "gate verdict; fix the producer or remove the malformed entries.",
+    );
+  }
+  const nestedCount = input.filter(looksLikePerAngleEntry).length;
   let angles;
   if (nestedCount > 0) {
     // Treat as per-angle. Any flat items mixed in are ambiguous; reject rather
     // than guess (mixing the two shapes is not a supported producer output).
-    if (nestedCount !== recognizable.length) {
+    if (nestedCount !== input.length) {
       throw new Error(
         "--findings-json input mixes per-angle entries (with a nested `findings` "
         + "array) and flat per-finding entries; supply one shape or the other.",
       );
     }
     angles = [];
-    for (const raw of recognizable) {
-      const section = buildAngleSectionFromNested(raw);
-      if (section) {
-        angles.push(section);
-      }
+    for (const raw of input) {
+      angles.push(buildAngleSectionFromNested(raw));
     }
   } else {
-    angles = groupFlatFindingsByAngle(recognizable);
+    angles = groupFlatFindingsByAngle(input);
   }
   return angles.length > 0 ? angles : null;
 }

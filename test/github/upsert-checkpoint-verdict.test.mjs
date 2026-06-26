@@ -2578,6 +2578,102 @@ test("renderGateReviewCommentBody throws when nested and flat shapes are mixed (
   );
 });
 
+test("renderGateReviewCommentBody sorts unknown/missing severities LAST, never before must-fix (Copilot review)", () => {
+  // Findings arrive in an order that, before the fix, would float the unknown
+  // severity ABOVE must-fix (indexOf gives unknown rank -1). After the fix the
+  // known order (must-fix → worth-fixing-now → defer) leads and unknowns trail.
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          { severity: "speculative", summary: "unknown severity finding" },
+          { severity: "must-fix", summary: "critical finding" },
+          { severity: "", summary: "missing severity finding" },
+          { severity: "worth-fixing-now", summary: "medium finding" },
+        ],
+      },
+    ],
+  });
+  const order = ["critical finding", "medium finding", "unknown severity finding", "missing severity finding"];
+  let cursor = -1;
+  for (const summary of order) {
+    const idx = body.indexOf(summary);
+    assert.ok(idx > cursor, `"${summary}" should appear after the previous entry (must-fix leads, unknowns trail)`);
+    cursor = idx;
+  }
+  // must-fix must NOT appear after the unknown-severity entry.
+  assert.ok(
+    body.indexOf("critical finding") < body.indexOf("unknown severity finding"),
+    "must-fix must sort before an unknown severity, not be hidden below it",
+  );
+});
+
+test("renderGateReviewCommentBody throws when a non-empty payload mixes recognized and unrecognized items (no silent drop) (Copilot review)", () => {
+  // One recognizable per-angle entry plus one unrecognized item. Before the fix
+  // the unrecognized item was silently filtered out (findings could be hidden).
+  // Now ANY unrecognized item in a non-empty payload throws.
+  assert.throws(
+    () =>
+      renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: "abc1234",
+        verdict: "findings_present",
+        findingsSummary: "ignored",
+        nextAction: "fix",
+        executionMode: "fanout_fanin",
+        structuredFindings: [
+          { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "real finding" }] },
+          { angle: "style", note: "no findings array and no summary" },
+        ],
+      }),
+    /match neither a per-angle entry .* nor a flat per-finding entry/,
+  );
+});
+
+test("renderGateReviewCommentBody renders an angle-less NESTED entry under `general` instead of dropping it (Copilot review)", async () => {
+  const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
+  // A nested entry whose `angle` is missing/blank must NOT be dropped — its
+  // findings still matter. It renders under the `general` fallback label, and a
+  // non-empty structured payload must NOT silently degrade to the free-text path.
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    verdict: "findings_present",
+    findingsSummary: "this free-text must NOT be rendered when structured findings are present",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        // No angle field at all.
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: "angle-less nested finding" }],
+      },
+      {
+        angle: "   ",
+        findings: [{ severity: "worth-fixing-now", summary: "blank-angle nested finding" }],
+      },
+    ],
+  });
+  // Both angle-less entries render under `general` — findings are NOT dropped.
+  assert.match(body, /\n- `general` → findings_present\n/);
+  assert.match(body, /\n {2}- \[must-fix\] angle-less nested finding\n/);
+  assert.match(body, /\n {2}- \[worth-fixing-now\] blank-angle nested finding\n/);
+  // The structured digest is used; the free-text fallback is NOT rendered.
+  assert.match(body, /per-angle breakdown below/);
+  assert.doesNotMatch(body, /must NOT be rendered/);
+  const parsed = parseGateReviewCommentMarkerBody(body);
+  assert.ok(parsed, "structured body must still parse via the marker parser");
+  assert.equal(parsed.contractComplete, true);
+});
+
 test("upsert-checkpoint-verdict --findings-json rejects an unrecognizable non-empty shape (#898)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-bad-"));
   try {
