@@ -1,7 +1,7 @@
 # Tracker-First Story-to-PR Contract
 
 This document defines the adapter-agnostic MVP contract for the tracker-first
-story-to-PR workflow in `pi-dev-loops`.
+story-to-PR workflow in `dev-loops`.
 
 **MVP invariant: one tracker work item → one GitHub PR.**
 
@@ -43,9 +43,9 @@ are out of scope for this slice.
 | PR lifecycle facts | GitHub | Draft / ready-for-review, open / merged / closed, branch, head SHA |
 | PR review and CI facts | GitHub | Reviewer assignments, review states, check-run results, merge status |
 | Decision content | ADR / RFC artifacts (when linked) | Architecture decisions and RFCs referenced from PR body |
-| PR projection and reverse-sync logic | `pi-dev-loops` | Title/body/label generation rules, state mapping, sync triggers |
+| PR projection and reverse-sync logic | `dev-loops` | Title/body/label generation rules, state mapping, sync triggers |
 
-`pi-dev-loops` **does not** become the canonical owner of any business fields.
+`dev-loops` **does not** become the canonical owner of any business fields.
 It provides projection and sync logic only.
 
 ## 3. PR Projection Contract
@@ -234,9 +234,9 @@ This contract is intentionally narrower than the parent epics:
 
 ## 7. Related
 
-- Parent workflow-family epic: [mfittko/pi-dev-loops#17](https://github.com/mfittko/pi-dev-loops/issues/17)
-- Umbrella artifact model epic: [mfittko/pi-dev-loops#19](https://github.com/mfittko/pi-dev-loops/issues/19)
-- This contract (first implementable slice): [mfittko/pi-dev-loops#21](https://github.com/mfittko/pi-dev-loops/issues/21)
+- Parent workflow-family epic: [mfittko/dev-loops#17](https://github.com/mfittko/dev-loops/issues/17)
+- Umbrella artifact model epic: [mfittko/dev-loops#19](https://github.com/mfittko/dev-loops/issues/19)
+- This contract (first implementable slice): [mfittko/dev-loops#21](https://github.com/mfittko/dev-loops/issues/21)
 - Copilot loop state graph: [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md)
 - Reviewer loop state graph: [Reviewer Loop State Graph](../../docs/reviewer-loop-state-graph.md)
 
