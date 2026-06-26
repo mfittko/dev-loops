@@ -6,8 +6,31 @@ two dev-loop gate boundaries: `draft_gate` and `pre_approval_gate`.
 ## Purpose
 
 Both gates share the same execution mechanism: a structured sub-loop that provides
-isolation, fresh-reviewer fan-out, fan-in synthesis, and iterative fix-then-retry.
-Codifying the sub-loop once as a shared contract avoids inconsistent execution.
+isolation, a build-once neutral context bundle, independent-reviewer fan-out,
+fan-in synthesis, and iterative fix-then-retry. Codifying the sub-loop once as a
+shared contract avoids inconsistent execution.
+
+### Execution model: build once, seed many (no fork)
+
+The sub-loop does **not** fork reviewers from a parent agent's loaded context, and
+it does not depend on any fork primitive or the Workflow tool. Instead:
+
+1. A deterministic **context-builder script** (`scripts/github/write-gate-context.mjs`)
+   builds ONE generous, neutral context bundle for the head SHA: the full diff plus
+   a structurally-adjacent code bundle (each changed file's 1-hop import in/out-edges)
+   with size guards. Because it is a script, the bundle is neutral (it cannot
+   editorialize) and deterministic (identical head + diff → identical bundle).
+2. Each per-angle reviewer is an **independent fresh-context Agent** that is **seeded
+   with that identical neutral bundle verbatim** plus its single review angle, and
+   widens only when its angle genuinely needs more. Reviewers never inherit the main
+   (orchestrating) agent's conversation or opinions — that independence is the
+   anti-bias requirement.
+3. Fan-in consolidates the per-angle findings unchanged.
+
+The cost win is **work-dedup**: the diff + adjacent code is built once instead of
+re-derived by every reviewer. That saving is guaranteed regardless of caching; a
+shared-prefix prompt-cache across reviewers is an opportunistic bonus, not a
+requirement.
 
 This contract owns the **execution shape** of gate-review work. It does not own:
 - which review angles a specific gate runs (that stays in the skill)
@@ -47,7 +70,7 @@ but the execution phases are identical.
 Before fanning out reviewers, run a preamble pass that produces review handoff context
 on an isolated checkout:
 
-- fresh context (do not fork the parent session just to share chat history). **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs` at startup and refuse to proceed on contamination. Use `--scope <angle>` so each reviewer writes its own sentinel.
+- fresh context (the reviewer is seeded with the neutral builder artifact + its angle, never the parent session's chat history or state). **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs` at startup and refuse to proceed on contamination. Use `--scope <angle>` so each reviewer writes its own sentinel.
 - `worktree: true` recommended per reviewer/subagent for filesystem isolation; prescribe it but
   do not fail closed if worktrees are unavailable in the current environment
 - the preamble resolves the gate's review angle set: it starts from the configured
@@ -62,20 +85,27 @@ on an isolated checkout:
 - the preamble produces one or more review handoff artifacts (branch, head SHA, PR/issue
   scope, acceptance criteria, touched files, validation posture). The resolved angle set
   and its rationale are written as a deterministic handoff artifact under
-  `tmp/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json` so the fork fan-out phase
+  `tmp/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json` so the fan-out phase
   consumes a stable, auditable briefing per head SHA.
+- the preamble ALSO builds the deterministic **neutral context bundle** ONCE: the full
+  diff (`scope.diffPath`) plus an adjacent-code bundle (`adjacentCode`) containing each
+  changed file and its 1-hop import in/out-edges (callers/callees/imports), with size
+  guards (skip lockfiles/generated/binary/minified; cap per-file bytes; truncate the
+  long tail) recorded in a `stripped`/`truncated`/`missing` manifest for observability.
+  This is the build-once, work-deduped seed handed verbatim to every reviewer; no
+  reviewer re-derives the diff + adjacent code from scratch.
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
   `context-build/validation-and-risks.md`) and synthesize the outputs into the review
   handoff artifacts
 
-### Phase 2 — Fork fan-out: parallel reviewers
+### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
-Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../agents/review.agent.md)), spawned once per resolved angle. Parallelism is capped at `gates.maxFanoutReviewers` (resolved via `resolveMaxFanoutReviewers(config)`, default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
+Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../agents/review.agent.md)), spawned once per resolved angle via the plain Agent tool. Reviewers are **independent and seeded with the identical neutral context bundle verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the loaded context of, the main agent or a sibling reviewer. Parallelism is capped at `gates.maxFanoutReviewers` (resolved via `resolveMaxFanoutReviewers(config)`, default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
 
-- starts in fresh context (do not inherit prior conversation state). **Mandatory:** run `scripts/github/verify-fresh-review-context.mjs --scope <angle>` at startup; refuse to proceed on contamination. Use `--scope` so parallel reviewers in the same working directory do not trigger false contamination from each other's sentinels.
-- receives a concise briefing summary from the preamble handoff artifacts
+- starts in fresh context. **Mandatory:** run `scripts/github/verify-fresh-review-context.mjs --scope <angle>` at startup; refuse to proceed on contamination. Use `--scope` so parallel reviewers in the same working directory do not trigger false contamination from each other's sentinels. Here "fresh" means the reviewer's context is the neutral builder artifact + its angle, and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
+- is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when its single angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph
 - is scoped to exactly one review angle
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
 - runs in an isolated worktree when worktrees are available

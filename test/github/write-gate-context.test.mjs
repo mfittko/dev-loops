@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -590,6 +590,93 @@ test("buildGateContext leaves scope.diffPath null when diffOutput is absent (sti
     );
     assert.equal(result.artifact.scope.diffPath, null);
     assert.deepEqual(result.artifact.scope.changedFiles, ["scripts/a.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// buildGateContext — neutral adjacent-code bundle (#895)
+// ---------------------------------------------------------------------------
+
+test("buildGateContext attaches a deterministic adjacentCode bundle (imports + importers of the changed file)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    // Build a small repo: changed.mjs imports dep.mjs; caller.mjs imports changed.mjs.
+    const files = {
+      "src/changed.mjs": 'import { helper } from "./dep.mjs";\nexport function changed() { return helper(); }\n',
+      "src/dep.mjs": "export function helper() { return 1; }\n",
+      "src/caller.mjs": 'import { changed } from "./changed.mjs";\nchanged();\n',
+    };
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = path.join(repoRoot, rel);
+      await mkdir(path.dirname(abs), { recursive: true });
+      await writeFile(abs, content, "utf8");
+    }
+
+    const config = draftConfig({ dynamicAngles: false });
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: {
+          nameStatusOutput: "M\tsrc/changed.mjs\n",
+          diffOutput: "diff --git a/src/changed.mjs b/src/changed.mjs\n+changed\n",
+        },
+        repo: "owner/repo",
+        pr: 30,
+        headSha: "abc1234567890",
+      },
+      { repoRoot },
+    );
+
+    const bundle = result.artifact.adjacentCode;
+    assert.ok(bundle, "adjacentCode bundle attached");
+    const byPath = Object.fromEntries(bundle.files.map((f) => [f.path, f]));
+    assert.equal(byPath["src/changed.mjs"].role, "changed");
+    assert.equal(byPath["src/dep.mjs"].role, "imports"); // out-edge
+    assert.equal(byPath["src/caller.mjs"].role, "importedBy"); // in-edge
+
+    // Deterministic: a second build produces an identical bundle.
+    const result2 = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: {
+          nameStatusOutput: "M\tsrc/changed.mjs\n",
+          diffOutput: "diff --git a/src/changed.mjs b/src/changed.mjs\n+changed\n",
+        },
+        repo: "owner/repo",
+        pr: 30,
+        headSha: "abc1234567890",
+      },
+      { repoRoot },
+    );
+    assert.equal(JSON.stringify(result2.artifact.adjacentCode), JSON.stringify(bundle));
+
+    // Round-trips on disk.
+    const onDisk = await readGateContext({
+      repo: "owner/repo", pr: 30, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.ok(onDisk.adjacentCode);
+    assert.deepEqual(
+      onDisk.adjacentCode.files.map((f) => f.path).sort(),
+      ["src/caller.mjs", "src/changed.mjs", "src/dep.mjs"],
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext omits adjacentCode when there are no changed files (backward-compatible shape)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const config = draftConfig();
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", repo: "owner/repo", pr: 31, headSha: "abc1234567890" },
+      { repoRoot },
+    );
+    assert.equal(Object.prototype.hasOwnProperty.call(result.artifact, "adjacentCode"), false);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

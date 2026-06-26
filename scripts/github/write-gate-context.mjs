@@ -34,6 +34,7 @@ import { resolveGateAnglesDynamic } from "@dev-loops/core/config";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 
 /**
  * Map the artifact gate name (draft_gate | pre_approval_gate) to the config
@@ -419,7 +420,7 @@ export function parseChangedFiles(nameStatusOutput) {
  * @returns {object}
  */
 export function buildGateContextArtifact(options) {
-  return {
+  const artifact = {
     repo: options.repo,
     pr: options.pr,
     gate: options.gate,
@@ -436,6 +437,13 @@ export function buildGateContextArtifact(options) {
       validationPosture: options.validationPosture ?? null,
     },
   };
+  // ADD (#895): the deterministic, neutral adjacent-code bundle. Only present
+  // when the context-builder computed it — keeps the artifact shape backward
+  // compatible for callers that build the artifact without an adjacency pass.
+  if (options.adjacentCode && typeof options.adjacentCode === "object") {
+    artifact.adjacentCode = options.adjacentCode;
+  }
+  return artifact;
 }
 
 export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
@@ -476,9 +484,15 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string[]} [input.touchedFiles]
  * @param {string|null} [input.acceptanceCriteria]
  * @param {string|null} [input.validationPosture]
+ * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, resolver: object }>}
+ *
+ * The artifact additionally carries a deterministic, neutral `adjacentCode`
+ * bundle (#895) when changed files are present: 1-hop import in/out-edges of the
+ * changed files with size guards + a stripped/truncated manifest. Reviewers are
+ * seeded with this verbatim instead of re-deriving the diff + adjacent code.
  */
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
   const configKey = mapGateToConfigKey(input.gate);
@@ -519,6 +533,29 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
     }
   }
 
+  // Build the deterministic, neutral adjacent-code bundle ONCE (#895): for each
+  // changed source file, include its 1-hop import out-edges (files it imports)
+  // and in-edges (files that import it), with size guards (skip
+  // lockfiles/generated/binary/minified; cap per-file bytes; truncate the long
+  // tail) recorded in a stripped/truncated manifest. Every independent reviewer
+  // is seeded with this identical bundle instead of re-deriving it — work-dedup.
+  // Best-effort: bundle computation must never block the context artifact.
+  let adjacentCode = null;
+  if (changedFiles.length > 0) {
+    try {
+      adjacentCode = await buildAdjacentBundle({
+        changedFiles,
+        repoRoot,
+        maxFileBytes: typeof input.maxFileBytes === "number" && input.maxFileBytes > 0
+          ? input.maxFileBytes
+          : DEFAULT_MAX_FILE_BYTES,
+      });
+    } catch (err) {
+      process.stderr.write(`[gate-context] adjacent-code bundle failed (continuing without adjacentCode): ${err?.message ?? err}\n`);
+      adjacentCode = null;
+    }
+  }
+
   const writeResult = await writeGateContext(
     {
       repo: input.repo,
@@ -531,6 +568,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       touchedFiles: input.touchedFiles ?? [],
       changedFiles,
       diffPath,
+      adjacentCode,
       acceptanceCriteria: input.acceptanceCriteria ?? null,
       validationPosture: input.validationPosture ?? null,
       tmpRoot,

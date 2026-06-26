@@ -117,6 +117,67 @@ test("verify-fresh-review-context --scope re-run with same scope detects contami
   }
 });
 
+// ---------------------------------------------------------------------------
+// RFC-2 reconciliation (#895): the injected neutral builder bundle is the
+// INTENDED seed (allowed), while main-agent / cross-session state bleed still
+// fails closed.
+// ---------------------------------------------------------------------------
+
+test("RFC-2: a reviewer seeded with the neutral gate-context bundle is NOT flagged as contaminated", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    // Simulate the build-once neutral bundle being present in the workspace:
+    // the gate-context artifact + .diff written by write-gate-context.mjs. These
+    // are the INTENDED seed for the reviewer and must NOT count as contamination.
+    const ctxDir = path.join(tmpDir, "tmp", "gate-context", "owner-repo", "pr-1");
+    await mkdir(ctxDir, { recursive: true });
+    await writeFile(
+      path.join(ctxDir, "draft_gate-abc1234.json"),
+      JSON.stringify({ adjacentCode: { files: [] }, scope: { diffPath: "x.diff" } }) + "\n",
+      "utf8",
+    );
+    await writeFile(path.join(ctxDir, "draft_gate-abc1234.diff"), "diff --git a/x b/x\n", "utf8");
+
+    // First scoped-reviewer run in a fresh session: must be fresh despite the
+    // neutral bundle existing on disk.
+    const result = runScript(["--scope", "draft-gate-coverage"], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.fresh, true);
+    assert.equal(output.sentinelCreated, true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("RFC-2: genuine cross-session state bleed (prior reviewer sentinel for the same scope) still fails closed", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    // The neutral bundle is present (allowed)...
+    const ctxDir = path.join(tmpDir, "tmp", "gate-context", "owner-repo", "pr-1");
+    await mkdir(ctxDir, { recursive: true });
+    await writeFile(
+      path.join(ctxDir, "draft_gate-abc1234.json"),
+      JSON.stringify({ adjacentCode: { files: [] } }) + "\n",
+      "utf8",
+    );
+    // ...but a prior reviewer session for the SAME scope already ran (sentinel
+    // present) — that is cross-session state bleed and must fail closed.
+    await writeFile(
+      path.join(tmpDir, "tmp", "checkpoint-context-sentinel-draft-gate-coverage.json"),
+      JSON.stringify({ createdAt: "2026-01-01T00:00:00.000Z", pid: 1, scope: "draft-gate-coverage" }) + "\n",
+      "utf8",
+    );
+    const result = runScript(["--scope", "draft-gate-coverage"], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.fresh, false);
+    assert.ok(output.reason.includes("sentinel already exists"));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("verify-fresh-review-context --scope rejects path traversal", async () => {
   const result = runScript(["--scope", "../../.git/config"]);
   assert.equal(result.status, 2, result.stderr);

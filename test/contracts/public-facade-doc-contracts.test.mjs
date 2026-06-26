@@ -301,9 +301,11 @@ test("checkpoint review chain contract exists and is referenced by both gates", 
     readRepo("skills/copilot-pr-followup/SKILL.md"),
   ]);
 
-  // Contract doc prescribes the 5 sub-loop phases
+  // Contract doc prescribes the 5 sub-loop phases. The fan-out phase describes
+  // independent reviewers seeded with the build-once neutral bundle — NOT a
+  // fork (the honesty fix, #895).
   assert.match(subLoopContract, /context-builder/i);
-  assert.match(subLoopContract, /fork fan-out/i);
+  assert.match(subLoopContract, /Fan-out: independent reviewers/i);
   assert.match(subLoopContract, /fan-in.*synthesis/i);
   assert.match(subLoopContract, /fix/i);
   assert.match(subLoopContract, /repeat until clean/i);
