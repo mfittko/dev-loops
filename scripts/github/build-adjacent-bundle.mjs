@@ -211,6 +211,10 @@ export async function buildImporterIndex(repoFiles, repoRoot) {
   const importers = new Map();
   for (const file of repoFiles) {
     if (!isSourceFile(file)) continue;
+    // Skip minified artifacts: they are stripped from the final bundle anyway and
+    // are not meaningful import sources, so reading them here is wasted I/O/memory
+    // on repos with large minified files. (Copilot review)
+    if (/\.min\.[a-z0-9]+$/i.test(file)) continue;
     let source;
     try {
       source = await readFile(path.resolve(repoRoot, file), "utf8");
