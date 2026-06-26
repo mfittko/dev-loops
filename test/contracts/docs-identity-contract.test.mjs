@@ -3,6 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readdir as fsReaddir, readFile, stat } from "node:fs/promises";
 
+const MARKDOWN_EXTENSIONS = new Set([".md"]);
+// `.github/` carries identity-bearing config (workflow YAML), not just docs. Scan it for the
+// same stale-slug references so the guard's "covers `.github/**`" claim is actually true.
+const GITHUB_EXTENSIONS = new Set([".md", ".yml", ".yaml"]);
+
 import { assert, fromRepoRoot, readRepo, test } from "../imported-assets-helpers.mjs";
 
 // #768: docs-identity guard. v0.3.0 shipped `dev-loops` / `@dev-loops/core` to npm, so the
@@ -19,7 +24,9 @@ const HISTORICAL_ARTIFACT_ALLOWLIST = new Set([
   "docs/phase-a-repo-slug-survey.md",
 ]);
 
-async function collectMarkdownFiles(dir) {
+// Recursively collect files under `dir` whose extension is in `extensions`. Missing directories
+// are skipped gracefully (the readdir error is swallowed and an empty list returned).
+async function collectFiles(dir, extensions) {
   const abs = path.join(repoRoot, dir);
   const out = [];
   let entries;
@@ -31,21 +38,27 @@ async function collectMarkdownFiles(dir) {
   for (const entry of entries) {
     const rel = path.posix.join(dir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...(await collectMarkdownFiles(rel)));
-    } else if (entry.name.endsWith(".md")) {
+      out.push(...(await collectFiles(rel, extensions)));
+    } else if (extensions.has(path.extname(entry.name))) {
       out.push(rel);
     }
   }
   return out;
 }
 
-async function existingDir(dir) {
-  return stat(path.join(repoRoot, dir)).then((s) => s.isDirectory()).catch(() => false);
-}
-
 test("user-facing identity surface carries no stale pi-dev-loops identity reference", async () => {
-  const docDirs = ["skills", ".github", "docs"];
-  const docFiles = (await Promise.all(docDirs.filter(existingDir).map(collectMarkdownFiles))).flat();
+  // Each surface declares the extensions it owns: docs dirs scan Markdown, `.github/` also scans
+  // workflow/config YAML. `collectFiles` already skips missing directories, so no pre-filtering is
+  // needed (the previous `docDirs.filter(existingDir)` was a dead async predicate that filtered
+  // nothing because it returned a Promise).
+  const docDirs = [
+    { dir: "skills", extensions: MARKDOWN_EXTENSIONS },
+    { dir: ".github", extensions: GITHUB_EXTENSIONS },
+    { dir: "docs", extensions: MARKDOWN_EXTENSIONS },
+  ];
+  const docFiles = (
+    await Promise.all(docDirs.map(({ dir, extensions }) => collectFiles(dir, extensions)))
+  ).flat();
   const rootDocs = ["README.md", "AGENTS.md", "extension/README.md"];
   for (const rel of rootDocs) {
     if (await stat(path.join(repoRoot, rel)).then(() => true).catch(() => false)) {
