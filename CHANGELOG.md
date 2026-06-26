@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
 - **Gate fan-out evidence enforcement is now ON by default** (#882, #879, epic #867 final phase). A clean gate verdict requires the gate to have run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA; the pre-merge evidence check fails closed otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`.
 - **Board status auto-syncs on dev-loop transitions** (#883, #874). A linked issue's board Status column is synced on loop transitions (e.g. PR opened → `In Progress`, merged → `Done`) via local `gh` auth — best-effort and non-fatal. Repairs the `move-queue-item` lookup that passed numeric (not string) project/item refs.
 
+### Fixed
+
+- **Skill shims import `@dev-loops/core` via its package specifier** (#890). `skills/dev-loop/scripts/log-bash-exit-1.mjs` and `phase-files.mjs` previously reached into core through cross-package relative paths (`../../../packages/core/src/...`), which are broken on disk for npm consumers because the published `dev-loops` package ships `skills/` but not `packages/core/`. They now import via the `@dev-loops/core` `exports` map. A contract test guards against reintroducing relative cross-package imports under `skills/`.
+
 ## 0.2.8
 
 ### Added
