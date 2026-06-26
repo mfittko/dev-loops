@@ -245,6 +245,80 @@ test("runWatchCycle preserves unresolved_feedback loopDisposition for fix states
   assert.equal(result.watchStatus, undefined);
 });
 
+test("runWatchCycle routes a waiting_for_ci boundary to the provider-agnostic CI watcher", async () => {
+  let copilotWatcherCalled = false;
+  let ciWatchArgs = null;
+
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: ["ready_to_rerequest_review"],
+        nextAction: "Wait for CI checks to complete or become available",
+        snapshot: { repo: "owner/repo", pr: 17, ciStatus: "pending" },
+        loopDisposition: "pending",
+        terminal: false,
+      }),
+      watchCopilotReviewImpl: async () => {
+        copilotWatcherCalled = true;
+        return { ok: true, status: "timeout" };
+      },
+      watchCiStatusImpl: async (args) => {
+        ciWatchArgs = args;
+        return { ok: true, status: "failure", settled: true, ciStatus: "failure", failedChecks: [{ name: "circleci/build" }], headSha: "sha-a", attempts: 1 };
+      },
+    },
+  );
+
+  assert.equal(copilotWatcherCalled, false);
+  assert.equal(ciWatchArgs.repo, "owner/repo");
+  assert.equal(ciWatchArgs.pr, 17);
+  // CI wait path uses the external-healthy-wait policy default (CI-specific
+  // label only changes diagnostics; the effective budget is unchanged).
+  assert.equal(ciWatchArgs.timeoutMs, 1_800_000);
+  assert.equal(result.watchStatus, "failure");
+  assert.equal(result.ciWatch.status, "failure");
+  assert.deepEqual(result.ciWatch.failedChecks, [{ name: "circleci/build" }]);
+  assert.equal(result.cycleDisposition, "needs_followup");
+  assert.equal(result.terminal, false);
+});
+
+test("runWatchCycle keeps a pending CI watch boundary non-terminal", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: ["ready_to_rerequest_review"],
+        nextAction: "Wait for CI checks to complete or become available",
+        snapshot: { repo: "owner/repo", pr: 17, ciStatus: "pending" },
+        loopDisposition: "pending",
+        terminal: false,
+      }),
+      watchCiStatusImpl: async () => ({ ok: true, status: "timeout", settled: false, ciStatus: "pending", failedChecks: [], headSha: "sha-a", attempts: 3 }),
+    },
+  );
+
+  assert.equal(result.watchStatus, "timeout");
+  assert.equal(result.cycleDisposition, "pending");
+  assert.equal(result.terminal, false);
+  // A quiet CI-watch timeout is a HEALTHY_WAIT (mirrors the Copilot-watch
+  // timeout), and the trace records the CI watcher helper + ciWatchArgs.
+  assert.equal(result.contractTrace.stopReason.classification, "healthy_wait");
+  assert.equal(result.contractTrace.waitStrategy.helper, "scripts/github/probe-ci-status.mjs");
+  assert.equal(result.contractTrace.waitStrategy.mode, "persistent_watch");
+  assert.equal(result.contractTrace.waitStrategy.effectiveTimeoutMs, 1_800_000);
+  assert.equal(result.contractTrace.stateRefresh.observedStatus, "timeout");
+  assert.equal(result.contractTrace.orchestration.ciWatchArgs.repo, "owner/repo");
+  assert.equal(result.contractTrace.orchestration.ciWatchArgs.pr, 17);
+  assert.equal(result.contractTrace.orchestration.effectiveWatchArgs.timeoutMs, 1_800_000);
+});
+
 test("runWatchCycle preserves done loopDisposition for stop states without invoking the watcher", async () => {
   let watcherCalled = false;
 
