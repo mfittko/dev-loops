@@ -520,15 +520,55 @@ describe("add-queue-item", () => {
       assert.equal(args.column, "Next Up");
     });
 
-    it("--status is accepted as a back-compat alias and parses to column", () => {
+    it("--status is accepted as a back-compat alias (parsed into args.status)", () => {
       const args = parseCliArgs([...base, "--status", "Next Up"]);
-      assert.equal(args.column, "Next Up");
+      assert.equal(args.status, "Next Up");
+      assert.equal(args.column, undefined);
     });
 
-    it("--column and --status produce the same parsed column", () => {
-      const viaColumn = parseCliArgs([...base, "--column", "In Progress"]);
-      const viaStatus = parseCliArgs([...base, "--status", "In Progress"]);
-      assert.equal(viaColumn.column, viaStatus.column);
+    it("main() resolves the --status alias to the same target column as --column", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, status: "Next Up" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.item.status, "Next Up");
+    });
+
+    it("main() rejects conflicting --column and --status values", async () => {
+      await assert.rejects(
+        () =>
+          main(
+            { repo: "mfittko/dev-loops", project: "1", item: 10, column: "Next Up", status: "Backlog" },
+            { env: {}, runChild: mockRunChild([]) },
+          ),
+        /Conflicting --column .* and --status/,
+      );
+    });
+
+    it("main() accepts --column and --status when they agree", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, column: "Next Up", status: "Next Up" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.item.status, "Next Up");
     });
   });
 });

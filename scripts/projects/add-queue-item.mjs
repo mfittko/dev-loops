@@ -88,8 +88,10 @@ function parseCliArgs(argv) {
         args.column = requireValue(token, "--column requires a value");
         break;
       case "status":
-        // Back-compat alias for --column (issue #912).
-        args.column = requireValue(token, "--status requires a value");
+        // Back-compat alias for --column (issue #912). Kept separate so a
+        // conflicting `--column X --status Y` is rejected rather than silently
+        // resolved by argv order.
+        args.status = requireValue(token, "--status requires a value");
         break;
       default:
         throw Object.assign(new Error(`Unknown flag: ${token.rawName}`), { code: "INVALID_ARGS", usage: USAGE });
@@ -381,6 +383,12 @@ async function main(args, { env = process.env, runChild } = {}) {
   const itemNumber = args.item;
   if (!Number.isInteger(itemNumber) || itemNumber < 1) {
     throw Object.assign(new Error("--item is required and must be a positive integer"), { code: "INVALID_ITEM" });
+  }
+  if (args.column != null && args.status != null && args.column.trim() !== args.status.trim()) {
+    throw Object.assign(
+      new Error(`Conflicting --column ("${args.column}") and --status ("${args.status}") — pass only one (prefer --column).`),
+      { code: "INVALID_ARGS", usage: USAGE },
+    );
   }
   const targetStatus = (args.column ?? args.status ?? "Backlog").trim();
   if (!targetStatus) {
