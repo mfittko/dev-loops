@@ -387,7 +387,7 @@ Do not report completion or advance to the next PR queue item until `.pi/dev-loo
 
 ### Post-merge board archive (best-effort)
 
-After the retrospective checkpoint write, optionally tidy the queue board locally:
+After the retrospective checkpoint write, run the post-merge board archive as a standard step of the post-merge hook (see [Merge Preconditions](../docs/merge-preconditions.md) "Post-merge"):
 
 ```sh
 node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name>

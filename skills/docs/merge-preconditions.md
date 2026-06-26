@@ -55,6 +55,10 @@ explicit instruction can unlock.
   It resolves the namespaced path, runs `git worktree remove --force <path> && git worktree prune` (the underlying
   mechanism) from the main checkout, and refuses any path not under `tmp/worktrees/dev-loops/`. See
   [worktree guidance](../../docs/worktree-guidance.md).
+- Archive long-done queue items (operator-induced, NOT a cron): `node scripts/projects/archive-done-items.mjs --repo <owner/name>`.
+  Runs as part of this post-merge hook. It applies the configured `queue.archiveOlderThanDays` (default `7d`) and archives
+  board items whose issue/PR has been closed at least that long. Best-effort/non-fatal — `archive-done-items.mjs` exits 0 on
+  skip/failure, so it never blocks merge completion. See [projects queue usage](../../docs/projects-queue-usage.md).
 - Clean up stale branches
 
 ## Cross-references
