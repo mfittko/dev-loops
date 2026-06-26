@@ -29,7 +29,7 @@
  * verdict, or main-agent state, so seeding a reviewer with it is the INTENDED
  * neutral seed (RFC-2), not contamination.
  */
-import { readFile, readdir, stat } from "node:fs/promises";
+import { open, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 /** Default per-file byte cap before truncation. */
@@ -106,7 +106,10 @@ function looksBinaryContent(buf) {
  *   - import ... from "x"        / export ... from "x"
  *   - import("x")                (dynamic import)
  *   - require("x")
- * Returns specifiers in source order, de-duplicated (first occurrence wins).
+ * Returns specifiers in a deterministic, grouped-by-kind order — each kind is
+ * scanned in its own pass (export/import-from → bare side-effect import →
+ * dynamic import() → require()), so the output is grouped by form rather than
+ * by position in the source. De-duplicated (first occurrence wins).
  * @param {string} source
  * @returns {string[]}
  */
@@ -227,8 +230,35 @@ export async function buildImporterIndex(repoFiles, repoRoot) {
 }
 
 /**
+ * Decide whether a repo-relative path is safe to resolve+read under repoRoot.
+ * Fails closed: rejects absolute paths, any `..` segment, and any resolved
+ * absolute path that escapes repoRoot. Deterministic, pure path math.
+ * @param {string} repoRoot
+ * @param {string} relPath — repo-relative POSIX path
+ * @returns {{ ok: true, abs: string } | { ok: false }}
+ */
+export function resolveSafeRepoPath(repoRoot, relPath) {
+  const posix = String(relPath).replace(/\\/g, "/");
+  if (posix.length === 0) return { ok: false };
+  if (path.posix.isAbsolute(posix) || path.win32.isAbsolute(posix)) return { ok: false };
+  if (posix.split("/").includes("..")) return { ok: false };
+  const root = path.resolve(repoRoot);
+  const abs = path.resolve(root, posix);
+  if (abs !== root && !abs.startsWith(root + path.sep)) return { ok: false };
+  return { ok: true, abs };
+}
+
+/**
  * Read a file with the size guards applied. Returns the (possibly truncated)
  * content plus guard metadata. Never throws on a missing/unreadable file.
+ *
+ * Path safety: unsafe relPaths (absolute, `..` segments, or escaping repoRoot)
+ * are NOT read — they are recorded with strip reason "unsafe-path".
+ *
+ * Bounded read: when the file is over the cap it is truncated, so we read at
+ * most maxFileBytes+1 bytes (the +1 lets us also sniff binary content past the
+ * cap without loading the whole file). The full original size is read from
+ * stat() for the manifest.
  * @param {string} repoRoot
  * @param {string} relPath
  * @param {number} maxFileBytes
@@ -239,36 +269,48 @@ async function readGuardedFile(repoRoot, relPath, maxFileBytes) {
   if (strip) {
     return { relPath, content: null, bytes: 0, includedBytes: 0, truncated: false, missing: false, strip };
   }
-  const abs = path.resolve(repoRoot, relPath);
-  let buf;
+  const safe = resolveSafeRepoPath(repoRoot, relPath);
+  if (!safe.ok) {
+    return { relPath, content: null, bytes: 0, includedBytes: 0, truncated: false, missing: false, strip: "unsafe-path" };
+  }
+  const abs = safe.abs;
+  let handle;
   try {
     const info = await stat(abs);
     if (!info.isFile()) {
       return { relPath, content: null, bytes: 0, includedBytes: 0, truncated: false, missing: true, strip: null };
     }
-    buf = await readFile(abs);
+    const bytes = info.size;
+    // Read at most cap+1 bytes: enough to detect over-cap and to truncate,
+    // while avoiding loading large files fully into memory.
+    const readCap = Math.min(bytes, maxFileBytes + 1);
+    const buf = Buffer.allocUnsafe(readCap);
+    handle = await open(abs, "r");
+    const { bytesRead } = await handle.read(buf, 0, readCap, 0);
+    const data = buf.subarray(0, bytesRead);
+    if (looksBinaryContent(data)) {
+      return { relPath, content: null, bytes, includedBytes: 0, truncated: false, missing: false, strip: "binary" };
+    }
+    let truncated = false;
+    let slice = data;
+    if (bytes > maxFileBytes) {
+      slice = data.subarray(0, maxFileBytes);
+      truncated = true;
+    }
+    return {
+      relPath,
+      content: slice.toString("utf8"),
+      bytes,
+      includedBytes: slice.length,
+      truncated,
+      missing: false,
+      strip: null,
+    };
   } catch {
     return { relPath, content: null, bytes: 0, includedBytes: 0, truncated: false, missing: true, strip: null };
+  } finally {
+    if (handle) await handle.close().catch(() => {});
   }
-  if (looksBinaryContent(buf)) {
-    return { relPath, content: null, bytes: buf.length, includedBytes: 0, truncated: false, missing: false, strip: "binary" };
-  }
-  const bytes = buf.length;
-  let truncated = false;
-  let slice = buf;
-  if (bytes > maxFileBytes) {
-    slice = buf.subarray(0, maxFileBytes);
-    truncated = true;
-  }
-  return {
-    relPath,
-    content: slice.toString("utf8"),
-    bytes,
-    includedBytes: slice.length,
-    truncated,
-    missing: false,
-    strip: null,
-  };
 }
 
 /**
@@ -282,7 +324,8 @@ async function readGuardedFile(repoRoot, relPath, maxFileBytes) {
  *     maxFileBytes,
  *     files: [{ path, role: "changed"|"imports"|"importedBy", relatedTo: [..],
  *               bytes, includedBytes, truncated, content }],  // sorted by path
- *     stripped: [{ path, reason, relatedTo: [..] }],          // sorted by path
+ *     stripped: [{ path, reason, role: "changed"|"imports"|"importedBy",
+ *                 relatedTo: [..] }],                          // sorted by path
  *     truncated: [{ path, bytes, includedBytes }],            // sorted by path
  *     missing: [string],                                      // sorted
  *   }

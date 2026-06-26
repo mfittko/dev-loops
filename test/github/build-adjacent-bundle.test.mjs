@@ -9,6 +9,7 @@ import {
   classifyStripReason,
   extractImportSpecifiers,
   resolveRelativeImport,
+  resolveSafeRepoPath,
   DEFAULT_MAX_FILE_BYTES,
 } from "../../scripts/github/build-adjacent-bundle.mjs";
 
@@ -196,6 +197,42 @@ test("buildAdjacentBundle strips a binary adjacent (NUL-byte content sniff)", as
     const entry = bundle.stripped.find((s) => s.path === "data.payload");
     assert.ok(entry);
     assert.equal(entry.reason, "binary");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveSafeRepoPath rejects absolute, parent-escaping, and out-of-root paths", () => {
+  const root = "/repo/root";
+  assert.equal(resolveSafeRepoPath(root, "src/a.mjs").ok, true);
+  assert.equal(resolveSafeRepoPath(root, "/etc/passwd").ok, false);
+  assert.equal(resolveSafeRepoPath(root, "../escape.mjs").ok, false);
+  assert.equal(resolveSafeRepoPath(root, "src/../../escape.mjs").ok, false);
+  assert.equal(resolveSafeRepoPath(root, "").ok, false);
+});
+
+test("buildAdjacentBundle skips an unsafe changed path and records it in stripped", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "adj-bundle-"));
+  try {
+    // Stash a file OUTSIDE the repo root that an unsafe relPath would reach.
+    const outside = path.join(root, "..", `secret-${path.basename(root)}.mjs`);
+    await writeFile(outside, "export const SECRET = 1;\n");
+    await writeFiles(root, { "src/kept.mjs": "export const k = 1;\n" });
+    const unsafe = `../secret-${path.basename(root)}.mjs`;
+    const bundle = await buildAdjacentBundle({
+      changedFiles: [unsafe, "src/kept.mjs"],
+      repoRoot: root,
+    });
+    // Not read as content, not leaked.
+    assert.equal(fileByPath(bundle, unsafe), undefined);
+    assert.ok(
+      !bundle.files.some((f) => String(f.content ?? "").includes("SECRET")),
+      "unsafe out-of-root file content must not leak into the bundle",
+    );
+    const entry = bundle.stripped.find((s) => s.path === unsafe);
+    assert.ok(entry, "unsafe path recorded in stripped manifest");
+    assert.equal(entry.reason, "unsafe-path");
+    await rm(outside, { force: true });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
