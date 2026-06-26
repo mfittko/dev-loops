@@ -70,9 +70,7 @@ test("resolveNextUpOrder returns order from mocked list helper", async () => {
  */
 function makeGhStub({ projects, statusOptions, items }) {
   return async (_cmd, args) => {
-    const queryIdx = args.indexOf("query=") === -1
-      ? args.findIndex((a) => typeof a === "string" && a.startsWith("query="))
-      : args.indexOf("query=");
+    const queryIdx = args.findIndex((a) => typeof a === "string" && a.startsWith("query="));
     const query = queryIdx >= 0 ? args[queryIdx].slice("query=".length) : "";
 
     const respond = (data) => ({ code: 0, stdout: JSON.stringify({ data }), stderr: "" });
