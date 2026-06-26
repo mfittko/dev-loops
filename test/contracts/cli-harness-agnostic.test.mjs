@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-// #774 (rescoped): the public `npx dev-loops` CLI must be harness-neutral — it must run with
+// #774 (rescoped): the public `npx dev-loops` CLI must be harness-agnostic — it must run with
 // no `@earendil-works/pi-*` present, and must not show Pi-only install strings unconditionally.
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -45,7 +45,7 @@ function runCli(args) {
   });
 }
 
-test("`dev-loops --help` runs standalone and is harness-neutral", () => {
+test("`dev-loops --help` runs standalone and is harness-agnostic", () => {
   const res = runCli(["--help"]);
   assert.equal(res.status, 0, res.stderr);
   const out = res.stdout;
@@ -71,36 +71,48 @@ test("Pi packaging is preserved in package.json (dual-harness)", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// #905: full env-var neutralization guard.
+// #905: harness-agnostic env-var guard.
 //
-// Every dev-loops-OWNED operational env var must be `DEVLOOPS_*` — there is NO
-// `PI_*` alias/fallback (a deliberate 0.x breaking change; migration in #769).
-// This guard scans all source for `PI_*` env-var references and fails if any
-// appear outside the explicit allowlist below. The only legitimate `PI_*` reads
-// left are vars the Pi *runtime* injects, which dev-loops reads purely to
-// integrate with the Pi harness (it does not own/define them). Renaming those
-// would break Pi integration since the Pi runtime sets the `PI_*` names.
+// dev-loops core owns NO harness-prefixed operational env var: every var it
+// defines is `DEVLOOPS_*`, with no `PI_*` alias/fallback (a deliberate 0.x
+// breaking change; migration in #769). Harness-specific env coupling is
+// confined to the harness-adapter boundary: the ONLY `PI_*` reads permitted in
+// code are vars the Pi *runtime* injects (harness detection + Pi session/
+// run-artifact discovery), and only inside the adapter modules that integrate
+// with Pi. A `PI_*` env token in any other code file is a harness-coupling
+// leak and fails here.
+//
+// Scope is CODE only (.mjs/.js/.cjs/.ts). Documentation may freely name `PI_*`
+// vars — the #769 migration guide must list the renamed names, and integration
+// docs describe the Pi-runtime contract — so prose is intentionally not scanned
+// (harness-agnosticism is a property of the code, not the docs).
 // ---------------------------------------------------------------------------
 
+const PI_ADAPTER = path.join("packages", "core", "src", "harness", "pi-adapter.mjs");
+const PI_ADAPTER_TEST = path.join("packages", "core", "test", "harness.test.mjs");
+const CONDUCTOR = path.join("scripts", "loop", "conductor-monitor.mjs");
+const CONDUCTOR_TEST = path.join("test", "loop", "conductor-monitor.test.mjs");
+
 /**
- * `PI_*` env-var names dev-loops legitimately READS because the Pi runtime
- * injects them (harness detection + Pi session/run-artifact discovery). These
- * are external Pi-platform contract vars, not dev-loops configuration.
+ * `PI_*` vars the Pi runtime injects, mapped to the adapter-boundary files
+ * allowed to read them. dev-loops does not own/define these; renaming them
+ * would break Pi integration since the Pi runtime sets the `PI_*` names. A read
+ * outside the listed files couples core to a specific harness and is rejected.
  */
-const PI_PLATFORM_ENV_ALLOWLIST = new Set([
-  "PI_SESSION", // pi-adapter: inside-Pi detection
-  "PI_INTERACTIVE", // pi-adapter: interactivity override
-  "PI_AGENT_SESSIONS_DIR", // conductor-monitor: Pi session dir
-  "PI_SUBAGENT_SESSIONS_DIR", // conductor-monitor: Pi session dir
-  "PI_SUBAGENT_ASYNC_RUNS_DIR", // conductor-monitor: Pi async-run dir
-  "PI_SUBAGENT_ASYNC_RESULTS_DIR", // conductor-monitor: Pi async-result dir
+const HARNESS_RUNTIME_ENV = new Map([
+  ["PI_SESSION", [PI_ADAPTER, PI_ADAPTER_TEST]], // inside-Pi detection
+  ["PI_INTERACTIVE", [PI_ADAPTER, PI_ADAPTER_TEST]], // interactivity override
+  ["PI_AGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi session dir
+  ["PI_SUBAGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi session dir
+  ["PI_SUBAGENT_ASYNC_RUNS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi async-run dir
+  ["PI_SUBAGENT_ASYNC_RESULTS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi async-result dir
 ]);
 
 /** Match any `PI_<UPPER_SNAKE>` token (candidate env-var name). */
 const PI_ENV_NAME_RE = /\bPI_[A-Z][A-Z0-9_]*\b/g;
 
-/** Recursively collect code + prose files (.mjs/.js/.cjs/.ts/.md) under a dir. */
-async function collectTextFiles(dir) {
+/** Recursively collect code files (.mjs/.js/.cjs/.ts) under a dir. */
+async function collectCodeFiles(dir) {
   const abs = path.join(repoRoot, dir);
   const out = [];
   let entries;
@@ -113,21 +125,21 @@ async function collectTextFiles(dir) {
     const rel = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === "node_modules") continue;
-      out.push(...(await collectTextFiles(rel)));
-    } else if (/\.(mjs|js|cjs|ts|md)$/.test(entry.name)) {
+      out.push(...(await collectCodeFiles(rel)));
+    } else if (/\.(mjs|js|cjs|ts)$/.test(entry.name)) {
       out.push(rel);
     }
   }
   return out;
 }
 
-test("no dev-loops-owned PI_* env var remains: all renamed to DEVLOOPS_* (no alias)", async () => {
-  // Scan canonical sources, prose, and the generated .claude tree. Exclude this
-  // guard file (its allowlist literals would self-match).
+test("dev-loops code is harness-agnostic: no owned PI_* env var, harness-runtime reads confined to the adapter", async () => {
+  // Scan canonical code + the generated .claude tree. Exclude this guard file
+  // (its allowlist literals would self-match).
   const files = (
     await Promise.all(
-      ["cli", "lib", "scripts", "packages", "agents", "skills", "extension", "test", "docs", ".claude"].map(
-        collectTextFiles,
+      ["cli", "lib", "scripts", "packages", "agents", "skills", "extension", "test", ".claude"].map(
+        collectCodeFiles,
       ),
     )
   ).flat();
@@ -141,16 +153,18 @@ test("no dev-loops-owned PI_* env var remains: all renamed to DEVLOOPS_* (no ali
     const names = new Set(content.match(PI_ENV_NAME_RE) ?? []);
     for (const name of names) {
       // Ignore non-env JS identifiers used by the Pi *import* detector tests
-      // (regex/token constants like PI_IMPORT_RE, PI_DYNAMIC_RE, PI_TOKEN) and
-      // any name on the Pi-platform allowlist.
+      // (regex/token constants like PI_IMPORT_RE, PI_DYNAMIC_RE, PI_TOKEN).
       if (name.endsWith("_RE") || name === "PI_TOKEN") continue;
-      if (PI_PLATFORM_ENV_ALLOWLIST.has(name)) continue;
-      offenders.push(`${rel}: ${name}`);
+      const adapterPaths = HARNESS_RUNTIME_ENV.get(name);
+      if (adapterPaths) {
+        // Pi-runtime-injected var: permitted only at the adapter boundary.
+        if (adapterPaths.includes(rel)) continue;
+        offenders.push(`${rel}: ${name} (harness-runtime var read outside the adapter boundary)`);
+        continue;
+      }
+      // Not a Pi-runtime var → a dev-loops-owned var that must be DEVLOOPS_*.
+      offenders.push(`${rel}: ${name} (dev-loops-owned PI_* var must be DEVLOOPS_*)`);
     }
   }
-  assert.deepEqual(
-    offenders,
-    [],
-    `dev-loops-owned PI_* env vars must be renamed to DEVLOOPS_* (no alias):\n${offenders.join("\n")}`,
-  );
+  assert.deepEqual(offenders, [], `harness-agnostic env-var violations:\n${offenders.join("\n")}`);
 });
