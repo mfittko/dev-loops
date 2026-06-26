@@ -209,7 +209,7 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
         } catch (err) {
           const msg = (err && err.message) ? err.message : String(err);
           logWarn(`${kind} failed, skipping: ${src} → ${dest}: ${msg}`);
-          actions.push({ entry, mode: "skip", reason: `copy-failed: ${msg}`, src, dest });
+          actions.push({ entry, mode: "skip", reason: `${kind}-failed: ${msg}`, src, dest });
         }
       }
     }
