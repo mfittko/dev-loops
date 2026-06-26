@@ -688,6 +688,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // return idempotent success so scripted/automated callers are not dead-ended
     // by a hard throw. (#891)
     const satisfied = coordinationContext.gateEvidence?.draftGate ?? {};
+    // executionMode lives on the gate MARKER summary, not the COMMENT (strict)
+    // summary: the strict `draftGate` summary is parsed from the visible comment
+    // body via normalizeGateSummary, which carries no executionMode field, so it
+    // would always collapse to inline_single_agent — misleading when the satisfied
+    // gate actually ran fanout_fanin. Prefer the marker's executionMode; if the
+    // marker is unavailable, OMIT the field rather than report a misleading default.
+    const satisfiedExecutionMode =
+      coordinationContext.gateEvidence?.draftGateMarker?.executionMode
+      ?? satisfied.executionMode
+      ?? null;
     return {
       ok: true,
       action: "noop",
@@ -703,7 +713,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       draftGateAlreadySatisfied: true,
       // Mirror the field shape of the other success paths for consistent consumers.
       blockCleanOnFindingSeverities: draftGateConfig.blockCleanOnFindingSeverities,
-      executionMode: satisfied.executionMode ?? DEFAULT_EXECUTION_MODE,
+      ...(satisfiedExecutionMode != null ? { executionMode: satisfiedExecutionMode } : {}),
       ...(satisfied.commentId != null ? { commentId: satisfied.commentId } : {}),
       ...(satisfied.commentUrl ? { commentUrl: satisfied.commentUrl } : {}),
     };
