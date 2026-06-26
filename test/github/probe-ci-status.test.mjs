@@ -183,7 +183,9 @@ test("watch-ci returns changed when the head SHA advances mid-wait", async () =>
   );
 });
 
-test("watch-ci treats a head with no checks as settled success", async () => {
+test("watch-ci settles no-checks success only after the grace window", async () => {
+  // Genuinely check-less repo (empty rollup, zero check-runs/statuses): does NOT
+  // settle on the first poll, settles after NO_CHECKS_GRACE_POLLS (2).
   await withGhStub(
     {
       routes: [
@@ -197,6 +199,108 @@ test("watch-ci treats a head with no checks as settled success", async () => {
       assert.equal(result.status, "success");
       assert.equal(result.settled, true);
       assert.equal(result.ciStatus, "none");
+      assert.equal(result.attempts, 2); // grace: not the first poll
+    },
+  );
+});
+
+test("watch-ci single check (timeout-ms 0) settles no-checks success immediately", async () => {
+  // No waiting budget → no grace window → a clean no-checks head reports at once.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", []) },
+        { match: ["check-runs"], stdout: checkRuns([]) },
+        { match: ["/status"], stdout: statuses([]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 0 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.ciStatus, "none");
+      assert.equal(result.attempts, 1);
+    },
+  );
+});
+
+test("watch-ci does NOT settle no-checks early when a check appears after zero-check polls", async () => {
+  // Poll 1: zero check-runs (provider hasn't registered yet). Poll 2: a terminal
+  // check appears. Must classify the check, NOT fabricate success on the race.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-ci-late-"));
+  try {
+    const ghPath = path.join(tempDir, "gh");
+    const counterPath = path.join(tempDir, "cr-counter.txt");
+    await writeFile(counterPath, "0", "utf8");
+    const script = [
+      "#!/usr/bin/env node",
+      'const { readFileSync, writeFileSync } = require("node:fs");',
+      `const counterPath = ${JSON.stringify(counterPath)};`,
+      'const argv = process.argv.slice(2).join(" ");',
+      'const has = (n) => argv.includes(n);',
+      // Rollup lists no expected check on poll 1 (provider hasn't registered),
+      // so the head looks check-less until the run appears.
+      'if (has("pr") && has("view")) { process.stdout.write(JSON.stringify({ headRefOid: "sha-a", statusCheckRollup: [] })); process.exit(0); }',
+      'if (has("check-runs")) {',
+      '  const i = Number(readFileSync(counterPath, "utf8").trim() || "0");',
+      '  writeFileSync(counterPath, String(i + 1));',
+      '  const runs = i === 0 ? [] : [{ status: "completed", conclusion: "success", name: "build" }];',
+      '  process.stdout.write(JSON.stringify({ check_runs: runs })); process.exit(0);',
+      '}',
+      `if (has("/status")) { process.stdout.write(${JSON.stringify(statuses([]))}); process.exit(0); }`,
+      'process.stderr.write(`unexpected gh args: ${argv}\\n`); process.exit(97);',
+      "",
+    ].join("\n");
+    await writeFile(ghPath, script, "utf8");
+    await chmod(ghPath, 0o755);
+    const env = { ...process.env, PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
+    const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+    assert.equal(result.status, "success");
+    assert.equal(result.ciStatus, "success"); // classified the real check, not none
+    assert.equal(result.attempts, 2);
+    assert.deepEqual(result.failedChecks, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("watch-ci treats expected-but-unreported checks (rollup) as pending, not none", async () => {
+  // statusCheckRollup lists an expected "build" check, but the check-runs/status
+  // APIs report zero terminal -> pending the whole budget, then timeout. Never none/success.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+        { match: ["check-runs"], stdout: checkRuns([]) },
+        { match: ["/status"], stdout: statuses([]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 25 }, fastDeps(env));
+      // Expected-but-unreported checks suppress the no-checks settle: the watcher
+      // waits out the budget (timeout) instead of fabricating a success.
+      assert.equal(result.status, "timeout");
+      assert.equal(result.settled, false);
+      assert.notEqual(result.status, "success");
+    },
+  );
+});
+
+test("watch-ci never fabricates success from a gh-api error on check-runs", async () => {
+  // check-runs API errors (non-zero exit) with zero statuses: must NOT be read
+  // as empty -> keep polling -> timeout, never success.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", []) },
+        { match: ["check-runs"], stdout: "boom\n", exitCode: 1 },
+        { match: ["/status"], stdout: statuses([]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 30 }, fastDeps(env));
+      assert.equal(result.status, "timeout");
+      assert.notEqual(result.status, "success");
+      assert.equal(result.ciStatus, "pending");
     },
   );
 });

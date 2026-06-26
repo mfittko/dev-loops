@@ -37,10 +37,19 @@ Statuses:
   pending    Timed-out single check (timeout-ms 0) found CI still in flight
   timeout    Watch budget elapsed while CI was still pending
   changed    Head SHA advanced during the wait; caller must re-baseline
-No-checks rule:
-  When the head SHA has zero check-runs AND zero commit-statuses, CI is
-  treated as settled success (ciStatus "none") immediately — there is
-  nothing to wait on, so the watcher must not hang.
+No-checks rule (grace, race-safe):
+  Zero check-runs AND zero commit-statuses is NOT settled green on the first
+  poll — a provider (CircleCI/Actions) may post its first check a beat after a
+  fresh push, and settling early would report green before any CI ran. Instead
+  the watcher awaits 2 consecutive zero-check polls (a ~2-poll-interval grace)
+  before settling success (ciStatus "none"): a genuinely check-less repo still
+  settles instead of hanging, while a late first check is awaited. If the PR's
+  statusCheckRollup lists EXPECTED checks while the APIs still report zero, that
+  is pending (checks expected, not yet reported), never none. A gh-api / parse
+  failure is never treated as empty — it forces pending so the watch keeps
+  polling, and a persistent error settles as "timeout", never fabricated green.
+  (timeout-ms 0 single check has no waiting budget, so a clean no-checks head
+  settles immediately.)
 Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
   { "ok": false, "error": "...", "usage"?: "..." }
@@ -164,7 +173,13 @@ async function fetchPrHeadSha({ repo, pr }, { env, ghCommand }) {
  * Provider-agnostic: covers GitHub Actions, CircleCI, and any external
  * commit-status / check-run reported against the commit.
  *
- * @returns {{ ciStatus: "success"|"failure"|"pending"|"none", noChecks: boolean, failedChecks: Array<{name:string}> }}
+ * `fetchError` is true when a `gh api` call failed (non-zero exit) or returned
+ * an unparseable / malformed payload. The caller MUST NOT treat a fetchError as
+ * a genuine empty (no-checks) state — a transient API error would otherwise
+ * fabricate green. On fetchError, ciStatus is forced to "pending" so the watch
+ * keeps polling (and a persistent error settles as "timeout", never success).
+ *
+ * @returns {{ ciStatus: "success"|"failure"|"pending"|"none", noChecks: boolean, fetchError: boolean, failedChecks: Array<{name:string}> }}
  */
 async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, ghCommand }) {
   const [checkRunsResult, statusesResult] = await Promise.all([
@@ -174,6 +189,7 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
 
   let checkRunsSignal = null;
   let checkRunsCount = 0;
+  let checkRunsError = checkRunsResult.code !== 0;
   if (checkRunsResult.code === 0) {
     try {
       const payload = JSON.parse(checkRunsResult.stdout);
@@ -186,38 +202,52 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
         const fullSignal = summarizeHeadScopedCheckRunsSignal(payload);
         checkRunsSignal = { ...visibleSignal, unsupportedCompleted: fullSignal.unsupportedCompleted };
         checkRunsCount = payload.check_runs.length;
+      } else {
+        checkRunsError = true; // exit 0 but no check_runs array → malformed payload, not empty
       }
     } catch {
       checkRunsSignal = null;
+      checkRunsError = true;
     }
   }
 
   let commitStatus = null;
   let statusesCount = 0;
+  let statusesError = statusesResult.code !== 0;
   if (statusesResult.code === 0) {
     try {
       const payload = JSON.parse(statusesResult.stdout);
       if (Array.isArray(payload?.statuses)) {
         commitStatus = normalizeHeadScopedCommitStatus(payload);
         statusesCount = payload.statuses.length;
+      } else {
+        statusesError = true; // exit 0 but no statuses array → malformed payload, not empty
       }
     } catch {
       commitStatus = null;
+      statusesError = true;
     }
   }
 
-  const ciStatus = normalizeHeadScopedCiContract({
-    checkRunsStatus: checkRunsSignal?.status ?? "none",
-    commitStatus: commitStatus ?? "none",
-    checkRunsUnsupportedCompleted: checkRunsSignal?.unsupportedCompleted ?? false,
-  }).overallStatus;
+  const fetchError = checkRunsError || statusesError;
+  const ciStatus = fetchError
+    ? "pending"
+    : normalizeHeadScopedCiContract({
+        checkRunsStatus: checkRunsSignal?.status ?? "none",
+        commitStatus: commitStatus ?? "none",
+        checkRunsUnsupportedCompleted: checkRunsSignal?.unsupportedCompleted ?? false,
+      }).overallStatus;
   const failedChecks = (checkRunsSignal?.failureDetails ?? []).map((name) => ({ name }));
-  return {
-    ciStatus,
-    // No-checks rule: zero check-runs AND zero commit-statuses on the head SHA.
-    noChecks: checkRunsCount === 0 && statusesCount === 0,
-    failedChecks,
-  };
+  // No-checks: zero check-runs AND zero commit-statuses, observed cleanly (no
+  // fetchError) AND with no PR-visible expected checks. If statusCheckRollup
+  // lists expected checks the providers haven't reported yet, that is pending
+  // (checks expected but not yet posted), not a genuinely check-less head.
+  const noChecks =
+    !fetchError &&
+    checkRunsCount === 0 &&
+    statusesCount === 0 &&
+    !(prVisibleCheckNames?.length > 0);
+  return { ciStatus, noChecks, fetchError, failedChecks };
 }
 
 function buildAttemptBudget(timeoutMs, pollIntervalMs) {
@@ -247,14 +277,25 @@ function settledResult(state, { settled, status }) {
   };
 }
 
+/** Consecutive clean zero-check polls required before settling none->success.
+ *  A provider (CircleCI/Actions) may post its first check a beat after the push;
+ *  settling on the FIRST zero-check poll would fabricate green before any CI ran.
+ *  So we await this many consecutive zero-check observations (a grace of ~2 poll
+ *  intervals) before treating a head as genuinely check-less. A repo that truly
+ *  has no CI still settles after the grace instead of hanging to timeout. */
+export const NO_CHECKS_GRACE_POLLS = 2;
+
 /**
  * Map a head CI state to a terminal watcher status, or null when still in flight.
- * No-checks settles as success — there is nothing to wait on.
+ * - failure / success classify immediately (a check is terminal).
+ * - none (zero checks, clean fetch, no expected checks) settles success only
+ *   after NO_CHECKS_GRACE_POLLS consecutive observations (see constant).
+ * - fetchError / expected-but-unreported checks → pending (keep polling).
  */
-function terminalStatusFor({ ciStatus, noChecks }) {
+function terminalStatusFor({ ciStatus, noChecks }, consecutiveNoChecks, graceFloor) {
   if (ciStatus === "failure") return "failure";
   if (ciStatus === "success") return "success";
-  if (noChecks) return "success";
+  if (noChecks && consecutiveNoChecks >= graceFloor) return "success";
   return null;
 }
 
@@ -273,6 +314,11 @@ export async function watchCiStatus(
   );
   const attemptBudget = buildAttemptBudget(options.timeoutMs, options.pollIntervalMs);
   const watchStartedAtMs = now();
+  // timeout-ms 0 is a single live check with no waiting budget: there is no
+  // grace window to await a late first check, so a clean no-checks head settles
+  // immediately (preserves single-check semantics). A real watch awaits the grace.
+  const graceFloor = options.timeoutMs === 0 ? 1 : NO_CHECKS_GRACE_POLLS;
+  let consecutiveNoChecks = 0;
   for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
     if (!(options.timeoutMs === 0 && attempt === 1)) {
       const pollDelayMs = buildPollDelayMs(
@@ -321,7 +367,8 @@ export async function watchCiStatus(
       { repo: options.repo, headSha: currentSha, prVisibleCheckNames },
       { env, ghCommand },
     );
-    const terminal = terminalStatusFor(state);
+    consecutiveNoChecks = state.noChecks ? consecutiveNoChecks + 1 : 0;
+    const terminal = terminalStatusFor(state, consecutiveNoChecks, graceFloor);
     if (terminal !== null) {
       return settledResult({ ...state, headSha: currentSha, attempts: attempt }, {
         settled: true,
