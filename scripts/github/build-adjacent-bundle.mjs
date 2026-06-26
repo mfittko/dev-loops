@@ -356,6 +356,12 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
     new Set((Array.isArray(changedFiles) ? changedFiles : []).map((f) => String(f).replace(/\\/g, "/")).filter((f) => f.length > 0)),
   ).sort();
 
+  // No changed files → empty bundle. Return early so the empty case is O(1) and
+  // skips the whole-repo scan + importer-index build entirely.
+  if (changed.length === 0) {
+    return { maxFileBytes, files: [], stripped: [], truncated: [], missing: [] };
+  }
+
   const repoFiles = await listRepoFiles(repoRoot);
   const existing = new Set(repoFiles);
   const importerIndex = await buildImporterIndex(repoFiles, repoRoot);
