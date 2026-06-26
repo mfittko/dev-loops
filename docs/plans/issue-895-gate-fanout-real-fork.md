@@ -1,7 +1,7 @@
 # Plan — Issue #895: make the gate fan-out actually fork from the context-builder
 
 Status: refinement plan (READ-ONLY analysis; not implemented)
-Source issue: mfittko/dev-loops#895 (bug) — owner decision recorded in the issue comment: resolve via Option 1 (make the fan-out actually fork) by driving the gate sub-loop through the Workflow tool: `context-builder stage → parallel([forked reviewers]) → fan-in`.
+Source issue: mfittko/dev-loops#895 (bug) — owner decision recorded in the issue comment "Converged design (operator-approved)": resolve by building a NEUTRAL context bundle ONCE (deterministic script) and seeding each independent reviewer with it — **no fork primitive, no Workflow dependency**. (An earlier "Option 1: fork via the Workflow tool" framing was explored and then superseded — see §0 for the governing design and §§1–12 for that investigation history.)
 Related: epic #867 (closed), #885 (closed, full-diff + adjacent code), #886, #875 (Phase 1 evidence/disclosure).
 
 ---

@@ -35,6 +35,14 @@ import path from "node:path";
 /** Default per-file byte cap before truncation. */
 export const DEFAULT_MAX_FILE_BYTES = 48 * 1024;
 
+/**
+ * Binary-sniff window: the NUL-byte heuristic inspects this many leading bytes.
+ * The guarded read must cover at least this window even when the per-file cap is
+ * configured smaller, so a small cap can't cause a binary (whose first NUL is
+ * past the cap) to be misclassified as text.
+ */
+const BINARY_SNIFF_BYTES = 8 * 1024;
+
 /** Source extensions we resolve import edges for (JS family, this repo). */
 const SOURCE_EXTENSIONS = [".mjs", ".js", ".cjs"];
 
@@ -93,7 +101,7 @@ function isBinaryPath(base) {
  * @returns {boolean}
  */
 function looksBinaryContent(buf) {
-  const limit = Math.min(buf.length, 8 * 1024);
+  const limit = Math.min(buf.length, BINARY_SNIFF_BYTES);
   for (let i = 0; i < limit; i++) {
     if (buf[i] === 0) return true;
   }
@@ -285,9 +293,10 @@ async function readGuardedFile(repoRoot, relPath, maxFileBytes) {
       return { relPath, content: null, bytes: 0, includedBytes: 0, truncated: false, missing: true, strip: null };
     }
     const bytes = info.size;
-    // Read at most cap+1 bytes: enough to detect over-cap and to truncate,
-    // while avoiding loading large files fully into memory.
-    const readCap = Math.min(bytes, maxFileBytes + 1);
+    // Read enough to (a) detect over-cap and truncate, and (b) always cover the
+    // binary-sniff window — so a cap configured below BINARY_SNIFF_BYTES can't let
+    // a binary slip through as text. Still bounded (never the whole large file).
+    const readCap = Math.min(bytes, Math.max(maxFileBytes + 1, BINARY_SNIFF_BYTES));
     const buf = Buffer.allocUnsafe(readCap);
     handle = await open(abs, "r");
     const { bytesRead } = await handle.read(buf, 0, readCap, 0);

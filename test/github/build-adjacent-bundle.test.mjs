@@ -202,6 +202,24 @@ test("buildAdjacentBundle strips a binary adjacent (NUL-byte content sniff)", as
   }
 });
 
+test("buildAdjacentBundle detects a binary whose first NUL is past a small maxFileBytes cap", async () => {
+  // Regression: the bounded read must still cover the binary-sniff window even
+  // when maxFileBytes < the sniff window, so a binary with text-looking bytes
+  // before the cap and a NUL after it is not misclassified as text.
+  const root = await mkdtemp(path.join(os.tmpdir(), "adj-bundle-"));
+  try {
+    const blob = Buffer.concat([Buffer.alloc(5000, 0x61 /* 'a' */), Buffer.from([0x00])]);
+    await writeFiles(root, { "late-nul.payload": blob });
+    const bundle = await buildAdjacentBundle({ changedFiles: ["late-nul.payload"], repoRoot: root, maxFileBytes: 1024 });
+    assert.equal(fileByPath(bundle, "late-nul.payload"), undefined);
+    const entry = bundle.stripped.find((s) => s.path === "late-nul.payload");
+    assert.ok(entry, "binary with a late NUL must be stripped, not included as text");
+    assert.equal(entry.reason, "binary");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("resolveSafeRepoPath rejects absolute, parent-escaping, and out-of-root paths", () => {
   const root = "/repo/root";
   assert.equal(resolveSafeRepoPath(root, "src/a.mjs").ok, true);

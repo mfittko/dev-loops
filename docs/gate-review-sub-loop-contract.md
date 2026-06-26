@@ -70,7 +70,7 @@ but the execution phases are identical.
 Before fanning out reviewers, run a preamble pass that produces review handoff context
 on an isolated checkout:
 
-- fresh context (the reviewer is seeded with the neutral builder artifact + its angle, never the parent session's chat history or state). **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs` at startup and refuse to proceed on contamination. Use `--scope <angle>` so each reviewer writes its own sentinel.
+- the context-builder runs in fresh context and emits a NEUTRAL artifact; that artifact (never the parent session's chat history or state) is what each downstream reviewer subagent is later seeded with. **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs` at startup and refuse to proceed on contamination. Use `--scope <angle>` so each reviewer writes its own sentinel.
 - `worktree: true` recommended per reviewer/subagent for filesystem isolation; prescribe it but
   do not fail closed if worktrees are unavailable in the current environment
 - the preamble resolves the gate's review angle set: it starts from the configured
