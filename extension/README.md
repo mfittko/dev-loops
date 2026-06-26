@@ -210,7 +210,7 @@ Config is validated at runtime by Zod schemas (`packages/core/src/config/config.
 ## Runtime / build / test contract
 
 Current Phase 3+ contract:
-- Node runtime floor: `>=20` (from `package.json`)
+- Node runtime floor: `>=24` (from `package.json`)
 - Pi host expectations are documented from current peer dependencies rather than a tested pinned Pi version range
 - the extension is source-loaded from `./extension/index.ts` through `package.json` `pi.extensions`
 - the package exposes `skills` through `package.json` `pi.skills` for install-based global skill loading
