@@ -1,7 +1,9 @@
 // Enforcement guard for issue #894: PR creation must always flow through the
 // canonical wrapper (`scripts/github/create-pr.mjs` / `dev-loops pr create`),
-// which is ALWAYS draft and ALWAYS self-assigned. No skill/agent procedure doc
-// may instruct an operator to OPEN a PR with raw `gh pr create`.
+// which is ALWAYS draft and always assigned — self-assigned by default
+// (`--assignee @me`), while honoring an explicit `--assignee <login>` / `-a <login>`.
+// No skill/agent procedure doc may instruct an operator to OPEN a PR with raw
+// `gh pr create`.
 //
 // The heuristic is deliberately conservative: it only flags an imperative
 // `gh pr create` occurrence whose surrounding sentence does NOT carry a

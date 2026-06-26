@@ -340,7 +340,13 @@ function parseTopLevelCommand(argv) {
       const resolvedSub = alias ? alias.canonical : sub;
       const scriptPath = routes[resolvedSub];
       if (!scriptPath) return { kind: "category_help", category: cmd };
-      return { kind: "subcommand_help", scriptPath: path.resolve(REPO_ROOT, scriptPath) };
+      return {
+        kind: "subcommand_help",
+        scriptPath: path.resolve(REPO_ROOT, scriptPath),
+        // Surface the deprecation notice on the --help fast-path too, so a
+        // deprecated alias signals migration in help mode (not only on dispatch).
+        ...(alias ? { deprecationNotice: alias.notice } : {}),
+      };
     }
     const route = resolveSubcommandRoute(args);
     if (route) return { kind: "subcommand", ...route };
@@ -370,6 +376,7 @@ export async function runCli({
       return 0;
     }
     case "subcommand_help": {
+      if (fromTop.deprecationNotice) { writeLines(stderr, [fromTop.deprecationNotice]); }
       const result = spawnSync("node", [fromTop.scriptPath, "--help"], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       });
