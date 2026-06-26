@@ -174,6 +174,38 @@ test("provision: rejects a source that is a symlink escaping the main checkout",
 // Idempotent reuse
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fail-closed: a config with load/validation errors yields zero actions
+// ---------------------------------------------------------------------------
+
+test("provision: config with errors yields zero provisioning actions (fail-closed)", async () => {
+  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/app.yml\n");
+  try {
+    // A real, present source — proves the EMPTY treatment is driven by the
+    // config errors, not by a missing file.
+    mkdirSync(path.join(fx.repoRoot, "config"));
+    writeFileSync(path.join(fx.repoRoot, "config/app.yml"), "key: value\n");
+
+    const loadConfig = async () => ({
+      config: { version: 1, worktree: { copyOnInit: ["config/app.yml"] } },
+      errors: [{ field: "worktree.copyOnInit", reason: "invalid" }],
+    });
+
+    const res = await provisionWorktree(
+      { worktreePath: fx.worktreePath, repoRoot: fx.repoRoot },
+      { loadConfig },
+    );
+    assert.equal(res.ok, true);
+    assert.equal(res.actions.length, 0);
+    assert.equal(res.summary.copied, 0);
+    assert.equal(res.summary.linked, 0);
+    assert.ok(res.summary.warnings >= 1, "one WARN about the invalid config");
+    assert.ok(!existsSync(path.join(fx.worktreePath, "config/app.yml")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("provision: idempotent on reuse (second run skips)", async () => {
   const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/app.yml\n  linkOnInit:\n    - data/big\n");
   try {

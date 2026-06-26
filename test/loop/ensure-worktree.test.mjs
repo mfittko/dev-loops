@@ -118,6 +118,34 @@ test("ensure: reports a conflict when a different branch occupies the path", asy
 });
 
 // ---------------------------------------------------------------------------
+// Branch already exists (worktree removed but ref left behind) → reuse the branch
+// ---------------------------------------------------------------------------
+
+test("ensure: reuses an existing branch when no worktree occupies it", async () => {
+  const repo = makeRepo();
+  try {
+    // Leave a branch behind without a worktree (the common removed-worktree case):
+    // create it, add+remove a worktree so the branch ref survives.
+    const stale = path.join(repo.root, "tmp/worktrees/dev-loops/issue-11");
+    repo.git("worktree", "add", "-b", "issue-11", stale, "main");
+    repo.git("worktree", "remove", "--force", stale);
+    repo.git("worktree", "prune");
+    assert.ok(!existsSync(stale), "worktree dir gone");
+    // Branch ref still exists.
+    assert.match(repo.git("rev-parse", "--verify", "--quiet", "refs/heads/issue-11"), /\w/);
+
+    // ensure must attach to the existing branch (no -b), not fail.
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 11 }, { provision: () => ({ ok: true, summary: {} }) });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    assert.equal(res.path, stale);
+    assert.ok(existsSync(stale), "worktree recreated on the existing branch");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Provisioning is invoked (injected core) and fails soft
 // ---------------------------------------------------------------------------
 

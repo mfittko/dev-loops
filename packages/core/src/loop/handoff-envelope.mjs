@@ -316,9 +316,17 @@ function deriveCwd(bundle, options = {}) {
   const kind = normalizeTargetKind(artifact.kind);
 
   if (root) {
+    // issue/pr go through the single source of truth (resolveWorktreePath); other
+    // slug kinds (local_branch/local_phase) still use the namespace + slug.
+    if (kind === DEV_LOOP_TARGET_KIND.ISSUE && Number.isInteger(artifact.issue) && artifact.issue > 0) {
+      return resolveWorktreePath({ repoRoot: root, kind: "issue", number: artifact.issue });
+    }
+    if (kind === DEV_LOOP_TARGET_KIND.PR && Number.isInteger(artifact.pr) && artifact.pr > 0) {
+      return resolveWorktreePath({ repoRoot: root, kind: "pr", number: artifact.pr });
+    }
     const slug = buildWorktreeSlug(artifact, kind);
     if (slug) {
-      return `${root}/tmp/worktrees/dev-loops/${slug}`;
+      return `${root}/${WORKTREE_NAMESPACE}/${slug}`;
     }
   }
 

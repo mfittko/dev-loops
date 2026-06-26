@@ -166,8 +166,15 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
     process.stderr.write(`[provision-worktree] WARN ${msg}\n`);
   };
 
-  const { config } = await loadConfig({ repoRoot: root });
-  const { copyOnInit, linkOnInit } = resolveWorktreeConfig(config);
+  // Fail-closed (repo convention): a config that failed to load/validate is
+  // treated as EMPTY — zero provisioning actions, one WARN. We never act on an
+  // unvalidated config (a bad entry could copy/link the wrong source).
+  const { config, errors } = await loadConfig({ repoRoot: root });
+  const safeConfig = errors && errors.length > 0 ? null : config;
+  if (safeConfig === null && errors && errors.length > 0) {
+    logWarn(`dev-loop config invalid (${errors.length} error(s)) — provisioning EMPTY config (no copy/link)`);
+  }
+  const { copyOnInit, linkOnInit } = resolveWorktreeConfig(safeConfig);
 
   for (const [entries, kind] of [[copyOnInit, "copy"], [linkOnInit, "link"]]) {
     for (const entry of entries) {

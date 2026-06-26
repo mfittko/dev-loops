@@ -19,13 +19,13 @@
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
 import { provisionWorktree } from "./provision-worktree.mjs";
+import { canonicalize } from "./_worktree-path.mjs";
 
 const USAGE = `Usage:
   ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) [--branch <name>] [--base <ref>]
@@ -112,26 +112,6 @@ export function parseEnsureWorktreeCliArgs(argv) {
   return options;
 }
 
-/**
- * Canonicalize for comparison: resolve symlinks on the longest existing
- * prefix (macOS /var → /private/var), keeping any not-yet-created leaf. Lets us
- * match a git-reported worktree path against a target that may not exist yet.
- */
-function canonicalize(p) {
-  let cur = path.resolve(p);
-  const tail = [];
-  for (;;) {
-    try {
-      return path.join(realpathSync(cur), ...tail);
-    } catch {
-      const parent = path.dirname(cur);
-      if (parent === cur) return path.resolve(p); // hit root without resolving
-      tail.unshift(path.basename(cur));
-      cur = parent;
-    }
-  }
-}
-
 /** Remote name from a base ref like "origin/main" → "origin". */
 function remoteFromBase(base) {
   const slash = base.indexOf("/");
@@ -144,6 +124,16 @@ function runGit(gitCommand, args, cwd) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+/** True when a local branch ref already exists (non-zero exit → absent). */
+function branchExists(gitCommand, branch, cwd) {
+  try {
+    runGit(gitCommand, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], cwd);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -197,7 +187,14 @@ export async function ensureWorktree(
   } catch (err) {
     process.stderr.write(`[ensure-worktree] WARN fetch failed (continuing): ${(err.stderr ?? err.message ?? "").toString().trim()}\n`);
   }
-  runGit(gitCommand, ["worktree", "add", "-b", wantBranch, target, base], root);
+  // The branch may already exist (worktree removed but branch left behind). `git
+  // worktree add -b` fails on an existing branch, so attach to it instead; only
+  // create-from-base when the branch is genuinely new.
+  if (branchExists(gitCommand, wantBranch, root)) {
+    runGit(gitCommand, ["worktree", "add", target, wantBranch], root);
+  } else {
+    runGit(gitCommand, ["worktree", "add", "-b", wantBranch, target, base], root);
+  }
 
   const summary = await provision({ worktreePath: target, repoRoot: root });
   return { ok: true, path: target, created: true, reused: false, provision: summary };

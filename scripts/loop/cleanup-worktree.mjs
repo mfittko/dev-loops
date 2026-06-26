@@ -20,6 +20,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath, WORKTREE_NAMESPACE } from "@dev-loops/core/loop/handoff-envelope";
+import { canonicalize } from "./_worktree-path.mjs";
 
 const USAGE = `Usage:
   cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p>)
@@ -92,10 +93,23 @@ export function parseCleanupWorktreeCliArgs(argv) {
   return options;
 }
 
-/** True when `target` is at or under `<repoRoot>/tmp/worktrees/dev-loops/`. */
+/**
+ * True when `target` is at or under `<repoRoot>/tmp/worktrees/dev-loops/`.
+ * Canonicalizes (realpath) every side first: a purely lexical prefix check is
+ * bypassable when the namespace dir (or a parent) is a symlink pointing outside
+ * the repo — `git worktree remove --force` would then delete outside the repo.
+ * Two checks close that hole: (1) the resolved namespace must still live inside
+ * the resolved repo-root, and (2) the resolved target must live inside the
+ * resolved namespace.
+ */
 function isUnderNamespace(target, repoRoot) {
-  const nsRoot = path.join(repoRoot, WORKTREE_NAMESPACE);
-  return target === nsRoot || target.startsWith(nsRoot + path.sep);
+  const realRoot = canonicalize(repoRoot);
+  const nsRoot = canonicalize(path.join(repoRoot, WORKTREE_NAMESPACE));
+  const real = canonicalize(target);
+  const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
+  // Namespace must resolve inside the repo (refuses a symlinked-out namespace),
+  // and the target must resolve inside that namespace.
+  return within(nsRoot, realRoot) && within(real, nsRoot);
 }
 
 export function cleanupWorktree({ repoRoot, issue, pr, path: explicitPath }, { gitCommand = "git" } = {}) {
