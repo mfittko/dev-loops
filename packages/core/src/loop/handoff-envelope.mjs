@@ -21,6 +21,7 @@ import {
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
+import { resolveHumanMergeOnly } from "../config/config.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -243,10 +244,18 @@ function deriveTarget(bundle, repo) {
 // ---------------------------------------------------------------------------
 
 function deriveStopRules(settings, strategy) {
-  if (settings?.autonomy?.stopAt && Array.isArray(settings.autonomy.stopAt)) {
-    return [...settings.autonomy.stopAt];
+  const base = (settings?.autonomy?.stopAt && Array.isArray(settings.autonomy.stopAt))
+    ? [...settings.autonomy.stopAt]
+    : [...(STRATEGY_DEFAULT_STOP_RULES[strategy] ?? [])];
+  // Fail closed: humanMergeOnly forces "merge" into the dispatched agent's
+  // stopRules regardless of configured stopAt, mirroring the authoritative
+  // resolveAutonomyStopAt(config) invariant. Without this, a custom
+  // stopAt that omits "merge" (e.g. [] or ["draft-pr"]) would tell the agent
+  // NOT to stop at merge — a direct humanMergeOnly bypass.
+  if (resolveHumanMergeOnly(settings) && !base.includes("merge")) {
+    base.push("merge");
   }
-  return [...(STRATEGY_DEFAULT_STOP_RULES[strategy] ?? [])];
+  return base;
 }
 
 // ---------------------------------------------------------------------------

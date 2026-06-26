@@ -531,6 +531,17 @@ test("stop-rules: local_implementation defaults to empty array", () => {
   assert.deepEqual(env.stopRules, []);
 });
 
+test("stop-rules: humanMergeOnly forces 'merge' even when stopAt is []", () => {
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    { autonomy: { stopAt: [], humanMergeOnly: true } },
+    {},
+    defaultOptions
+  );
+
+  assert.ok(env.stopRules.includes("merge"), "humanMergeOnly must force 'merge' into derived stopRules");
+});
+
 // ===========================================================================
 // 7. requiredReads derivation
 // ===========================================================================
