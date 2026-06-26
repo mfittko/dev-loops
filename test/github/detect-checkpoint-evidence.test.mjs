@@ -25,13 +25,13 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   env: {
     ...process.env,
     ...(options.env ?? {}),
-    PI_SUBAGENT_RUN_ID: options.env?.PI_SUBAGENT_RUN_ID ?? "",
+    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
   },
 });
 
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
-  return { ...env, PI_SUBAGENT_RUN_ID: "" };
+  return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
 test("parseGateReviewCommentBody parses the deterministic visible gate comment format", () => {
@@ -1047,7 +1047,7 @@ test("detect-checkpoint-evidence fails closed when async run no longer owns the 
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], {
       cwd: tempDir,
-      env: { ...process.env, PI_SUBAGENT_RUN_ID: "run-stale" },
+      env: { ...process.env, DEVLOOPS_RUN_ID: "run-stale" },
     });
 
     assert.equal(result.code, 1);
@@ -1084,7 +1084,7 @@ test("detect-checkpoint-evidence does not fail closed when async run has no owne
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], {
       cwd: tempDir,
-      env: { ...env, PI_SUBAGENT_RUN_ID: "run-stale" },
+      env: { ...env, DEVLOOPS_RUN_ID: "run-stale" },
     });
 
     // With #569, missing ownership is advisory — gate operations should not

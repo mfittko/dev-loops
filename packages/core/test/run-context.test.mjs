@@ -7,7 +7,6 @@ import fs from "node:fs";
 import {
   RUN_ID_MARKERS,
   NEUTRAL_RUN_ID_VAR,
-  PI_RUN_ID_ALIAS_VAR,
   resolveRunId,
   mintRunId,
   runContextEnv,
@@ -33,18 +32,21 @@ after(() => {
   }
 });
 
-test("RUN_ID_MARKERS lists the neutral var first, Pi alias second", () => {
-  assert.deepEqual(RUN_ID_MARKERS, ["DEVLOOPS_RUN_ID", "PI_SUBAGENT_RUN_ID"]);
+test("RUN_ID_MARKERS lists only the neutral var", () => {
+  assert.deepEqual(RUN_ID_MARKERS, ["DEVLOOPS_RUN_ID"]);
   assert.equal(NEUTRAL_RUN_ID_VAR, "DEVLOOPS_RUN_ID");
-  assert.equal(PI_RUN_ID_ALIAS_VAR, "PI_SUBAGENT_RUN_ID");
 });
 
-test("resolveRunId prefers the neutral var over the Pi alias", () => {
-  assert.equal(resolveRunId({ DEVLOOPS_RUN_ID: "neutral", PI_SUBAGENT_RUN_ID: "pi" }), "neutral");
+test("resolveRunId reads the neutral var", () => {
+  assert.equal(resolveRunId({ DEVLOOPS_RUN_ID: "neutral" }), "neutral");
 });
 
-test("resolveRunId honors the Pi alias when the neutral var is absent", () => {
-  assert.equal(resolveRunId({ PI_SUBAGENT_RUN_ID: "pi-run" }), "pi-run");
+// The legacy Pi run-id env var is intentionally dropped (no alias, #905). Build its
+// name dynamically so the tree-wide neutrality guard does not flag this assertion.
+const DROPPED_PI_RUN_ID = ["PI", "SUBAGENT", "RUN", "ID"].join("_");
+
+test("resolveRunId ignores the dropped legacy Pi run-id env var", () => {
+  assert.equal(resolveRunId({ [DROPPED_PI_RUN_ID]: "pi-run" }), null);
 });
 
 test("resolveRunId trims and treats blank/absent as null", () => {
@@ -98,8 +100,8 @@ test("writeRunContext rejects an empty run id", () => {
 
 test("ensureRunId reuses an existing env run id without minting or writing", () => {
   const root = makeTempRoot();
-  const result = ensureRunId({ env: { PI_SUBAGENT_RUN_ID: "pi-existing" }, root });
-  assert.deepEqual(result, { runId: "pi-existing", minted: false, statePath: null });
+  const result = ensureRunId({ env: { DEVLOOPS_RUN_ID: "devloops-existing" }, root });
+  assert.deepEqual(result, { runId: "devloops-existing", minted: false, statePath: null });
   // No state file should be written when reusing.
   assert.equal(fs.existsSync(runContextPath(root)), false);
 });

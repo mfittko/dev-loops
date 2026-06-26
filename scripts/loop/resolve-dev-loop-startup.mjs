@@ -437,10 +437,10 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
       return buildAsyncStartRejection(validation);
     }
   }
-  const PI_WORKTREE_BYPASS_VAR = "PI_WORKTREE_BYPASS";
+  const DEVLOOPS_WORKTREE_BYPASS_VAR = "DEVLOOPS_WORKTREE_BYPASS";
   if (
     strategyKey === "local_implementation" &&
-    (effectiveEnv[PI_WORKTREE_BYPASS_VAR] ?? "").trim() !== "1"
+    (effectiveEnv[DEVLOOPS_WORKTREE_BYPASS_VAR] ?? "").trim() !== "1"
   ) {
     try {
       const worktreeOutput = execFileSync("git", ["worktree", "list"], {

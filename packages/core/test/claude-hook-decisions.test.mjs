@@ -81,7 +81,7 @@ test("decideWriteGuard allows the dev-loop subagent context via the CA2 run id",
   );
   // Pi alias is honored by resolveRunId too.
   assert.equal(
-    decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: { PI_SUBAGENT_RUN_ID: "run-1" } }).decision,
+    decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: { DEVLOOPS_RUN_ID: "run-1" } }).decision,
     "allow",
   );
 });

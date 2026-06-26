@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 
-const PI_PREPUSH_BYPASS_VAR = "PI_PREPUSH_BYPASS";
+const DEVLOOPS_PREPUSH_BYPASS_VAR = "DEVLOOPS_PREPUSH_BYPASS";
 const BLOCKED_REFS = ["refs/heads/main"];
 
 const USAGE = `Usage:
@@ -17,7 +17,7 @@ Exit codes:
   1  Push blocked (target is a protected ref)
 
 Bypass:
-  PI_PREPUSH_BYPASS=1   Skip all checks (for emergencies only).
+  DEVLOOPS_PREPUSH_BYPASS=1   Skip all checks (for emergencies only).
                          Preferred: push a feature branch and open a PR.`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -88,8 +88,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const options = parsePrePushGuardCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return { ok: true, help: true }; }
 
-  if (env[PI_PREPUSH_BYPASS_VAR] === "1") {
-    stdout.write(JSON.stringify({ ok: true, bypassed: true, reason: `${PI_PREPUSH_BYPASS_VAR}=1` }) + "\n");
+  if (env[DEVLOOPS_PREPUSH_BYPASS_VAR] === "1") {
+    stdout.write(JSON.stringify({ ok: true, bypassed: true, reason: `${DEVLOOPS_PREPUSH_BYPASS_VAR}=1` }) + "\n");
     return { ok: true, bypassed: true };
   }
 

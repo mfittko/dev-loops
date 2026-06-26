@@ -116,7 +116,7 @@ test("info.mjs --issue produces human-readable output with gh stubs", async () =
     await import("fs").then(fs => fs.promises.chmod(ghPath, 0o755));
 
     const { code, stdout, stderr } = await runNode(["--issue", String(issueNumber), "--repo", repoSlug], {
-      env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}`, PI_SUBAGENT_RUN_ID: "info-test" },
+      env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}`, DEVLOOPS_RUN_ID: "info-test" },
       cwd: tmpDir,
     });
 
@@ -216,7 +216,7 @@ test("info.mjs --issue --json produces valid JSON with gh stubs", async () => {
     await import("fs").then(fs => fs.promises.chmod(ghPath, 0o755));
 
     const { code, stdout, stderr } = await runNode(["--issue", "1", "--repo", repoSlug, "--json"], {
-      env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}`, PI_SUBAGENT_RUN_ID: "info-test" },
+      env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}`, DEVLOOPS_RUN_ID: "info-test" },
       cwd: tmpDir,
     });
 

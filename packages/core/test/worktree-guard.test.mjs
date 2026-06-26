@@ -8,7 +8,7 @@ import {
   parseAllWorktreePaths,
   isListedWorktree,
   detectSubagentAvailability,
-  PI_SUBAGENT_AVAILABLE_VAR,
+  DEVLOOPS_SUBAGENT_AVAILABLE_VAR,
 } from "../src/loop/worktree-guard.mjs";
 
 // ---------------------------------------------------------------------------
@@ -208,40 +208,37 @@ test("isListedWorktree: false when cwd is under a non-worktree directory", () =>
 // detectSubagentAvailability
 // ---------------------------------------------------------------------------
 
-test("detectSubagentAvailability: true when PI_SUBAGENT_AVAILABLE=1 (alias)", () => {
-  assert.equal(detectSubagentAvailability({ env: { PI_SUBAGENT_AVAILABLE: "1" } }), true);
-});
-
 test("detectSubagentAvailability: true when the neutral DEVLOOPS_SUBAGENT_AVAILABLE=1", () => {
   assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "1" } }), true);
 });
 
-test("detectSubagentAvailability: explicit neutral '0' wins over the Pi alias (precedence)", () => {
+test("detectSubagentAvailability: explicit '0' is respected as not available", () => {
   assert.equal(
-    detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "0", PI_SUBAGENT_AVAILABLE: "1" } }),
+    detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "0" } }),
     false,
   );
 });
 
-test("detectSubagentAvailability: falls back to the Pi alias only when the neutral var is unset/blank", () => {
-  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "", PI_SUBAGENT_AVAILABLE: "1" } }), true);
-  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "  ", PI_SUBAGENT_AVAILABLE: "1" } }), true);
+test("detectSubagentAvailability: ignores the dropped legacy Pi availability env var", () => {
+  // Built dynamically so the tree-wide neutrality guard does not flag this assertion.
+  const droppedPiAvailable = ["PI", "SUBAGENT", "AVAILABLE"].join("_");
+  assert.equal(detectSubagentAvailability({ env: { [droppedPiAvailable]: "1" } }), false);
 });
 
-test("detectSubagentAvailability: false when PI_SUBAGENT_AVAILABLE is not set", () => {
+test("detectSubagentAvailability: false when DEVLOOPS_SUBAGENT_AVAILABLE is not set", () => {
   assert.equal(detectSubagentAvailability({ env: {} }), false);
 });
 
-test("detectSubagentAvailability: false when PI_SUBAGENT_AVAILABLE is empty", () => {
-  assert.equal(detectSubagentAvailability({ env: { PI_SUBAGENT_AVAILABLE: "" } }), false);
+test("detectSubagentAvailability: false when DEVLOOPS_SUBAGENT_AVAILABLE is empty", () => {
+  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "" } }), false);
 });
 
-test("detectSubagentAvailability: false when PI_SUBAGENT_AVAILABLE is zero", () => {
-  assert.equal(detectSubagentAvailability({ env: { PI_SUBAGENT_AVAILABLE: "0" } }), false);
+test("detectSubagentAvailability: false when DEVLOOPS_SUBAGENT_AVAILABLE is zero", () => {
+  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "0" } }), false);
 });
 
-test("detectSubagentAvailability: false when PI_SUBAGENT_AVAILABLE is whitespace", () => {
-  assert.equal(detectSubagentAvailability({ env: { PI_SUBAGENT_AVAILABLE: "  " } }), false);
+test("detectSubagentAvailability: false when DEVLOOPS_SUBAGENT_AVAILABLE is whitespace", () => {
+  assert.equal(detectSubagentAvailability({ env: { DEVLOOPS_SUBAGENT_AVAILABLE: "  " } }), false);
 });
 
 test("detectSubagentAvailability: defaults to process.env when no arg", () => {
@@ -251,9 +248,9 @@ test("detectSubagentAvailability: defaults to process.env when no arg", () => {
 });
 
 // ---------------------------------------------------------------------------
-// PI_SUBAGENT_AVAILABLE_VAR constant
+// DEVLOOPS_SUBAGENT_AVAILABLE_VAR constant
 // ---------------------------------------------------------------------------
 
-test("PI_SUBAGENT_AVAILABLE_VAR: matches the env var name", () => {
-  assert.equal(PI_SUBAGENT_AVAILABLE_VAR, "PI_SUBAGENT_AVAILABLE");
+test("DEVLOOPS_SUBAGENT_AVAILABLE_VAR: matches the env var name", () => {
+  assert.equal(DEVLOOPS_SUBAGENT_AVAILABLE_VAR, "DEVLOOPS_SUBAGENT_AVAILABLE");
 });

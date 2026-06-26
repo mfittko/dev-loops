@@ -10,10 +10,9 @@
  * async context marker. When the marker is absent, the check fails closed
  * and returns a machine-readable rejection rather than silently proceeding.
  *
- * Async context markers (required when workflow.asyncStartMode is `required`),
- * neutral-first — see `@dev-loops/core/loop/run-context`:
+ * Async context marker (required when workflow.asyncStartMode is `required`)
+ * — see `@dev-loops/core/loop/run-context`:
  * - DEVLOOPS_RUN_ID env var (neutral, harness-agnostic)
- * - PI_SUBAGENT_RUN_ID env var (Pi subagent framework; retained as a compatibility alias)
  *
  * Allowed modes:
  * - workflow.asyncStartMode: required | allowed
@@ -30,11 +29,10 @@ import { RUN_ID_MARKERS, isClaudeHarness } from "./run-context.mjs";
 // ---------------------------------------------------------------------------
 
 /**
- * Environment variable names that indicate an async context, neutral-first.
+ * Environment variable names that indicate an async context.
  * Sourced from the shared run-context contract so the markers stay in one place.
- * The historical name is kept for back-compat; it now includes DEVLOOPS_RUN_ID.
  */
-export const PI_ASYNC_CONTEXT_MARKERS = RUN_ID_MARKERS;
+export const ASYNC_CONTEXT_MARKERS = RUN_ID_MARKERS;
 
 /** Supported workflow async-start modes. */
 export const ASYNC_START_MODE = Object.freeze({
@@ -130,8 +128,8 @@ export function validateAsyncStartContext({
     };
   }
 
-  // Check for any async context marker (neutral DEVLOOPS_RUN_ID or the Pi alias)
-  for (const marker of PI_ASYNC_CONTEXT_MARKERS) {
+  // Check for any async context marker (DEVLOOPS_RUN_ID)
+  for (const marker of ASYNC_CONTEXT_MARKERS) {
     const value = env[marker];
     if (typeof value === "string" && value.trim().length > 0) {
       return {
@@ -150,24 +148,7 @@ export function validateAsyncStartContext({
     };
   }
 
-  const sessionOnlyMarker =
-    (typeof env.PI_SESSION_ID === "string" && env.PI_SESSION_ID.trim().length > 0)
-      ? "PI_SESSION_ID"
-      : ((typeof env.PI_ASYNC_CONTEXT === "string" && env.PI_ASYNC_CONTEXT.trim().length > 0)
-          ? "PI_ASYNC_CONTEXT"
-          : null);
-  if (sessionOnlyMarker !== null) {
-    return {
-      status: ASYNC_START_STATUS.REJECTED,
-      reason:
-        `Detected ${sessionOnlyMarker}, but GitHub-first async-start requires a visible ` +
-        "subagent run id for inspectable startup/resume evidence. " +
-        "Set DEVLOOPS_RUN_ID (or the PI_SUBAGENT_RUN_ID alias) to proceed. Any exception must come from repository-maintained workflow policy.",
-      detectedMarker: null,
-    };
-  }
-
-  if (env.PI_DEV_LOOP_DETACHED === "1") {
+  if (env.DEVLOOPS_DETACHED === "1") {
     return {
       status: ASYNC_START_STATUS.REJECTED,
       reason:
@@ -185,7 +166,7 @@ export function validateAsyncStartContext({
       "No async context detected. " +
       "The dev-loop must run within a visible async subagent session, " +
       "not as a detached local process. " +
-      `Set ${PI_ASYNC_CONTEXT_MARKERS[0]} (or the PI_SUBAGENT_RUN_ID alias) to proceed. ` +
+      `Set ${ASYNC_CONTEXT_MARKERS[0]} to proceed. ` +
       "Repository-maintained workflow policy controls any exceptions.",
     detectedMarker: null,
   };

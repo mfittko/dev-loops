@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   ASYNC_START_MODE,
   ASYNC_START_STATUS,
-  PI_ASYNC_CONTEXT_MARKERS,
+  ASYNC_CONTEXT_MARKERS,
   buildAsyncStartRejection,
   validateAsyncStartContext,
   resolveEffectiveAsyncStartMode,
@@ -14,43 +14,28 @@ import {
 // validateAsyncStartContext: rejection (no markers present)
 // ---------------------------------------------------------------------------
 
-test("validateAsyncStartContext: rejects when no Pi context markers are present", () => {
+test("validateAsyncStartContext: rejects when no context markers are present", () => {
   const result = validateAsyncStartContext({ env: {} });
   assert.equal(result.status, ASYNC_START_STATUS.REJECTED);
   assert.equal(result.detectedMarker, null);
   assert.ok(result.reason.includes("No async context detected"));
 });
 
-test("validateAsyncStartContext: rejects when markers are empty strings", () => {
-  const env = {
-    PI_SUBAGENT_RUN_ID: "",
-    PI_SESSION_ID: "",
-    PI_ASYNC_CONTEXT: "",
-  };
+test("validateAsyncStartContext: rejects when the marker is an empty string", () => {
+  const env = { DEVLOOPS_RUN_ID: "" };
   const result = validateAsyncStartContext({ env });
   assert.equal(result.status, ASYNC_START_STATUS.REJECTED);
 });
 
-test("validateAsyncStartContext: rejects when markers are whitespace-only", () => {
-  const env = {
-    PI_SUBAGENT_RUN_ID: "   ",
-    PI_SESSION_ID: "\t",
-    PI_ASYNC_CONTEXT: " ",
-  };
+test("validateAsyncStartContext: rejects when the marker is whitespace-only", () => {
+  const env = { DEVLOOPS_RUN_ID: "   " };
   const result = validateAsyncStartContext({ env });
   assert.equal(result.status, ASYNC_START_STATUS.REJECTED);
 });
 
 // ---------------------------------------------------------------------------
-// validateAsyncStartContext: valid (Pi-managed context detected)
+// validateAsyncStartContext: valid (async context detected)
 // ---------------------------------------------------------------------------
-
-test("validateAsyncStartContext: valid when PI_SUBAGENT_RUN_ID is set (alias)", () => {
-  const env = { PI_SUBAGENT_RUN_ID: "run-abc123" };
-  const result = validateAsyncStartContext({ env });
-  assert.equal(result.status, ASYNC_START_STATUS.VALID);
-  assert.equal(result.detectedMarker, "PI_SUBAGENT_RUN_ID");
-});
 
 test("validateAsyncStartContext: valid when the neutral DEVLOOPS_RUN_ID is set", () => {
   const env = { DEVLOOPS_RUN_ID: "devloops-run-1" };
@@ -59,38 +44,13 @@ test("validateAsyncStartContext: valid when the neutral DEVLOOPS_RUN_ID is set",
   assert.equal(result.detectedMarker, "DEVLOOPS_RUN_ID");
 });
 
-test("validateAsyncStartContext: neutral marker wins when both are set", () => {
-  const env = { DEVLOOPS_RUN_ID: "devloops-run-1", PI_SUBAGENT_RUN_ID: "pi-run" };
-  const result = validateAsyncStartContext({ env });
-  assert.equal(result.status, ASYNC_START_STATUS.VALID);
-  assert.equal(result.detectedMarker, "DEVLOOPS_RUN_ID");
-});
-
-test("validateAsyncStartContext: rejects when only PI_SESSION_ID is set without a run id", () => {
-  const env = { PI_SESSION_ID: "session-xyz" };
+test("validateAsyncStartContext: ignores the dropped legacy Pi run-id env var", () => {
+  // Built dynamically so the tree-wide neutrality guard does not flag this assertion.
+  const droppedPiRunId = ["PI", "SUBAGENT", "RUN", "ID"].join("_");
+  const env = { [droppedPiRunId]: "pi-run" };
   const result = validateAsyncStartContext({ env });
   assert.equal(result.status, ASYNC_START_STATUS.REJECTED);
   assert.equal(result.detectedMarker, null);
-  assert.ok(result.reason.includes("PI_SUBAGENT_RUN_ID"));
-});
-
-test("validateAsyncStartContext: rejects when only PI_ASYNC_CONTEXT is set without a run id", () => {
-  const env = { PI_ASYNC_CONTEXT: "1" };
-  const result = validateAsyncStartContext({ env });
-  assert.equal(result.status, ASYNC_START_STATUS.REJECTED);
-  assert.equal(result.detectedMarker, null);
-  assert.ok(result.reason.includes("PI_SUBAGENT_RUN_ID"));
-});
-
-test("validateAsyncStartContext: first matching marker wins (priority order)", () => {
-  const env = {
-    PI_SUBAGENT_RUN_ID: "run-1",
-    PI_SESSION_ID: "sess-2",
-    PI_ASYNC_CONTEXT: "1",
-  };
-  const result = validateAsyncStartContext({ env });
-  assert.equal(result.status, ASYNC_START_STATUS.VALID);
-  assert.equal(result.detectedMarker, "PI_SUBAGENT_RUN_ID");
 });
 
 // ---------------------------------------------------------------------------
@@ -109,11 +69,11 @@ test("validateAsyncStartContext: allowed when workflow.asyncStartMode=allowed", 
 
 test("validateAsyncStartContext: allowed mode still reports valid when run id is present", () => {
   const result = validateAsyncStartContext({
-    env: { PI_SUBAGENT_RUN_ID: "run-1" },
+    env: { DEVLOOPS_RUN_ID: "run-1" },
     asyncStartMode: ASYNC_START_MODE.ALLOWED,
   });
   assert.equal(result.status, ASYNC_START_STATUS.VALID);
-  assert.equal(result.detectedMarker, "PI_SUBAGENT_RUN_ID");
+  assert.equal(result.detectedMarker, "DEVLOOPS_RUN_ID");
 });
 
 test("validateAsyncStartContext: rejects unrecognized workflow.asyncStartMode", () => {
@@ -157,11 +117,8 @@ test("buildAsyncStartRejection: builds error payload from rejected validation", 
 // Constants are correctly exported
 // ---------------------------------------------------------------------------
 
-test("PI_ASYNC_CONTEXT_MARKERS contains expected markers", () => {
-  assert.ok(PI_ASYNC_CONTEXT_MARKERS.includes("PI_SUBAGENT_RUN_ID"));
-  assert.ok(PI_ASYNC_CONTEXT_MARKERS.includes("DEVLOOPS_RUN_ID"));
-  assert.equal(PI_ASYNC_CONTEXT_MARKERS.length, 2);
-  assert.equal(PI_ASYNC_CONTEXT_MARKERS[0], "DEVLOOPS_RUN_ID", "neutral marker must be first (precedence)");
+test("ASYNC_CONTEXT_MARKERS contains the neutral marker only", () => {
+  assert.deepEqual(ASYNC_CONTEXT_MARKERS, ["DEVLOOPS_RUN_ID"]);
 });
 
 test("ASYNC_START_MODE has all expected values", () => {

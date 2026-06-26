@@ -19,7 +19,7 @@ const USAGE = `Usage:
   pr-runner-coordination.mjs release --repo <owner/name> --pr <number> [--run-id <id>]
 Durable one-runner-per-PR coordination helper.
 If --run-id is omitted for claim/assert/release/takeover, DEVLOOPS_RUN_ID is used
-(falling back to the PI_SUBAGENT_RUN_ID alias).
+(via DEVLOOPS_RUN_ID).
 Output:
   stdout: { "ok": true, ... }
   stderr: { "ok": false, "error": "...", ... }

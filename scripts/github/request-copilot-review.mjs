@@ -30,7 +30,7 @@ Optional:
                             the last Copilot review. Refused when the PR head
                             has not changed since the last review.
 Debug:
-  PI_DEV_LOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
+  DEVLOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
                             convergence detection falls back to unsuppressed behavior
 Output (stdout, JSON):
   { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_draft",
@@ -262,7 +262,7 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
     const interpretation = interpretLoopState(snapshot);
     return interpretation.sameHeadCleanConverged;
   } catch (error) {
-    if (runtime?.env?.PI_DEV_LOOPS_DEBUG === "1") {
+    if (runtime?.env?.DEVLOOPS_DEBUG === "1") {
       const detail = error instanceof Error ? error.message : String(error);
       process.stderr.write(`[request-copilot-review] same-head clean-convergence detection unavailable: ${detail}\n`);
     }
@@ -302,7 +302,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
       interpretation,
     };
   } catch (error) {
-    if (runtime?.env?.PI_DEV_LOOPS_DEBUG === "1") {
+    if (runtime?.env?.DEVLOOPS_DEBUG === "1") {
       const detail = error instanceof Error ? error.message : String(error);
       process.stderr.write(`[request-copilot-review] round-cap auto-rerequest detection unavailable: ${detail}\n`);
     }

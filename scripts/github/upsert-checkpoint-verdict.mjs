@@ -1194,7 +1194,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (existing) {
     const updated = await updateComment({ repo: options.repo, commentId: existing.commentId, body: desiredBody }, { env, ghCommand });
     // Post-update verification: verify the updated comment is visible via direct API fetch by comment ID.
-    // A run id is set (production context) — DEVLOOPS_RUN_ID, or the PI_SUBAGENT_RUN_ID alias.
+    // A run id is set (production context) — DEVLOOPS_RUN_ID.
     let updateVerificationWarning = null;
     if (envRunId) {
       let verified = await verifyComment({ repo: options.repo, commentId: updated.commentId }, { env, ghCommand });
@@ -1229,7 +1229,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // comment is not yet returned by paginated list endpoints. A direct fetch
   // by comment ID confirms the comment is persisted, preventing the evidence
   // checker from falsely reporting "missing" and triggering a duplicate post.
-  // Only active when a run id is set (production context) — DEVLOOPS_RUN_ID or the PI_SUBAGENT_RUN_ID alias.
+  // Only active when a run id is set (production context) — DEVLOOPS_RUN_ID.
   let verified = true;
   let verificationWarning = null;
   if (envRunId) {

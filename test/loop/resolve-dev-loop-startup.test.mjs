@@ -106,7 +106,7 @@ test("buildResolveDevLoopStartupResult maps local implementation to the local ro
     },
     artifactState: "not_applicable",
     loopState: "active",
-  }, { env: { PI_WORKTREE_BYPASS: "1" } });
+  }, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } });
 
   assert.equal(result.bundleKind, "resolved");
   assert.equal(result.selectedStrategy, "local_implementation");
@@ -130,7 +130,7 @@ test("buildResolveDevLoopStartupResult maps linked Copilot follow-up to the PR f
     artifactState: "open",
     issueLinkageResolution: "resolved_linked_pr",
     loopState: "unresolved_feedback_present",
-  }, { env: { PI_SUBAGENT_RUN_ID: "test-run-123" }, cwd: os.tmpdir() });
+  }, { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: os.tmpdir() });
 
   assert.equal(result.bundleKind, "resolved");
   assert.equal(result.selectedStrategy, "copilot_pr_followup");
@@ -338,7 +338,7 @@ test("buildResolveDevLoopStartupResult maps durable-artifact 'required' to check
         artifactState: "not_applicable",
         loopState: "active",
       },
-      { env: { PI_SUBAGENT_RUN_ID: "test-run-123" }, cwd: tempDir },
+      { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: tempDir },
     );
 
     // The resolver auto-reads the checkpoint file and maps "required" → "missing".
@@ -377,7 +377,7 @@ test("buildResolveDevLoopStartupResult overrides caller-provided state with on-d
         loopState: "active",
         retrospectiveCheckpointState: "complete",
       },
-      { env: { PI_SUBAGENT_RUN_ID: "test-run-123" }, cwd: tempDir },
+      { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: tempDir },
     );
 
     // On-disk "required" overrides caller-provided "complete". The resolver
@@ -413,7 +413,7 @@ test("buildResolveDevLoopStartupResult fails closed when checkpoint file is malf
         artifactState: "not_applicable",
         loopState: "active",
       },
-      { env: { PI_SUBAGENT_RUN_ID: "test-run-123" }, cwd: tempDir },
+      { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: tempDir },
     );
 
     // Malformed file -> fail closed with missing checkpoint state -> needs_reconcile.
@@ -448,7 +448,7 @@ test("buildResolveDevLoopStartupResult fails closed when checkpoint file has unr
         artifactState: "not_applicable",
         loopState: "active",
       },
-      { env: { PI_SUBAGENT_RUN_ID: "test-run-123" }, cwd: tempDir },
+      { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: tempDir },
     );
 
     // Unrecognized state -> fail closed with missing -> needs_reconcile.
@@ -460,7 +460,7 @@ test("buildResolveDevLoopStartupResult fails closed when checkpoint file has unr
   }
 });
 
-test("buildResolveDevLoopStartupResult rejects async-required strategy without PI_SUBAGENT_RUN_ID", () => {
+test("buildResolveDevLoopStartupResult rejects async-required strategy without DEVLOOPS_RUN_ID", () => {
   const result = buildResolveDevLoopStartupResult(
     {
       currentState: {
@@ -482,7 +482,7 @@ test("buildResolveDevLoopStartupResult rejects async-required strategy without P
   assert.ok(result.error.includes("async context"));
 });
 
-test("buildResolveDevLoopStartupResult allows async-required strategy with PI_SUBAGENT_RUN_ID", () => {
+test("buildResolveDevLoopStartupResult allows async-required strategy with DEVLOOPS_RUN_ID", () => {
   const result = buildResolveDevLoopStartupResult(
     {
       currentState: {
@@ -496,7 +496,7 @@ test("buildResolveDevLoopStartupResult allows async-required strategy with PI_SU
       issueLinkageResolution: "resolved_linked_pr",
       loopState: "unresolved_feedback_present",
     },
-    { env: { PI_SUBAGENT_RUN_ID: "test-run-123" } },
+    { env: { DEVLOOPS_RUN_ID: "test-run-123" } },
   );
 
   assert.equal(result.ok, true);
@@ -537,7 +537,7 @@ test("buildResolveDevLoopStartupResult does not enforce async-start on local_imp
       artifactState: "not_applicable",
       loopState: "active",
     },
-    { env: { PI_WORKTREE_BYPASS: "1" } },
+    { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } },
   );
 
   assert.equal(result.ok, true);
@@ -646,14 +646,14 @@ test("resolver resolves normally for local_implementation from worktree", () => 
   }
 });
 
-test("resolver bypasses worktree check with PI_WORKTREE_BYPASS=1 from main checkout", () => {
+test("resolver bypasses worktree check with DEVLOOPS_WORKTREE_BYPASS=1 from main checkout", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-bypass-"));
   try {
     writeWorktreeEnv(tempDir);
     const env = {
       ...process.env,
       PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}`,
-      PI_WORKTREE_BYPASS: "1",
+      DEVLOOPS_WORKTREE_BYPASS: "1",
     };
 
     const result = buildResolveDevLoopStartupResult(
@@ -687,7 +687,7 @@ test("resolver does not block non-local_implementation strategies from main chec
     const env = {
       ...process.env,
       PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}`,
-      PI_SUBAGENT_RUN_ID: "test-run-123",
+      DEVLOOPS_RUN_ID: "test-run-123",
     };
 
     const result = buildResolveDevLoopStartupResult(
@@ -831,7 +831,7 @@ test("runCli --issue uses config inputSource=phase-docs to choose phase-doc loca
       cwd: tempDir,
       env: {
         ...ghStub.env,
-        PI_WORKTREE_BYPASS: "1",
+        DEVLOOPS_WORKTREE_BYPASS: "1",
       },
     });
 
@@ -865,8 +865,8 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
       cwd: tempDir,
       env: {
         ...ghStub.env,
-        PI_WORKTREE_BYPASS: "1",
-        PI_SUBAGENT_RUN_ID: "test-run-copilot-author",
+        DEVLOOPS_WORKTREE_BYPASS: "1",
+        DEVLOOPS_RUN_ID: "test-run-copilot-author",
       },
     });
     assert.equal(result.code, 0, result.stderr);
@@ -901,8 +901,8 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
       cwd: tempDir,
       env: {
         ...ghStub.env,
-        PI_WORKTREE_BYPASS: "1",
-        PI_SUBAGENT_RUN_ID: "test-run-external-author",
+        DEVLOOPS_WORKTREE_BYPASS: "1",
+        DEVLOOPS_RUN_ID: "test-run-external-author",
       },
     });
     assert.equal(result.code, 0, result.stderr);
