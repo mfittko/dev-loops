@@ -83,5 +83,5 @@ you want to change.
 
 ## See also
 
-- [`CHANGELOG.md`](../CHANGELOG.md) — the `0.3.0` entry records the full env-var mapping.
+- [`CHANGELOG.md`](../CHANGELOG.md) — the `PI_*`→`DEVLOOPS_*` env-var rename entry records the full mapping.
 - [Extension Documentation](../extension/README.md) — config keys and defaults.
