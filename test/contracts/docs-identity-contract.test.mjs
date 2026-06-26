@@ -22,6 +22,9 @@ const STALE_IDENTITY_RE = /(?:@)?pi-dev-loops/;
 // and must NOT trip the guard. Any genuine rename-history doc belongs here.
 const HISTORICAL_ARTIFACT_ALLOWLIST = new Set([
   "docs/phase-a-repo-slug-survey.md",
+  // The migration guide MUST name the old `pi-dev-loops` slug — that's what consumers are
+  // migrating FROM. Its filename/URL is deliberately slug-free so README links don't trip.
+  "docs/migrating-to-dev-loops.md",
 ]);
 
 // Recursively collect files under `dir` whose extension is in `extensions`. A MISSING directory
