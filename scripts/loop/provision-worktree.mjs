@@ -198,10 +198,19 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
           continue;
         }
         const dest = path.join(dst, path.relative(root, src));
-        const res = kind === "copy"
-          ? await provisionCopy(src, dest, logWarn)
-          : await provisionLink(src, dest, logWarn);
-        actions.push({ entry, ...res });
+        // Fail-soft per the header promise: a per-entry copy/link failure (e.g.
+        // EACCES, dest conflict the helper didn't catch) logs ONE WARN, records
+        // a skip action, and continues — it never aborts the whole run.
+        try {
+          const res = kind === "copy"
+            ? await provisionCopy(src, dest, logWarn)
+            : await provisionLink(src, dest, logWarn);
+          actions.push({ entry, ...res });
+        } catch (err) {
+          const msg = (err && err.message) ? err.message : String(err);
+          logWarn(`${kind} failed, skipping: ${src} → ${dest}: ${msg}`);
+          actions.push({ entry, mode: "skip", reason: `copy-failed: ${msg}`, src, dest });
+        }
       }
     }
   }

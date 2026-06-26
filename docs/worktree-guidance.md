@@ -45,7 +45,8 @@ node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \
   [--branch <name>] [--base <ref, default origin/main>]
 ```
 
-It prints `{ ok, path, created|reused, provision: <summary> }`. Provisioning is
+It prints `{ ok, path, created|reused, provision: { actions, summary } }` (the
+full `provisionWorktree()` result, not just its summary). Provisioning is
 fail-soft (a warning never aborts the worktree); a `git worktree add` failure is
 a hard error. It does **not** run `npm install` (see dependencies below).
 

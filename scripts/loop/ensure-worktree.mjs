@@ -15,7 +15,8 @@
  * - Does NOT run npm install (out of scope).
  *
  * Prints a JSON result to stdout:
- *   { ok, path, created|reused, provision: <summary> }
+ *   { ok, path, created|reused, provision: { actions, summary } }
+ * (`provision` is the full provisionWorktree() result, not just its summary.)
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
 import { execFileSync } from "node:child_process";
@@ -42,7 +43,7 @@ Optional:
   -h, --help        Show this help.
 Output (stdout, JSON):
   { "ok": true, "path": <p>, "created": bool, "reused": bool,
-    "provision": <summary> }`.trim();
+    "provision": { "actions": [...], "summary": {...} } }`.trim();
 
 const parseError = buildParseError(USAGE);
 

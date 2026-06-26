@@ -35,7 +35,9 @@ Required:
 Optional:
   -h, --help        Show this help.
 Output (stdout, JSON):
-  { "ok": true, "removed": <path>|null, "reason": "<why>" }`.trim();
+  { "ok": bool, "removed": <path>|null, "reason": "<why>" }
+  ok is true on success/skip (incl. fail-soft git errors); false ONLY when the
+  path is refused for being outside ${WORKTREE_NAMESPACE}/ (removed: null).`.trim();
 
 const parseError = buildParseError(USAGE);
 

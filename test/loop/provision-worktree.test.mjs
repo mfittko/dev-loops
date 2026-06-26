@@ -206,6 +206,39 @@ test("provision: config with errors yields zero provisioning actions (fail-close
   }
 });
 
+// ---------------------------------------------------------------------------
+// Fail-soft on a per-entry copy/link error (e.g. EACCES / ENOTDIR): one entry
+// fails but is recorded as a skip and the run does NOT throw; others process.
+// ---------------------------------------------------------------------------
+
+test("provision: a per-entry copy failure is recorded as skip and does not throw", async () => {
+  const fx = makeFixture(
+    "version: 1\nworktree:\n  copyOnInit:\n    - blocked/file.yml\n    - ok.yml\n",
+  );
+  try {
+    mkdirSync(path.join(fx.repoRoot, "blocked"));
+    writeFileSync(path.join(fx.repoRoot, "blocked/file.yml"), "x");
+    writeFileSync(path.join(fx.repoRoot, "ok.yml"), "y");
+    // Make the failing entry's dest parent (worktree/blocked) a FILE so
+    // mkdir(recursive) for blocked/file.yml throws ENOTDIR — a genuine
+    // per-entry fs failure. The "ok.yml" entry is independent and must still copy.
+    writeFileSync(path.join(fx.worktreePath, "blocked"), "not a dir");
+
+    // Must not throw despite the per-entry failure.
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.equal(res.ok, true);
+    // The failed entry is recorded as a skip carrying the failure reason.
+    const failed = res.actions.find((a) => a.mode === "skip" && /copy-failed:/.test(a.reason || ""));
+    assert.ok(failed, `expected a copy-failed skip action, got ${JSON.stringify(res.actions)}`);
+    assert.ok(res.summary.warnings >= 1);
+    // The independent entry still processed — the loop continued past the failure.
+    assert.equal(res.summary.copied, 1);
+    assert.equal(readFileSync(path.join(fx.worktreePath, "ok.yml"), "utf8"), "y");
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("provision: idempotent on reuse (second run skips)", async () => {
   const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/app.yml\n  linkOnInit:\n    - data/big\n");
   try {
