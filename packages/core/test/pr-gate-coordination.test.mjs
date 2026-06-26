@@ -333,7 +333,13 @@ test("round_cap_clean_fallback routes a post-cap clean head to pre_approval_gate
   assert.match(result.reason, /pre_approval_gate/i);
 });
 
-test("round_cap_clean_fallback with clean current-head pre_approval reaches final approval (#896)", () => {
+// #579 (gate review): a round-cap clean fallback with a clean current-head
+// pre_approval_gate but NO clean draft_gate evidence must reconcile the draft
+// gate, NOT jump to final approval. The detect-pr-gate-coordination-state #579
+// post-pass unconditionally downgrades FINAL_APPROVAL_READY → DRAFT_GATE_NEEDED
+// when draftGate.cleanEvidenceExists is false (no ROUND_CAP_CLEAN_FALLBACK
+// exemption), so the core handler must agree to avoid a dead branch.
+test("round_cap_clean_fallback with clean pre_approval but no draft_gate evidence reconciles the draft gate (#579 gate review)", () => {
   const result = evaluatePrGateCoordination({
     pr: 892,
     currentHeadSha: "ef84bca2deadbeef",
@@ -350,10 +356,36 @@ test("round_cap_clean_fallback with clean current-head pre_approval reaches fina
     preApprovalGateMarker: gate({ visible: true, headSha: "ef84bca2", verdict: "clean", contractComplete: true }),
   });
 
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  assert.equal(result.draftGate.cleanEvidenceExists, false);
+  assert.equal(result.draftGateAlreadySatisfied, false);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
+  assert.match(result.reason, /no gate exemptions, #579/i);
+});
+
+test("round_cap_clean_fallback with clean current-head pre_approval AND clean draft_gate evidence reaches final approval (#896)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 892,
+    currentHeadSha: "ef84bca2deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: false,
+    ciStatus: "success",
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    // clean draft_gate evidence on an earlier head satisfies the draft gate
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "ef84bca2", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "ef84bca2", verdict: "clean", contractComplete: true }),
+  });
+
   assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
-  // round-cap clean fallback is the draft-gate equivalent (#587): no separate
-  // clean draft_gate evidence required.
+  assert.equal(result.draftGate.cleanEvidenceExists, true);
   assert.equal(result.draftGateAlreadySatisfied, true);
   assert.match(result.reason, /round-cap clean fallback/i);
 });

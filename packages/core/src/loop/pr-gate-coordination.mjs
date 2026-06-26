@@ -1365,9 +1365,31 @@ function evaluatePrGateCoordinationCore(input = {}) {
         }
       }
 
-      // Round-cap clean fallback is accepted as the draft-gate equivalent (#587),
-      // so a clean pre_approval_gate at the cap reaches final approval even without
-      // separate clean draft_gate evidence.
+      // Mirror LOW_SIGNAL_CONVERGED (#579): a clean current head with no clean
+      // draft_gate evidence must reconcile the draft gate rather than jump to
+      // final approval. This keeps the core handler consistent with the
+      // detect-pr-gate-coordination-state #579 post-pass, which unconditionally
+      // downgrades FINAL_APPROVAL_READY → DRAFT_GATE_NEEDED when
+      // draftGate.cleanEvidenceExists is false (no ROUND_CAP_CLEAN_FALLBACK
+      // exemption). Without this guard the final-approval-without-draft-gate
+      // branch is dead through the real script and asserts behavior it never
+      // produces.
+      if (!draftGate.cleanEvidenceExists) {
+        return buildDraftGateNeededForMergeResult({
+          input,
+          currentHeadSha,
+          draftGate,
+          preApprovalGate,
+          mergeStateStatus,
+          conflictFiles,
+          underlyingReason: "Round-cap clean fallback has clean pre_approval_gate but no clean draft_gate evidence.",
+          refinementArtifact,
+          effectiveLifecycleState,
+        });
+      }
+
+      // Round-cap clean fallback with clean draft_gate evidence reaches final
+      // approval when the current head also has clean pre_approval_gate evidence.
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL]);
       pushUnique(forbiddenActions, [
         PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
