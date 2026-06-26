@@ -557,12 +557,14 @@ async function verifyComment({ repo, commentId }, { env, ghCommand }) {
 //
 // Durability note: there is a bounded window between convertPrToDraft and
 // markPrReady (the recursive verdict post does network I/O) in which a process
-// crash would leave the PR in draft. This is self-healing — the next run re-enters
-// as a draft, posts normally, and a subsequent transition/ready restores it — but
-// the transition is logged (below) so a stuck-draft PR leaves a breadcrumb. There
-// is no mutual exclusion around the GitHub draft toggle itself; the convert and
-// markPrReady mutations are individually idempotent, so cooperating runners cannot
-// produce a permanent draft (only a transient flicker).
+// crash would leave the PR in draft INDEFINITELY — until a later dev-loop run (or a
+// manual `gh pr ready`) restores it. Recovery is automatic but NOT instantaneous:
+// the next run re-enters as a draft, posts normally, and restores ready. The
+// transition is logged (below) so a stuck-draft PR leaves a breadcrumb. There is no
+// mutual exclusion around the GitHub draft toggle itself; the convert and
+// markPrReady mutations are individually idempotent, so concurrent cooperating
+// runners cause at most a transient draft flicker (not a stuck draft) — only a hard
+// crash mid-transition can leave the PR drafted until a subsequent run.
 async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot }) {
   const { convertPrToDraft, markPrReady } = await import("./reconcile-draft-gate.mjs");
   process.stderr.write(
@@ -693,9 +695,15 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       repo: options.repo,
       pr: options.pr,
       gate: "draft_gate",
-      headSha: canonicalHeadSha,
+      // Report the head the existing clean evidence was recorded on (which may be a
+      // stale head — the draft gate is a one-time boundary accepted on any head),
+      // not the request's canonical head, so the field is not misleading.
+      headSha: satisfied.headSha ?? canonicalHeadSha,
       currentHeadSha: evidence.currentHeadSha,
       draftGateAlreadySatisfied: true,
+      // Mirror the field shape of the other success paths for consistent consumers.
+      blockCleanOnFindingSeverities: draftGateConfig.blockCleanOnFindingSeverities,
+      executionMode: satisfied.executionMode ?? DEFAULT_EXECUTION_MODE,
       ...(satisfied.commentId != null ? { commentId: satisfied.commentId } : {}),
       ...(satisfied.commentUrl ? { commentUrl: satisfied.commentUrl } : {}),
     };
