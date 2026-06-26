@@ -554,8 +554,21 @@ async function verifyComment({ repo, commentId }, { env, ghCommand }) {
 // cannot satisfy requireFanoutEvidence on draft_gate), this preserves fanout
 // evidence. On any failure mid-transition the PR is best-effort restored to
 // ready before rethrowing. (#891)
+//
+// Durability note: there is a bounded window between convertPrToDraft and
+// markPrReady (the recursive verdict post does network I/O) in which a process
+// crash would leave the PR in draft. This is self-healing — the next run re-enters
+// as a draft, posts normally, and a subsequent transition/ready restores it — but
+// the transition is logged (below) so a stuck-draft PR leaves a breadcrumb. There
+// is no mutual exclusion around the GitHub draft toggle itself; the convert and
+// markPrReady mutations are individually idempotent, so cooperating runners cannot
+// produce a permanent draft (only a transient flicker).
 async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot }) {
   const { convertPrToDraft, markPrReady } = await import("./reconcile-draft-gate.mjs");
+  process.stderr.write(
+    `[draft_gate] ${options.repo}#${options.pr} is ready but needs clean draft_gate evidence; ` +
+    `temporarily converting to draft to post the verdict, then restoring ready.\n`,
+  );
   const conversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   let result;
   try {
@@ -566,14 +579,21 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
     if (conversion.alreadyDraft !== true) {
       try {
         await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
-      } catch {
-        // Best-effort restore; surface the original error.
+        process.stderr.write(`[draft_gate] restored ${options.repo}#${options.pr} to ready after a failed verdict post.\n`);
+      } catch (restoreError) {
+        // Best-effort restore; surface the original error but log the restore failure
+        // so the transient draft state is not silent.
+        process.stderr.write(
+          `[draft_gate] WARNING: failed to restore ${options.repo}#${options.pr} to ready after a failed verdict post; ` +
+          `it may be left in draft: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}\n`,
+        );
       }
     }
     throw error;
   }
   if (conversion.alreadyDraft !== true) {
     await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+    process.stderr.write(`[draft_gate] restored ${options.repo}#${options.pr} to ready after posting draft_gate evidence.\n`);
   }
   return { ...result, draftTransition: true };
 }
