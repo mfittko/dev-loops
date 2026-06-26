@@ -12,10 +12,9 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)))
 const hooksDir = path.join(repoRoot, ".claude", "hooks");
 
 function runHook(script, payload, env = {}) {
-  // Build a clean env with the run-id markers explicitly removed (not set to `undefined`, whose
+  // Build a clean env with the run-id marker explicitly removed (not set to `undefined`, whose
   // spawnSync handling is version-dependent and could coerce to the string "undefined").
   const childEnv = { ...process.env };
-  delete childEnv.DEVLOOPS_RUN_ID;
   delete childEnv.DEVLOOPS_RUN_ID;
   const res = spawnSync("node", [path.join(hooksDir, script)], {
     input: JSON.stringify(payload),
