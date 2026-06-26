@@ -5,7 +5,10 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { watchCopilotReview } from "../github/probe-copilot-review.mjs";
+import { watchCiStatus } from "../github/probe-ci-status.mjs";
 import { runHandoff } from "./copilot-pr-handoff.mjs";
+import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
+import { DEFAULT_POLL_INTERVAL_MS } from "@dev-loops/core/loop/policy-constants";
 import { detectCopilotSessionActivity } from "./detect-copilot-session-activity.mjs";
 import { parseArgs } from "node:util";
 import {
@@ -236,6 +239,7 @@ export async function runWatchCycle(
     ghCommand = "gh",
     runHandoffImpl = runHandoff,
     watchCopilotReviewImpl = watchCopilotReview,
+    watchCiStatusImpl = watchCiStatus,
     detectCopilotSessionActivityImpl = detectCopilotSessionActivity,
     fetchPrHeadBranchImpl = fetchPrHeadBranch,
     watchWorkflowRunImpl = watchWorkflowRun,
@@ -266,6 +270,34 @@ export async function runWatchCycle(
   }
   if (handoff.watchTimeoutPolicy !== undefined) {
     result.watchTimeoutPolicy = handoff.watchTimeoutPolicy;
+  }
+  // Provider-agnostic CI wait (#917): a waiting_for_ci boundary would otherwise
+  // dead-end at action:"stop". Route it to the helper-owned CI watcher
+  // (CircleCI / GH Actions / external commit-status), not gh run watch.
+  if (handoff.action !== "watch" && handoff.state === STATE.WAITING_FOR_CI) {
+    const ciTimeoutMs = determineWatchTimeout(EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY.defaultTimeoutMs);
+    const ciWatchArgs = {
+      repo: options.repo,
+      pr: options.pr,
+      pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+      timeoutMs: ciTimeoutMs,
+    };
+    const ciWatch = await watchCiStatusImpl(ciWatchArgs, { env, ghCommand });
+    result.ciWatchArgs = ciWatchArgs;
+    result.ciWatch = ciWatch;
+    result.watchStatus = ciWatch.status;
+    // success/failure/changed all need authoritative re-detection (follow-up);
+    // a quiet timeout stays a healthy pending wait.
+    result.cycleDisposition = ciWatch.status === "timeout" ? "pending" : "needs_followup";
+    result.terminal = false;
+    result.contractTrace = buildWatchCycleContractTrace({
+      handoff,
+      watchArgs: result.watchArgs ?? null,
+      watchTimeoutPolicy: result.watchTimeoutPolicy ?? null,
+      watchStatus: ciWatch.status,
+      cycleDisposition: result.cycleDisposition,
+    });
+    return result;
   }
   if (handoff.action !== "watch") {
     result.contractTrace = buildWatchCycleContractTrace({
