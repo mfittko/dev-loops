@@ -4,11 +4,11 @@ import { spawn } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
-tool is ALWAYS a draft and ALWAYS self-assigned. Never call raw \`gh pr create\`.
+tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
 Behavior:
   - injects exactly one \`--draft\` when absent (draft is the only mode)
-  - defaults \`--assignee @me\` when no \`--assignee\` is provided (always self-assigned)
-  - honors an explicit \`--assignee <login>\` when supplied
+  - defaults \`--assignee @me\` when no assignee is given (self-assigned by default)
+  - honors an explicit \`--assignee <login>\` / \`-a <login>\` when supplied (no default injected)
   - rejects \`--ready\` before invoking \`gh\`
   - detects missing \`Closes #N\` / \`Fixes #N\` in \`--body\` or \`--body-file\` content (non-fatal stderr warning)
   - forwards every other argument to \`gh pr create\` unchanged

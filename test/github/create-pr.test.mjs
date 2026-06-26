@@ -301,8 +301,12 @@ test("create-pr --help documents draft-only behavior, default self-assign, and -
   assert.equal(result.stderr, "");
   assert.match(result.stdout, /Canonical PR-creation wrapper around `gh pr create`/i);
   assert.match(result.stdout, /injects exactly one `--draft` when absent/i);
-  assert.match(result.stdout, /defaults `--assignee @me` when no `--assignee` is provided/i);
+  assert.match(result.stdout, /defaults `--assignee @me` when no assignee is given/i);
+  assert.match(result.stdout, /self-assigned by default/i);
   assert.match(result.stdout, /honors an explicit `--assignee <login>`/i);
+  // The help text must not overstate self-assignment as unconditional (it is the
+  // default, but an explicit --assignee/-a is honored). (#894 / Copilot review)
+  assert.doesNotMatch(result.stdout, /ALWAYS self-assigned/i);
   assert.match(result.stdout, /rejects `--ready` before invoking `gh`/i);
   assert.match(result.stdout, /preserves the underlying `gh pr create` stdout, stderr, and exit code/i);
 });
