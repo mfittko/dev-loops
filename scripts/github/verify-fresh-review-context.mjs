@@ -3,7 +3,18 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>]
-Verify that the current subagent session has fresh context.
+Verify that the current scoped-reviewer session has fresh context.
+
+"Fresh" means the reviewer's context is the neutral gate-context builder
+artifact (the build-once diff + adjacent-code bundle) plus its single review
+angle, and explicitly NOT the main (orchestrating) agent's conversation/state
+or a prior reviewer session's state. The injected neutral bundle is the
+INTENDED seed and is NOT contamination; this guard detects main-agent /
+cross-session state bleed by way of a per-(cwd, scope) sentinel: a first run in
+a fresh session creates the sentinel and passes, a re-entry that finds an
+existing sentinel fails closed. Seeding a reviewer with the neutral bundle (a
+path/prompt, not a sentinel) never creates a sentinel, so it never
+false-positives as contaminated.
 Options:
   --scope <name>  Unique reviewer scope (e.g. "draft-gate-coverage").
                   Must be non-empty, containing only alphanumeric
