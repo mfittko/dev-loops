@@ -25,7 +25,7 @@ Structural quality → `../skills/docs/structural-quality.md`
 ## Key helpers
 
 Startup: `node scripts/loop/resolve-dev-loop-startup.mjs`
-Create PR (always draft + self-assigned): `node scripts/github/create-pr.mjs ...` (`--assignee @me` is the default)
+Create PR (always draft, self-assigned by default): `node scripts/github/create-pr.mjs ...` (`--assignee @me` is the default)
 Gate: `node scripts/github/upsert-checkpoint-verdict.mjs`
 Branch guard: `node scripts/loop/pre-commit-branch-guard.mjs`
 

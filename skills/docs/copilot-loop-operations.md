@@ -174,7 +174,7 @@ New PRs in this workflow must be opened as **draft** PRs first when the reposito
 
 Only use `node <resolved-skill-scripts>/github/create-pr.mjs` when authoritative issue↔PR resolution says there is no already-open linked PR. If a PR already exists, reuse/update that canonical PR instead of opening another one. This wrapper preserves the underlying `gh pr create` output contract while enforcing draft-first mechanically and self-assigning the PR by default (`--assignee @me`).
 
-MUST use `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <base> --head <head> --title "..." --body-file <body-file>` (always draft + self-assigned; `--assignee @me` is the default).
+MUST use `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <base> --head <head> --title "..." --body-file <body-file>` (always draft, self-assigned by default; `--assignee @me` is the default).
 
 ## Timeout and watch policy
 

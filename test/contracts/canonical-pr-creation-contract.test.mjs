@@ -120,7 +120,7 @@ test("no skill/agent procedure doc instructs raw `gh pr create` to open a PR (#8
     offendersByFile,
     {},
     `Found raw \`gh pr create\` instruction(s) that should route through the canonical ` +
-      `\`dev-loops pr create\` / \`create-pr.mjs\` path (always draft + self-assigned):\n` +
+      `\`dev-loops pr create\` / \`create-pr.mjs\` path (always draft, self-assigned by default):\n` +
       `${JSON.stringify(offendersByFile, null, 2)}`,
   );
 });

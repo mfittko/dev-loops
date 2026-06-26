@@ -76,7 +76,7 @@ const SUBCOMMAND_ALIASES = {
   pr: {
     "create-draft": {
       canonical: "create",
-      notice: "[dev-loops] `pr create-draft` is deprecated; use `pr create` (always draft + self-assigned).",
+      notice: "[dev-loops] `pr create-draft` is deprecated; use `pr create` (always draft, self-assigned by default).",
     },
   },
 };
@@ -125,7 +125,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "debt-remediate": "File debt remediation issues",
   },
   pr: {
-    create: "Create PR (always draft + self-assigned)",
+    create: "Create PR (always draft, self-assigned by default)",
     "ready-for-review": "Mark PR ready for review",
     "reconcile-draft": "Reconcile non-draft PR",
   },
