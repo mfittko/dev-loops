@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { main } from "../../scripts/projects/add-queue-item.mjs";
+import { main, parseCliArgs } from "../../scripts/projects/add-queue-item.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -509,6 +509,26 @@ describe("add-queue-item", () => {
         assert.equal(json.ok, false);
         assert.equal(json.code, "CONTENT_NOT_FOUND");
       }
+    });
+  });
+
+  describe("--column / --status flag alias (issue #912)", () => {
+    const base = ["--repo", "mfittko/dev-loops", "--project", "1", "--item", "42"];
+
+    it("--column sets the target column", () => {
+      const args = parseCliArgs([...base, "--column", "Next Up"]);
+      assert.equal(args.column, "Next Up");
+    });
+
+    it("--status is accepted as a back-compat alias and parses to column", () => {
+      const args = parseCliArgs([...base, "--status", "Next Up"]);
+      assert.equal(args.column, "Next Up");
+    });
+
+    it("--column and --status produce the same parsed column", () => {
+      const viaColumn = parseCliArgs([...base, "--column", "In Progress"]);
+      const viaStatus = parseCliArgs([...base, "--status", "In Progress"]);
+      assert.equal(viaColumn.column, viaStatus.column);
     });
   });
 });

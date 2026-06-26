@@ -10,7 +10,7 @@ The board provides durable, visible, shared state for queue ordering and item st
 - **Visible** — operators can inspect and reorder the queue from the GitHub UI
 - **Authoritative for membership + ordering when configured** — when a board is configured (`queue.projectNumber` or `queue.boardTitle`), `dev-loops queue run` reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` before running, so the board (not hand edits) drives **which** issues are worked and their order. Without a configured board, `dev-loops queue` falls back to the local queue file's entry order.
 
-> Add work to the queue via the board (`dev-loops project add ... --status "Next Up"`), not by hand-editing `.pi/dev-loop-queue.json`. With a populated board and an empty local queue, the runner reconciles the board's `Next Up` items in rather than reporting an empty queue. If a board is configured but `Next Up` is empty, the runner reports "Board configured but Next Up is empty; nothing to run" — distinct from the unconfigured-and-empty "Queue is empty".
+> Add work to the queue via the board (`dev-loops queue add ... --column "Next Up"`), not by hand-editing `.pi/dev-loop-queue.json`. With a populated board and an empty local queue, the runner reconciles the board's `Next Up` items in rather than reporting an empty queue. If a board is configured but `Next Up` is empty, the runner reports "Board configured but Next Up is empty; nothing to run" — distinct from the unconfigured-and-empty "Queue is empty".
 
 ## Setup
 
@@ -19,7 +19,7 @@ The board provides durable, visible, shared state for queue ordering and item st
 Run the idempotent bootstrap wrapper:
 
 ```sh
-dev-loops project ensure --repo mfittko/dev-loops
+dev-loops queue ensure --repo mfittko/dev-loops
 ```
 
 This creates a project named "Dev Loop Queue" (default) under the `mfittko` user:
@@ -42,7 +42,7 @@ Safe to re-run — exits clean if the board already exists.
 #### Custom title
 
 ```sh
-dev-loops project ensure --repo mfittko/dev-loops --title "My Queue"
+dev-loops queue ensure --repo mfittko/dev-loops --title "My Queue"
 ```
 
 ### 2. Verify the Status field
@@ -83,7 +83,7 @@ Dev-loop queue wrappers will:
 - **Reorder** items when the operator adjusts priority via `--after` dependencies or manual intervention
 - **Fall back** gracefully when the board is absent or unreachable: the local queue file's entry order takes over, and no board mutations are attempted
 
-Use `dev-loops project --help` to inspect the queue helper surface and per-subcommand `--help` for details.
+Use `dev-loops queue --help` to inspect the queue helper surface and per-subcommand `--help` for details.
 
 ## Status sync is driven by the loop state
 
@@ -148,20 +148,20 @@ queue:
 
 ## Reordering board items
 
-`dev-loops project reorder` wraps the `updateProjectV2ItemPosition` mutation. In
+`dev-loops queue reorder` wraps the `updateProjectV2ItemPosition` mutation. In
 addition to the flag form (`--item [--after]`), it exposes three ergonomic
 subcommands. A `<ref>` is an issue/PR **number** or a project **item node ID**,
 and every form works for both issues and PRs.
 
 ```sh
 # Move issue/PR #630 to the top of its current Status column
-dev-loops project reorder move-to-top 630 --repo mfittko/dev-loops --project 1
+dev-loops queue reorder move-to-top 630 --repo mfittko/dev-loops --project 1
 
 # Move #630 immediately after #625
-dev-loops project reorder move-after 630 625 --repo mfittko/dev-loops --project 1
+dev-loops queue reorder move-after 630 625 --repo mfittko/dev-loops --project 1
 
 # Set an explicit order: 103 first, then 101, then 102
-dev-loops project reorder order 103 101 102 --repo mfittko/dev-loops --project 1
+dev-loops queue reorder order 103 101 102 --repo mfittko/dev-loops --project 1
 ```
 
 The subcommand forms emit diff-friendly JSON with the column order **before** and
@@ -200,7 +200,7 @@ Add `--dry-run` to any form to print the intended GraphQL mutation(s) — includ
 the chained mutations for `order` — without executing them:
 
 ```sh
-dev-loops project reorder order 103 101 102 --repo mfittko/dev-loops --project 1 --dry-run
+dev-loops queue reorder order 103 101 102 --repo mfittko/dev-loops --project 1 --dry-run
 ```
 
 ```json
@@ -228,7 +228,7 @@ be reordered.
 
 ## Archiving completed items
 
-`dev-loops project archive-done` removes finished work from the board. It archives
+`dev-loops queue archive-done` removes finished work from the board. It archives
 items (via `archiveProjectV2Item`) whose issue or PR has been **closed** for at
 least the given duration. The closed state — not the board Status column — is the
 criterion (a closed issue/PR is "done" for cleanup purposes), so a closed item is
@@ -237,13 +237,13 @@ webhooks) and scoped to the single repo passed via `--repo`.
 
 ```sh
 # Archive items whose issue/PR closed more than 30 days ago (default)
-dev-loops project archive-done --repo mfittko/dev-loops --project 1
+dev-loops queue archive-done --repo mfittko/dev-loops --project 1
 
 # Custom threshold (units: h = hours, d = days, w = weeks)
-dev-loops project archive-done --repo mfittko/dev-loops --project 1 --older-than 7d
+dev-loops queue archive-done --repo mfittko/dev-loops --project 1 --older-than 7d
 
 # Preview without mutating
-dev-loops project archive-done --repo mfittko/dev-loops --project 1 --dry-run
+dev-loops queue archive-done --repo mfittko/dev-loops --project 1 --dry-run
 ```
 
 Output distinguishes the items scanned from the actual archive candidates:
@@ -273,7 +273,7 @@ Real boards drift over time. An operator may rename `Next Up` to `Ready`, or `In
 Report drift without mutating (safe default):
 
 ```sh
-dev-loops project ensure --repo mfittko/dev-loops
+dev-loops queue ensure --repo mfittko/dev-loops
 ```
 
 When drift is detected, the JSON output includes `repairs.renameCandidates` but leaves existing columns untouched.
@@ -281,7 +281,7 @@ When drift is detected, the JSON output includes `repairs.renameCandidates` but 
 Rename equivalent columns after review:
 
 ```sh
-dev-loops project ensure --repo mfittko/dev-loops --repair-rename
+dev-loops queue ensure --repo mfittko/dev-loops --repair-rename
 ```
 
 This renames recognized equivalents (for example `Ready` -> `Next Up`) and adds any still-missing standard columns. It never removes existing columns. Irreconcilable conflicts (for example both `Ready` and `Next` mapping to `Next Up`) are reported in `repairs.conflicts` and no mutation is performed (no renames and no additive column creation).

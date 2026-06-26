@@ -3,7 +3,7 @@ import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 
-const USAGE = `Usage: dev-loops project add --repo <owner/name> --project <number|id> --item <number>
+const USAGE = `Usage: dev-loops queue add --repo <owner/name> --project <number|id> --item <number>
 
 Add an existing issue or PR to a GitHub Projects V2 board.
 
@@ -11,7 +11,8 @@ Options:
   --repo <owner/name>         Required. Repository containing the issue/PR.
   --project <number|id>       Required. Project number (integer) or node ID.
   --item <number>             Required. Issue or PR number to add.
-  --status <name>             Initial Status column (default: "Backlog").
+  --column <name>             Initial Status column (default: "Backlog").
+  --status <name>             Back-compat alias for --column.
   --help, -h                  Show this help.
 
 Output (stdout):
@@ -41,6 +42,7 @@ function parseCliArgs(argv) {
       repo: { type: "string" },
       project: { type: "string" },
       item: { type: "string" },
+      column: { type: "string" },
       status: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
@@ -81,8 +83,12 @@ function parseCliArgs(argv) {
         args.item = val;
         break;
       }
+      case "column":
+        args.column = requireValue(token, "--column requires a value");
+        break;
       case "status":
-        args.status = requireValue(token, "--status requires a value");
+        // Back-compat alias for --column (issue #912).
+        args.column = requireValue(token, "--status requires a value");
         break;
       default:
         throw Object.assign(new Error(`Unknown flag: ${token.rawName}`), { code: "INVALID_ARGS", usage: USAGE });
@@ -375,9 +381,9 @@ async function main(args, { env = process.env, runChild } = {}) {
   if (!Number.isInteger(itemNumber) || itemNumber < 1) {
     throw Object.assign(new Error("--item is required and must be a positive integer"), { code: "INVALID_ITEM" });
   }
-  const targetStatus = (args.status ?? "Backlog").trim();
+  const targetStatus = (args.column ?? args.status ?? "Backlog").trim();
   if (!targetStatus) {
-    throw Object.assign(new Error("--status must not be empty"), { code: "INVALID_STATUS" });
+    throw Object.assign(new Error("--column must not be empty"), { code: "INVALID_STATUS" });
   }
 
   // 1. Resolve owner
@@ -542,4 +548,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main };
+export { main, parseCliArgs };
