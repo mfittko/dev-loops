@@ -15,6 +15,7 @@ import {
   resolveAutonomyStopAt,
   resolveHumanMergeOnly,
   resolveEffectiveMergeAuthorized,
+  resolveEffectiveMergeAuthorizedFromLoad,
   resolveRefinementConfig,
   resolveRefinement,
   resolveGateConfig,
@@ -1616,6 +1617,27 @@ describe("role resolution", () => {
       assert.equal(resolveEffectiveMergeAuthorized(false, { version: 1 }), false);
       // fail closed on a non-boolean signal
       assert.equal(resolveEffectiveMergeAuthorized("yes", { version: 1 }), false);
+    });
+
+    test("resolveEffectiveMergeAuthorizedFromLoad fails closed when the config load has errors", () => {
+      // The .devloops that would declare humanMergeOnly may be the very file that
+      // failed to load — never grant merge authorization from an unverified config.
+      assert.equal(
+        resolveEffectiveMergeAuthorizedFromLoad(true, { config: { version: 1 }, errors: [new Error("invalid YAML")] }),
+        false,
+      );
+    });
+
+    test("resolveEffectiveMergeAuthorizedFromLoad honors the gate when load is clean", () => {
+      // clean load, no humanMergeOnly → honors the flag
+      assert.equal(resolveEffectiveMergeAuthorizedFromLoad(true, { config: { version: 1 }, errors: [] }), true);
+      // clean load, humanMergeOnly → still false
+      assert.equal(
+        resolveEffectiveMergeAuthorizedFromLoad(true, { config: { version: 1, autonomy: { humanMergeOnly: true } }, errors: [] }),
+        false,
+      );
+      // missing errors array treated as clean
+      assert.equal(resolveEffectiveMergeAuthorizedFromLoad(true, { config: { version: 1 } }), true);
     });
 
     // Refinement resolution

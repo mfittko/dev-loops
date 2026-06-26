@@ -790,6 +790,25 @@ export function resolveEffectiveMergeAuthorized(mergeAuthorized, config) {
   return mergeAuthorized === true;
 }
 
+/**
+ * Authoritative gate for callers that load the config themselves and hold its
+ * `{ config, errors }` load result. FAILS CLOSED on any config load/validation
+ * error: `loadDevLoopConfig` never throws (it returns an `errors` array), so a
+ * caller must not assume "no exception" means "config is safe". If the config
+ * could not be loaded/validated, the `.devloops` file declaring `humanMergeOnly`
+ * may be the very one that failed — so merge authorization is denied rather than
+ * silently granted from a fallback config that lacks the invariant.
+ *
+ * @param {boolean} mergeAuthorized per-run authorization signal
+ * @param {{ config?: DevLoopConfig, errors?: Array<unknown> }} loadResult result of `loadDevLoopConfig`
+ * @returns {boolean}
+ */
+export function resolveEffectiveMergeAuthorizedFromLoad(mergeAuthorized, loadResult) {
+  const errors = loadResult?.errors ?? [];
+  if (errors.length > 0) return false;
+  return resolveEffectiveMergeAuthorized(mergeAuthorized, loadResult?.config);
+}
+
 const DEFAULT_REFINEMENT_CONFIG = BUILT_IN_DEFAULTS.refinement;
 const DEFAULT_WORKFLOW_CONFIG = BUILT_IN_DEFAULTS.workflow;
 

@@ -20,7 +20,7 @@ import { computeParallelSchedule } from "@dev-loops/core/loop/queue-parallel";
 import { readQueue } from "@dev-loops/core/loop/queue-state";
 import { reconcileBoardMembership } from "@dev-loops/core/loop/queue-membership";
 import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
-import { loadDevLoopConfig, resolveEffectiveMergeAuthorized } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad } from "@dev-loops/core/config";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -184,14 +184,25 @@ async function main() {
 
   // Authoritative merge-authorization gate: when the repo enforces
   // humanMergeOnly, --merge-authorized is ignored (fails closed) so the queue
-  // driver never auto-merges. Fail-open on config load errors → treat the
-  // configured flag as-is rather than silently auto-merging.
+  // driver never auto-merges. `loadDevLoopConfig` never throws — it returns an
+  // `errors` array — so a try/catch would not catch an unreadable/invalid
+  // `.devloops` (which may be the very file declaring humanMergeOnly). FAIL
+  // CLOSED on any config load/validation error: if the config cannot be
+  // confirmed, do NOT grant merge authorization. A compliance invariant must
+  // never be silently dropped because its config could not be read.
   let effectiveMergeAuthorized = args.mergeAuthorized;
-  try {
-    const { config } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
-    effectiveMergeAuthorized = resolveEffectiveMergeAuthorized(args.mergeAuthorized, config);
-  } catch {
-    // config unavailable: keep the explicit flag (no humanMergeOnly to enforce)
+  if (args.mergeAuthorized) {
+    const load = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    effectiveMergeAuthorized = resolveEffectiveMergeAuthorizedFromLoad(args.mergeAuthorized, load);
+    if ((load.errors?.length ?? 0) > 0) {
+      console.error(
+        JSON.stringify({
+          ok: true,
+          warning: "dev-loop config could not be loaded/validated; failing closed on merge authorization (not auto-merging).",
+          errors: load.errors.map((e) => (e && e.message) || String(e)),
+        }),
+      );
+    }
   }
 
   const result = await runQueue(REPO_ROOT, args.repo, {
