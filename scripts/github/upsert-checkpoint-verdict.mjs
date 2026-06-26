@@ -23,7 +23,8 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>]
+const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>]
+The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin.
 Create or update the visible checkpoint verdict comment for a gate/head pair.
 Same-head reruns are idempotent: if a visible marker already exists for the same
 \`gate + headSha\`, this helper updates it in place when correction is needed and
@@ -42,6 +43,29 @@ Required:
                                             alternative to --findings-summary
                                             (preserves newlines; takes precedence
                                             when both are present)
+  --findings-json <path>                    Read STRUCTURED fan-out review
+                                            findings from a JSON file. PRIMARY
+                                            shape is the per-angle review-results
+                                            array (array of { angle, verdict?,
+                                            findings:[{severity, summary, file?,
+                                            line?, disposition?}] } — the same
+                                            per-angle objects that feed
+                                            consolidateFanin). A FLAT per-finding
+                                            array (array of { severity, summary,
+                                            angle?, file?|files?, line?,
+                                            disposition? } — consolidateFanin's
+                                            OUTPUT / toFindingsLogShape) is also
+                                            accepted and is GROUPED by each
+                                            finding's .angle. A non-empty input
+                                            matching NEITHER shape is rejected
+                                            (no silent all-clean). Renders a
+                                            readable per-angle breakdown (newlines
+                                            preserved); the findings summary line
+                                            carries a single-line digest. Takes
+                                            precedence over
+                                            --findings-summary/--findings-file for
+                                            the rendered body. Intended for
+                                            --execution-mode fanout_fanin.
   --next-action <text>
 Optional:
   --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
@@ -229,6 +253,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       verdict: { type: "string" },
       "findings-summary": { type: "string" },
       "findings-file": { type: "string" },
+      "findings-json": { type: "string" },
       "next-action": { type: "string" },
       "findings-severity-counts": { type: "string" },
       "execution-mode": { type: "string" },
@@ -247,6 +272,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     verdict: undefined,
     findingsSummary: undefined,
     findingsFile: undefined,
+    findingsJson: undefined,
     nextAction: undefined,
     findingsSeverityCounts: undefined,
     executionMode: undefined,
@@ -310,6 +336,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       options.findingsFile = rawPath;
       continue;
     }
+    if (token.name === "findings-json") {
+      const rawPath = requireTokenValue(token, parseError).trim();
+      if (rawPath.length === 0) {
+        throw parseError("--findings-json must be a non-empty path");
+      }
+      options.findingsJson = rawPath;
+      continue;
+    }
     if (token.name === "next-action") {
       options.nextAction = normalizeRequiredText(requireTokenValue(token, parseError), "--next-action");
       continue;
@@ -362,12 +396,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   }
   const missing = ["repo", "pr", "headSha", "verdict", "findingsSummary", "nextAction"]
     .filter((key) => options[key] === undefined);
-  if (options.findingsFile) {
+  // --findings-file and --findings-json each provide the findings body, so either
+  // satisfies the findingsSummary requirement.
+  if (options.findingsFile || options.findingsJson) {
     const fsIdx = missing.indexOf("findingsSummary");
     if (fsIdx !== -1) missing.splice(fsIdx, 1);
   }
   if (missing.length > 0) {
-    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict, --findings-summary (or --findings-file), and --next-action");
+    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict, --findings-summary (or --findings-file or --findings-json), and --next-action");
   }
   // Contract (skills/copilot-pr-followup/SKILL.md): inline runs MUST pass
   // --inline-reason. Inline is the default mode, so a complete call that resolves
@@ -400,6 +436,253 @@ function appendGateEvidenceNote(summary, note) {
   }
   return smartTruncate(`${normalizedSummary}; ${normalizedNote}`, MAX_GATE_COMMENT_TEXT_LENGTH);
 }
+const STRUCTURED_FINDINGS_SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
+// Sanitize free text for a single-line markdown bullet. Collapse whitespace
+// (LLM text often carries embedded newlines, which would split a bullet across
+// lines) and neutralize HTML-comment delimiters so a finding field cannot smuggle
+// a hidden marker into the rendered body. Mirrors post-gate-findings.mjs.
+function sanitizeStructuredInline(value) {
+  return String(value)
+    .replace(/\s+/gu, " ")
+    .replace(/<!--/gu, "&lt;!--")
+    .replace(/-->/gu, "--&gt;")
+    .trim();
+}
+// Sanitize text rendered inside an inline backtick code span (angle labels,
+// file refs): additionally strip backticks so an embedded backtick cannot close
+// the span and break out into raw markdown.
+function sanitizeStructuredCodeSpan(value) {
+  return sanitizeStructuredInline(String(value).replace(/`/gu, ""));
+}
+// Normalize a single finding object into a deterministic render entry, or null
+// when it carries no usable summary.
+function normalizeStructuredFinding(f) {
+  if (!f || typeof f !== "object" || Array.isArray(f)) {
+    return null;
+  }
+  const summary = typeof f.summary === "string" ? f.summary.trim() : "";
+  if (summary.length === 0) {
+    return null;
+  }
+  const entry = {
+    severity: typeof f.severity === "string" ? f.severity.trim() : "",
+    summary,
+  };
+  if (typeof f.file === "string" && f.file.trim().length > 0) {
+    entry.file = f.file.trim();
+  } else if (Array.isArray(f.files)) {
+    // Flat consolidated findings (toFindingsLogShape) carry a `files` array
+    // rather than a single `file`; surface the first entry as the location ref.
+    const file = f.files.find((x) => typeof x === "string" && x.trim().length > 0);
+    if (file) {
+      entry.file = file.trim();
+    }
+  }
+  if (typeof f.line === "number" && Number.isFinite(f.line)) {
+    entry.line = f.line;
+  }
+  if (typeof f.disposition === "string" && f.disposition.trim().length > 0) {
+    entry.disposition = f.disposition.trim();
+  }
+  return entry;
+}
+// Map a severity to its sort rank. Known severities follow
+// STRUCTURED_FINDINGS_SEVERITY_ORDER (must-fix → worth-fixing-now → defer);
+// unknown/missing severities map to a LARGE rank so they sort LAST, never
+// before must-fix. (indexOf alone would give an unknown severity rank -1,
+// floating it ABOVE must-fix and hiding the highest-priority items below it.)
+function severitySortRank(severity) {
+  const idx = STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(severity);
+  return idx === -1 ? STRUCTURED_FINDINGS_SEVERITY_ORDER.length : idx;
+}
+// Sort findings by severity (must-fix first, unknown/missing last) for
+// deterministic output, preserving input order within a severity.
+function sortStructuredFindings(findings) {
+  findings.sort(
+    (a, b) => severitySortRank(a.severity) - severitySortRank(b.severity),
+  );
+  return findings;
+}
+// Does this item look like a NESTED per-angle entry (consolidateFanin's INPUT
+// shape: { angle, verdict?, findings: [...] })? It must carry a `findings`
+// ARRAY — that, not the presence of an `angle` string, is what distinguishes a
+// per-angle section from a single flat finding.
+function looksLikePerAngleEntry(item) {
+  return Boolean(item) && typeof item === "object" && !Array.isArray(item) && Array.isArray(item.findings);
+}
+// Does this item look like a FLAT per-finding entry (consolidateFanin's OUTPUT /
+// toFindingsLogShape shape: { severity, summary, angle?, file?/files?, ... })? It
+// carries a summary (and typically a severity) but NO nested `findings` array.
+function looksLikeFlatFinding(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return false;
+  }
+  if (Array.isArray(item.findings)) {
+    return false;
+  }
+  return typeof item.summary === "string" && item.summary.trim().length > 0;
+}
+// Build a render-ready per-angle section from a nested entry. A missing/blank
+// angle is NOT dropped — its findings still matter for the verdict — so it is
+// rendered under a `general` fallback label (consistent with the flat-grouping
+// angleless→`general` bucket). Dropping it would let a non-empty structured
+// payload silently degrade to the free-text path and hide findings.
+function buildAngleSectionFromNested(raw) {
+  const trimmedAngle = typeof raw.angle === "string" ? raw.angle.trim() : "";
+  const angle = trimmedAngle.length > 0 ? trimmedAngle : "general";
+  const findings = [];
+  for (const f of raw.findings) {
+    const entry = normalizeStructuredFinding(f);
+    if (entry) {
+      findings.push(entry);
+    }
+  }
+  sortStructuredFindings(findings);
+  const verdict = typeof raw.verdict === "string" && raw.verdict.trim().length > 0
+    ? raw.verdict.trim()
+    : (findings.length > 0 ? "findings_present" : "clean");
+  return { angle, verdict, findings };
+}
+// Group a FLAT per-finding array into per-angle sections, keyed by each
+// finding's `.angle` field (findings without an angle are grouped under a
+// shared "general" bucket so they are NOT dropped). The verdict for each
+// section is derived from whether it carries findings.
+function groupFlatFindingsByAngle(input) {
+  const order = [];
+  const byAngle = new Map();
+  for (const f of input) {
+    const entry = normalizeStructuredFinding(f);
+    if (!entry) {
+      continue;
+    }
+    const angle = typeof f.angle === "string" && f.angle.trim().length > 0
+      ? f.angle.trim()
+      : "general";
+    if (!byAngle.has(angle)) {
+      byAngle.set(angle, []);
+      order.push(angle);
+    }
+    byAngle.get(angle).push(entry);
+  }
+  const angles = [];
+  for (const angle of order) {
+    const findings = sortStructuredFindings(byAngle.get(angle));
+    angles.push({
+      angle,
+      verdict: findings.length > 0 ? "findings_present" : "clean",
+      findings,
+    });
+  }
+  return angles;
+}
+// Normalize the structured findings input into a deterministic, render-ready
+// per-angle shape. Accepts BOTH recognizable shapes without silently zeroing
+// findings:
+//   1. NESTED per-angle (consolidateFanin INPUT):
+//        [{ angle, verdict?, findings: [{ severity, summary, file?, line?, disposition? }] }]
+//      → rendered one section per angle.
+//   2. FLAT per-finding (consolidateFanin OUTPUT / toFindingsLogShape):
+//        [{ severity, summary, angle?, file?|files?, line?, disposition? }]
+//      → GROUPED by each finding's `.angle` into per-angle sections.
+// Returns null when the input is empty/non-array (caller falls back to the
+// free-text summary). THROWS when the input is non-empty but matches NEITHER
+// shape, so a wrong input shape can never silently render an all-clean verdict.
+function normalizeStructuredFindings(input) {
+  if (!Array.isArray(input) || input.length === 0) {
+    return null;
+  }
+  // A gate verdict comment must NEVER silently hide/drop findings. If ANY item
+  // in a non-empty payload is neither a recognizable per-angle entry nor a
+  // recognizable flat finding, THROW rather than filter-and-proceed — an
+  // unrecognized item (producer drift, malformed entry) could otherwise carry a
+  // dropped finding the reviewer never sees.
+  const unrecognized = input.filter(
+    (item) => !looksLikePerAngleEntry(item) && !looksLikeFlatFinding(item),
+  );
+  if (unrecognized.length === input.length) {
+    throw new Error(
+      "--findings-json input is non-empty but matches neither recognized shape: "
+      + "a per-angle array ([{ angle, verdict?, findings: [...] }]) or a flat "
+      + "per-finding array ([{ severity, summary, angle?, ... }]). Refusing to "
+      + "render an all-clean verdict from unrecognized findings.",
+    );
+  }
+  if (unrecognized.length > 0) {
+    throw new Error(
+      "--findings-json input contains "
+      + `${unrecognized.length} of ${input.length} item(s) that match neither a `
+      + "per-angle entry (with a nested `findings` array) nor a flat per-finding "
+      + "entry (with a non-empty `summary`). Refusing to silently drop them from a "
+      + "gate verdict; fix the producer or remove the malformed entries.",
+    );
+  }
+  const nestedCount = input.filter(looksLikePerAngleEntry).length;
+  let angles;
+  if (nestedCount > 0) {
+    // Treat as per-angle. Any flat items mixed in are ambiguous; reject rather
+    // than guess (mixing the two shapes is not a supported producer output).
+    if (nestedCount !== input.length) {
+      throw new Error(
+        "--findings-json input mixes per-angle entries (with a nested `findings` "
+        + "array) and flat per-finding entries; supply one shape or the other.",
+      );
+    }
+    angles = [];
+    for (const raw of input) {
+      angles.push(buildAngleSectionFromNested(raw));
+    }
+  } else {
+    angles = groupFlatFindingsByAngle(input);
+  }
+  return angles.length > 0 ? angles : null;
+}
+// Render the consolidated per-angle fan-in findings as a readable, multi-line
+// markdown block: one section per angle (angle label + per-angle verdict),
+// nested findings carrying severity and an optional file:line reference. Newlines
+// are intentionally PRESERVED — this block is NOT run through collapseWhitespace /
+// summarizeCheckpointVerdictText. The whole block is bounded by
+// MAX_GATE_COMMENT_TEXT_LENGTH. The leading single-line digest is what the marker
+// parser captures for the `**Findings summary:**` field; the structured body is
+// nested below it and is deliberately written so no nested line matches a gate
+// field regex (no `verdict:` / `next action:` / `execution mode:` line starts).
+function renderStructuredFindings(angles) {
+  const lines = [];
+  for (const { angle, verdict, findings } of angles) {
+    const angleLabel = sanitizeStructuredCodeSpan(angle);
+    lines.push(`- \`${angleLabel}\` → ${sanitizeStructuredInline(verdict)}`);
+    for (const finding of findings) {
+      const severity = sanitizeStructuredInline(finding.severity) || "finding";
+      const summary = sanitizeStructuredInline(finding.summary);
+      let location = "";
+      if (finding.file) {
+        const fileRef = sanitizeStructuredCodeSpan(finding.file);
+        const lineRef = Number.isFinite(finding.line) ? `:${finding.line}` : "";
+        if (fileRef.length > 0) {
+          location = ` (\`${fileRef}${lineRef}\`)`;
+        }
+      }
+      const dispositionSuffix = finding.disposition
+        ? ` — _${sanitizeStructuredInline(finding.disposition)}_`
+        : "";
+      lines.push(`  - [${severity}] ${summary}${location}${dispositionSuffix}`);
+    }
+  }
+  return smartTruncate(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH);
+}
+// Build the single-line digest shown on the `**Findings summary:**` line when a
+// structured per-angle block is rendered. The marker/parse contract requires this
+// line to carry non-empty, single-line content (parseGateReviewCommentFields
+// captures only the remainder of this one line), so the structured block below it
+// is purely presentational.
+function buildStructuredFindingsDigest(angles) {
+  const totalFindings = angles.reduce((sum, a) => sum + a.findings.length, 0);
+  const angleWord = angles.length === 1 ? "angle" : "angles";
+  if (totalFindings === 0) {
+    return `${angles.length} ${angleWord} reviewed; no findings (see per-angle breakdown below).`;
+  }
+  const findingWord = totalFindings === 1 ? "finding" : "findings";
+  return `${angles.length} ${angleWord} reviewed; ${totalFindings} ${findingWord} (see per-angle breakdown below).`;
+}
 function renderExecutionModeLine(executionMode, inlineReason) {
   const mode = executionMode ?? DEFAULT_EXECUTION_MODE;
   if (mode === "inline_single_agent") {
@@ -410,7 +693,7 @@ function renderExecutionModeLine(executionMode, inlineReason) {
   }
   return `**Execution mode:** ${mode}`;
 }
-export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason }) {
+export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, gateEvidenceNote }) {
   const lines = [
     `### Gate review: \`${gate}\``,
     "",
@@ -422,9 +705,33 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
     const sevs = blockCleanOnFindingSeverities.join(", ");
     lines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
   }
+  // When structured per-angle fan-in data is supplied, render it as a readable
+  // multi-line block. The `**Findings summary:**` line still carries a non-empty
+  // single-line digest so the marker/parse contract (which captures only that
+  // one line) keeps round-tripping; the structured breakdown is nested below it
+  // with newlines preserved (NOT collapsed to a run-on line).
+  const angles = normalizeStructuredFindings(structuredFindings);
+  if (angles) {
+    // Build the single-line digest and append the gate-evidence note (parity with
+    // the free-text appendGateEvidenceNote path), so a structured verdict carries
+    // the gate-evidence note (e.g. the round-cap / round-exhaustion fallback note)
+    // on the `**Findings summary:**` line just like a free-text verdict does.
+    // appendGateEvidenceNote keeps this a single, length-bounded line, preserving
+    // the marker/parse contract. The per-angle bullets below are unaffected.
+    const structuredSummary = appendGateEvidenceNote(buildStructuredFindingsDigest(angles), gateEvidenceNote ?? null);
+    lines.push(
+      "",
+      `**Findings summary:** ${structuredSummary}`,
+      "",
+      renderStructuredFindings(angles),
+    );
+  } else {
+    lines.push(
+      "",
+      `**Findings summary:** ${findingsSummary}`,
+    );
+  }
   lines.push(
-    "",
-    `**Findings summary:** ${findingsSummary}`,
     "",
     `**Next action:** ${nextAction}`,
   );
@@ -775,7 +1082,42 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       );
     }
   }
-  if (options.findingsFile) {
+  // Structured per-angle findings (consolidated fan-in shape) take precedence
+  // over the free-text summary: when present, the verdict comment renders a
+  // multi-line per-angle breakdown and the `**Findings summary:**` line carries a
+  // single-line digest (so the marker/parse contract still round-trips).
+  let structuredFindings = null;
+  if (options.findingsJson) {
+    let raw;
+    try {
+      raw = await readFile(options.findingsJson, "utf8");
+    } catch (err) {
+      throw new Error(`Cannot read --findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`--findings-json "${options.findingsJson}" is not valid JSON`);
+    }
+    // Accept either a bare array of per-angle entries or an object wrapping it
+    // under `angles` / `findings` (defensive against caller shape drift).
+    const candidate = Array.isArray(parsed)
+      ? parsed
+      : (Array.isArray(parsed?.angles) ? parsed.angles : (Array.isArray(parsed?.findings) ? parsed.findings : null));
+    try {
+      structuredFindings = normalizeStructuredFindings(candidate);
+    } catch (err) {
+      throw new Error(`--findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!structuredFindings) {
+      throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
+    }
+  }
+  // --findings-json takes precedence; when structured findings are present, do not
+  // read --findings-file at all (avoids a spurious hard failure if a caller passes
+  // both and the file is missing/invalid even though it would be ignored anyway).
+  if (!structuredFindings && options.findingsFile) {
     try {
       const fileContent = await readFile(options.findingsFile, "utf8");
       const trimmedEnd = fileContent.replace(/\n+$/, "");
@@ -790,13 +1132,23 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       throw new Error(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  const effectiveFindingsSummary = options.findingsFile
-    ? options.findingsSummary
-    : appendGateEvidenceNote(options.findingsSummary, coordination.gateEvidenceNote ?? null);
+  // The findings-summary the comment is compared/round-tripped against. With a
+  // structured render this is the single-line digest (what the marker parser
+  // recovers from the `**Findings summary:**` line); otherwise the free-text path.
+  const effectiveFindingsSummary = structuredFindings
+    ? appendGateEvidenceNote(buildStructuredFindingsDigest(structuredFindings), coordination.gateEvidenceNote ?? null)
+    : (options.findingsFile
+      ? options.findingsSummary
+      : appendGateEvidenceNote(options.findingsSummary, coordination.gateEvidenceNote ?? null));
   const desiredBody = renderGateReviewCommentBody({
     ...options,
     headSha: canonicalHeadSha,
     findingsSummary: effectiveFindingsSummary,
+    structuredFindings,
+    // In structured mode the renderer rebuilds the digest internally and appends
+    // this note, so the rendered `**Findings summary:**` line matches
+    // effectiveFindingsSummary (the value used for the noop/round-trip compare).
+    gateEvidenceNote: coordination.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
   });
   const gateEvidence = selectGateEvidence(evidence, options.gate);
