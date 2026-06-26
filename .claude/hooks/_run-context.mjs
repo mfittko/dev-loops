@@ -2,15 +2,11 @@
 /**
  * Neutral run-id / async-context contract.
  *
- * The dev-loop async path historically keyed off Pi's `PI_SUBAGENT_RUN_ID` env var to
+ * The dev-loop async path keys off the harness-neutral `DEVLOOPS_RUN_ID` env var to
  * identify an inspectable per-subagent run (runner ownership, async-start enforcement,
- * human-comment gating). This module generalizes that into a harness-neutral
- * `DEVLOOPS_RUN_ID`, keeping `PI_SUBAGENT_RUN_ID` as a backward-compatible alias, and
- * provides a mint-and-propagate path for harnesses (e.g. Claude Code) that inject no
- * native per-subagent run id.
- *
- * Marker precedence is neutral-first: a present `DEVLOOPS_RUN_ID` wins; otherwise the Pi
- * alias is honored. Existing Pi runs that set only `PI_SUBAGENT_RUN_ID` behave identically.
+ * human-comment gating), and provides a mint-and-propagate path for harnesses (e.g. Claude
+ * Code) that inject no native per-subagent run id. The harness sets `DEVLOOPS_RUN_ID` when
+ * dispatching an async subagent.
  *
  * This module is pure except for the explicit file/IO helpers (writeRunContext/readRunContext),
  * which take an injectable `fs` and `root` for testability.
@@ -22,15 +18,12 @@ import path from "node:path";
 
 /**
  * Env var names that carry the async-context run id, in resolution precedence order.
- * Neutral `DEVLOOPS_RUN_ID` first; Pi `PI_SUBAGENT_RUN_ID` retained as a compatibility alias.
+ * The neutral `DEVLOOPS_RUN_ID` is the sole marker.
  */
-export const RUN_ID_MARKERS = Object.freeze(["DEVLOOPS_RUN_ID", "PI_SUBAGENT_RUN_ID"]);
+export const RUN_ID_MARKERS = Object.freeze(["DEVLOOPS_RUN_ID"]);
 
 /** Neutral env var name used when minting/propagating a run id. */
 export const NEUTRAL_RUN_ID_VAR = "DEVLOOPS_RUN_ID";
-
-/** Pi-compatibility alias env var name. */
-export const PI_RUN_ID_ALIAS_VAR = "PI_SUBAGENT_RUN_ID";
 
 /** State-file name (under `.pi/`, consistent with existing dev-loop checkpoint files). */
 export const RUN_CONTEXT_FILENAME = "dev-loop-run-context.json";
@@ -57,7 +50,7 @@ export function isClaudeHarness(env = process.env) {
 }
 
 /**
- * Resolve the active run id from the environment, neutral marker first.
+ * Resolve the active run id from the environment.
  *
  * @param {Record<string, string|undefined>} [env]
  * @returns {string|null} The trimmed run id, or null when none is set.
@@ -155,8 +148,8 @@ export function readRunContext({ root, fs = fsDefault }) {
  * Resolve the active run id, or mint one and persist a run-context state file.
  *
  * This is the "mint at startup and propagate" primitive a Claude dev-loop agent (or a
- * headless entry) calls before dispatching child work. When the env already carries a run
- * id (Pi alias or neutral), it is reused and no new id is minted.
+ * headless entry) calls before dispatching child work. When the env already carries a
+ * `DEVLOOPS_RUN_ID`, it is reused and no new id is minted.
  *
  * @param {object} [params]
  * @param {Record<string, string|undefined>} [params.env]

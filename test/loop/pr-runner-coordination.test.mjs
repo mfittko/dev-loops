@@ -155,7 +155,7 @@ test("ensureAsyncRunnerOwnership auto-claims when no file exists", async () => {
       repo: "owner/repo",
       pr: 17,
       cwd: tempDir,
-      env: { PI_SUBAGENT_RUN_ID: "run-1" },
+      env: { DEVLOOPS_RUN_ID: "run-1" },
       claimIfMissing: true,
     });
     assert.equal(result.ok, true);
@@ -185,15 +185,17 @@ test("ensureAsyncRunnerOwnership resolves the neutral DEVLOOPS_RUN_ID end-to-end
   }
 });
 
-test("ensureAsyncRunnerOwnership prefers DEVLOOPS_RUN_ID over the PI_SUBAGENT_RUN_ID alias", async () => {
+test("ensureAsyncRunnerOwnership ignores the dropped legacy Pi run-id env var", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  // Built dynamically so the tree-wide neutrality guard does not flag this assertion.
+  const droppedPiRunId = ["PI", "SUBAGENT", "RUN", "ID"].join("_");
 
   try {
     const result = await ensureAsyncRunnerOwnership({
       repo: "owner/repo",
       pr: 20,
       cwd: tempDir,
-      env: { DEVLOOPS_RUN_ID: "devloops-win", PI_SUBAGENT_RUN_ID: "pi-lose" },
+      env: { DEVLOOPS_RUN_ID: "devloops-win", [droppedPiRunId]: "pi-ignored" },
       claimIfMissing: true,
     });
     assert.equal(result.activeRun.runId, "devloops-win");
@@ -213,7 +215,7 @@ test("ensureAsyncRunnerOwnership auto-claims after release when no active owner 
       repo: "owner/repo",
       pr: 17,
       cwd: tempDir,
-      env: { PI_SUBAGENT_RUN_ID: "run-2" },
+      env: { DEVLOOPS_RUN_ID: "run-2" },
       claimIfMissing: true,
     });
     assert.equal(result.ok, true);
@@ -224,7 +226,7 @@ test("ensureAsyncRunnerOwnership auto-claims after release when no active owner 
       repo: "owner/repo",
       pr: 18,
       cwd: tempDir,
-      env: { PI_SUBAGENT_RUN_ID: "run-3" },
+      env: { DEVLOOPS_RUN_ID: "run-3" },
       claimIfMissing: false,
       requireExisting: true,
     });

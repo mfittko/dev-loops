@@ -17,13 +17,13 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   env: {
     ...process.env,
     ...(options.env ?? {}),
-    PI_SUBAGENT_RUN_ID: options.env?.PI_SUBAGENT_RUN_ID ?? "",
+    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
   },
 });
 
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
-  return { ...env, PI_SUBAGENT_RUN_ID: "" };
+  return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
 async function readGhCallCount(tempDir) {

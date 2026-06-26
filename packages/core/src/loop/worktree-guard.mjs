@@ -121,32 +121,22 @@ export function isListedWorktree(cwd, worktreePaths) {
  * Neutral environment variable name checked by `detectSubagentAvailability`.
  *
  * Set `DEVLOOPS_SUBAGENT_AVAILABLE=1` when the runtime supports subagent dispatch.
- * This is consistent with the `PI_WORKTREE_BYPASS` pattern and other repo-local
+ * This is consistent with the `DEVLOOPS_WORKTREE_BYPASS` pattern and other repo-local
  * runtime configuration gates already present in the repo.
  */
 export const DEVLOOPS_SUBAGENT_AVAILABLE_VAR = "DEVLOOPS_SUBAGENT_AVAILABLE";
 
-/**
- * Pi-compatibility alias for {@link DEVLOOPS_SUBAGENT_AVAILABLE_VAR}; honored when the
- * neutral var is unset so existing Pi runtimes keep working unchanged.
- */
-export const PI_SUBAGENT_AVAILABLE_VAR = "PI_SUBAGENT_AVAILABLE";
-
-/** Availability env var names, neutral-first. */
-export const SUBAGENT_AVAILABLE_VARS = Object.freeze([
-  DEVLOOPS_SUBAGENT_AVAILABLE_VAR,
-  PI_SUBAGENT_AVAILABLE_VAR,
-]);
+/** Availability env var names. */
+export const SUBAGENT_AVAILABLE_VARS = Object.freeze([DEVLOOPS_SUBAGENT_AVAILABLE_VAR]);
 
 /**
  * Detect whether subagent dispatch is available in the current runtime.
  *
  * This is an env-var-based heuristic, consistent with other bypass/availability
  * patterns in the repo. It is intentionally simple — the gate's subagent check
- * is advisory (fails-open) and never hard-blocks on subagent absence. Precedence is
- * neutral-first: the first var that is *set* (non-blank) is authoritative — so an explicit
- * `DEVLOOPS_SUBAGENT_AVAILABLE=0` is respected even when `PI_SUBAGENT_AVAILABLE=1`. The Pi
- * alias is only consulted when the neutral var is unset/blank.
+ * is advisory (fails-open) and never hard-blocks on subagent absence. The var that is
+ * *set* (non-blank) is authoritative — so an explicit `DEVLOOPS_SUBAGENT_AVAILABLE=0` is
+ * respected as a hard "not available".
  *
  * @param {{ env?: Record<string, string | undefined> }} [options]
  * @returns {boolean}

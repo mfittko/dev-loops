@@ -16,13 +16,13 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   env: {
     ...process.env,
     ...(options.env ?? {}),
-    PI_SUBAGENT_RUN_ID: options.env?.PI_SUBAGENT_RUN_ID ?? "",
+    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
   },
 });
 
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries);
-  return { ...env, PI_SUBAGENT_RUN_ID: "" };
+  return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
 async function writeGitStub(tempDir, { stdout = "", stderr = "", exitCode = 0, assertArgs = [] } = {}) {
@@ -1129,7 +1129,7 @@ test("detect-pr-gate-coordination-state surfaces linked-issue + refinement via g
 
     const result = await detectPrGateCoordinationState(
       { repo: "owner/repo", pr: 10 },
-      { env: { ...env, PI_SUBAGENT_RUN_ID: "" } },
+      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
     );
     assert.equal(result.ok, true);
     assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
@@ -1181,7 +1181,7 @@ test("detect-pr-gate-coordination-state leaves refinement=present when linked is
 
     const result = await detectPrGateCoordinationState(
       { repo: "owner/repo", pr: 10 },
-      { env: { ...env, PI_SUBAGENT_RUN_ID: "" } },
+      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
     );
     assert.equal(result.ok, true);
     assert.notEqual(result.gateBoundary, PR_CHECKPOINT.BLOCKED);

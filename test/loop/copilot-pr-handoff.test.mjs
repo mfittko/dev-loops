@@ -19,7 +19,7 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   env: {
     ...process.env,
     ...(options.env ?? {}),
-    PI_SUBAGENT_RUN_ID: options.env?.PI_SUBAGENT_RUN_ID ?? "",
+    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
   },
 });
 
@@ -29,7 +29,7 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
  */
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries);
-  return { ...env, PI_SUBAGENT_RUN_ID: "" };
+  return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
 const EMPTY_THREADS = JSON.stringify({
@@ -194,7 +194,7 @@ test("copilot-pr-handoff requests review and emits watch action for pr_ready_no_
         stdout: '{"reviews":[]}\n',
       },
     ], { matchMode: "claims" });
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -249,7 +249,7 @@ test("copilot-pr-handoff emits watch action when Copilot is already requested", 
         stdout: EMPTY_THREADS + "\n",
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -331,7 +331,7 @@ test("copilot-pr-handoff does not request review when checks have not materializ
         stdout: EMPTY_THREADS + "\n",
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -373,7 +373,7 @@ test("copilot-pr-handoff does not request review when statusCheckRollup is missi
         stdout: EMPTY_THREADS + "\n",
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -413,7 +413,7 @@ test("copilot-pr-handoff reports draft reset as ready-state reentry requirement"
         stdout: EMPTY_THREADS + "\n",
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -487,7 +487,7 @@ test("copilot-pr-handoff emits stop action when Copilot review is unavailable", 
         stdout: '{"reviews":[]}\n',
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -561,7 +561,7 @@ test("copilot-pr-handoff emits watch action when 422 but Copilot is in requested
         stdout: '{"reviews":[]}\n',
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -633,7 +633,7 @@ test("copilot-pr-handoff emits watch action when 422 but Copilot has a pending r
         stdout: '{"headRefOid":"abc123","reviews":[{"id":"r-1","state":"PENDING","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"abc123"}}]}\n',
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -693,7 +693,7 @@ test("copilot-pr-handoff treats stale pending Copilot review on an older commit 
         stdout: `${EMPTY_THREADS}\n`,
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -876,7 +876,7 @@ test("copilot-pr-handoff treats stale requested_reviewers as clean convergence a
         stdout: EMPTY_THREADS + "\n",
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1002,7 +1002,7 @@ test("copilot-pr-handoff preserves copilotReviewPresent=false for an initial req
         stdout: '{"headRefOid":"newsha","reviews":[]}\n',
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1181,7 +1181,7 @@ test("copilot-pr-handoff does not re-request review when checks have not materia
         stdout: EMPTY_THREADS + "\n",
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1232,7 +1232,7 @@ test("copilot-pr-handoff keeps same-head suppression (no force flag)", async () 
         stdout: EMPTY_THREADS + "\n",
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1375,7 +1375,7 @@ test("copilot-pr-handoff stops at round_cap_clean_fallback (no re-request) when 
         }) + "\n",
       },
     ], { matchMode: "claims" });
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1454,7 +1454,7 @@ test("copilot-pr-handoff emits fix action when unresolved threads exist", async 
         stdout: unresolvedThreads + "\n",
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1570,7 +1570,7 @@ test("copilot-pr-handoff emits stop action when no PR exists", async () => {
         exitCode: 1,
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1607,7 +1607,7 @@ test("copilot-pr-handoff emits stop action for merged PR", async () => {
         }) + "\n",
       },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1691,7 +1691,7 @@ test("copilot-pr-handoff stops cleanly when another run already owns the PR", as
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], {
       cwd: tempDir,
-      env: { ...process.env, PI_SUBAGENT_RUN_ID: "run-new" },
+      env: { ...process.env, DEVLOOPS_RUN_ID: "run-new" },
     });
 
     assert.equal(result.code, 0);
@@ -1981,7 +1981,7 @@ test("detectRecentHumanComments detects multiple human comments after last bot",
   }
 });
 
-test("copilot-pr-handoff skips human comment check when PI_SUBAGENT_RUN_ID not set", async () => {
+test("copilot-pr-handoff skips human comment check when DEVLOOPS_RUN_ID not set", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-skip-"));
 
   try {
@@ -2000,7 +2000,7 @@ test("copilot-pr-handoff skips human comment check when PI_SUBAGENT_RUN_ID not s
       },
     ]);
 
-    // PI_SUBAGENT_RUN_ID is "" (empty/falsy) from writeGhStub defaults
+    // DEVLOOPS_RUN_ID is "" (empty/falsy) from writeGhStub defaults
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
     assert.equal(result.code, 0);
@@ -2018,7 +2018,7 @@ test("copilot-pr-handoff skips human comment check when PI_SUBAGENT_RUN_ID not s
 
 
 
-test("copilot-pr-handoff runs human comment check when PI_SUBAGENT_RUN_ID is set", async () => {
+test("copilot-pr-handoff runs human comment check when DEVLOOPS_RUN_ID is set", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-active-"));
 
   try {
@@ -2058,7 +2058,7 @@ test("copilot-pr-handoff runs human comment check when PI_SUBAGENT_RUN_ID is set
       },
     ]);
 
-    const runEnv = { ...env, PI_SUBAGENT_RUN_ID: "run-test-human-pause" };
+    const runEnv = { ...env, DEVLOOPS_RUN_ID: "run-test-human-pause" };
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { cwd: tempDir, env: runEnv });
 
     assert.equal(result.code, 0);
@@ -2134,7 +2134,7 @@ test("copilot-pr-handoff stops when human comment check fails with non-zero exit
       },
     ], { matchMode: "claims" });
 
-    const runEnv = { ...env, PI_SUBAGENT_RUN_ID: "run-test-fetch-fail" };
+    const runEnv = { ...env, DEVLOOPS_RUN_ID: "run-test-fetch-fail" };
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { cwd: tempDir, env: runEnv });
 
     assert.equal(result.code, 0);
@@ -2200,7 +2200,7 @@ test("copilot-pr-handoff stops when human comment check fails with invalid JSON"
       },
     ], { matchMode: "claims", logCalls: true });
 
-    const runEnv = { ...env, PI_SUBAGENT_RUN_ID: "run-test-parse-fail" };
+    const runEnv = { ...env, DEVLOOPS_RUN_ID: "run-test-parse-fail" };
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { cwd: tempDir, env: runEnv });
 
     assert.equal(result.code, 0);
@@ -2236,7 +2236,7 @@ test("copilot-pr-handoff skips Copilot request for internal-only PR and emits fi
       // detect-internal-only-pr: gh pr view --json files --jq .files[].path
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "scripts/foo.mjs\ntest/foo.test.mjs\n" },
     ], { matchMode: "claims" });
-    const env = { ...rawEnv, PI_SUBAGENT_RUN_ID: "" };
+    const env = { ...rawEnv, DEVLOOPS_RUN_ID: "" };
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
     assert.equal(result.code, 0);
@@ -2300,7 +2300,7 @@ test("copilot-pr-handoff does not skip Copilot for consumer-facing PR", async ()
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"reviews":[]}\n' },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
     assert.equal(result.code, 0);
@@ -2332,7 +2332,7 @@ test("copilot-pr-handoff skips internal detection when GH_SEQUENCE_PATH is set (
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"reviews":[]}\n' },
     ]);
-    env.PI_SUBAGENT_RUN_ID = "";
+    env.DEVLOOPS_RUN_ID = "";
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
     assert.equal(result.code, 0);

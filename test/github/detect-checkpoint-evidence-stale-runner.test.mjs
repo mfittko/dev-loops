@@ -17,7 +17,7 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   env: {
     ...process.env,
     ...(options.env ?? {}),
-    PI_SUBAGENT_RUN_ID: options.env?.PI_SUBAGENT_RUN_ID ?? "",
+    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
   },
 });
 
@@ -65,7 +65,7 @@ async function writeGhStub(tempDir) {
       }) + "\n",
     },
   ], { repeatLastOnOverflow: true });
-  return { ...env, PI_SUBAGENT_RUN_ID: "" };
+  return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
 test("detect-checkpoint-evidence fails closed when active runner is stale", async () => {
@@ -86,7 +86,7 @@ test("detect-checkpoint-evidence fails closed when active runner is stale", asyn
       cwd: tempDir,
       env: {
         ...env,
-        PI_DEV_LOOP_STALE_RUNNER_MAX_AGE_MS: "1000",
+        DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: "1000",
       },
     });
 

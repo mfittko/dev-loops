@@ -122,12 +122,12 @@ test("parsePreFlightGateCliArgs: rejects --expected-branch with missing value", 
 // Bypass
 // ---------------------------------------------------------------------------
 
-test("gate passes with PI_PREFLIGHT_BYPASS=1 from main checkout", () => {
+test("gate passes with DEVLOOPS_PREFLIGHT_BYPASS=1 from main checkout", () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-bypass-"));
   try {
     const result = runGate([], {
       cwd: tempDir,
-      env: { PI_PREFLIGHT_BYPASS: "1" },
+      env: { DEVLOOPS_PREFLIGHT_BYPASS: "1" },
     });
     assert.equal(result.exitCode, 0);
     const payload = JSON.parse(result.stdout);
@@ -388,7 +388,7 @@ test("gate reports subagent status skipped when --check-subagents not set", () =
     const result = runGate([], {
       cwd: worktreeDir,
       gitDir: tempDir,
-      env: { PI_SUBAGENT_AVAILABLE: "1" },
+      env: { DEVLOOPS_SUBAGENT_AVAILABLE: "1" },
     });
 
     assert.equal(result.exitCode, 0);
@@ -399,7 +399,7 @@ test("gate reports subagent status skipped when --check-subagents not set", () =
   }
 });
 
-test("gate reports subagent available when PI_SUBAGENT_AVAILABLE=1 and --check-subagents", () => {
+test("gate reports subagent available when DEVLOOPS_SUBAGENT_AVAILABLE=1 and --check-subagents", () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-subagent-ok-"));
   try {
     const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-497");
@@ -416,7 +416,7 @@ test("gate reports subagent available when PI_SUBAGENT_AVAILABLE=1 and --check-s
     const result = runGate(["--check-subagents"], {
       cwd: worktreeDir,
       gitDir: tempDir,
-      env: { PI_SUBAGENT_AVAILABLE: "1" },
+      env: { DEVLOOPS_SUBAGENT_AVAILABLE: "1" },
     });
 
     assert.equal(result.exitCode, 0);
@@ -485,7 +485,7 @@ test("success output is valid JSON on stdout", () => {
     const result = runGate(["--expected-branch", "issue-497"], {
       cwd: worktreeDir,
       gitDir: tempDir,
-      env: { PI_SUBAGENT_AVAILABLE: "1" },
+      env: { DEVLOOPS_SUBAGENT_AVAILABLE: "1" },
     });
 
     assert.equal(result.exitCode, 0);

@@ -19,13 +19,13 @@ test("resolveStaleRunnerMaxAgeMs prefers explicit option, then env, then default
   assert.equal(resolveStaleRunnerMaxAgeMs({}, emptyEnv), 30 * 60 * 1000);
   assert.equal(resolveStaleRunnerMaxAgeMs({ staleRunnerMaxAgeMs: 5000 }, emptyEnv), 5000);
   assert.equal(resolveStaleRunnerMaxAgeMs({ staleRunnerMaxAgeMs: 5000 }), 5000);
-  assert.equal(resolveStaleRunnerMaxAgeMs({}, { PI_DEV_LOOP_STALE_RUNNER_MAX_AGE_MS: "9000" }), 9000);
+  assert.equal(resolveStaleRunnerMaxAgeMs({}, { DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: "9000" }), 9000);
   assert.equal(
-    resolveStaleRunnerMaxAgeMs({ staleRunnerMaxAgeMs: 5000 }, { PI_DEV_LOOP_STALE_RUNNER_MAX_AGE_MS: "9000" }),
+    resolveStaleRunnerMaxAgeMs({ staleRunnerMaxAgeMs: 5000 }, { DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: "9000" }),
     5000,
   );
   assert.equal(resolveStaleRunnerMaxAgeMs({ staleRunnerMaxAgeMs: -1 }, emptyEnv), 30 * 60 * 1000);
-  assert.equal(resolveStaleRunnerMaxAgeMs({}, { PI_DEV_LOOP_STALE_RUNNER_MAX_AGE_MS: "abc" }), 30 * 60 * 1000);
+  assert.equal(resolveStaleRunnerMaxAgeMs({}, { DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: "abc" }), 30 * 60 * 1000);
 });
 
 test("detectStaleRunner returns no_owner_record when no coordination file exists", async () => {

@@ -72,7 +72,7 @@ Stop reasons:
 Async-start contract:
   This loop must run within a visible harness-managed async context when
   workflow.asyncStartMode is set to required (default). It fails closed unless
-  DEVLOOPS_RUN_ID (or the PI_SUBAGENT_RUN_ID alias) is set, to prevent hidden detached-process fallback
+  DEVLOOPS_RUN_ID is set, to prevent hidden detached-process fallback
   (nohup, disowned shell jobs, etc.). Snapshot/test input mode
   (both --copilot-input and --reviewer-input) is exempt. Any relaxed
   async-start posture is maintainer-controlled repository policy, not an

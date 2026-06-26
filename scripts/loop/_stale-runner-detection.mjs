@@ -18,7 +18,7 @@ export function resolveStaleRunnerMaxAgeMs(options = {}, env = process.env) {
   if (Number.isFinite(explicit) && explicit > 0) {
     return Math.floor(explicit);
   }
-  const fromEnv = parsePositiveIntegerMs(env?.PI_DEV_LOOP_STALE_RUNNER_MAX_AGE_MS, NaN);
+  const fromEnv = parsePositiveIntegerMs(env?.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS, NaN);
   if (Number.isFinite(fromEnv) && fromEnv > 0) {
     return fromEnv;
   }

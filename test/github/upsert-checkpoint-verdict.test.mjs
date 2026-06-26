@@ -35,13 +35,13 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, augmentIn
   env: {
     ...process.env,
     ...(options.env ?? {}),
-    PI_SUBAGENT_RUN_ID: options.env?.PI_SUBAGENT_RUN_ID ?? "",
+    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
   },
 });
 
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
-  return { ...env, PI_SUBAGENT_RUN_ID: "" };
+  return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
 function buildGateCoordinationEntries({
@@ -1946,7 +1946,7 @@ test("upsert-checkpoint-verdict does NOT convert a ready PR to draft when reconc
         issueComments: [],
       }),
     ], { repeatLastOnOverflow: true, logCalls: true });
-    const env = { ...logEnvRaw, PI_SUBAGENT_RUN_ID: "" };
+    const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
 
     await assert.rejects(
       () => upsertCheckpointVerdict({
@@ -2048,7 +2048,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
       { assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"], stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-900"}\n' },
       { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "{}\n" },
     ], { matchMode: "claims", logCalls: true });
-    const env = { ...logEnvRaw, PI_SUBAGENT_RUN_ID: "" };
+    const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
 
     const result = await upsertCheckpointVerdict({
       repo: "owner/repo",
@@ -2304,7 +2304,7 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
       "--next-action", "mark ready for review",
     ], {
       cwd: tempDir,
-      env: { ...ghEnv, PI_SUBAGENT_RUN_ID: "new-run-id" },
+      env: { ...ghEnv, DEVLOOPS_RUN_ID: "new-run-id" },
     });
 
     // The command should succeed (not fail with ownership_lost) because the stale runner was taken over.
@@ -2923,7 +2923,7 @@ test("upsert-checkpoint-verdict CLI fails closed for inline mode without --inlin
     "--findings-summary", "no issues found", "--next-action", "mark ready for review",
   ];
   const result = await runNodeHelper(scriptPath, args, {
-    env: { ...process.env, PI_SUBAGENT_RUN_ID: "" },
+    env: { ...process.env, DEVLOOPS_RUN_ID: "" },
   });
   assert.equal(result.code, 1);
   const payload = JSON.parse(result.stderr);

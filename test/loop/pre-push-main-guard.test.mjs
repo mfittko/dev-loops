@@ -55,15 +55,25 @@ test("runCli blocks push to refs/heads/main", async () => {
   assert.equal(result.blockedRef, "refs/heads/main");
 });
 
-test("runCli bypasses with PI_PREPUSH_BYPASS=1", async () => {
+test("runCli bypasses with DEVLOOPS_PREPUSH_BYPASS=1", async () => {
   const stdin = new PassThrough();
   stdin.end("refs/heads/main abc refs/heads/main def\n");
   const stdout = { write: () => {} };
   const stderr = { write: () => {} };
-  const env = { PI_PREPUSH_BYPASS: "1" };
+  const env = { DEVLOOPS_PREPUSH_BYPASS: "1" };
   let output = "";
   const fakeStdout = { write: (s) => { output += s; } };
   const result = await runCli([], { stdout: fakeStdout, stderr, stdin, env });
+  assert.ok(result.ok);
+  assert.equal(result.bypassed, true);
+});
+
+test("runCli bypasses with whitespace-padded DEVLOOPS_PREPUSH_BYPASS (trim consistency)", async () => {
+  const stdin = new PassThrough();
+  stdin.end("refs/heads/main abc refs/heads/main def\n");
+  const stderr = { write: () => {} };
+  const env = { DEVLOOPS_PREPUSH_BYPASS: " 1" };
+  const result = await runCli([], { stdout: { write: () => {} }, stderr, stdin, env });
   assert.ok(result.ok);
   assert.equal(result.bypassed, true);
 });

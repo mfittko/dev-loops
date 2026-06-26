@@ -12,7 +12,7 @@ import {
   isListedWorktree,
   detectSubagentAvailability,
 } from "@dev-loops/core/loop/worktree-guard";
-const PI_PREFLIGHT_BYPASS_VAR = "PI_PREFLIGHT_BYPASS";
+const DEVLOOPS_PREFLIGHT_BYPASS_VAR = "DEVLOOPS_PREFLIGHT_BYPASS";
 const USAGE = `Usage:
   pre-flight-gate.mjs [--expected-branch <name>] [--check-subagents]
 Gate local implementation mutations before planning or editing.
@@ -28,7 +28,7 @@ Violation output (stderr, JSON, exit 1):
   { "ok": false, "error": "<error_code>", "checks": { ... },
     "guidance": "<actionable instruction for the agent>" }
 Bypass:
-  PI_PREFLIGHT_BYPASS=1   Skip all checks (for development/testing only).`.trim();
+  DEVLOOPS_PREFLIGHT_BYPASS=1   Skip all checks (for development/testing only).`.trim();
 const parseError = buildParseError(USAGE);
 export function parsePreFlightGateCliArgs(argv) {
   const options = {
@@ -180,11 +180,11 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return { ok: true, help: true };
   }
-  if ((effectiveEnv[PI_PREFLIGHT_BYPASS_VAR] ?? "").trim() === "1") {
+  if ((effectiveEnv[DEVLOOPS_PREFLIGHT_BYPASS_VAR] ?? "").trim() === "1") {
     const payload = {
       ok: true,
       checks: { worktree: true, branch: "skipped", subagents: "skipped" },
-      summary: "pre-flight gate bypassed via PI_PREFLIGHT_BYPASS=1",
+      summary: "pre-flight gate bypassed via DEVLOOPS_PREFLIGHT_BYPASS=1",
     };
     stdout.write(`${JSON.stringify(payload)}\n`);
     return payload;

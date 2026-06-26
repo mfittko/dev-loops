@@ -19,7 +19,7 @@ const EMPTY_THREADS = JSON.stringify({
 
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries);
-  return { ...env, PI_SUBAGENT_RUN_ID: "" };
+  return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
 test("parseWatchCycleCliArgs rejects --probe-only as a removed policy flag", () => {
@@ -510,7 +510,7 @@ process.exit(97);
       PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
       GH_REREQUEST_STATE_PATH: path.join(tempDir, "requested-state.txt"),
       GH_SEQUENCE_PATH: path.join(tempDir, "gh-sequence.json"),
-      PI_SUBAGENT_RUN_ID: "",
+      DEVLOOPS_RUN_ID: "",
     };
 
     const result = await runWatchCycle(
