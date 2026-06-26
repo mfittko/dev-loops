@@ -346,6 +346,19 @@ test("resolveLifecycleState: humanMergeOnly fails closed — merge authorized bu
   assert.equal(result.isTerminal, false);
 });
 
+test("resolveLifecycleState: fails closed on a non-boolean mergeAuthorized (only true clears merge)", () => {
+  // A non-boolean truthy mergeAuthorized must NOT advance to MERGE, matching the
+  // authoritative resolveEffectiveMergeAuthorized gate (#910 round-2).
+  const result = resolveLifecycleState({
+    hasLinkedPr: true,
+    hasUnresolvedThreads: false,
+    preApprovalGatePassed: true,
+    mergeAuthorized: "yes",
+    humanMergeOnly: false,
+  });
+  assert.notEqual(result.state, LIFECYCLE_STATE.MERGE);
+});
+
 test("resolveLifecycleState: humanMergeOnly does not block an already-merged PR (terminal)", () => {
   const result = resolveLifecycleState({
     hasLinkedPr: true,

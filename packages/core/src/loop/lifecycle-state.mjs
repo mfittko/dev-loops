@@ -201,8 +201,11 @@ export function resolveLifecycleState(input = {}) {
 
   // Fail closed: when the repo enforces human-only merge, the agent is never
   // cleared to advance to the merge action — the per-run mergeAuthorized signal
-  // is ignored. An already-merged PR (isMerged) is still terminal below.
-  const effectiveMergeAuthorized = humanMergeOnly === true ? false : mergeAuthorized;
+  // is ignored. Also fail closed on a non-boolean `mergeAuthorized` (only an
+  // exact `true` clears merge), matching the authoritative
+  // `resolveEffectiveMergeAuthorized` gate. An already-merged PR (isMerged) is
+  // still terminal below.
+  const effectiveMergeAuthorized = humanMergeOnly !== true && mergeAuthorized === true;
 
   // 1. Explicit phase override — canonical or fail closed
   if (phase !== null && phase !== undefined) {
