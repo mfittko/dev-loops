@@ -24,16 +24,18 @@ const HISTORICAL_ARTIFACT_ALLOWLIST = new Set([
   "docs/phase-a-repo-slug-survey.md",
 ]);
 
-// Recursively collect files under `dir` whose extension is in `extensions`. Missing directories
-// are skipped gracefully (the readdir error is swallowed and an empty list returned).
+// Recursively collect files under `dir` whose extension is in `extensions`. A MISSING directory
+// is skipped gracefully (ENOENT → empty list); any other readdir error (permissions, I/O) is
+// rethrown so the guard fails loudly rather than silently under-scanning the identity surface.
 async function collectFiles(dir, extensions) {
   const abs = path.join(repoRoot, dir);
   const out = [];
   let entries;
   try {
     entries = await fsReaddir(abs, { withFileTypes: true });
-  } catch {
-    return out;
+  } catch (err) {
+    if (err && err.code === "ENOENT") return out;
+    throw err;
   }
   for (const entry of entries) {
     const rel = path.posix.join(dir, entry.name);
