@@ -9,9 +9,9 @@ export {
   readRecordFromStdin,
   runCli,
   truncateText,
-} from "../../../packages/core/src/bash-exit-one.mjs";
+} from "@dev-loops/core/bash-exit-one";
 
-import { runCli } from "../../../packages/core/src/bash-exit-one.mjs";
+import { runCli } from "@dev-loops/core/bash-exit-one";
 
 const invokedAsScript = process.argv[1]
   ? import.meta.url === pathToFileURL(process.argv[1]).href
