@@ -6,7 +6,8 @@ import { parse as parseYaml } from "yaml";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 
-const USAGE = `Usage: dev-loops project ensure --repo <owner/name> [--project <number>] [--title <title>] [--link-repo <owner/name>] [--repair-rename]
+const USAGE = `Usage: dev-loops queue ensure --repo <owner/name> [--project <number>] [--title <title>] [--link-repo <owner/name>] [--repair-rename]
+       (dev-loops project ensure … is a back-compat alias)
 
 --repair-rename    Rename semantically equivalent Status columns to the standard names
                    (e.g. "Ready" -> "Next Up"). Without this flag the helper only

@@ -4,10 +4,11 @@ import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 
 const USAGE = `Usage:
-  dev-loops project reorder --repo <owner/name> --project <number|id> --item <number|node-id> [--after <number|node-id>]
-  dev-loops project reorder move-to-top <ref> --repo <owner/name> --project <number|id>
-  dev-loops project reorder move-after <ref> <after-ref> --repo <owner/name> --project <number|id>
-  dev-loops project reorder order <ref1> <ref2> ... --repo <owner/name> --project <number|id>
+  dev-loops queue reorder --repo <owner/name> --project <number|id> --item <number|node-id> [--after <number|node-id>]
+  dev-loops queue reorder move-to-top <ref> --repo <owner/name> --project <number|id>
+  dev-loops queue reorder move-after <ref> <after-ref> --repo <owner/name> --project <number|id>
+  dev-loops queue reorder order <ref1> <ref2> ... --repo <owner/name> --project <number|id>
+  (dev-loops project reorder … is a back-compat alias)
 
 Reorder GitHub Projects V2 items by board position via updateProjectV2ItemPosition.
 

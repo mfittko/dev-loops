@@ -59,6 +59,13 @@ const SUBCOMMAND_ROUTES = {
   },
   queue: {
     run:            "scripts/loop/run-queue.mjs",
+    list:    "scripts/projects/list-queue-items.mjs",
+    add:     "scripts/projects/add-queue-item.mjs",
+    move:    "scripts/projects/move-queue-item.mjs",
+    reorder: "scripts/projects/reorder-queue-item.mjs",
+    "archive-done": "scripts/projects/archive-done-items.mjs",
+    "sync-status": "scripts/projects/sync-item-status.mjs",
+    ensure:  "scripts/projects/ensure-queue-board.mjs",
   },
   inspect: {
     run:    "scripts/loop/inspect-run.mjs",
@@ -91,12 +98,13 @@ const HELP_CATEGORY_LABELS = {
   gate: "Gate verdicts, evidence, and review operations",
   loop: "Loop lifecycle",
   pr: "PR helpers",
-  project: "GitHub Projects queue helpers",
+  queue: "Queue board: run + management (add/list/reorder/move/sync-status/archive)",
+  project: "Alias for queue (GitHub Projects queue helpers)",
   inspect: "Inspection (Pi extension only)",
   refine: "Epic tree refinement verification",
 };
 
-const TOP_LEVEL_HELP_CATEGORY_ORDER = ["gate", "loop", "pr", "project", "inspect", "refine"];
+const TOP_LEVEL_HELP_CATEGORY_ORDER = ["gate", "loop", "pr", "queue", "project", "inspect", "refine"];
 
 const SUBCOMMAND_DESCRIPTIONS = {
   gate: {
@@ -140,6 +148,13 @@ const SUBCOMMAND_DESCRIPTIONS = {
   },
   queue: {
     run: "Run queue driver",
+    list: "List queue board items",
+    add: "Add issue/PR to queue board",
+    move: "Move queue item between Status columns",
+    reorder: "Reorder items (move-to-top/move-after/order, --dry-run)",
+    "archive-done": "Archive closed Done items older than a duration",
+    "sync-status": "Sync a queued issue/PR's board Status column (best-effort)",
+    ensure: "Create/repair queue board bootstrap surface",
   },
   inspect: {
     run: "Inspect run state",

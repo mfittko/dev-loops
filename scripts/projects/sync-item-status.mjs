@@ -4,7 +4,8 @@ import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { syncBoardStatus } from "@dev-loops/core/loop/queue-board-sync";
 import { parseArgs } from "node:util";
 
-const USAGE = `Usage: dev-loops project sync-status --repo <owner/name> --item <number> --to-column <name>
+const USAGE = `Usage: dev-loops queue sync-status --repo <owner/name> --item <number> --to-column <name>
+       (dev-loops project sync-status … is a back-compat alias)
 
 Sync a queued issue/PR's board Status column on a dev-loop transition (e.g.
 PR opened → "In Progress", merged → "Done"). Resolves the board from .devloops

@@ -163,6 +163,44 @@ test("CLI help exposes project queue wrapper surface", async () => {
 });
 
 
+test("queue category help lists run plus management subcommands (issue #912)", async () => {
+  const stdout = createBufferStream();
+  const stderr = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["queue", "--help"],
+    runtime: createRuntime(),
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
+
+  assert.equal(exitCode, 0);
+  const help = stdout.read();
+  assert.match(help, /dev-loops queue <subcommand>/);
+  for (const sub of ["run", "add", "list", "reorder", "move", "sync-status", "archive-done"]) {
+    assert.match(help, new RegExp(`\\b${sub.replace("-", "\\-")}\\b`), `queue --help should list ${sub}`);
+  }
+  assert.match(help, /add\s+Add issue\/PR to queue board/);
+  assert.equal(stderr.read(), "");
+});
+
+test("queue add/list route to the same project scripts via --help usage (issue #912)", () => {
+  const add = spawnSync("node", ["./cli/index.mjs", "queue", "add", "--help"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(add.status, 0, add.stderr);
+  assert.match(add.stdout, /Add an existing issue or PR to a GitHub Projects V2 board/);
+  assert.match(add.stdout, /--column <name>/);
+  assert.match(add.stdout, /--status <name>\s+Back-compat alias for --column/);
+
+  const list = spawnSync("node", ["./cli/index.mjs", "queue", "list", "--help"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(list.status, 0, list.stderr);
+  assert.match(list.stdout, /List GitHub Projects V2 items filtered by Status column/);
+});
+
 test("CLI status next steps lead with dev-loop when all checks pass", async () => {
   const statusStdout = createBufferStream();
   const statusStderr = createBufferStream();

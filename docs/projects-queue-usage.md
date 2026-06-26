@@ -28,7 +28,7 @@ No configuration file entry is required — helpers use explicit CLI arguments.
 First, bootstrap the board (one-time):
 
 ```sh
-dev-loops project ensure --repo <owner/name>
+dev-loops queue ensure --repo <owner/name>
 ```
 
 The wrapper emits the project number and URL. Use the project number in subsequent
@@ -36,63 +36,65 @@ helper invocations.
 
 ## How to use the helpers
 
-All helpers are thin wrappers around `gh api graphql`. They emit machine-readable JSON on
-stdout and structured errors on stderr. All accept `--help` for usage.
+Queue management lives under `dev-loops queue <subcommand>` (run `dev-loops queue --help` to
+list them). `dev-loops project <subcommand>` is kept as a back-compat alias for the same
+scripts. All helpers are thin wrappers around `gh api graphql`. They emit machine-readable JSON
+on stdout and structured errors on stderr. All accept `--help` for usage.
 
 ### List queue items
 
 ```sh
 # List all items in a project
-dev-loops project list --repo mfittko/dev-loops --project 1
+dev-loops queue list --repo mfittko/dev-loops --project 1
 
 # List only items in "Next Up" column
-dev-loops project list --repo mfittko/dev-loops --project 1 --column "Next Up"
+dev-loops queue list --repo mfittko/dev-loops --project 1 --column "Next Up"
 
 # Limit to top 5 items
-dev-loops project list --repo mfittko/dev-loops --project 1 --limit 5
+dev-loops queue list --repo mfittko/dev-loops --project 1 --limit 5
 ```
 
 ### Add an item to the queue
 
 ```sh
 # Add issue #42 to the Backlog column (default)
-dev-loops project add --repo mfittko/dev-loops --project 1 --item 42
+dev-loops queue add --repo mfittko/dev-loops --project 1 --item 42
 
-# Add issue #42 to a specific column
-dev-loops project add --repo mfittko/dev-loops --project 1 --item 42 --status "Next Up"
+# Add issue #42 to a specific column (--status is a back-compat alias for --column)
+dev-loops queue add --repo mfittko/dev-loops --project 1 --item 42 --column "Next Up"
 ```
 
 ### Move an item between columns
 
 ```sh
 # Move issue #42 from its current column to In Progress
-dev-loops project move --repo mfittko/dev-loops --project 1 --item 42 --to-column "In Progress"
+dev-loops queue move --repo mfittko/dev-loops --project 1 --item 42 --to-column "In Progress"
 
 # Move a project item by its node ID
-dev-loops project move --repo mfittko/dev-loops --project 1 --item "PVTI_..." --to-column "Done"
+dev-loops queue move --repo mfittko/dev-loops --project 1 --item "PVTI_..." --to-column "Done"
 ```
 
 ### Reorder items
 
 ```sh
 # Move issue #42 to the top of the column
-dev-loops project reorder --repo mfittko/dev-loops --project 1 --item 42
+dev-loops queue reorder --repo mfittko/dev-loops --project 1 --item 42
 
 # Move issue #42 after issue #17
-dev-loops project reorder --repo mfittko/dev-loops --project 1 --item 42 --after 17
+dev-loops queue reorder --repo mfittko/dev-loops --project 1 --item 42 --after 17
 
 # Reorder by project item node IDs
-dev-loops project reorder --repo mfittko/dev-loops --project 1 --item "PVTI_abc" --after "PVTI_xyz"
+dev-loops queue reorder --repo mfittko/dev-loops --project 1 --item "PVTI_abc" --after "PVTI_xyz"
 ```
 
 ### Typical workflow
 
-1. Bootstrap the board once: `dev-loops project ensure --repo <owner/name>`
-2. Add items as they are queued: `dev-loops project add --repo ... --project <n> --item <issue>`
-3. Reorder by priority: drag in the GitHub UI, or use `dev-loops project reorder`
-4. When a worker picks up an item: `dev-loops project move ... --to-column "In Progress"`
-5. When done: `dev-loops project move ... --to-column "Done"`
-6. Inspect the queue at any time: `dev-loops project list ...`
+1. Bootstrap the board once: `dev-loops queue ensure --repo <owner/name>`
+2. Add items as they are queued: `dev-loops queue add --repo ... --project <n> --item <issue>`
+3. Reorder by priority: drag in the GitHub UI, or use `dev-loops queue reorder`
+4. When a worker picks up an item: `dev-loops queue move ... --to-column "In Progress"`
+5. When done: `dev-loops queue move ... --to-column "Done"`
+6. Inspect the queue at any time: `dev-loops queue list ...`
 
 ## Fail-closed behavior
 
@@ -136,7 +138,7 @@ it is the **authoritative source of queue membership and ordering** — not just
 - **Configured and reachable**: `dev-loops queue run` resolves the board's `Next Up` column and
   reconciles those items into `.pi/dev-loop-queue.json` (appending a queued entry for any
   `Next Up` issue not already present) before running. The board therefore drives **which**
-  issues are worked and their order. Enqueue work via `dev-loops project add ... --status "Next Up"`
+  issues are worked and their order. Enqueue work via `dev-loops queue add ... --column "Next Up"`
   rather than hand-editing the queue file.
 - **Configured but unreachable (API error)**: reconciliation fails open — the run continues
   with the existing local queue entries; no board mutations are attempted.
