@@ -68,16 +68,17 @@ Failure behavior:
 - malformed arguments, invalid JSON, and `gh` failures emit `{ "ok": false, "error": "..." }` on stderr and exit non-zero
 - live capture is only allowed when both `--repo` and `--pr` are present
 
-### `scripts/github/create-draft-pr.mjs`
+### `scripts/github/create-pr.mjs`
 
-Thin wrapper around `gh pr create` for draft-first PR creation.
+Canonical wrapper around `gh pr create`. Every PR opened through this tool is ALWAYS a draft and is always assigned — self-assigned by default (`--assignee @me` when none is given), while still honoring an explicit `--assignee <login>`. Never call raw `gh pr create` to open a PR. (`dev-loops pr create` dispatches here; the legacy `dev-loops pr create-draft` subcommand still works as a deprecated alias.)
 
 Usage:
-- `node scripts/github/create-draft-pr.mjs [gh pr create args...]`
-- `node <resolved-skill-scripts>/github/create-draft-pr.mjs [gh pr create args...]`
+- `node scripts/github/create-pr.mjs [gh pr create args...]`
+- `node <resolved-skill-scripts>/github/create-pr.mjs [gh pr create args...]`
 
 Contract:
-- injects exactly one `--draft` when the caller did not already supply it
+- injects exactly one `--draft` when the caller did not already supply it (draft is the only mode)
+- self-assigns by default (defaults `--assignee @me` when no `--assignee` is provided); honors an explicit `--assignee <login>` when one is given
 - rejects `--ready` before invoking `gh`; use `gh pr ready` later after draft-gate approval
 - forwards every other argument to `gh pr create` unchanged and in order
 - preserves the underlying `gh pr create` stdout, stderr, and exit code without wrapping success output

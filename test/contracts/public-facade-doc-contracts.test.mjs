@@ -345,18 +345,19 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
     readRepo("docs/tracker-story-pr-contract.md"),
   ]);
 
-  // copilot-pr-followup routes PR creation through the draft wrapper
-  assert.match(copilotFollowupSkill, /MUST use `node <resolved-skill-scripts>\/github\/create-draft-pr\.mjs/i);
+  // copilot-pr-followup routes PR creation through the canonical create-pr wrapper
+  assert.match(copilotFollowupSkill, /MUST use `node <resolved-skill-scripts>\/github\/create-pr\.mjs/i);
   assert.match(copilotFollowupSkill, /gh issue create --repo <resolved-repo> --assignee @me/i);
-  assert.match(copilotFollowupSkill, /node <resolved-skill-scripts>\/github\/create-draft-pr\.mjs --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
+  assert.match(copilotFollowupSkill, /node <resolved-skill-scripts>\/github\/create-pr\.mjs --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.doesNotMatch(copilotFollowupSkill, /gh pr create --draft --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.match(copilotFollowupSkill, /New PRs in this workflow must be opened as \*\*draft\*\* PRs first/i);
   assert.match(copilotFollowupSkill, /Do not create a fresh PR directly in ready-for-review state/i);
   assert.match(copilotFollowupSkill, /draft gate inspection is a real workflow boundary/i);
 
-  // local-implementation keeps self-assignment unconditional and draft-first config-driven via the wrapper
-  assert.match(localImplementationSkill, /PR creation must always include `--assignee @me`/i);
-  assert.match(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}dev-loops pr create-draft --assignee @me/i);
+  // local-implementation: PRs are always draft and always assigned — self-assigned
+  // by default (`--assignee @me`), honoring an explicit assignee — via the canonical wrapper
+  assert.match(localImplementationSkill, /always draft and always assigned — self-assigned by default/i);
+  assert.match(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}dev-loops pr create --assignee @me/i);
   assert.doesNotMatch(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}gh pr create --draft --assignee @me/i);
   assert.match(localImplementationSkill, /Do not create a fresh PR directly in ready-for-review state/i);
   assert.match(localImplementationSkill, /draft gate inspection is a real workflow boundary/i);
@@ -365,7 +366,7 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   assert.match(finalApprovalSkill, /Human approval checkpoint/i);
   assert.match(finalApprovalSkill, /Do not restate merge-ready preconditions/i);
   assert.match(agents, /When creating GitHub issues via `gh issue create`, always include `--assignee @me`/i);
-  assert.match(agents, /dev-loops pr create-draft --assignee @me/i);
+  assert.match(agents, /dev-loops pr create \.\.\./i);
   assert.doesNotMatch(agents, /gh issue create` or `gh pr create`/i);
   // Workflow handoff template is now a derivation contract, not a prose dispatch template.
   // Draft-first enforcement lives in AGENTS.md and individual skill docs.

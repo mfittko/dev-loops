@@ -44,7 +44,7 @@ const SUBCOMMAND_ROUTES = {
     "debt-remediate":       "scripts/loop/debt-remediate.mjs",
   },
   pr: {
-    "create-draft":     "scripts/github/create-draft-pr.mjs",
+    create:             "scripts/github/create-pr.mjs",
     "ready-for-review": "scripts/github/ready-for-review.mjs",
     "reconcile-draft":  "scripts/github/reconcile-draft-gate.mjs",
   },
@@ -68,6 +68,22 @@ const SUBCOMMAND_ROUTES = {
     verify: "scripts/refine/verify.mjs",
   },
 };
+
+// Back-compat subcommand aliases: { category: { oldName: { canonical, notice } } }.
+// Aliases keep existing callers working while emitting a one-line deprecation
+// notice to stderr so they migrate to the canonical subcommand.
+const SUBCOMMAND_ALIASES = {
+  pr: {
+    "create-draft": {
+      canonical: "create",
+      notice: "[dev-loops] `pr create-draft` is deprecated; use `pr create` (always draft, self-assigned by default).",
+    },
+  },
+};
+
+function resolveSubcommandAlias(category, subcommand) {
+  return SUBCOMMAND_ALIASES[category]?.[subcommand] ?? null;
+}
 
 const TOP_LEVEL_COMMANDS = new Set(["help", "status", "doctor", "gates", "hide"]);
 
@@ -109,7 +125,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "debt-remediate": "File debt remediation issues",
   },
   pr: {
-    "create-draft": "Create draft PR",
+    create: "Create PR (always draft, self-assigned by default)",
     "ready-for-review": "Mark PR ready for review",
     "reconcile-draft": "Reconcile non-draft PR",
   },
@@ -279,16 +295,19 @@ function resolveSubcommandRoute(args) {
     return { error: `Missing subcommand for '${category}'. Available: ${subs}` };
   }
 
-  const subcommand = args[1];
+  const requestedSubcommand = args[1];
+  const alias = resolveSubcommandAlias(category, requestedSubcommand);
+  const subcommand = alias ? alias.canonical : requestedSubcommand;
   const scriptPath = routes[subcommand];
   if (!scriptPath) {
     const subs = Object.keys(routes).join(", ");
-    return { error: `Unknown subcommand '${subcommand}' for '${category}'. Available: ${subs}` };
+    return { error: `Unknown subcommand '${requestedSubcommand}' for '${category}'. Available: ${subs}` };
   }
 
   return {
     scriptPath: path.resolve(REPO_ROOT, scriptPath),
     forwardedArgs: args.slice(2),
+    ...(alias ? { deprecationNotice: alias.notice } : {}),
   };
 }
 
@@ -317,9 +336,17 @@ function parseTopLevelCommand(argv) {
     }
     // Check if any remaining arg is --help — delegate to script
     if (args.slice(1).some((a) => a === "--help" || a === "-h")) {
-      const scriptPath = routes[sub];
+      const alias = resolveSubcommandAlias(cmd, sub);
+      const resolvedSub = alias ? alias.canonical : sub;
+      const scriptPath = routes[resolvedSub];
       if (!scriptPath) return { kind: "category_help", category: cmd };
-      return { kind: "subcommand_help", scriptPath: path.resolve(REPO_ROOT, scriptPath) };
+      return {
+        kind: "subcommand_help",
+        scriptPath: path.resolve(REPO_ROOT, scriptPath),
+        // Surface the deprecation notice on the --help fast-path too, so a
+        // deprecated alias signals migration in help mode (not only on dispatch).
+        ...(alias ? { deprecationNotice: alias.notice } : {}),
+      };
     }
     const route = resolveSubcommandRoute(args);
     if (route) return { kind: "subcommand", ...route };
@@ -349,6 +376,7 @@ export async function runCli({
       return 0;
     }
     case "subcommand_help": {
+      if (fromTop.deprecationNotice) { writeLines(stderr, [fromTop.deprecationNotice]); }
       const result = spawnSync("node", [fromTop.scriptPath, "--help"], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       });
@@ -387,6 +415,7 @@ export async function runCli({
     }
     case "subcommand": {
       if (fromTop.error) { writeLines(stderr, [fromTop.error]); return 1; }
+      if (fromTop.deprecationNotice) { writeLines(stderr, [fromTop.deprecationNotice]); }
       const scriptArgs = fromTop.forwardedArgs || [];
       const result = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],

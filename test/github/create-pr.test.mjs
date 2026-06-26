@@ -5,9 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
-import { buildCreateDraftPrArgs, detectClosingKeyword } from "../../scripts/github/create-draft-pr.mjs";
+import { buildCreatePrArgs, detectClosingKeyword } from "../../scripts/github/create-pr.mjs";
 
-const scriptPath = path.resolve("scripts/github/create-draft-pr.mjs");
+const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
 async function writeGhStub(tempDir, entries, options = {}) {
@@ -59,8 +59,8 @@ test("detectClosingKeyword scans only first MAX_BODY_SCAN_BYTES", () => {
 
 // --- integration tests for closing-keyword warning ---
 
-test("create-draft-pr --body with closing keyword emits no stderr warning", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-body-keyword-ok-"));
+test("create-pr --body with closing keyword emits no stderr warning", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-keyword-ok-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -85,8 +85,8 @@ test("create-draft-pr --body with closing keyword emits no stderr warning", asyn
   }
 });
 
-test("create-draft-pr --body without closing keyword emits stderr warning but exits 0", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-body-no-keyword-"));
+test("create-pr --body without closing keyword emits stderr warning but exits 0", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-no-keyword-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -111,8 +111,8 @@ test("create-draft-pr --body without closing keyword emits stderr warning but ex
   }
 });
 
-test("create-draft-pr --body-file with closing keyword emits no stderr warning", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-bodyfile-keyword-ok-"));
+test("create-pr --body-file with closing keyword emits no stderr warning", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-bodyfile-keyword-ok-"));
 
   try {
     const bodyPath = path.join(tempDir, "pr-body.md");
@@ -140,8 +140,8 @@ test("create-draft-pr --body-file with closing keyword emits no stderr warning",
   }
 });
 
-test("create-draft-pr --body-file without closing keyword emits stderr warning but exits 0", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-bodyfile-no-keyword-"));
+test("create-pr --body-file without closing keyword emits stderr warning but exits 0", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-bodyfile-no-keyword-"));
 
   try {
     const bodyPath = path.join(tempDir, "pr-body.md");
@@ -169,8 +169,8 @@ test("create-draft-pr --body-file without closing keyword emits stderr warning b
   }
 });
 
-test("create-draft-pr --body-file with missing file emits stderr warning (non-fatal)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-bodyfile-missing-"));
+test("create-pr --body-file with missing file emits stderr warning (non-fatal)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-bodyfile-missing-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -195,11 +195,11 @@ test("create-draft-pr --body-file with missing file emits stderr warning (non-fa
   }
 });
 
-// --- existing tests continued ---
+// --- arg-building tests ---
 
-test("buildCreateDraftPrArgs injects --draft when absent", () => {
+test("buildCreatePrArgs injects --draft when absent", () => {
   assert.deepEqual(
-    buildCreateDraftPrArgs(["--repo", "owner/repo", "--assignee", "@me"]),
+    buildCreatePrArgs(["--repo", "owner/repo", "--assignee", "@me"]),
     {
       help: false,
       ghArgs: ["pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft"],
@@ -207,9 +207,49 @@ test("buildCreateDraftPrArgs injects --draft when absent", () => {
   );
 });
 
-test("buildCreateDraftPrArgs avoids adding a duplicate --draft", () => {
+test("buildCreatePrArgs defaults --assignee @me when no assignee is provided (#894)", () => {
   assert.deepEqual(
-    buildCreateDraftPrArgs(["--draft", "--repo", "owner/repo", "--assignee", "@me"]),
+    buildCreatePrArgs(["--repo", "owner/repo", "--base", "main", "--head", "feature"]),
+    {
+      help: false,
+      ghArgs: ["pr", "create", "--repo", "owner/repo", "--base", "main", "--head", "feature", "--assignee", "@me", "--draft"],
+    },
+  );
+});
+
+test("buildCreatePrArgs honors an explicit --assignee <login> and does not add a default", () => {
+  assert.deepEqual(
+    buildCreatePrArgs(["--repo", "owner/repo", "--assignee", "octocat"]),
+    {
+      help: false,
+      ghArgs: ["pr", "create", "--repo", "owner/repo", "--assignee", "octocat", "--draft"],
+    },
+  );
+});
+
+test("buildCreatePrArgs honors --assignee=<login> form without adding a default", () => {
+  assert.deepEqual(
+    buildCreatePrArgs(["--repo", "owner/repo", "--assignee=octocat"]),
+    {
+      help: false,
+      ghArgs: ["pr", "create", "--repo", "owner/repo", "--assignee=octocat", "--draft"],
+    },
+  );
+});
+
+test("buildCreatePrArgs honors the -a short assignee flag and does not inject a conflicting default (#894)", () => {
+  assert.deepEqual(
+    buildCreatePrArgs(["--repo", "owner/repo", "-a", "octocat"]),
+    {
+      help: false,
+      ghArgs: ["pr", "create", "--repo", "owner/repo", "-a", "octocat", "--draft"],
+    },
+  );
+});
+
+test("buildCreatePrArgs avoids adding a duplicate --draft", () => {
+  assert.deepEqual(
+    buildCreatePrArgs(["--draft", "--repo", "owner/repo", "--assignee", "@me"]),
     {
       help: false,
       ghArgs: ["pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me"],
@@ -217,56 +257,62 @@ test("buildCreateDraftPrArgs avoids adding a duplicate --draft", () => {
   );
 });
 
-test("buildCreateDraftPrArgs rejects --ready before gh is invoked", () => {
+test("buildCreatePrArgs rejects --ready before gh is invoked", () => {
   assert.throws(
-    () => buildCreateDraftPrArgs(["--repo", "owner/repo", "--ready"]),
+    () => buildCreatePrArgs(["--repo", "owner/repo", "--ready"]),
     /rejects --ready/i,
   );
 });
 
-test("buildCreateDraftPrArgs appends --draft after a false-valued draft token", () => {
+test("buildCreatePrArgs appends --draft after a false-valued draft token", () => {
   assert.deepEqual(
-    buildCreateDraftPrArgs(["--repo", "owner/repo", "--draft=false"]),
+    buildCreatePrArgs(["--repo", "owner/repo", "--assignee", "@me", "--draft=false"]),
     {
       help: false,
-      ghArgs: ["pr", "create", "--repo", "owner/repo", "--draft=false", "--draft"],
+      ghArgs: ["pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--draft"],
     },
   );
 });
 
-test("buildCreateDraftPrArgs re-appends --draft when a later token disables it", () => {
+test("buildCreatePrArgs re-appends --draft when a later token disables it", () => {
   assert.deepEqual(
-    buildCreateDraftPrArgs(["--draft", "--repo", "owner/repo", "--draft=false"]),
+    buildCreatePrArgs(["--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false"]),
     {
       help: false,
-      ghArgs: ["pr", "create", "--draft", "--repo", "owner/repo", "--draft=false", "--draft"],
+      ghArgs: ["pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--draft"],
     },
   );
 });
 
-test("buildCreateDraftPrArgs treats --draft=true as already supplied", () => {
+test("buildCreatePrArgs treats --draft=true as already supplied", () => {
   assert.deepEqual(
-    buildCreateDraftPrArgs(["--repo", "owner/repo", "--draft=true"]),
+    buildCreatePrArgs(["--repo", "owner/repo", "--assignee", "@me", "--draft=true"]),
     {
       help: false,
-      ghArgs: ["pr", "create", "--repo", "owner/repo", "--draft=true"],
+      ghArgs: ["pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=true"],
     },
   );
 });
 
-test("create-draft-pr --help documents draft-only behavior and --ready rejection", async () => {
+test("create-pr --help documents draft-only behavior, default self-assign, and --ready rejection", async () => {
   const result = await runNode(["--help"]);
 
   assert.equal(result.code, 0);
   assert.equal(result.stderr, "");
-  assert.match(result.stdout, /Thin wrapper around `gh pr create`/i);
+  assert.match(result.stdout, /Canonical PR-creation wrapper around `gh pr create`/i);
   assert.match(result.stdout, /injects exactly one `--draft` when absent/i);
+  assert.match(result.stdout, /defaults `--assignee @me` when no assignee is given/i);
+  assert.match(result.stdout, /self-assigned by default/i);
+  assert.match(result.stdout, /honors an explicit `--assignee <login>`/i);
+  // The help text must not overstate self-assignment as unconditional (it is the
+  // default, but an explicit --assignee/-a is honored). (#894 / Copilot review)
+  assert.doesNotMatch(result.stdout, /ALWAYS self-assigned/i);
   assert.match(result.stdout, /rejects `--ready` before invoking `gh`/i);
   assert.match(result.stdout, /preserves the underlying `gh pr create` stdout, stderr, and exit code/i);
 });
 
-test("create-draft-pr forwards args in order and preserves gh stdout on success", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-success-"));
+test("create-pr forwards args in order and preserves gh stdout on success", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-success-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -282,8 +328,8 @@ test("create-draft-pr forwards args in order and preserves gh stdout on success"
       "--repo", "owner/repo",
       "--assignee", "@me",
       "--base", "main",
-      "--head", "issue-349-create-draft-pr",
-      "--title", "Add draft wrapper",
+      "--head", "issue-349-create-pr",
+      "--title", "Add canonical wrapper",
       "--body-file", bodyPath,
       "positional-token",
     ], { env });
@@ -296,8 +342,8 @@ test("create-draft-pr forwards args in order and preserves gh stdout on success"
       "--repo", "owner/repo",
       "--assignee", "@me",
       "--base", "main",
-      "--head", "issue-349-create-draft-pr",
-      "--title", "Add draft wrapper",
+      "--head", "issue-349-create-pr",
+      "--title", "Add canonical wrapper",
       "--body-file", bodyPath,
       "positional-token",
       "--draft",
@@ -307,8 +353,44 @@ test("create-draft-pr forwards args in order and preserves gh stdout on success"
   }
 });
 
-test("create-draft-pr preserves an existing --draft without adding another copy", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-existing-draft-"));
+test("create-pr defaults --assignee @me end-to-end when no assignee flag is given (#894)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-default-assignee-"));
+
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "https://github.com/owner/repo/pull/17\n" },
+    ]);
+
+    const bodyPath = path.join(tempDir, "pr-body.md");
+    await writeFile(bodyPath, "Closes #894\n", "utf8");
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body-file", bodyPath,
+    ], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(await readGhCalls(ghLogPath), [[
+      "pr", "create",
+      "--repo", "owner/repo",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body-file", bodyPath,
+      "--assignee", "@me",
+      "--draft",
+    ]]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr preserves an existing --draft without adding another copy", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-existing-draft-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -334,8 +416,8 @@ test("create-draft-pr preserves an existing --draft without adding another copy"
   }
 });
 
-test("create-draft-pr appends --draft after --draft=false so draft-first still wins", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-false-draft-"));
+test("create-pr appends --draft after --draft=false so draft-first still wins", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-false-draft-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -344,21 +426,21 @@ test("create-draft-pr appends --draft after --draft=false so draft-first still w
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--draft=false"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--draft=false"], { env });
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--draft=false", "--draft",
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--draft",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
 
-test("create-draft-pr re-appends --draft when a later token disables it", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-reappend-"));
+test("create-pr re-appends --draft when a later token disables it", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-reappend-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -367,21 +449,21 @@ test("create-draft-pr re-appends --draft when a later token disables it", async 
       },
     ]);
 
-    const result = await runNode(["--draft", "--repo", "owner/repo", "--draft=false"], { env });
+    const result = await runNode(["--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false"], { env });
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--draft", "--repo", "owner/repo", "--draft=false", "--draft",
+      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--draft",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
 
-test("create-draft-pr treats --draft=true as already supplied and avoids a duplicate", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-true-draft-"));
+test("create-pr treats --draft=true as already supplied and avoids a duplicate", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-true-draft-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -390,21 +472,21 @@ test("create-draft-pr treats --draft=true as already supplied and avoids a dupli
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--draft=true"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--draft=true"], { env });
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--draft=true",
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=true",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
 
-test("create-draft-pr rejects --ready without invoking gh", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-ready-reject-"));
+test("create-pr rejects --ready without invoking gh", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-ready-reject-"));
 
   try {
     const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
@@ -414,7 +496,7 @@ test("create-draft-pr rejects --ready without invoking gh", async () => {
     assert.equal(result.stdout, "");
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /rejects --ready/i);
-    assert.match(stderrPayload.usage, /Usage: create-draft-pr\.mjs/i);
+    assert.match(stderrPayload.usage, /Usage: create-pr\.mjs/i);
     assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
     assert.deepEqual(await readGhCalls(ghLogPath), []);
   } finally {
@@ -422,8 +504,8 @@ test("create-draft-pr rejects --ready without invoking gh", async () => {
   }
 });
 
-test("create-draft-pr preserves gh stdout, stderr, and exit code on failure", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-draft-pr-gh-failure-"));
+test("create-pr preserves gh stdout, stderr, and exit code on failure", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-gh-failure-"));
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
