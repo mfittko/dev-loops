@@ -16,7 +16,7 @@ const SCAN_DIR = "skills";
 // Detect a real ESM import (static, side-effect, or dynamic) whose specifier is a relative
 // path reaching into `packages/core`. The leading relative segment and the `from`/`import`
 // keyword keep prose mentions of the path in comments/strings from being false positives.
-// The optional `(?:\.\/)+` prefix also catches `./..`-style equivalents (e.g.
+// The optional `(?:\.\/)*` prefix also catches `./..`-style equivalents (e.g.
 // `"./../../packages/core/..."`) that are still relative paths but would otherwise bypass a
 // detector anchored solely on a leading `..`.
 const RELATIVE_CORE_STATIC_OR_SIDE_EFFECT_RE =
@@ -50,7 +50,7 @@ async function collectSourceFiles(dir) {
   return out;
 }
 
-test("no file under skills/ imports @dev-loops/core via a cross-package relative path", async () => {
+test("no file under skills/ reaches into packages/core via a cross-package relative import path", async () => {
   const files = await collectSourceFiles(SCAN_DIR);
   assert.ok(files.length > 0, "expected to scan some source files under skills/");
 
