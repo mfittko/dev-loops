@@ -25,7 +25,11 @@ export async function resolveNextUpOrder(
   const listItems = dependencies.listQueueItems ?? listQueueItemsMain;
   try {
     const result = await listItems(
-      { repo, project: projectNumber, column: "Next Up" },
+      // list-queue-items validates `project` as a string ref (CLI contract);
+      // resolveProjectNumber yields a number, so stringify it. Passing the raw
+      // number trips parseProjectRef's `typeof raw !== "string"` guard, which
+      // surfaces as a misleading "--project is required" (#901).
+      { repo, project: String(projectNumber), column: "Next Up" },
       { env, runChild: dependencies.runChild },
     );
     const order = (result?.items ?? [])
