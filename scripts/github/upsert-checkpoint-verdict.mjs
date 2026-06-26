@@ -1106,7 +1106,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
     }
   }
-  if (options.findingsFile) {
+  // --findings-json takes precedence; when structured findings are present, do not
+  // read --findings-file at all (avoids a spurious hard failure if a caller passes
+  // both and the file is missing/invalid even though it would be ignored anyway).
+  if (!structuredFindings && options.findingsFile) {
     try {
       const fileContent = await readFile(options.findingsFile, "utf8");
       const trimmedEnd = fileContent.replace(/\n+$/, "");
