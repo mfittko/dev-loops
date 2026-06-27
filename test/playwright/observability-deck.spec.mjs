@@ -91,7 +91,8 @@ test("webkit renders the observability deck and captures named states", async ({
 });
 
 // Mobile pass: enforce that content FITS — no horizontal scroll anywhere, and
-// no `overflow:hidden` ancestor clipping a taller-than-it element. Settle the
+// no `<section>` whose own overflow-y is hidden/clip while its content is taller
+// than its box (the vertical-clip check below is per-section, not an ancestor walk). Settle the
 // layout (viewport applied, fonts loaded, network idle) before measuring so the
 // cold-start false-fail — measuring desktop ~815px geometry — can't happen.
 const MOBILE = { width: 390, height: 844 };
@@ -120,7 +121,7 @@ async function measureFit(page) {
     // Vertical clip: a section whose content is taller than its box while its
     // own overflow-y is hidden has cut-off content.
     const clipped = [];
-    for (const el of document.querySelectorAll("section.slide, section")) {
+    for (const el of document.querySelectorAll("section")) {
       const oy = getComputedStyle(el).overflowY;
       if ((oy === "hidden" || oy === "clip") && el.clientHeight + 1 < el.scrollHeight) {
         clipped.push(`<${el.tagName.toLowerCase()} id="${el.id}"> client=${el.clientHeight} scroll=${el.scrollHeight}`);
