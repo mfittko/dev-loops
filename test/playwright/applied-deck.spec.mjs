@@ -84,3 +84,103 @@ test("webkit renders the applied deck and captures named states", async ({ page 
     await stopFixtureServer(server);
   }
 });
+
+// Mobile pass: enforce that content FITS — no horizontal scroll anywhere, and
+// no `<section>` whose own overflow-y is hidden/clip while its content is taller
+// than its box (the vertical-clip check below is per-section, not an ancestor walk). Settle the
+// layout (viewport applied, fonts loaded, network idle) before measuring so the
+// cold-start false-fail — measuring desktop ~815px geometry — can't happen.
+const MOBILE = { width: 390, height: 844 };
+
+async function settleMobile(page, url) {
+  await page.setViewportSize(MOBILE);
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle");
+  await page.waitForFunction((w) => window.innerWidth === w, MOBILE.width);
+  await page.evaluate(() => document.fonts.ready);
+}
+
+// Returns { hOffenders, pageScrollWidth, innerWidth, clipped } measured after settle.
+async function measureFit(page) {
+  return page.evaluate(() => {
+    const iw = window.innerWidth;
+    const hOffenders = [];
+    for (const el of document.querySelectorAll("body *")) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      // Diagrams must now FIT, not scroll: no overflow-x:auto exemption.
+      if (r.right > iw + 1) {
+        hOffenders.push(`<${el.tagName.toLowerCase()} class="${el.className}"> right=${Math.round(r.right)} "${(el.textContent || "").trim().slice(0, 32)}"`);
+      }
+    }
+    // Vertical clip: a section whose content is taller than its box while its
+    // own overflow-y is hidden has cut-off content.
+    const clipped = [];
+    for (const el of document.querySelectorAll("section")) {
+      const oy = getComputedStyle(el).overflowY;
+      if ((oy === "hidden" || oy === "clip") && el.clientHeight + 1 < el.scrollHeight) {
+        clipped.push(`<${el.tagName.toLowerCase()} id="${el.id}"> client=${el.clientHeight} scroll=${el.scrollHeight}`);
+      }
+    }
+    return {
+      hOffenders,
+      clipped,
+      pageScrollWidth: document.scrollingElement.scrollWidth,
+      innerWidth: iw,
+    };
+  });
+}
+
+test("webkit applied deck fits the mobile viewport (no horizontal scroll, no vertical clip)", async ({ page }, testInfo) => {
+  const { server, url } = await startFixtureServer(makeDeckServer);
+
+  try {
+    await settleMobile(page, url);
+    const m = await measureFit(page);
+
+    // Authoritative horizontal-fit guard: per-element getBoundingClientRect().right
+    // is clip-independent, so it catches overflow even though body{overflow-x:hidden}.
+    expect(m.hOffenders, `elements overflow the ${MOBILE.width}px viewport (must FIT, not scroll):\n${m.hOffenders.join("\n")}`).toEqual([]);
+    // Defensive secondary: body{overflow-x:hidden} clips page-level growth, so this
+    // line rarely fires on its own — the per-element check above is the real catch.
+    expect(m.pageScrollWidth, "page scrollWidth exceeds the viewport (defensive check)").toBeLessThanOrEqual(m.innerWidth + 1);
+    expect(m.clipped, `sections clip content with overflow:hidden (taller than their box):\n${m.clipped.join("\n")}`).toEqual([]);
+
+    // Capture one mobile state so the review loop sees the phone layout.
+    const coreIdea = page.locator("#core-idea");
+    await coreIdea.scrollIntoViewIfNeeded();
+    await expect(coreIdea).toBeVisible();
+    await captureNamedUiState({
+      page,
+      testInfo,
+      sliceId: "applied-deck",
+      stateName: "Core idea (mobile 390)",
+      fullPage: false,
+      metadata: {
+        fixture: path.basename(DECK_PATH),
+        route: "#core-idea",
+        reviewHint: "Mobile (390x844) layout for the core-idea section — fits the viewport, no scroll/clip.",
+      },
+    });
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
+// Guard the guard: a deliberately-wide element MUST be caught by the fit check.
+test("mobile fit check fails on a deliberately-wide element", async ({ page }) => {
+  const { server, url } = await startFixtureServer(makeDeckServer);
+
+  try {
+    await settleMobile(page, url);
+    await page.evaluate(() => {
+      const wide = document.createElement("div");
+      wide.style.cssText = "width:1200px;height:10px";
+      document.body.appendChild(wide);
+    });
+    const m = await measureFit(page);
+    expect(m.hOffenders.length).toBeGreaterThan(0);
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
