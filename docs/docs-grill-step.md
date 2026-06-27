@@ -15,7 +15,7 @@ It runs autonomously in-loop. The dev-loop performs the grill itself through the
 
 The grill rides two surfaces that already run inside the loop, so it applies on every run without a manual pass:
 
-1. **During refinement.** The [refiner agent](../agents/refiner.agent.md) cross-checks the active phase against the contracts and docs it touches as part of producing the refined plan, surfacing drift as a refinement finding rather than carrying an unverified claim forward.
+1. **During refinement.** The [refiner agent](../agents/refiner.agent.md) cross-checks the active phase against the contracts and docs it touches as part of producing the refined plan, surfacing drift as a refinement finding while the claim is still being verified.
 2. **At the pre-approval gate.** The `docs` review angle in `gates.preApproval.angles` (see `packages/core/src/config/extension-defaults.yaml`) resolves to the [docs persona](../agents/docs.agent.md) in review mode, which audits documentation correctness for the change as one fan-out angle of the [gate review sub-loop](./gate-review-sub-loop-contract.md).
 
 ## The keep/fix rule
@@ -24,7 +24,7 @@ Each finding takes exactly one disposition, codified by `classifyDocsGrillFindin
 
 | Finding | Disposition |
 | --- | --- |
-| Real drift between code/behavior and a contract claim | `record_finding` — record it; it is the loop's evidence the change is wrong, not the doc |
+| Real drift between code/behavior and a contract claim | `record_finding` — record it; the change contradicts a contract that still holds |
 | Doc-only drift small enough for this branch | `fix_in_place` — correct the doc on the same branch |
 | Doc-only drift too large for this branch | `route_followup` — open or note a follow-up |
 | Cosmetic wording nit | `ignore_cosmetic` — do not block and do not fix here |
@@ -42,4 +42,4 @@ This keeps the disposition rule testable; the firing surfaces (refiner cross-che
 
 ## First run
 
-The [local-first epic (#947)](https://github.com/mfittko/dev-loops/issues/947) tree refinement is the first run of this step. Each node of the epic tree was refined with a per-node grill against the contracts it reuses — `--plan-file` reuses the existing `local_implementation` strategy and `local_phase` target (no new strategy), the plan reuses the phase-doc format under `docs/phases/`, and promotion opens a single draft PR as the spec-of-record — surfacing each contract claim for verification during the refiner+grill fan-out rather than after it. The ratified design decisions on #947 record the grilled-and-confirmed contract reuse.
+The [local-first epic (#947)](https://github.com/mfittko/dev-loops/issues/947) tree refinement is the first run of this step. Each node of the epic tree was refined with a per-node grill against the contracts it reuses — `--plan-file` reuses the existing `local_implementation` strategy and `local_phase` target (no new strategy), the plan reuses the phase-doc format under `docs/phases/`, and promotion opens a single draft PR as the spec-of-record — surfacing each contract claim for verification during the refiner+grill fan-out, while refining. The ratified design decisions on #947 record the grilled-and-confirmed contract reuse.
