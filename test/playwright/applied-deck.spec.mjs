@@ -34,8 +34,9 @@ function makeDeckServer() {
 // stable <section id> in the rendered deck.
 const NAMED_STATES = [
   { id: "hero", stateName: "Hero" },
-  { id: "gate-fanout", stateName: "Gate fan-out" },
-  { id: "v040-capabilities", stateName: "v0.4.0 capabilities" },
+  { id: "core-idea", stateName: "Core idea" },
+  { id: "parallel-review", stateName: "Parallel review" },
+  { id: "trust", stateName: "Trust / never-lie" },
   { id: "impact", stateName: "Impact" },
 ];
 
