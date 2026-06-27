@@ -46,6 +46,7 @@ For the active phase, require and produce:
 - Do not invent audit findings when no audit artifact was provided
 - when the phase includes watcher or predicate-driven behavior: explicit timeout semantics and negative-case expectations for non-target identities/events
 - when the phase relies on package-first shared helpers inside a source-loaded workspace: explicit integration expectations about whether local callers use published package imports or a thin source/workspace adapter during development
+- cross-check the phase's claims against the contracts and docs they reference (the autonomous docs-grill step, see ../docs/docs-grill-step.md): surface code-vs-doc drift, stale references, and contract-surface inaccuracies as refinement findings rather than carrying an unverified claim forward
 
 ## Working style
 - Prefer parallel fresh-context fan-out/fan-in when it improves refinement quality or surfaces materially different variants.

@@ -20,6 +20,8 @@ Start here for repository documentation.
 - [UI Artifact Contract](./ui-artifact-contract.md)
 - [UI Designer + Vision Review Loop](./ui-designer-review-loop.md)
 - [Slides Content & Storytelling Review Loop](./slides-story-review-loop.md)
+- [A/B Contrast Deslop Step](./ab-contrast-deslop-step.md)
+- [Docs-Grill Step](./docs-grill-step.md) — autonomous in-loop check of a change against its contracts/docs
 
 ## Active local phase doc
 
