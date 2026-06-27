@@ -6,7 +6,7 @@ One storytelling review pass over `docs/articles/eliminating-coordination-delay.
 
 - **Audience:** public / non-insider developers and technical leads. No prior knowledge of the runtime.
 - **Intended takeaway:** AI made code cheap; coordination is now the cost; the fix is to make every handoff an explicit, observable decision on a state graph.
-- **Pay extra attention to:** no version-pegging, no raw enum/identifier dumps, a hook a stranger cares about, one idea per section, and a close that is a line, not a feature list.
+- **Pay extra attention to:** no version-pegging, no raw enum/identifier dumps, a hook a stranger cares about, one idea per section, and a close that lands as a single line.
 
 ## Findings and corrective actions (applied)
 
@@ -15,9 +15,9 @@ One storytelling review pass over `docs/articles/eliminating-coordination-delay.
 | 1 | high | First draft risked opening on the mechanism ("nested loops") before the reader cares. The hook must make a stranger feel the pain first. | Open on the concrete asymmetry — code writes in seconds, the handoffs around it leak hours and get guessed wrong — and name "coordination delay" in plain language before any mechanism. | Done |
 | 2 | high | Source deck carried raw identifiers (`stop_at_next_safe_gate`, `hard_constraint`, `fanout_fanin`, `humanMergeOnly`). A public reader does not need them and they date the piece. | Translated every identifier to plain language ("a tidy stopping point", "a hard constraint", "one consolidated verdict", "a named human"). No raw enums or config keys in the article. | Done |
 | 3 | medium | "What it buys" risked becoming a flat feature list — the deck's failure mode for a close, and a real risk for a body section too. | Framed the four behaviors as things a *guess-based* workflow cannot offer, each as its own bolded one-idea beat (safe pauses, steering, parallel review, honest done), with "done means merged" called out as the one that matters most. | Done |
-| 4 | medium | Four diagrams must each earn their place, not decorate. Two (lifecycle, fan-in) were already in the deck; two (PR-gate flow as a flowchart, steering flow) are new and must add information the prose doesn't. | Each diagram gets a caption stating what it shows that the text does not: the gate flow shows the loop-backs (can't skip a gate that didn't run); the steering flow shows the apply-now-vs-queue-until-safe branch. Removed any diagram that only restated a sentence. | Done |
-| 5 | medium | "Why a state graph beats a prompt" is the intellectual core but was buried as a bullet list in the source. As prose it needs a memorable contrast, not a list. | Rewrote as a two-consequence argument ending on the line "A prompt is a wish about behavior. A state graph is a guarantee about it." | Done |
-| 6 | low | Close risked trailing off after the state-graph section. Decks taught: end on a line, not a recap. | Added a short dedicated close that restates the arc in two sentences and lands on the deck's punchline: "Make every handoff a decision you can see, and nothing stalls in the dark." | Done |
+| 4 | medium | Four diagrams must each earn their place by adding information the prose doesn't. Two (lifecycle, fan-in) were already in the deck; two (PR-gate flow as a flowchart, steering flow) are new and must add information the prose doesn't. | Each diagram gets a caption stating what it shows that the text does not: the gate flow shows the loop-backs (can't skip a gate that didn't run); the steering flow shows the apply-now-vs-queue-until-safe branch. Removed any diagram that only restated a sentence. | Done |
+| 5 | medium | "Why a state graph beats a prompt" is the intellectual core but was buried as a bullet list in the source. As prose it needs a memorable through-line. | Rewrote as a two-consequence argument. (The A/B pass below later restated its closing line as a single direct claim.) | Done |
+| 6 | low | Close risked trailing off after the state-graph section. Decks taught: end on a single line. | Added a short dedicated close that restates the arc in two sentences and lands on one line. (The A/B pass below restated that line in positive form.) | Done |
 | 7 | low | Medium can't render Mermaid; without guidance the diagrams would break for the actual publish target. | Added a "Rendering the diagrams on Medium" note and ensured every diagram is captioned so the prose carries the argument even when diagrams are static images. | Done |
 
 ## Lens check
@@ -26,7 +26,7 @@ One storytelling review pass over `docs/articles/eliminating-coordination-delay.
 - **One idea per section:** the one idea (never guess a handoff) is stated once and each later section is a single beat. ✔
 - **Public clarity:** no version numbers, no raw enums/config keys; mechanism named in plain language. ✔
 - **Arc:** hook → one idea → what it buys → fan-out/fan-in → steering → why a graph → close. ✔
-- **Strong close:** a line, not a feature list. ✔
+- **Strong close:** a single line. ✔
 - **Diagrams earn their place:** 4 captioned diagrams, each adding structure the prose states only in passing. ✔
 
 ## Outcome
@@ -46,3 +46,11 @@ Applied the deslop ruleset to the prose in both `eliminating-coordination-delay.
 - **Redundant restatement beats:** dropped the trailing bold echoes "**Ambiguity never silently becomes a guess.**" (rewritten) and "**Done means merged — verified, never assumed.**" (removed; the paragraph already states it).
 
 Verification: `npm run verify` exits 0, docs link check passes. The `.md` and `.html` remain in content parity (HTML lede still expands the subtitle as before).
+
+## A/B contrast pass
+
+A dedicated pass removed the binary-contrast / negation-by-contrast antipattern in both orderings ("X, not Y" and "Y, not X"), the single most pervasive AI tell in the draft. The earlier deslop pass had cut the obvious fragments but left the construction throughout the body. Following the standard step (see the formalized deslop sub-step): a per-document analysis flagged every instance, a final-check pass caught misses and guarded the tone, and the rewrites state each point directly.
+
+The rule was to drop the contrast *scaffolding* while keeping load-bearing technical distinctions stated plainly. The merge signal stays real ("CI-green comes from the real check result" in place of "verified, not assumed"); the human-merge policy stays a flat fact ("the merge always belongs to a named human"). The state-graph close became "A state graph guarantees the behavior a prompt can only request," and the article's final line became "Make every handoff a decision you can see, and the work keeps moving in the open" — both superseding the contrast-built versions recorded above. A human-likeness pass then restored natural rhythm where the cuts had left flat runs of declaratives, without reintroducing any contrast.
+
+Verification: `npm run verify` exits 0; a residual check finds zero of the flagged constructions in the `.md` or `.html`.
