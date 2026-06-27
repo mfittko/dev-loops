@@ -81,7 +81,7 @@ flowchart LR
   C --> D[Verify outcomes]
   D --> A
 ```
-*Figure 3 — The measurement loop. Capture, measure, change, verify — then back to capture. It's a cycle, not a one-time audit, because the slowest transition moves as you fix things.*
+*Figure 3 — The measurement loop. Capture, measure, change, verify — then back to capture. It repeats as a cycle, because the slowest transition moves as you fix things.*
 
 This is ordinary improvement discipline, applied to the part of delivery that has stayed invisible. Shortening a wait depends on measuring it, and measuring it depends on capturing its state.
 
