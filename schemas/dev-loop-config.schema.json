@@ -105,6 +105,43 @@
         }
       }
     },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Approval / merge-handoff behavior. `humanHandoff` (opt-in) offers to assign the PR to a named human reviewer/assignee at the pre-approval gate. Pairs with autonomy.humanMergeOnly.",
+      "properties": {
+        "humanHandoff": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Offer to assign the PR to a human reviewer/assignee at the pre-approval / merge-handoff boundary. Opt-in; disabled by default. OFFER-only — the operator confirms the assignee.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable the human-handoff offer at the pre-approval gate."
+            },
+            "candidatesFrom": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "codeowners",
+                  "recent-committers"
+                ]
+              },
+              "description": "Candidate sources the resolver queries: CODEOWNERS for touched paths and/or recent committers to those paths."
+            },
+            "assignees": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Static, highest-priority candidate logins to offer (e.g. [alice, bob])."
+            }
+          }
+        }
+      }
+    },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
