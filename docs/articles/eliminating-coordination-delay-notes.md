@@ -32,3 +32,17 @@ One storytelling review pass over `docs/articles/eliminating-coordination-delay.
 ## Outcome
 
 `story_review_satisfied` — remaining nits are minor and do not justify another dedicated pass.
+
+## Deslop pass
+
+Applied the deslop ruleset to the prose in both `eliminating-coordination-delay.md` and its render `eliminating-coordination-delay.html`, keeping meaning, structure, the 4 diagrams and their captions, the front-matter, and the dark visual identity. Tells removed:
+
+- **Em-dashes in prose:** replaced with commas, periods, or parentheses. Markdown body dropped from 22 to 4 (the 4 remaining are the `Diagram N —` caption labels, kept as a caption convention); HTML `&mdash;` dropped from 31 to 4 (same caption labels).
+- **Binary-contrast fragments:** "The code is cheap now. The coordination is not." → "Code is cheap to write now; getting it through the pipeline is not." And "That sounds modest. It is not." → "That sounds modest, but most of the lost hours...".
+- **Dramatic short fragments:** dropped "Many eyes, one decision." and "Same input, parallel angles, one output you can trust." (the latter rewritten into a full sentence).
+- **Magic adverbs:** "quietly guess wrong" → "guess wrong"; "It drifts quietly, with no warning" → "The drift comes with no warning"; "the work naturally organizes itself" → "the work falls into loops"; removed "simply cannot offer" and "blindly obey".
+- **Bold-led bullet pattern:** the four-item "**Safe pauses.** … **Mid-flight steering.** …" list became ordinal prose paragraphs ("The first is safe pauses. … The fourth matters most: …"), which also breaks the flat four-item parallelism.
+- **Throat-clearing / filler:** "worth saying plainly" cut from the coordination-delay definition; "Strip it all back and the message is simple." cut from the close; the invented bold label `**coordination delay**` de-emphasized to plain "coordination delay".
+- **Redundant restatement beats:** dropped the trailing bold echoes "**Ambiguity never silently becomes a guess.**" (rewritten) and "**Done means merged — verified, never assumed.**" (removed; the paragraph already states it).
+
+Verification: `npm run verify` exits 0, docs link check passes. The `.md` and `.html` remain in content parity (HTML lede still expands the subtitle as before).

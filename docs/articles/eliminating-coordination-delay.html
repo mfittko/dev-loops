@@ -188,24 +188,24 @@
   <header class="hero-card">
     <p class="kicker">dev-loops</p>
     <h1>Eliminating Coordination Delay in AI-Assisted Dev Workflows</h1>
-    <p class="lede">AI made writing code cheap. The handoffs around the code &mdash; author to reviewer, reviewer to CI, CI back to a human &mdash; are where the hours leak, and where agents quietly guess wrong.</p>
+    <p class="lede">AI made writing code cheap. The handoffs around the code, author to reviewer, reviewer to CI, CI back to a human, are where the hours go, and where agents guess wrong.</p>
   </header>
 
-  <p>An AI agent can write a working function in seconds. That part is solved. What is not solved is everything that happens <em>around</em> the function: handing it to a reviewer, getting feedback back to the author, waiting for the build, deciding whether it is safe to merge. Each of those handoffs looks instant on a diagram and takes hours in real life &mdash; and worse, when an agent is left to manage them on its own, it tends to <em>guess</em> at them. It assumes the build passed. It assumes the review is done. It marks the work finished because finishing felt close.</p>
+  <p>An AI agent can write a working function in seconds. That part is solved. What is not solved is everything that happens <em>around</em> the function: handing it to a reviewer, getting feedback back to the author, waiting for the build, deciding whether it is safe to merge. Each of those handoffs looks instant on a diagram and takes hours in real life. Worse, an agent left to manage them on its own will guess at them. It assumes the build passed, assumes the review is done, and marks the work finished because finishing felt close.</p>
 
-  <p>That gap has a name worth saying plainly: <strong>coordination delay</strong>. It is the time work spends waiting between people and steps, plus the rework caused when someone &mdash; or something &mdash; guesses wrong about where the work actually is. The code is cheap now. The coordination is not.</p>
+  <p>That gap has a name: coordination delay. It is the time work spends waiting between people and steps, plus the rework caused when someone, or something, guesses wrong about where the work actually is. Code is cheap to write now; getting it through the pipeline is not.</p>
 
   <p>This article is about one idea for closing that gap, and why the shape of the solution matters as much as the idea itself.</p>
 
   <h2>The one idea: never guess a handoff</h2>
 
-  <p>Here is the whole thing in a sentence: <strong>never guess a handoff &mdash; make every handoff an explicit, observable decision.</strong></p>
+  <p>Here is the whole thing in a sentence: never guess a handoff. Make every handoff an explicit, observable decision.</p>
 
-  <p>That sounds modest. It is not. Most of the lost hours in an AI-assisted workflow are not lost inside the work; they are lost in the seams between steps, where the system has to answer a question like <em>who acts next?</em> or <em>is this actually ready?</em> and answers it with a hopeful assumption instead of a checked fact.</p>
+  <p>That sounds modest, but most of the lost hours in an AI-assisted workflow are not lost inside the work. They are lost in the seams between steps, where the system has to answer a question like <em>who acts next?</em> or <em>is this ready?</em> and answers it with a hopeful assumption instead of a checked fact.</p>
 
-  <p>The fix is to refuse the assumption everywhere. Every transition &mdash; author to reviewer, reviewer back to author, ready-to-merge to merged &mdash; becomes a decision the system makes deliberately and writes down where you can see it. When the situation is ambiguous, the system does not pick the likeliest path and hope. It stops and asks. <strong>Ambiguity never silently becomes a guess.</strong></p>
+  <p>The fix is to refuse the assumption everywhere. Every transition (author to reviewer, reviewer back to author, ready-to-merge to merged) becomes a decision the system makes deliberately and writes down where you can see it. When the situation is ambiguous, the system does not pick the likeliest path and hope. It stops and asks. Ambiguity never becomes a guess without someone signing off on it.</p>
 
-  <p>Once you hold that rule, the work naturally organizes itself into loops nested inside loops. An outer loop asks, every cycle, <em>who acts next?</em> &mdash; and makes exactly one move before asking again. Inside it, one loop walks a single pull request from first draft to merged. Another tracks every review comment from raised to resolved, so nothing falls through. One move at a time, each move chosen on purpose.</p>
+  <p>Hold that rule and the work falls into loops nested inside loops. An outer loop asks, every cycle, <em>who acts next?</em>, then makes exactly one move before asking again. Inside it, one loop walks a single pull request from first draft to merged. Another tracks every review comment from raised to resolved, so nothing falls through. One move at a time, each move chosen on purpose.</p>
 
   <figure>
     <div class="diagram-scroll">
@@ -228,15 +228,15 @@
 
   <h2>What an explicit handoff buys you</h2>
 
-  <p>Treating every handoff as a real decision is not bureaucracy. It is what makes four genuinely useful behaviors possible &mdash; behaviors a guess-based workflow simply cannot offer.</p>
+  <p>Treating every handoff as a real decision is not bureaucracy. It is what makes four behaviors possible that a guess-based workflow cannot offer.</p>
 
-  <p><strong>Safe pauses.</strong> Because the system always knows where it is, it can stop without making a mess. Ask it to stop mid-edit and it does not drop a half-written file; it finishes the current step, lands it clean, and hands you a tidy stopping point. There are only a few honest answers to "can I stop now?" &mdash; <em>stop this instant</em>, <em>stop at the next clean boundary</em>, or <em>I can't move at all because a required check is missing</em> &mdash; and the system gives you the true one.</p>
+  <p>The first is safe pauses. Because the system always knows where it is, it can stop without making a mess. Ask it to stop mid-edit and it does not drop a half-written file. It finishes the current step, lands it clean, and hands you a stopping point. There are only a few honest answers to "can I stop now?": <em>stop this instant</em>, <em>stop at the next clean boundary</em>, or <em>I can't move at all because a required check is missing</em>. The system gives you the true one.</p>
 
-  <p><strong>Mid-flight steering.</strong> You can change the rules without stopping the machine. Halfway through a run you can say "don't touch the auth module," and that lands as a hard constraint the remaining steps must honor &mdash; no restart, no lost progress. The rule simply takes effect from the next move on. A softer nudge is treated as a preference it honors when it can; a "stop when safe" request winds the work down at the next clean boundary.</p>
+  <p>The second is mid-flight steering. You can change the rules without stopping the machine. Halfway through a run you can say "don't touch the auth module," and that lands as a hard constraint the remaining steps must honor, with no restart and no lost progress. The rule takes effect from the next move on. A softer nudge becomes a preference the system honors when it can, and a "stop when safe" request winds the work down at the next clean boundary.</p>
 
-  <p><strong>Parallel review that produces one verdict.</strong> A pull request can be examined from several angles at once &mdash; scope, test coverage, security &mdash; by reviewers that all read the <em>same evidence bundle</em>: the same diff, the same context. Because the inputs are identical, the verdicts are directly comparable, and they merge into a single answer. One serious finding is enough to block the merge. Many eyes, one decision.</p>
+  <p>The third is parallel review that produces one verdict. Several reviewers examine a pull request at once, each on a different angle (scope, test coverage, security), and all of them read the <em>same evidence bundle</em>: the same diff, the same context. Because the inputs are identical, the verdicts are directly comparable, and they merge into a single answer. One serious finding blocks the merge.</p>
 
-  <p><strong>"Done" that means merged.</strong> This is the one that matters most. In a guess-based system, "done" means the agent <em>believes</em> it is done. Here, the board shows done only when a pull request has actually merged &mdash; read from a real merge signal the agent cannot fabricate. The build being green is verified, not assumed; the system waits for the real result. And the agent never merges its own work &mdash; the final yes belongs to a named human, every time. <strong>Done means merged &mdash; verified, never assumed.</strong></p>
+  <p>The fourth matters most: "done" that means merged. In a guess-based system, "done" means the agent <em>believes</em> it is done. Here, the board shows done only when a pull request has actually merged, read from a real merge signal the agent cannot fabricate. The build being green is verified, not assumed, and the system waits for the real result. The agent never merges its own work. The final yes belongs to a named human, every time.</p>
 
   <figure>
     <div class="diagram-scroll">
@@ -293,7 +293,7 @@
 
   <h2>Fan out wide, fan in to one answer</h2>
 
-  <p>The parallel review deserves a closer look, because it is a small pattern with a big payoff. The trick is to build the evidence <em>once</em> and neutrally &mdash; the diff plus just enough surrounding context &mdash; and hand that identical bundle to every reviewer. No reviewer gets a richer or poorer view than another, so their findings sit on the same footing. Then the separate verdicts are consolidated into one, with the strictest finding winning.</p>
+  <p>The parallel review deserves a closer look, because it is a small pattern with a large payoff. Build the evidence once and neutrally (the diff plus just enough surrounding context) and hand that identical bundle to every reviewer. No reviewer gets a richer or poorer view than another, so their findings sit on the same footing. Then consolidate the separate verdicts into one, with the strictest finding winning.</p>
 
   <figure>
     <div class="diagram-scroll">
@@ -312,11 +312,11 @@
     <figcaption><b>Diagram 3 &mdash; Fan-out / fan-in.</b> One evidence bundle fans out to independent reviewers working different angles in parallel, then their findings fan back in to a single consolidated verdict.</figcaption>
   </figure>
 
-  <p>This is the opposite of a free-for-all where each reviewer scrapes its own context and they end up arguing about different versions of reality. Same input, parallel angles, one output you can trust.</p>
+  <p>Compare that to a free-for-all where each reviewer scrapes its own context and they end up arguing about different versions of reality. Here the input is shared, the angles run in parallel, and the output is one verdict you can trust.</p>
 
   <h2>Steering without stopping</h2>
 
-  <p>Mid-flight steering is worth one more diagram, because it shows the discipline in action. When you inject an instruction, the system does not blindly obey on the spot &mdash; it classifies the instruction and decides <em>when</em> it can be honored safely.</p>
+  <p>Mid-flight steering is worth one more diagram, because it shows the discipline in action. When you inject an instruction, the system does not obey on the spot. It classifies the instruction and decides <em>when</em> it can be honored safely.</p>
 
   <figure>
     <div class="diagram-scroll">
@@ -337,22 +337,22 @@
         <div class="node accent">Run&nbsp;continues,<br/>steered</div>
       </div>
     </div>
-    <figcaption><b>Diagram 4 &mdash; Steering flow.</b> A hard constraint is applied immediately if it is safe, or queued until the next safe point if it is not &mdash; the run keeps its progress either way, and is never left half-changed.</figcaption>
+    <figcaption><b>Diagram 4 &mdash; Steering flow.</b> A hard constraint is applied immediately if it is safe, or queued until the next safe point if it is not. The run keeps its progress either way, and is never left half-changed.</figcaption>
   </figure>
 
   <h2>Why a state graph beats a prompt</h2>
 
-  <p>You could try to get all of this from prompting alone &mdash; write a long, careful instruction and trust the model to follow it. It will, mostly, until it doesn't. Steer a workflow with prose and its behavior shifts with every model update, every longer context window, every change in sampling. It drifts quietly, with no warning, and you find out in production.</p>
+  <p>You could try to get all of this from prompting alone: write a long, careful instruction and trust the model to follow it. It will, mostly, until it doesn't. Steer a workflow with prose and its behavior shifts with every model update, every longer context window, every change in sampling. The drift comes with no warning, and you find out in production.</p>
 
-  <p>The alternative is to run the workflow on a <strong>state graph</strong>: the set of possible moves is closed and listable, so every next step is known up front. That has two consequences that prose can never offer. First, a known set of moves is a <em>testable</em> set &mdash; a wrong transition is caught in a test run, not at 3&nbsp;a.m. in production. Second, the system can always say exactly where it is and what it is allowed to do next, which is the very thing that makes safe pauses, steering, and an honest "done" possible in the first place.</p>
+  <p>Run the workflow on a state graph instead. The set of possible moves is closed and listable, so every next step is known up front. That buys two things prose cannot. A known set of moves is a <em>testable</em> set, so a wrong transition shows up in a test run rather than at 3&nbsp;a.m. in production. And the system can always say exactly where it is and what it is allowed to do next, which is what makes safe pauses, steering, and an honest "done" possible at all.</p>
 
   <p>A prompt is a wish about behavior. A state graph is a guarantee about it. When the whole point is to stop guessing, you do not want your coordination layer built on a guess.</p>
 
   <h2>The close</h2>
 
-  <p>Strip it all back and the message is simple. AI made the code cheap; the coordination around the code is now the expensive part, and most of that cost is paid in bad handoffs &mdash; wrong routing, silent stalls, and a "done" that turns out to be a hope.</p>
+  <p>AI made the code cheap. The coordination around the code is now the expensive part, and most of that cost is paid in bad handoffs: wrong routing, stalls nobody noticed, and a "done" that turns out to be a hope.</p>
 
-  <p>So stop guessing handoffs. Make every one of them a decision you can see: who acts next, whether it is safe to pause, what a mid-flight instruction means, and &mdash; above all &mdash; whether the work is truly merged or merely assumed to be. Build that on a state graph so the guarantee holds even when the model underneath you changes.</p>
+  <p>So stop guessing handoffs. Make every one of them a decision you can see: who acts next, whether it is safe to pause, what a mid-flight instruction means, and above all whether the work is actually merged or only assumed to be. Build that on a state graph so the guarantee holds even when the model underneath you changes.</p>
 
   <p class="closer">Make every handoff a decision you can see, and nothing stalls in the dark.</p>
 
