@@ -293,13 +293,13 @@
 <section class="slide" id="interrupt-cost">
   <div class="slide-inner">
     <p class="kicker">The delay pattern</p>
-    <h2>One Interrupt Costs Five Transitions, Not Five Minutes</h2>
+    <h2>One Interrupt, Five Transitions</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
-          <li>A five-minute question doesn't cost five minutes. It costs the <strong>switch out, the rebuild, and the recovery</strong> on both sides.</li>
+          <li>A five-minute question costs the <strong>switch out, the rebuild, and the recovery</strong> on both sides.</li>
           <li>Every interruption walks the same five steps &mdash; <em>notice, switch, rebuild, act, recover</em> &mdash; and each one has its own latency.</li>
-          <li>Across a queue of work, repeated interrupts don't add up. They <strong>multiply</strong>.</li>
+          <li>Across a queue of work, repeated interrupts <strong>multiply</strong>.</li>
         </ul>
       </div>
       <div class="glass-card flow-card">
@@ -327,7 +327,7 @@
 <section class="slide" id="handoff">
   <div class="slide-inner">
     <p class="kicker">Handoff cost</p>
-    <h2>Every Handoff Restarts the Same Discovery From Scratch</h2>
+    <h2>Handoffs Restart Discovery</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <p class="card-label">What the receiver pays for, every time</p>
@@ -354,10 +354,10 @@
 <section class="slide" id="blind-spot">
   <div class="slide-inner">
     <p class="kicker">The blind spot</p>
-    <h2>Your Git History Hides Exactly Where the Time Went</h2>
+    <h2>Git History Hides the Wait</h2>
     <div class="glass-card card-narrow">
       <ul class="tight-list">
-        <li>Commits record the <strong>output</strong> &mdash; they say nothing about the hours the work sat idle before someone touched it.</li>
+        <li>Commits record the <strong>output</strong> &mdash; leaving unrecorded the hours the work sat idle before someone touched it.</li>
         <li>Review threads bury the cost of re-reading and re-explaining inside ordinary back-and-forth.</li>
         <li>CI timestamps end at green. They miss the gap before a human notices and acts on the result.</li>
         <li>So the single biggest drag on lead time &mdash; <em>coordination waiting</em> &mdash; is invisible to every tool you already trust.</li>
@@ -369,10 +369,10 @@
 <section class="slide" id="observable-state">
   <div class="slide-inner">
     <p class="kicker">Observable state</p>
-    <h2>Four Fields Decide Whether the Next Actor Starts or Stalls</h2>
+    <h2>Four Fields Unblock the Next Actor</h2>
     <div class="grid grid-2">
       <div class="glass-card">
-        <p class="section-lead">The fix isn't more meetings or more status pings. It's making the state of the work <strong>explicit</strong>, so picking it up becomes <em>continuation</em> instead of investigation.</p>
+        <p class="section-lead">The fix is making the state of the work <strong>explicit</strong>, so picking it up becomes a <em>continuation</em> of work already in motion.</p>
         <p class="soft-note">Keep these four current and the next actor &mdash; human or agent &mdash; starts immediately, with nothing to reconstruct.</p>
       </div>
       <div class="glass-card">
@@ -391,13 +391,13 @@
 <section class="slide" id="measurement-loop">
   <div class="slide-inner">
     <p class="kicker">The measurement loop</p>
-    <h2>You Can't Shorten a Wait You Never Measured</h2>
+    <h2>Measure the Wait First</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
-          <li>Capture the state, and the waits between actors stop being anecdotes &mdash; they become <strong>numbers you can point at</strong>.</li>
+          <li>Capture the state, and the waits between actors become <strong>numbers you can point at</strong>.</li>
           <li>Find the transition that stalls most, change the process there, and check whether the wait actually dropped.</li>
-          <li>Then confirm the change didn't <em>trade speed for quality</em>. Faster only counts if it's still correct.</li>
+          <li>Then confirm the change held <em>quality</em> steady, the step people skip.</li>
         </ul>
       </div>
       <div class="glass-card flow-card">
@@ -423,21 +423,21 @@
 <section class="slide" id="instrumented">
   <div class="slide-inner">
     <p class="kicker">From idea to instrument</p>
-    <h2>Those Four Fields Aren't a Wish &mdash; They're Where the Work Already Lives</h2>
+    <h2>The Fields Already Live in the Work</h2>
     <div class="grid grid-3">
       <div class="glass-card">
         <p class="card-label">Owner &amp; next step are a board</p>
         <ul class="mini-list">
           <li>Work moves through visible columns: waiting, in progress, done.</li>
           <li>The column <em>is</em> the current owner and the safe next step.</li>
-          <li>A deterministic resolver picks the next action &mdash; no guessing whose move it is.</li>
+          <li>A deterministic resolver picks the next action and names whose move it is.</li>
         </ul>
       </div>
       <div class="glass-card">
         <p class="card-label">Decisions leave a trail</p>
         <ul class="mini-list">
           <li>Each review gate records its verdict in the open, with the findings behind it.</li>
-          <li>The latest decision is written down, not held in someone's head.</li>
+          <li>The latest decision is written down for the next actor to read.</li>
           <li>Pick the work up tomorrow and the reasoning is still there.</li>
         </ul>
       </div>
@@ -456,7 +456,7 @@
 <section class="slide" id="metrics">
   <div class="slide-inner">
     <p class="kicker">Why it pays off</p>
-    <h2>Visible State Moves Three Numbers at Once</h2>
+    <h2>Visible State Moves Three Numbers</h2>
     <div class="grid grid-3">
       <div class="glass-card">
         <p class="card-label">Quality</p>
@@ -489,17 +489,17 @@
 <section class="slide" id="close">
   <div class="slide-inner">
     <p class="kicker">The takeaway</p>
-    <h2>The Cheapest Speed-Up Is Making the Waiting Visible</h2>
+    <h2>Make the Waiting Visible</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
-          <li><strong>Make the state explicit,</strong> and pickup becomes continuation instead of an investigation.</li>
+          <li><strong>Make the state explicit,</strong> and pickup becomes a continuation of work already under way.</li>
           <li><strong>Measure the waits,</strong> and the biggest stall stops hiding behind your commit history.</li>
-          <li><strong>Automate only where state proves it's safe,</strong> and you remove the stall without removing the judgment.</li>
+          <li><strong>Automate only where state proves it's safe,</strong> and you remove the stall while keeping the judgment.</li>
         </ul>
       </div>
       <div class="metric-card closer">
-        <p class="hero-copy">Stop optimizing how fast you write code. Start measuring how long it waits.</p>
+        <p class="hero-copy">Measure how long the work waits.</p>
       </div>
     </div>
   </div>
