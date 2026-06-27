@@ -191,7 +191,7 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   return { out, files: ['index.html', ...DECKS.map((d) => d.file)] };
 }
 
-const invokedDirectly = process.argv[1] === fileURLToPath(import.meta.url);
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
   const args = process.argv.slice(2);
   const getArg = (name) => {
