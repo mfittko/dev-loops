@@ -166,6 +166,22 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
+  /* single full-width card: cap measure so lines stay readable; anchor left under the title */
+  .card-narrow { max-width: 58rem; }
+
+  /* closing line: center it in its card and give it punchline weight */
+  .closer { justify-content: center; }
+  .closer .hero-copy {
+    text-align: center;
+    font-weight: 620;
+    font-size: clamp(1.15rem, 2.6vw, 1.5rem);
+    line-height: 1.35;
+    color: var(--accent-soft);
+  }
+
+  /* flow card: keep diagram visually centered when copy is short */
+  .flow-card { justify-content: center; }
+
   .soft-note { color: var(--copy); margin-top: 0.85rem; font-size: 0.95rem; }
   .note-top-md { margin-top: 0.75rem; }
   .note-top-sm { margin-top: 0.5rem; }
@@ -246,7 +262,7 @@
           <li>When the situation is ambiguous, it stops and asks. <em>Ambiguity never becomes a guess.</em></li>
         </ul>
       </div>
-      <div class="glass-card">
+      <div class="glass-card flow-card">
         <p class="card-label">One move per cycle</p>
         <div class="flow-scroll">
           <div class="flow">
@@ -323,7 +339,7 @@
           <li>A single serious finding <em>blocks the merge</em> &mdash; one no is enough.</li>
         </ul>
       </div>
-      <div class="glass-card">
+      <div class="glass-card flow-card">
         <p class="card-label">Same evidence in, one verdict out</p>
         <div class="flow-scroll">
           <div class="flow">
@@ -380,7 +396,7 @@
   <div class="slide-inner">
     <p class="kicker">Why a graph, not a prompt</p>
     <h2>Prompt-Only Workflows Drift; a State Graph Can't</h2>
-    <div class="glass-card">
+    <div class="glass-card card-narrow">
       <ul class="tight-list">
         <li>Steer a workflow with prose alone and its behavior shifts with every model update, longer context, or change in temperature &mdash; quietly, with no warning.</li>
         <li>dev-loops runs the workflow on a <strong>state graph</strong> instead: the moves are a closed, listable set, so every possible next step is known up front.</li>
@@ -402,7 +418,7 @@
           <li><strong>Because "done" means merged,</strong> a green board is the truth, not a hopeful guess.</li>
         </ul>
       </div>
-      <div class="metric-card">
+      <div class="metric-card closer">
         <p class="hero-copy">Make every handoff a decision you can see &mdash; and nothing stalls in the dark.</p>
       </div>
     </div>

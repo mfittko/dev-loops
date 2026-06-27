@@ -35,8 +35,11 @@ function makeDeckServer() {
 const NAMED_STATES = [
   { id: "hero", stateName: "Hero" },
   { id: "core-idea", stateName: "Core idea" },
+  { id: "safe-pauses", stateName: "Safe pauses" },
+  { id: "steering", stateName: "Steering" },
   { id: "parallel-review", stateName: "Parallel review" },
   { id: "trust", stateName: "Trust / never-lie" },
+  { id: "why-graphs", stateName: "Why graphs" },
   { id: "impact", stateName: "Impact" },
 ];
 

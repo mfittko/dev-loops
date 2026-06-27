@@ -80,3 +80,56 @@ New arc and section ids:
 
 Playwright named states updated to the new ids (`hero`, `core-idea`,
 `parallel-review`, `trust`, `impact`); no-horizontal-overflow assertion kept.
+
+---
+
+## Visual refinement pass — post-restructure designer review (issue-926)
+
+Visual-only pass over the rewritten 8-slide deck. Narrative content unchanged;
+section ids stable. Captured all eight named states via
+`npm run test:playwright:deck` (WebKit) — the spec's `NAMED_STATES` was widened
+from 5 to all 8 ids (`hero`, `core-idea`, `safe-pauses`, `steering`,
+`parallel-review`, `trust`, `why-graphs`, `impact`) and kept widened for
+broader future coverage. Each `screenshot.png` was opened and critiqued; a
+390px-wide pass confirmed the responsive collapse (no horizontal overflow).
+
+### Findings (per slide)
+
+- **hero** — solid. Balanced single hero-card, good hierarchy. No change.
+- **core-idea** — flow card's diagram sat top-aligned, leaving dead space
+  below it against the taller left list card. Diagram looked stranded.
+- **safe-pauses / steering / trust** — vertical position varies between
+  captures, but that is a `scrollIntoViewIfNeeded` capture artifact (each
+  `.slide` is `min-height:100vh; justify-content:center` in the real deck), not
+  a layout defect. Content, spacing, and card balance are correct. No change.
+- **parallel-review** — flow diagram legible, aligned, centered; cards balanced.
+  Same flow-card centering tweak applied for consistency. Otherwise solid.
+- **why-graphs** — real readability defect: the single full-width `.glass-card`
+  let body lines run the full ~72rem inner width (~110ch), too wide to read
+  comfortably.
+- **impact** — the `metric-card` closing line read like a stray left-aligned,
+  top-anchored paragraph rather than a closer; it did not land as a punchline,
+  and the card had dead space below it.
+
+### Corrective actions applied (CSS/markup only, self-contained, CSP-safe)
+
+- `.card-narrow` (max-width 58rem, left-anchored under the title) on the
+  why-graphs card — caps the measure for a readable line length without
+  detaching from the left-aligned heading.
+- `.closer` on the impact metric-card — vertically centers the line and styles
+  `.hero-copy` inside it centered, larger, weighted, accent-soft: it now lands
+  as the deck's closing punchline.
+- `.flow-card` on the core-idea and parallel-review diagram cards —
+  `justify-content: center` so the diagram is vertically centered against the
+  taller adjacent list card instead of stranded at the top.
+
+Kept the navy/glass/violet identity, inline styles, and all section ids.
+
+### Before / after
+
+Before: why-graphs lines ran edge-to-edge (hard to read); impact closer was a
+left/top paragraph; core-idea & parallel-review diagrams hung at card top.
+After (re-captured + re-read): why-graphs reads at a comfortable measure under
+its title; the impact closer is centered and emphatic; both flow diagrams sit
+centered in their cards. Narrow (390px) collapse verified — single column, no
+horizontal overflow. Playwright deck spec passes (8 states captured).
