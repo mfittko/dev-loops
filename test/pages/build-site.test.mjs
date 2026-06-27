@@ -24,3 +24,21 @@ test('build-site assembles index + both deck files, index links both decks', asy
     await rm(out, { recursive: true, force: true });
   }
 });
+
+test('build-site refuses to wipe filesystem root', async () => {
+  await assert.rejects(() => buildSite({ outDir: '/' }), /refusing to wipe unsafe output dir/);
+});
+
+test('build-site refuses to wipe repoRoot itself', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-repo-'));
+  try {
+    await assert.rejects(
+      () => buildSite({ repoRoot, outDir: repoRoot }),
+      /refusing to wipe unsafe output dir/,
+    );
+    // Nothing deleted: dir still exists.
+    await stat(repoRoot); // throws if missing
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

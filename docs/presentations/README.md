@@ -9,9 +9,9 @@ truth for publishing.
 | Applied dev-loops — Eliminating Coordination Delay | [`applied-dev-loops.html`](applied-dev-loops.html) | Turning review/merge handoffs into a parallel, fail-closed pipeline. |
 | Process Observability — Make the Waiting Visible | [`process-observability.html`](process-observability.html) | Measuring how long work waits, not how fast you write code. |
 
-The `.html` renders inline all CSS and diagrams (no Slidev runtime, no CDN, no
-remote resources) and ship a strict `Content-Security-Policy`, so they open
-directly in a browser and publish as static files.
+The self-contained `.html` files inline all CSS and diagrams (no Slidev runtime,
+no CDN, no remote resources) and ship a strict `Content-Security-Policy`, so they
+open directly in a browser and publish as static files.
 
 ## View locally
 

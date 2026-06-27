@@ -4,7 +4,7 @@
 // The deck HTML files are the source of truth; site/ is assembled, never
 // hand-maintained. Usage: node scripts/pages/build-site.mjs [--out <dir>] [--repo-root <dir>]
 import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, parse as parsePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -171,6 +171,14 @@ ${cards}
 export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   const out = outDir ? resolve(outDir) : join(repoRoot, 'site');
   const decksDir = join(repoRoot, 'docs', 'presentations');
+
+  // Guard: out is wiped before assembly. Refuse paths that would nuke the
+  // filesystem root, the repo itself, or an ancestor of the repo.
+  const root = resolve(repoRoot);
+  const isAncestorOf = (a, b) => b === a || b.startsWith(a + '/');
+  if (out === parsePath(out).root || out === root || isAncestorOf(out, root)) {
+    throw new Error(`refusing to wipe unsafe output dir ${out}`);
+  }
 
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
