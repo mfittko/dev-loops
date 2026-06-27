@@ -112,13 +112,15 @@ function defaultBranchName(planPath) {
   return `promote-plan/${slug}`;
 }
 
-/** Parse the PR number from `gh pr create` stdout (the printed PR URL). */
+/**
+ * Parse the PR number from `gh pr create` stdout, which prints the PR URL.
+ * Only the `/pull/<n>` form is trusted; anything else fails closed via the
+ * caller's `pr_number_unparseable` path rather than guessing from a trailing
+ * number (which could mis-bind an unrelated PR from stdout noise).
+ */
 function parsePrNumberFromGhOutput(text) {
   const match = /\/pull\/(\d+)\b/u.exec(String(text ?? ""));
-  if (match) return Number.parseInt(match[1], 10);
-  // Fallback: a bare number on its own line (some gh configs print just the URL tail).
-  const bare = /(?:^|\s)#?(\d+)\s*$/u.exec(String(text ?? "").trim());
-  return bare ? Number.parseInt(bare[1], 10) : null;
+  return match ? Number.parseInt(match[1], 10) : null;
 }
 
 function emit(stdout, json, summary, humanLines) {
@@ -151,8 +153,8 @@ export async function runCli(argv = process.argv.slice(2), {
   const existingPrNumber = readLinkedPrNumber(markdownText);
   const decision = evaluatePromoteEligibility({
     baseSectionsValid: validatePlanFile(markdownText).ok,
-    hasAcceptanceCriteria: extractSection(markdownText, acHeading) ? true : false,
-    hasDefinitionOfDone: extractSection(markdownText, dodHeading) ? true : false,
+    hasAcceptanceCriteria: Boolean(extractSection(markdownText, acHeading)),
+    hasDefinitionOfDone: Boolean(extractSection(markdownText, dodHeading)),
     existingPrNumber,
   });
 
@@ -225,7 +227,7 @@ export async function runCli(argv = process.argv.slice(2), {
   }
 
   // Stage and commit the plan doc as the spec-of-record.
-  const add = await runChildFn("git", ["add", planPath], env);
+  const add = await runChildFn("git", ["add", "--", planPath], env);
   if (add.code !== 0) {
     return fail("git_add_failed", add.stderr.trim());
   }
@@ -257,7 +259,24 @@ export async function runCli(argv = process.argv.slice(2), {
   }
   const prNumber = parsePrNumberFromGhOutput(prCreate.stdout);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    return fail("pr_number_unparseable", prCreate.stdout.trim());
+    // create-pr returned success, so the draft PR IS open — this is a
+    // post-mutation failure, not a clean fail-closed. Surface a recovery hint
+    // (the PR number could not be parsed from gh's output) referencing the head
+    // branch so the operator can find the open PR and link it manually.
+    const summary = {
+      ok: false,
+      reason: "pr_number_unparseable",
+      detail: prCreate.stdout.trim() || null,
+      planFile: planPath,
+      branch,
+      recovery: `A draft PR was opened on branch ${branch} but its number could not be parsed from gh output. Find it with: gh pr list --head "${branch}" --json number,url. Then record the link with: node scripts/refine/promote-plan.mjs is idempotent only once the front-matter prNumber is set, so add it manually (prNumber: <n>) and commit ${planDocRelPath}.`,
+    };
+    emit(stdout, options.json, summary, [
+      `promote-plan: FAIL (pr_number_unparseable)`,
+      `  branch: ${branch} (a draft PR is open; its number could not be parsed — recover via 'gh pr list --head "${branch}"')`,
+    ]);
+    process.exitCode = 1;
+    return summary;
   }
 
   // Write the PR number back into the plan's front-matter (the plan->PR link),
@@ -286,7 +305,7 @@ export async function runCli(argv = process.argv.slice(2), {
   };
   const linkedMarkdown = writeLinkedPrNumber(markdownText, prNumber);
   await writeFile(planPath, linkedMarkdown, "utf8");
-  const linkAdd = await runChildFn("git", ["add", planPath], env);
+  const linkAdd = await runChildFn("git", ["add", "--", planPath], env);
   if (linkAdd.code !== 0) {
     return failAfterPrOpen("git_link_add_failed", linkAdd.stderr.trim());
   }

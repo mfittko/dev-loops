@@ -169,6 +169,24 @@ export function evaluatePromoteEligibility({
 }
 
 /**
+ * Neutralize GitHub issue-closing keywords (`closes #12`, `fixes #3`,
+ * `resolved #7`, …) by wrapping the keyword+reference in inline code, which
+ * GitHub does not parse as a closing reference. The AC/DoD section bodies are
+ * untrusted plan content; an accidental `Closes #123` in a plan would otherwise
+ * flow into the PR body and auto-close an unrelated issue on merge — breaking
+ * the PR-FIRST guarantee that promotion never closes a tracker artifact.
+ *
+ * ponytail: handles the realistic `#<n>` form; cross-repo (`owner/repo#n`) and
+ * full-URL closing refs are not neutralized — out of scope for local plans.
+ */
+function neutralizeIssueCloseKeywords(text) {
+  return String(text).replace(
+    /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(\s+)(#\d+)\b/giu,
+    "`$1$2$3`",
+  );
+}
+
+/**
  * Build the draft-PR body for a promoted plan. The body is the self-contained
  * spec-of-record: it references the committed plan doc path (the PR→plan link)
  * and carries the FULL Acceptance criteria + Definition of done extracted from
@@ -176,7 +194,8 @@ export function evaluatePromoteEligibility({
  *
  * Deliberately no `Closes #N` / issue reference: PR-FIRST promotion never mints
  * an issue, and the committed plan doc — not a tracker artifact — is the
- * authority.
+ * authority. Issue-closing keywords inside the embedded AC/DoD are neutralized
+ * so untrusted plan content cannot smuggle one in.
  *
  * @param {object} params
  * @param {string} params.planDocPath  repo-relative path of the committed plan doc
@@ -197,17 +216,19 @@ export function buildPromotionPrBody({ planDocPath, acceptanceCriteria, definiti
   if (dod.length === 0) {
     throw new Error("buildPromotionPrBody requires definitionOfDone");
   }
+  const safeAc = neutralizeIssueCloseKeywords(ac);
+  const safeDod = neutralizeIssueCloseKeywords(dod);
   return [
     `Spec-of-record: the committed plan doc \`${docPath}\` is the authority for this work.`,
     "This PR was opened by PR-FIRST promotion; no tracker issue exists.",
     "",
     "## Acceptance criteria",
     "",
-    ac,
+    safeAc,
     "",
     "## Definition of done",
     "",
-    dod,
+    safeDod,
     "",
   ].join("\n");
 }

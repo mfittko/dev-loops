@@ -153,4 +153,20 @@ describe("plan-file-promote-contract: PR body", () => {
     assert.throws(() => buildPromotionPrBody({ ...args, acceptanceCriteria: "" }));
     assert.throws(() => buildPromotionPrBody({ ...args, definitionOfDone: "" }));
   });
+
+  test("neutralizes issue-closing keywords smuggled into AC/DoD so no issue auto-closes", () => {
+    const body = buildPromotionPrBody({
+      ...args,
+      acceptanceCriteria: "- Closes #123 when done.\n- fixes #4.",
+      definitionOfDone: "- Resolved #7.",
+    });
+    // No ACTIVE closing reference: each keyword+ref is wrapped in inline code,
+    // which GitHub does not parse as a closing keyword.
+    for (const re of [/(?<!`)\bCloses #123\b(?!`)/u, /(?<!`)\bfixes #4\b(?!`)/u, /(?<!`)\bResolved #7\b(?!`)/u]) {
+      assert.doesNotMatch(body, re);
+    }
+    assert.match(body, /`Closes #123`/u);
+    assert.match(body, /`fixes #4`/u);
+    assert.match(body, /`Resolved #7`/u);
+  });
 });
