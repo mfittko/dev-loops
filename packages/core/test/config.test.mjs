@@ -26,6 +26,7 @@ import {
   resolveRequireFanoutEvidence,
   resolveMaxFanoutReviewers,
   resolveGatePostFindingsComments,
+  resolvePlansDir,
   DEFAULT_MAX_FANOUT_REVIEWERS,
 } from "../src/config/config.mjs";
 // ============================================================================
@@ -2886,5 +2887,51 @@ describe("gates.postFindingsComments", () => {
   test("rejects non-boolean postFindingsComments", () => {
     const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: "yes" } });
     assert.equal(bad.success, false);
+  });
+});
+
+describe("localPlanning", () => {
+  test("valid plansDir parses in full and file schemas", () => {
+    const full = DevLoopConfigSchema.safeParse({ version: 1, localPlanning: { plansDir: "docs/plans/" } });
+    assert.equal(full.success, true);
+    assert.equal(full.data.localPlanning.plansDir, "docs/plans/");
+
+    const file = FileConfigSchema.safeParse({ version: 1, localPlanning: { plansDir: "docs/plans/" } });
+    assert.equal(file.success, true);
+    assert.equal(file.data.localPlanning.plansDir, "docs/plans/");
+  });
+
+  test("rejects an unknown sibling key (fail-closed strictObject)", () => {
+    const bad = DevLoopConfigSchema.safeParse({
+      version: 1,
+      localPlanning: { plansDir: "docs/phases/", unknownKey: true },
+    });
+    assert.equal(bad.success, false);
+  });
+
+  test("rejects a non-string plansDir", () => {
+    const bad = DevLoopConfigSchema.safeParse({ version: 1, localPlanning: { plansDir: 7 } });
+    assert.equal(bad.success, false);
+  });
+
+  test("BUILT_IN_DEFAULTS exposes plansDir defaulting to docs/phases/", () => {
+    assert.equal(BUILT_IN_DEFAULTS.localPlanning.plansDir, "docs/phases/");
+  });
+
+  test("resolvePlansDir returns the default when absent and the override when set", () => {
+    assert.equal(resolvePlansDir({}), "docs/phases/");
+    assert.equal(resolvePlansDir({ localPlanning: {} }), "docs/phases/");
+    assert.equal(resolvePlansDir({ localPlanning: { plansDir: "  docs/plans/  " } }), "docs/plans/");
+  });
+
+  test("shipped extension defaults parse and expose localPlanning.plansDir", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-LP-"));
+    try {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.equal(result.config.localPlanning.plansDir, "docs/phases/");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

@@ -30,7 +30,7 @@ Key contract:
 **Persisted markdown plan files are the authoritative artifact store.** Work originates from a markdown plan file committed to the repository. No GitHub issue is required. GitHub PRs are still used for review and merge, but the plan file is the canonical spec.
 
 Artifacts:
-- **Planning artifact:** Persisted markdown plan file (e.g., `docs/phases/phase-<n>.md`)
+- **Planning artifact:** Persisted markdown plan file (e.g., `docs/phases/phase-<n>.md`); its format and required base sections are defined in the [Plan-file Contract](plan-file-contract.md)
 - **Execution artifact:** Local branch and associated GitHub PR (created during implementation)
 - **No GitHub issue:** The plan file replaces the issue as the canonical spec
 
@@ -102,6 +102,7 @@ dev-loops is **tracker-first (opted in, GitHub backend).**
 | Doc | Relationship |
 |---|---|
 | [Public Dev Loop Contract](public-dev-loop-contract.md) | This contract is the canonical entrypoint; artifact authority contract defines the artifact model it assumes |
+| [Plan-file Contract](plan-file-contract.md) | Defines the plan-file format (phase-doc format) and its required base sections for local-planning mode |
 | [Tracker-First Loop State](tracker-first-loop-state.md) | That doc defines the PR-level state machine for tracker-first PR workflows — it is about execution state, not artifact authority |
 | [Main Agent Contract](main-agent-contract.md) | Defines the delegation boundary; artifact authority defines which artifacts govern work |
 | AGENTS.md | Repo constitution; cites the work-origin rule and points to this contract |
