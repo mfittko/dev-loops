@@ -19,7 +19,7 @@ css: ./style.css
 
 <p class="kicker">The core idea</p>
 
-## The Work Is One Loop Inside Another — and a Handoff Is Never Guessed
+## Loops Inside Loops
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -51,7 +51,7 @@ stateDiagram-v2
 
 <p class="kicker">Safe pauses</p>
 
-## The Loop Only Pauses Where It's Safe — and Can't Advance on a Gate That Didn't Run
+## Pauses Only at Safe Boundaries
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -72,7 +72,7 @@ stateDiagram-v2
 
 <p class="kicker">Mid-flight steering</p>
 
-## Change the Rules Mid-Run Without Stopping the Machine
+## Change the Rules Mid-Run
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -93,7 +93,7 @@ stateDiagram-v2
 
 <p class="kicker">Parallel review</p>
 
-## One PR, Several Reviewers at Once, One Verdict
+## Many Reviewers, One Verdict
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -125,7 +125,7 @@ stateDiagram-v2
 
 <p class="kicker">It never lies about being done</p>
 
-## "Done" Means Merged — Verified, Never Assumed
+## "Done" Means Merged
 
 <div class="grid grid-cols-3 gap-5 items-start">
 <div class="glass-card">
@@ -158,7 +158,7 @@ stateDiagram-v2
 
 <p class="kicker">Why a graph, not a prompt</p>
 
-## Prompt-Only Workflows Drift; a State Graph Can't
+## State Graphs Pin Behavior
 
 <div class="glass-card">
 <ul class="tight-list">
@@ -172,7 +172,7 @@ stateDiagram-v2
 
 <p class="kicker">Impact</p>
 
-## You Stop Losing Afternoons to Bad Handoffs
+## Stop Losing Afternoons
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
