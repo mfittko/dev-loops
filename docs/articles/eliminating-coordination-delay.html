@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
+<title>Eliminating Coordination Delay in AI-Assisted Dev Workflows</title>
+<style>
+  :root {
+    --ground-1: #08101f;
+    --ground-2: #0b1220;
+    --ground-3: #0f172a;
+    --ink: #e5e7eb;
+    --heading: #f8fafc;
+    --copy: #cbd5e1;
+    --accent: #a78bfa;
+    --accent-soft: #ddd6fe;
+    --kicker: #93c5fd;
+    --card-border: rgba(148, 163, 184, 0.18);
+    --node-border: rgba(129, 140, 248, 0.4);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    font-family: var(--font);
+    color: var(--ink);
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+    background:
+      radial-gradient(circle at 85% 4%, rgba(139, 92, 246, 0.22), transparent 26%),
+      radial-gradient(circle at 12% 2%, rgba(59, 130, 246, 0.16), transparent 22%),
+      linear-gradient(180deg, var(--ground-1) 0%, var(--ground-2) 38%, var(--ground-3) 100%);
+    background-attachment: fixed;
+  }
+
+  .wrap {
+    max-width: 48rem;
+    margin: 0 auto;
+    padding: clamp(2rem, 6vw, 4rem) clamp(1.1rem, 5vw, 2rem) 5rem;
+  }
+
+  /* readable article measure (~65ch) inside the wrapper */
+  .article p,
+  .article ul,
+  .article .section-h,
+  .article .lede { max-width: 40rem; }
+
+  .kicker {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 0.72rem;
+    color: var(--kicker);
+    margin: 0 0 0.6rem;
+    font-weight: 600;
+  }
+
+  h1, h2, h3 { color: var(--heading); letter-spacing: -0.02em; margin-top: 0; }
+  h1 { font-weight: 760; font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.08; margin-bottom: 0.9rem; }
+  h2 { font-weight: 720; font-size: clamp(1.35rem, 3.4vw, 1.85rem); line-height: 1.15; margin: 2.6rem 0 0.9rem; }
+
+  .lede {
+    color: var(--copy);
+    font-size: clamp(1.08rem, 2.4vw, 1.28rem);
+    line-height: 1.5;
+    margin: 0 0 2rem;
+  }
+
+  p { line-height: 1.72; font-size: 1.05rem; color: var(--ink); margin: 0 0 1.15rem; }
+  strong { color: var(--accent-soft); }
+  em { color: #e2e8f0; font-style: italic; }
+  ul { line-height: 1.7; padding-left: 1.2rem; margin: 0 0 1.15rem; }
+  li + li { margin-top: 0.4rem; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 6px;
+    padding: 0.05em 0.4em;
+    color: #e2e8f0;
+  }
+
+  .hero-card {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.6));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.3);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-radius: 24px;
+    padding: 1.6rem 1.7rem;
+    margin-bottom: 2.6rem;
+  }
+  .hero-card .lede { margin-bottom: 0; }
+
+  /* diagram figure: glass card + horizontal-scroll safety for wide flows */
+  figure {
+    margin: 1.8rem 0 2rem;
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.8), rgba(15, 23, 42, 0.62));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-radius: 20px;
+    padding: 1.3rem 1.35rem 1.1rem;
+  }
+  .diagram-scroll { overflow-x: auto; padding-bottom: 0.35rem; }
+  figcaption {
+    color: var(--copy);
+    font-size: 0.9rem;
+    line-height: 1.45;
+    margin-top: 1rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+    padding-top: 0.8rem;
+  }
+  figcaption b { color: var(--accent-soft); font-weight: 650; }
+
+  /* inline flow nodes (ported from the deck's inline-flow technique) */
+  .flow { display: flex; align-items: center; gap: 0; min-width: max-content; }
+  .flow-col { display: flex; flex-direction: column; gap: 0.55rem; justify-content: center; }
+  .node {
+    background: linear-gradient(180deg, rgba(24, 36, 61, 0.92), rgba(17, 24, 39, 0.82));
+    border: 1px solid var(--node-border);
+    border-radius: 14px;
+    padding: 0.55rem 0.85rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: #e2e8f0;
+    white-space: nowrap;
+    text-align: center;
+  }
+  .node.accent { border-color: rgba(167, 139, 250, 0.7); color: var(--accent-soft); }
+  .node.start { border-color: rgba(147, 197, 253, 0.6); color: var(--kicker); }
+  .node.done { border-color: rgba(110, 231, 183, 0.6); color: #6ee7b7; }
+  .edge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: rgba(148, 163, 184, 0.85);
+    padding: 0 0.6rem;
+    min-width: 3rem;
+  }
+  .edge .arrow { font-size: 1.1rem; line-height: 1; }
+  .edge .edge-label {
+    font-size: 0.64rem;
+    color: var(--kicker);
+    text-align: center;
+    margin-top: 0.2rem;
+    max-width: 7.5rem;
+    line-height: 1.2;
+  }
+
+  /* SVG diagrams scale within their scroll container */
+  .diagram-scroll svg { display: block; height: auto; }
+  .diagram-scroll svg text { font-family: var(--mono); fill: #e2e8f0; }
+  .diagram-scroll svg .lab { fill: var(--kicker); font-family: var(--font); }
+
+  .rule { border: 0; border-top: 1px solid rgba(148, 163, 184, 0.16); margin: 3rem 0; }
+
+  .render-note {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 1.2rem 1.35rem;
+    margin-top: 2rem;
+  }
+  .render-note h2 { margin-top: 0; font-size: 1.2rem; }
+  .render-note p { margin-bottom: 0; font-size: 0.98rem; color: var(--copy); }
+
+  .closer {
+    color: var(--accent-soft);
+    font-weight: 620;
+    font-size: clamp(1.12rem, 2.6vw, 1.4rem);
+    line-height: 1.4;
+    margin: 1.6rem 0 0;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<article class="article">
+
+  <header class="hero-card">
+    <p class="kicker">dev-loops</p>
+    <h1>Eliminating Coordination Delay in AI-Assisted Dev Workflows</h1>
+    <p class="lede">AI made writing code cheap. The handoffs around the code &mdash; author to reviewer, reviewer to CI, CI back to a human &mdash; are where the hours leak, and where agents quietly guess wrong.</p>
+  </header>
+
+  <p>An AI agent can write a working function in seconds. That part is solved. What is not solved is everything that happens <em>around</em> the function: handing it to a reviewer, getting feedback back to the author, waiting for the build, deciding whether it is safe to merge. Each of those handoffs looks instant on a diagram and takes hours in real life &mdash; and worse, when an agent is left to manage them on its own, it tends to <em>guess</em> at them. It assumes the build passed. It assumes the review is done. It marks the work finished because finishing felt close.</p>
+
+  <p>That gap has a name worth saying plainly: <strong>coordination delay</strong>. It is the time work spends waiting between people and steps, plus the rework caused when someone &mdash; or something &mdash; guesses wrong about where the work actually is. The code is cheap now. The coordination is not.</p>
+
+  <p>This article is about one idea for closing that gap, and why the shape of the solution matters as much as the idea itself.</p>
+
+  <h2>The one idea: never guess a handoff</h2>
+
+  <p>Here is the whole thing in a sentence: <strong>never guess a handoff &mdash; make every handoff an explicit, observable decision.</strong></p>
+
+  <p>That sounds modest. It is not. Most of the lost hours in an AI-assisted workflow are not lost inside the work; they are lost in the seams between steps, where the system has to answer a question like <em>who acts next?</em> or <em>is this actually ready?</em> and answers it with a hopeful assumption instead of a checked fact.</p>
+
+  <p>The fix is to refuse the assumption everywhere. Every transition &mdash; author to reviewer, reviewer back to author, ready-to-merge to merged &mdash; becomes a decision the system makes deliberately and writes down where you can see it. When the situation is ambiguous, the system does not pick the likeliest path and hope. It stops and asks. <strong>Ambiguity never silently becomes a guess.</strong></p>
+
+  <p>Once you hold that rule, the work naturally organizes itself into loops nested inside loops. An outer loop asks, every cycle, <em>who acts next?</em> &mdash; and makes exactly one move before asking again. Inside it, one loop walks a single pull request from first draft to merged. Another tracks every review comment from raised to resolved, so nothing falls through. One move at a time, each move chosen on purpose.</p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <div class="flow">
+        <div class="node start">Start</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Who&nbsp;acts&nbsp;next?</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="flow-col">
+          <div class="node">Write&nbsp;the&nbsp;code</div>
+          <div class="node">Resolve&nbsp;feedback</div>
+          <div class="node">Ask&nbsp;a&nbsp;human&nbsp;(ambiguous)</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">one move, then ask again</span></div>
+        <div class="node accent">Who&nbsp;acts&nbsp;next?</div>
+      </div>
+    </div>
+    <figcaption><b>Diagram 1 &mdash; The nested loops.</b> An outer "who acts next?" decision routes each cycle to exactly one move, then returns to ask again. When the next step is ambiguous, the loop hands control to a human rather than guessing.</figcaption>
+  </figure>
+
+  <h2>What an explicit handoff buys you</h2>
+
+  <p>Treating every handoff as a real decision is not bureaucracy. It is what makes four genuinely useful behaviors possible &mdash; behaviors a guess-based workflow simply cannot offer.</p>
+
+  <p><strong>Safe pauses.</strong> Because the system always knows where it is, it can stop without making a mess. Ask it to stop mid-edit and it does not drop a half-written file; it finishes the current step, lands it clean, and hands you a tidy stopping point. There are only a few honest answers to "can I stop now?" &mdash; <em>stop this instant</em>, <em>stop at the next clean boundary</em>, or <em>I can't move at all because a required check is missing</em> &mdash; and the system gives you the true one.</p>
+
+  <p><strong>Mid-flight steering.</strong> You can change the rules without stopping the machine. Halfway through a run you can say "don't touch the auth module," and that lands as a hard constraint the remaining steps must honor &mdash; no restart, no lost progress. The rule simply takes effect from the next move on. A softer nudge is treated as a preference it honors when it can; a "stop when safe" request winds the work down at the next clean boundary.</p>
+
+  <p><strong>Parallel review that produces one verdict.</strong> A pull request can be examined from several angles at once &mdash; scope, test coverage, security &mdash; by reviewers that all read the <em>same evidence bundle</em>: the same diff, the same context. Because the inputs are identical, the verdicts are directly comparable, and they merge into a single answer. One serious finding is enough to block the merge. Many eyes, one decision.</p>
+
+  <p><strong>"Done" that means merged.</strong> This is the one that matters most. In a guess-based system, "done" means the agent <em>believes</em> it is done. Here, the board shows done only when a pull request has actually merged &mdash; read from a real merge signal the agent cannot fabricate. The build being green is verified, not assumed; the system waits for the real result. And the agent never merges its own work &mdash; the final yes belongs to a named human, every time. <strong>Done means merged &mdash; verified, never assumed.</strong></p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <svg viewBox="0 0 640 300" width="640" role="img" aria-label="A pull request's lifecycle through the gates">
+        <defs>
+          <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 z" fill="#94a3b8" />
+          </marker>
+        </defs>
+        <!-- nodes -->
+        <g font-size="12">
+          <rect x="20" y="20" width="150" height="40" rx="12" fill="#0f172a" stroke="#93c5fd" />
+          <text x="95" y="44" text-anchor="middle">Draft opened</text>
+
+          <rect x="20" y="100" width="150" height="48" rx="12" fill="#111827" stroke="#818cf8" />
+          <text x="95" y="120" text-anchor="middle">Draft gate:</text>
+          <text x="95" y="136" text-anchor="middle">checks present?</text>
+
+          <rect x="245" y="100" width="150" height="40" rx="12" fill="#0f172a" stroke="#818cf8" />
+          <text x="320" y="124" text-anchor="middle">Review rounds</text>
+
+          <rect x="245" y="20" width="150" height="48" rx="12" fill="#111827" stroke="#a78bfa" />
+          <text x="320" y="40" text-anchor="middle" class="lab" fill="#a78bfa">findings? author</text>
+          <text x="320" y="56" text-anchor="middle" class="lab" fill="#a78bfa">resolves &amp; loops</text>
+
+          <rect x="470" y="100" width="150" height="48" rx="12" fill="#111827" stroke="#818cf8" />
+          <text x="545" y="120" text-anchor="middle">Pre-approval gate:</text>
+          <text x="545" y="136" text-anchor="middle">CI green?</text>
+
+          <rect x="470" y="200" width="150" height="40" rx="12" fill="#0f172a" stroke="#818cf8" />
+          <text x="545" y="224" text-anchor="middle">Hand to a human</text>
+
+          <rect x="245" y="200" width="150" height="40" rx="12" fill="#0f172a" stroke="#6ee7b7" />
+          <text x="320" y="224" text-anchor="middle" fill="#6ee7b7">Done = merged</text>
+        </g>
+        <!-- edges -->
+        <g stroke="#94a3b8" fill="none" stroke-width="1.4" marker-end="url(#ah)">
+          <path d="M95,60 L95,100" />
+          <path d="M170,124 L245,122" />
+          <path d="M320,100 L320,68" />
+          <path d="M395,120 L470,122" />
+          <path d="M545,148 L545,200" />
+          <path d="M470,220 L395,220" />
+        </g>
+        <g font-size="10" fill="#93c5fd" font-family="-apple-system, sans-serif">
+          <text x="60" y="84">yes</text>
+          <text x="408" y="114">verified</text>
+          <text x="500" y="180">human merges</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><b>Diagram 2 &mdash; A pull request's lifecycle through the gates.</b> It cannot skip a gate that never ran: a draft with missing checks loops back, an unresolved finding returns to the author, and the merge belongs to a human, not the agent.</figcaption>
+  </figure>
+
+  <h2>Fan out wide, fan in to one answer</h2>
+
+  <p>The parallel review deserves a closer look, because it is a small pattern with a big payoff. The trick is to build the evidence <em>once</em> and neutrally &mdash; the diff plus just enough surrounding context &mdash; and hand that identical bundle to every reviewer. No reviewer gets a richer or poorer view than another, so their findings sit on the same footing. Then the separate verdicts are consolidated into one, with the strictest finding winning.</p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <div class="flow">
+        <div class="node start">One&nbsp;neutral<br/>evidence&nbsp;bundle</div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">same diff to each</span></div>
+        <div class="flow-col">
+          <div class="node">Scope&nbsp;review</div>
+          <div class="node">Coverage&nbsp;review</div>
+          <div class="node">Security&nbsp;review</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">consolidate</span></div>
+        <div class="node accent">One&nbsp;verdict<br/>strictest&nbsp;wins</div>
+      </div>
+    </div>
+    <figcaption><b>Diagram 3 &mdash; Fan-out / fan-in.</b> One evidence bundle fans out to independent reviewers working different angles in parallel, then their findings fan back in to a single consolidated verdict.</figcaption>
+  </figure>
+
+  <p>This is the opposite of a free-for-all where each reviewer scrapes its own context and they end up arguing about different versions of reality. Same input, parallel angles, one output you can trust.</p>
+
+  <h2>Steering without stopping</h2>
+
+  <p>Mid-flight steering is worth one more diagram, because it shows the discipline in action. When you inject an instruction, the system does not blindly obey on the spot &mdash; it classifies the instruction and decides <em>when</em> it can be honored safely.</p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <div class="flow">
+        <div class="node start">Operator&nbsp;injects<br/>an&nbsp;instruction</div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">classify</span></div>
+        <div class="flow-col">
+          <div class="node accent">Hard&nbsp;constraint</div>
+          <div class="node">Preference</div>
+          <div class="node">Stop&nbsp;when&nbsp;safe</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">safe now?</span></div>
+        <div class="flow-col">
+          <div class="node">Apply&nbsp;from&nbsp;next&nbsp;move</div>
+          <div class="node">Queue&nbsp;until&nbsp;safe</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Run&nbsp;continues,<br/>steered</div>
+      </div>
+    </div>
+    <figcaption><b>Diagram 4 &mdash; Steering flow.</b> A hard constraint is applied immediately if it is safe, or queued until the next safe point if it is not &mdash; the run keeps its progress either way, and is never left half-changed.</figcaption>
+  </figure>
+
+  <h2>Why a state graph beats a prompt</h2>
+
+  <p>You could try to get all of this from prompting alone &mdash; write a long, careful instruction and trust the model to follow it. It will, mostly, until it doesn't. Steer a workflow with prose and its behavior shifts with every model update, every longer context window, every change in sampling. It drifts quietly, with no warning, and you find out in production.</p>
+
+  <p>The alternative is to run the workflow on a <strong>state graph</strong>: the set of possible moves is closed and listable, so every next step is known up front. That has two consequences that prose can never offer. First, a known set of moves is a <em>testable</em> set &mdash; a wrong transition is caught in a test run, not at 3&nbsp;a.m. in production. Second, the system can always say exactly where it is and what it is allowed to do next, which is the very thing that makes safe pauses, steering, and an honest "done" possible in the first place.</p>
+
+  <p>A prompt is a wish about behavior. A state graph is a guarantee about it. When the whole point is to stop guessing, you do not want your coordination layer built on a guess.</p>
+
+  <h2>The close</h2>
+
+  <p>Strip it all back and the message is simple. AI made the code cheap; the coordination around the code is now the expensive part, and most of that cost is paid in bad handoffs &mdash; wrong routing, silent stalls, and a "done" that turns out to be a hope.</p>
+
+  <p>So stop guessing handoffs. Make every one of them a decision you can see: who acts next, whether it is safe to pause, what a mid-flight instruction means, and &mdash; above all &mdash; whether the work is truly merged or merely assumed to be. Build that on a state graph so the guarantee holds even when the model underneath you changes.</p>
+
+  <p class="closer">Make every handoff a decision you can see, and nothing stalls in the dark.</p>
+
+  <hr class="rule" />
+
+  <div class="render-note">
+    <h2>Rendering the diagrams on Medium</h2>
+    <p>Medium does not natively render Mermaid. In the Markdown version of this article each diagram is a fenced <code>mermaid</code> block so it stays editable, and each carries a caption so the article reads cleanly even when a diagram is shown as a static image. To publish on Medium, either paste each block into a Mermaid-enabled editor and embed the rendered image, or export each diagram as SVG/PNG and drop it in where the block sits. Because every diagram is captioned, the prose carries the argument on its own.</p>
+  </div>
+
+</article>
+</div>
+</body>
+</html>
