@@ -12,216 +12,177 @@ css: ./style.css
 <div class="hero-card">
   <p class="kicker">dev-loops</p>
   <h1>Eliminating Coordination Delay in AI-Assisted Dev Workflows</h1>
-  <p class="hero-copy">A coordination runtime built on nested state machines. Every handoff is explicit, routed, and observable.</p>
+  <p class="hero-copy">AI agents made writing code cheap. The handoffs around the code — author to reviewer, reviewer to CI, CI back to a human — are where hours quietly leak and where agents guess wrong. dev-loops turns every handoff into a decision you can see.</p>
 </div>
 
 ---
 
-<p class="kicker">Design Approach</p>
+<p class="kicker">The core idea</p>
 
-## State Graphs and Pure Functions, Not Prompt Engineering
+## The Work Is One Loop Inside Another — and a Handoff Is Never Guessed
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
 <ul class="tight-list">
-  <li>Workflow logic lives in <strong>skills</strong> backed by deterministic state machines</li>
-  <li>Routing, gating, and handoff are pure functions — testable, reproducible</li>
-  <li>LLM judgment is bounded: the graph decides <em>what happens next</em>, the agent decides <em>how</em></li>
+  <li><strong>Who acts next?</strong> An outer loop decides, every cycle, which role takes the work — and makes exactly one move at a time.</li>
+  <li><strong>The PR's life.</strong> An inner loop walks each pull request from first draft to merged, one explicit step at a time.</li>
+  <li><strong>The feedback.</strong> A second inner loop tracks every review comment from raised to resolved, so nothing gets lost.</li>
+  <li>When the situation is ambiguous, it stops and asks. <em>Ambiguity never becomes a guess.</em></li>
 </ul>
 </div>
 <div class="glass-card">
-<ul class="tight-list">
-  <li><strong>Prompt-only approach</strong>: behavior drifts with model updates, context length, temperature</li>
-  <li><strong>Graph-backed skills</strong>: transitions are closed sets, outcomes are enumerable, regressions are catchable in CI</li>
-</ul>
-</div>
-</div>
+<p class="card-label">One move per cycle</p>
 
----
-
-<p class="kicker">Loop Model</p>
-
-## Three Nested Loops, Closed Transition Sets
-
-<div class="glass-card">
-<ul class="tight-list">
-  <li><strong>Outer loop</strong> — selects one <code>ROUTING_OUTCOME</code> per cycle</li>
-  <li><strong>Copilot loop</strong> — explicit lifecycle states from <code>no_pr</code> to <code>done</code>, including <code>pr_ready_no_feedback</code>, <code>waiting_for_copilot_review</code>, and <code>blocked_needs_user_decision</code></li>
-  <li><strong>Reviewer loop</strong> — feedback resolution and re-request</li>
-  <li>Ambiguity yields <code>needs_reconcile</code>, never a guessed handoff</li>
-</ul>
-</div>
-
-```mermaid {scale: 0.68}
+```mermaid {scale: 0.66}
 stateDiagram-v2
   direction LR
-  [*] --> OuterLoop
-  OuterLoop --> CopilotLoop: HANDOFF_TO_COPILOT_LOOP
-  OuterLoop --> ReviewerLoop: HANDOFF_TO_REVIEWER_LOOP
-  OuterLoop --> NeedsReconcile: ambiguous
-  CopilotLoop --> OuterLoop: cycle complete
-  ReviewerLoop --> OuterLoop: cycle complete
+  [*] --> WhoActsNext
+  WhoActsNext --> WriteTheCode: author's turn
+  WhoActsNext --> ResolveFeedback: reviewer's turn
+  WhoActsNext --> AskAHuman: ambiguous
+  WriteTheCode --> WhoActsNext
+  ResolveFeedback --> WhoActsNext
 ```
 
+</div>
+</div>
+
 ---
 
-<p class="kicker">Quality Gates</p>
+<p class="kicker">Safe pauses</p>
 
-## Every State Transition Is an Explicit Gate
+## The Loop Only Pauses Where It's Safe — and Can't Advance on a Gate That Didn't Run
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
 <ul class="tight-list">
-  <li><code>no_pr → pr_draft</code> — work exists but is not reviewable</li>
-  <li><code>pr_draft → pr_ready_no_feedback</code> — author signals readiness</li>
-  <li><code>pr_ready_no_feedback → waiting_for_copilot_review</code> — review requested</li>
-  <li><code>stop_at_next_safe_gate</code> requests a stop that takes effect at the next safe gate</li>
+  <li><strong>Pause now</strong> — it's safe to hand control to a human this instant.</li>
+  <li><strong>Pause at the next clean boundary</strong> — finish the step in flight first, then stop.</li>
+  <li><strong>Can't continue</strong> — a required check is missing, so the work refuses to move.</li>
+  <li>A pull request <em>cannot</em> advance past a review that was never actually run. The gate fails closed.</li>
 </ul>
 </div>
 <div class="glass-card">
-<p><strong>SAFE_POINT_CATEGORY</strong></p>
-<div class="chip-row">
-  <span class="pill">immediate</span>
-  <span class="pill">next_point</span>
-  <span class="pill">terminal</span>
-</div>
-<p class="soft-note note-top-md">Each copilot-loop state maps to a safe-point category — the loop knows where it can safely pause for operator input.</p>
+<p class="card-label">Example</p>
+<p class="soft-note">You ask it to stop. If it's mid-edit, it doesn't drop the file — it tags the request <code>stop_at_next_safe_gate</code> and pauses the moment the current step lands clean. You get a tidy stopping point, not a half-written change.</p>
 </div>
 </div>
 
 ---
 
-<p class="kicker">Conductor Routing</p>
+<p class="kicker">Mid-flight steering</p>
 
-## evaluateConductorRouting: One Deterministic Outcome Per Cycle
+## Change the Rules Mid-Run Without Stopping the Machine
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
 <ul class="tight-list">
-  <li>Pure function — no I/O, no side effects</li>
-  <li>Consumes family-local lifecycle states as inputs</li>
-  <li>Returns exactly one <code>ROUTING_OUTCOME</code></li>
-  <li>Conflicting signals → <code>needs_reconcile</code>, never a guess</li>
+  <li><strong>A hard rule</strong> — a constraint the next steps must obey.</li>
+  <li><strong>A preference</strong> — a nudge it tries to honor when it can.</li>
+  <li><strong>A question</strong> — a clarification it folds into its next move.</li>
+  <li><strong>Stop when safe</strong> — wind down at the next clean boundary.</li>
 </ul>
 </div>
 <div class="glass-card">
-<p><strong>ROUTING_OUTCOME</strong></p>
-<div class="chip-row">
-  <span class="pill">continue_current_wait</span>
-  <span class="pill">handoff_to_copilot_loop</span>
-  <span class="pill">handoff_to_reviewer_loop</span>
-  <span class="pill">stay_with_current_live_owner</span>
-  <span class="pill">stop_needs_human</span>
-  <span class="pill">done_terminal</span>
-  <span class="pill">needs_reconcile</span>
-</div>
+<p class="card-label">Example</p>
+<p class="soft-note">Halfway through, you say <em>"don't touch the auth module."</em> It lands as a <code>hard_constraint</code> the remaining steps must honor — no restart, no lost progress, the rule simply takes effect from the next move on.</p>
 </div>
 </div>
 
 ---
 
-<p class="kicker">Parallel Reviews</p>
+<p class="kicker">Parallel review</p>
 
-## Fan-Out Review Angles, Merge Into One Coherent Package
+## One PR, Several Reviewers at Once, One Verdict
 
+<div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
 <ul class="tight-list">
-  <li><code>determine_review_plan</code> — select bounded review angles</li>
-  <li><code>reviews_running</code> — parallel local runs per angle</li>
-  <li><code>merge_results</code> — combine findings into one review</li>
-  <li><code>draft_review_ready</code> → <code>draft_review_posted</code> → <code>waiting_for_user_submit</code> → <code>submitted_review</code></li>
+  <li>Every reviewer reads the <strong>same evidence bundle</strong> — the same diff, the same context — so their verdicts are directly comparable.</li>
+  <li>Each looks from a different angle (scope, test coverage, security) at the same time.</li>
+  <li>The findings merge into <strong>one verdict</strong>.</li>
+  <li>A single serious finding <em>blocks the merge</em> — one no is enough.</li>
 </ul>
 </div>
+<div class="glass-card">
+<p class="card-label">Same evidence in, one verdict out</p>
 
 ```mermaid {scale: 0.6}
 stateDiagram-v2
   direction LR
-  determine_review_plan --> reviews_running
-  reviews_running --> merge_results
-  merge_results --> draft_review_ready
-  draft_review_ready --> draft_review_posted
-  draft_review_posted --> waiting_for_user_submit
-  waiting_for_user_submit --> submitted_review
+  Evidence --> Scope
+  Evidence --> Coverage
+  Evidence --> Security
+  Scope --> Verdict
+  Coverage --> Verdict
+  Security --> Verdict
 ```
 
----
-
-<p class="kicker">Steering</p>
-
-## Operators Inject Constraints Mid-Flight Without Breaking the Loop
-
-<div class="grid grid-cols-2 gap-5 items-start">
-<div class="glass-card">
-<ul class="tight-list">
-  <li><code>stop_at_next_safe_gate</code> — requests a stop at the next safe gate</li>
-  <li><code>hard_constraint</code> — must be respected by subsequent steps</li>
-  <li><code>preference</code> / <code>clarification</code> — softer guidance</li>
-  <li><code>next_point</code> states queue unsafe-now events; terminal states reject or require human action</li>
-</ul>
-</div>
-<div class="glass-card">
-<p><strong>STEERING_KIND</strong></p>
-<div class="chip-row">
-  <span class="pill">hard_constraint</span>
-  <span class="pill">preference</span>
-  <span class="pill">clarification</span>
-  <span class="pill">stop_at_next_safe_gate</span>
-</div>
-<p class="soft-note note-top-sm">Result: <code>applied_now</code> · <code>queued_for_safe_point</code> · <code>rejected_unsafe_now</code> · <code>rejected_invalid_or_conflicting</code> · <code>needs_human_decision</code></p>
 </div>
 </div>
 
 ---
 
-<p class="kicker">PR Lifecycle</p>
+<p class="kicker">It never lies about being done</p>
 
-## PRs Flow Through a Deterministic Lifecycle
+## "Done" Means Merged — Verified, Never Assumed
 
-<div class="grid grid-cols-2 gap-5 items-start">
+<div class="grid grid-cols-3 gap-5 items-start">
 <div class="glass-card">
-<ul class="tight-list">
-  <li>Gate review comments are required (fail-closed) at draft and pre-approval boundaries</li>
-  <li>Review threads are captured and resolved deterministically</li>
-  <li>CI gates are checked before state transitions</li>
+<p class="card-label">A human merges</p>
+<ul class="mini-list">
+  <li>The agent never merges its own work.</li>
+  <li>At the final gate it hands the PR to a named person.</li>
+  <li>A human always owns the last yes.</li>
 </ul>
 </div>
 <div class="glass-card">
-<p><strong>Lifecycle checkpoints</strong></p>
-<div class="chip-row">
-  <span class="pill">draft_gate</span>
-  <span class="pill">ready_for_review</span>
-  <span class="pill">pre_approval_gate</span>
-  <span class="pill">merge_ready</span>
+<p class="card-label">"Done" is real</p>
+<ul class="mini-list">
+  <li>The board shows <em>done</em> only when a PR actually merged.</li>
+  <li>It reads a real merge signal — it can't fabricate one.</li>
+  <li>Each task runs in its own isolated workspace.</li>
+</ul>
+</div>
+<div class="glass-card">
+<p class="card-label">Green is checked</p>
+<ul class="mini-list">
+  <li>CI-green is verified, never assumed.</li>
+  <li>Works with any CI provider, not just one.</li>
+  <li>It waits for the real result instead of guessing.</li>
+</ul>
 </div>
 </div>
+
+---
+
+<p class="kicker">Why a graph, not a prompt</p>
+
+## Prompt-Only Workflows Drift; a State Graph Can't
+
+<div class="glass-card">
+<ul class="tight-list">
+  <li>Steer a workflow with prose alone and its behavior shifts with every model update, longer context, or change in temperature — quietly, with no warning.</li>
+  <li>dev-loops runs the workflow on a <strong>state graph</strong> instead: the moves are a closed, listable set, so every possible next step is known up front.</li>
+  <li>A known set of moves is a testable set — a wrong transition is caught in CI, not in production at 3am.</li>
+</ul>
 </div>
 
 ---
 
 <p class="kicker">Impact</p>
 
-## Quality Up, Wait Time Down, Throughput Up
+## You Stop Losing Afternoons to Bad Handoffs
 
-<div class="grid grid-cols-3 gap-5 items-start">
+<div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
-<p><strong>Quality ↑</strong></p>
-<ul class="mini-list">
-  <li>Routing refuses ambiguity</li>
-  <li>Steering preserves operator intent</li>
+<ul class="tight-list">
+  <li><strong>Because routing refuses to guess,</strong> you don't lose an afternoon to a wrong handoff that quietly sent the work the wrong way.</li>
+  <li><strong>Because every pause is explicit,</strong> stalls that used to sit until someone happened to check are flagged the moment they happen.</li>
+  <li><strong>Because "done" means merged,</strong> a green board is the truth, not a hopeful guess.</li>
 </ul>
 </div>
 <div class="glass-card">
-<p><strong>Wait time ↓</strong></p>
-<ul class="mini-list">
-  <li>Gate-review comments required at key boundaries</li>
-  <li>CI and thread states drive lifecycle transitions</li>
-</ul>
-</div>
-<div class="glass-card">
-<p><strong>Throughput ↑</strong></p>
-<ul class="mini-list">
-  <li>Deterministic routing per cycle</li>
-  <li>Blocked runs flagged before stall</li>
-</ul>
+<p class="hero-copy">Make every handoff a decision you can see — and nothing stalls in the dark.</p>
 </div>
 </div>

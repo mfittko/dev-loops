@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Applied dev-loops deck refreshed for v0.4.0 + a self-contained shareable HTML render** (#926). `docs/presentations/applied-dev-loops-presentation.md` (Slidev) gains two slides in the existing dark glass-card style: the **gate fan-out/fan-in sub-loop** (build-once neutral bundle = full diff + 1-hop import adjacency, size-guarded; independent per-angle reviewers seeded with the identical bundle; `consolidateFanin` merges per-angle verdicts; no fork primitive / no Workflow dependency; fail-closed `fanout_fanin` verdict with enforced severity counts) and **the coordination runtime owning the full lifecycle** (enforced human merge via `autonomy.humanMergeOnly`, managed `tmp/worktrees/dev-loops/` worktrees, provider-agnostic `watch-ci`, queue board as a deterministic adapter). A standalone, CSP-safe `docs/presentations/applied-dev-loops.html` ships the full deck with all CSS inline and the mermaid diagrams rendered as inline CSS flow (no font/mermaid CDN, no remote resources) — each slide is a stable-id `<section>` for UI smoke targeting. A thin WebKit smoke spec (`test/playwright/applied-deck.spec.mjs` + `playwright.applied-deck.config.mjs`, `npm run test:playwright:deck`) captures the `hero`, `core-idea`, `parallel-review`, `trust`, and `impact` named states under `test-results/ui-smoke/applied-deck/`; one designer/vision review pass (notes in `docs/presentations/applied-dev-loops-review-notes.md`) fixed ragged card heights via equal-height grid rows. A follow-up **public-audience storytelling pass** restructured the deck to one ~8-slide narrative arc (claim-style titles, jargon translated to plain language, raw enum/pill walls cut to at most one identifier per slide as evidence, mechanism→outcome close) while keeping the dark glass-card visual identity unchanged.
+
 ## 0.4.0
 
 ### Added
