@@ -5,6 +5,7 @@ dist/
 tmp/
 playwright-report/
 test-results/
+site/
 .DS_Store
 *.log
 .pi/dev-loop-retrospective-checkpoint.json

@@ -1,0 +1,60 @@
+name: Deploy presentation decks to GitHub Pages
+
+# build (assemble site/ + upload artifact) runs on push to main and validates
+# the assembly. deploy is workflow_dispatch-only so a push to main never turns
+# red while Pages is disabled (private-repo plan caveat — see
+# docs/presentations/README.md). After enabling Pages (Settings -> Pages ->
+# Source: GitHub Actions), an operator runs this workflow via "Run workflow".
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  pages: write
+  id-token: write
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Assemble site/
+        run: node scripts/pages/build-site.mjs
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    # Gated to workflow_dispatch: deploying before Pages is enabled fails, so
+    # only an operator triggers it (after enabling Pages). Pushes to main stop
+    # at build, which still validates the assembly.
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
