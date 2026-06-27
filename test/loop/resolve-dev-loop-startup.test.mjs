@@ -35,12 +35,14 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     inputPath: "state.json",
     issue: undefined,
     pr: undefined,
+    planFile: undefined,
   });
   assert.deepEqual(parseResolveDevLoopStartupCliArgs(["--help"]), {
     help: true,
     inputPath: undefined,
     issue: undefined,
     pr: undefined,
+    planFile: undefined,
   });
 });
 
@@ -74,6 +76,33 @@ test("parseResolveDevLoopStartupCliArgs rejects --issue combined with --input", 
   );
 });
 
+test("parseResolveDevLoopStartupCliArgs parses --plan-file", () => {
+  const opts = parseResolveDevLoopStartupCliArgs(["--plan-file", "docs/phases/foo.md"]);
+  assert.equal(opts.help, false);
+  assert.equal(opts.planFile, "docs/phases/foo.md");
+  assert.equal(opts.issue, undefined);
+  assert.equal(opts.pr, undefined);
+  assert.equal(opts.inputPath, undefined);
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --plan-file combined with --issue", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--plan-file", "p.md", "--issue", "511"]),
+    /mutually exclusive/i,
+  );
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --plan-file combined with --pr and --input", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--plan-file", "p.md", "--pr", "7"]),
+    /mutually exclusive/i,
+  );
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--plan-file", "p.md", "--input", "s.json"]),
+    /mutually exclusive/i,
+  );
+});
+
 test("parseResolveDevLoopStartupCliArgs rejects --issue with non-integer value", () => {
   assert.throws(
     () => parseResolveDevLoopStartupCliArgs(["--issue", "abc"]),
@@ -93,6 +122,17 @@ test("parseResolveDevLoopStartupCliArgs rejects no input mode", () => {
     () => parseResolveDevLoopStartupCliArgs([]),
     /--input.*--issue.*--pr|required/i,
   );
+});
+
+test("buildResolveDevLoopStartupResult normalizes a null input instead of throwing", () => {
+  // `--input null` is legal JSON; the resolver-only field destructure must not
+  // throw a TypeError before routing can fail closed.
+  let result;
+  assert.doesNotThrow(() => {
+    result = buildResolveDevLoopStartupResult(null, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } });
+  });
+  assert.ok(result && typeof result === "object");
+  assert.ok(typeof result.bundleKind === "string");
 });
 
 test("buildResolveDevLoopStartupResult maps local implementation to the local route pack", () => {
