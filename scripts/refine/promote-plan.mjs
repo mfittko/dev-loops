@@ -275,7 +275,7 @@ export async function runCli(argv = process.argv.slice(2), {
       planFile: planPath,
       branch,
       prNumber,
-      recovery: `PR #${prNumber} is open but the plan->PR link commit failed. ${planDocRelPath} now carries prNumber: ${prNumber} in its front-matter; record the link with: git add ${planDocRelPath} && git commit -m "docs(plan): link to PR #${prNumber}" && git push.`,
+      recovery: `PR #${prNumber} is open but the plan->PR link commit failed. ${planDocRelPath} now carries prNumber: ${prNumber} in its front-matter; record the link with: git add -- "${planDocRelPath}" && git commit -m "docs(plan): link to PR #${prNumber}" && git push.`,
     };
     emit(stdout, options.json, summary, [
       `promote-plan: FAIL (${reason})${detail ? `: ${detail}` : ""}`,

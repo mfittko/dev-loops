@@ -56,6 +56,9 @@ async function gitInit(repoDir, env) {
   await sh(["init", "-q", "-b", "main"]);
   await sh(["config", "user.email", "test@example.com"]);
   await sh(["config", "user.name", "Test"]);
+  // Disable commit signing so the test is deterministic regardless of a
+  // developer's global commit.gpgsign setting.
+  await sh(["config", "commit.gpgsign", "false"]);
   await sh(["commit", "-q", "--allow-empty", "-m", "root"]);
 }
 
