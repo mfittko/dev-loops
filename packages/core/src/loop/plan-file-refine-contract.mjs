@@ -61,6 +61,18 @@ function stripSection(markdownText, headingText) {
   return `${markdownText.slice(0, start)}${markdownText.slice(end)}`.replace(/\n{3,}/gu, "\n\n");
 }
 
+/**
+ * Whether markdown carries a `## <heading>` section marker. Used to re-derive
+ * the section-presence facts from the freshly-written text so the end-state
+ * check verifies the append actually happened (rather than re-asserting the
+ * inputs). ponytail: local copy of the section-detect regex; the shared section
+ * helper belongs in core once extractSection is lifted out of scripts/.
+ */
+function hasSection(markdownText, headingText) {
+  const escaped = headingText.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`^##\\s+${escaped}\\s*$`, "imu").test(markdownText);
+}
+
 /** Append a `## <heading>` section with the given body to markdown. */
 function appendSection(markdownText, headingText, body) {
   const trimmed = markdownText.replace(/\s+$/u, "");
@@ -190,13 +202,15 @@ export function refinePlanFileInPlace({
   refinedMarkdown = appendSection(refinedMarkdown, COVERAGE_MATRIX_HEADING, coverageMatrix);
   refinedMarkdown = appendSection(refinedMarkdown, DOCS_GRILL_FINDINGS_HEADING, grillBody);
 
-  // Re-classify against the refined text using the facts the write just created.
-  // A correct refine carries the base sections forward (untouched) and adds both
-  // refinement markers, flipping the intake state to ready.
+  // Re-derive the section-presence facts from the text the write just produced
+  // (not from the inputs) so this check actually verifies the append landed: a
+  // correct refine carries the base sections forward and adds both refinement
+  // markers, flipping the intake state to ready. A buggy rewrite that dropped a
+  // section is caught here and fails closed rather than advancing the state.
   const endState = evaluatePlanFileIntakeState({
     baseSectionsValid,
-    hasAcceptanceCriteria: true,
-    hasDefinitionOfDone: true,
+    hasAcceptanceCriteria: hasSection(refinedMarkdown, acHeading),
+    hasDefinitionOfDone: hasSection(refinedMarkdown, dodHeading),
   }).state;
   if (endState !== PLAN_FILE_INTAKE_STATE.PLAN_REFINED_READY_FOR_PROMOTION) {
     return { ok: false, reason: "refine_did_not_reach_ready", planFileIntakeState: endState };
