@@ -462,6 +462,10 @@ export function summarizeCanonicalState(bundle) {
 export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdapter(), env, cwd, asyncStartMode = "required" } = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
   const effectiveCwd = cwd ?? adapter.getCwd();
+  // Normalize a non-object input (e.g. `--input null`, which parses to a legal
+  // JSON null) to {} so the destructure below cannot throw before routing can
+  // fail closed with a structured reconcile bundle.
+  if (input === null || typeof input !== "object") input = {};
   // Plan-file intake carries two resolver-only fields that the pure routing
   // evaluator does not model. Strip them before evaluation and re-apply them to
   // the result; `planFileExempt` waives the worktree-isolation guard because a

@@ -124,6 +124,17 @@ test("parseResolveDevLoopStartupCliArgs rejects no input mode", () => {
   );
 });
 
+test("buildResolveDevLoopStartupResult normalizes a null input instead of throwing", () => {
+  // `--input null` is legal JSON; the resolver-only field destructure must not
+  // throw a TypeError before routing can fail closed.
+  let result;
+  assert.doesNotThrow(() => {
+    result = buildResolveDevLoopStartupResult(null, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } });
+  });
+  assert.ok(result && typeof result === "object");
+  assert.ok(typeof result.bundleKind === "string");
+});
+
 test("buildResolveDevLoopStartupResult maps local implementation to the local route pack", () => {
   const result = buildResolveDevLoopStartupResult({
     currentState: {
