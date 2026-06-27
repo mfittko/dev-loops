@@ -4,9 +4,10 @@ Public-audience talks on dev-loops. Each deck has a Slidev source (`*-presentati
 and a self-contained, CSP-safe HTML render (`*.html`) — the HTML is the source of
 truth for publishing. The HTML render carries editorial refinements applied directly
 to it (the storytelling restructure, the headline shortening, and the A/B-contrast
-deslop); the Slidev source tracks the slide headlines, but the HTML is not regenerated from
-it. Edit the `.html` for anything that ships, and mirror only headline changes back
-to the `.md`.
+deslop); the Slidev source tracks the slide headlines, but its body text predates the HTML's
+storytelling restructure and deslop, so the two diverge below the headline level and
+the HTML is not regenerated from it. Edit the `.html` for anything that ships
+(headlines and body), and mirror only headline changes back to the `.md`.
 
 | Deck | HTML render | Topic |
 | --- | --- | --- |
