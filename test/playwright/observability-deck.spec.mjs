@@ -143,8 +143,12 @@ test("webkit observability deck fits the mobile viewport (no horizontal scroll, 
     await settleMobile(page, url);
     const m = await measureFit(page);
 
+    // Authoritative horizontal-fit guard: per-element getBoundingClientRect().right
+    // is clip-independent, so it catches overflow even though body{overflow-x:hidden}.
     expect(m.hOffenders, `elements overflow the ${MOBILE.width}px viewport (must FIT, not scroll):\n${m.hOffenders.join("\n")}`).toEqual([]);
-    expect(m.pageScrollWidth, "page must not scroll horizontally at all").toBeLessThanOrEqual(m.innerWidth + 1);
+    // Defensive secondary: body{overflow-x:hidden} clips page-level growth, so this
+    // line rarely fires on its own — the per-element check above is the real catch.
+    expect(m.pageScrollWidth, "page scrollWidth exceeds the viewport (defensive check)").toBeLessThanOrEqual(m.innerWidth + 1);
     expect(m.clipped, `sections clip content with overflow:hidden (taller than their box):\n${m.clipped.join("\n")}`).toEqual([]);
 
     // Capture one mobile state so the review loop sees the phone layout.
