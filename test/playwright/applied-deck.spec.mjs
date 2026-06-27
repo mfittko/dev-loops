@@ -84,3 +84,55 @@ test("webkit renders the applied deck and captures named states", async ({ page 
     await stopFixtureServer(server);
   }
 });
+
+// Mobile pass: `overflow:hidden` masks clipped overflow from body.scrollWidth,
+// so walk in-flow elements and fail if any element's right edge exceeds the
+// viewport — unless it (or an ancestor) is an `overflow-x:auto` scroller, which
+// legitimately owns its own horizontal scroll (e.g. the flow diagram).
+test("webkit applied deck has no clipped overflow at mobile width", async ({ page }, testInfo) => {
+  const { server, url } = await startFixtureServer(makeDeckServer);
+
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+
+    const offenders = await page.evaluate(() => {
+      const iw = window.innerWidth;
+      const inScroller = (el) => {
+        for (let n = el; n; n = n.parentElement) {
+          if (getComputedStyle(n).overflowX === "auto") return true;
+        }
+        return false;
+      };
+      const out = [];
+      for (const el of document.querySelectorAll("body *")) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        if (r.right > iw + 1 && !inScroller(el)) {
+          out.push(`<${el.tagName.toLowerCase()} class="${el.className}"> right=${Math.round(r.right)} "${(el.textContent || "").trim().slice(0, 32)}"`);
+        }
+      }
+      return out;
+    });
+    expect(offenders, `elements overflow the ${390}px viewport (overflow:hidden would clip them):\n${offenders.join("\n")}`).toEqual([]);
+
+    // Capture one mobile state so the review loop sees the phone layout.
+    const coreIdea = page.locator("#core-idea");
+    await coreIdea.scrollIntoViewIfNeeded();
+    await expect(coreIdea).toBeVisible();
+    await captureNamedUiState({
+      page,
+      testInfo,
+      sliceId: "applied-deck",
+      stateName: "Core idea (mobile 390)",
+      fullPage: false,
+      metadata: {
+        fixture: path.basename(DECK_PATH),
+        route: "#core-idea",
+        reviewHint: "Mobile (390x844) layout for the core-idea section — no clipped overflow.",
+      },
+    });
+  } finally {
+    await stopFixtureServer(server);
+  }
+});

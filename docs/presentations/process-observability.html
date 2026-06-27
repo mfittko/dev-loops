@@ -89,7 +89,7 @@
   h2 { margin-bottom: 1rem; font-size: clamp(1.5rem, 3.2vw, 2.2rem); font-weight: 720; }
   h3 { margin-bottom: 0.6rem; }
 
-  p, li { line-height: 1.5; }
+  p, li { line-height: 1.5; overflow-wrap: anywhere; }
   strong { color: var(--accent-soft); }
   em { color: #e2e8f0; font-style: italic; }
 
@@ -101,6 +101,8 @@
     border-radius: 6px;
     padding: 0.05em 0.4em;
     color: #e2e8f0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .kicker {
@@ -140,8 +142,11 @@
 
   /* stretch cards to equal height per row so card bottoms align (designer-review fix) */
   .grid { display: grid; gap: 1.25rem; align-items: stretch; }
+  /* min-width:0 lets a wide child (max-content flow) scroll within its card
+     instead of forcing the grid track past the viewport and getting clipped */
+  .grid > * { min-width: 0; }
   .grid > .glass-card,
-  .grid > .metric-card { display: flex; flex-direction: column; }
+  .grid > .metric-card { display: flex; flex-direction: column; min-width: 0; }
   .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
@@ -196,6 +201,9 @@
     margin-top: 1.4rem;
     overflow-x: auto;
     padding-bottom: 0.5rem;
+    /* min-width:0 so this scroller, not its flex parent, absorbs the wide flow */
+    min-width: 0;
+    max-width: 100%;
   }
   .flow {
     display: flex;
