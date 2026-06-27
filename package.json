@@ -30,6 +30,7 @@
     "test:dev-loop": "node --test --test-reporter ./test/failure-summary-reporter.mjs skills/dev-loop/scripts/dev-mode-context.test.mjs skills/dev-loop/scripts/render-template.test.mjs skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs",
     "test:playwright:viewer": "playwright test -c playwright.inspect-run-viewer.config.mjs",
     "test:playwright:deck": "playwright test -c playwright.applied-deck.config.mjs",
+    "test:playwright:obs-deck": "playwright test -c playwright.observability-deck.config.mjs",
     "smoke:headless": "node scripts/claude/headless-info-smoke.mjs",
     "test:docs": "node scripts/docs/validate-links.mjs && node scripts/docs/validate-no-duplicate-rules.mjs",
     "repo-wiki": "node scripts/repo-wiki.mjs",

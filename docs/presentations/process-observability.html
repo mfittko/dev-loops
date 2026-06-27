@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
+<title>dev-loops: Process Observability</title>
+<style>
+  :root {
+    --ground-1: #08101f;
+    --ground-2: #0b1220;
+    --ground-3: #0f172a;
+    --ink: #e5e7eb;
+    --heading: #f8fafc;
+    --copy: #cbd5e1;
+    --accent: #a78bfa;
+    --accent-soft: #ddd6fe;
+    --kicker: #93c5fd;
+    --card-border: rgba(148, 163, 184, 0.18);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Helvetica Neue", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    body { scroll-snap-type: none; }
+    .slide { scroll-snap-align: none; }
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font);
+    color: var(--ink);
+    background: var(--ground-3);
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+    scroll-snap-type: y proximity;
+    height: 100vh;
+    overflow-y: auto;
+  }
+
+  .slide {
+    position: relative;
+    min-height: 100vh;
+    padding: clamp(2rem, 5vh, 3.5rem) clamp(1.25rem, 5vw, 3rem);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+    scroll-snap-align: start;
+    background:
+      radial-gradient(circle at 85% 12%, rgba(139, 92, 246, 0.24), transparent 24%),
+      radial-gradient(circle at 15% 8%, rgba(59, 130, 246, 0.18), transparent 20%),
+      linear-gradient(180deg, var(--ground-1) 0%, var(--ground-2) 42%, var(--ground-3) 100%);
+    border-top: 1px solid rgba(148, 163, 184, 0.08);
+  }
+
+  .slide::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px);
+    background-size: 42px 42px;
+    -webkit-mask-image: linear-gradient(180deg, rgba(255,255,255,0.28), transparent 72%);
+    mask-image: linear-gradient(180deg, rgba(255,255,255,0.28), transparent 72%);
+  }
+
+  .slide > * { position: relative; z-index: 1; }
+
+  .slide-inner {
+    width: 100%;
+    max-width: 72rem;
+    margin: 0 auto;
+  }
+
+  h1, h2, h3 {
+    color: var(--heading);
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    margin-top: 0;
+  }
+
+  h1 { font-weight: 760; margin-bottom: 0.6rem; }
+  h2 { margin-bottom: 1rem; font-size: clamp(1.5rem, 3.2vw, 2.2rem); font-weight: 720; }
+  h3 { margin-bottom: 0.6rem; }
+
+  p, li { line-height: 1.5; }
+  strong { color: var(--accent-soft); }
+  em { color: #e2e8f0; font-style: italic; }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 6px;
+    padding: 0.05em 0.4em;
+    color: #e2e8f0;
+  }
+
+  .kicker {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 0.72rem;
+    color: var(--kicker);
+    margin: 0 0 0.45rem;
+    font-weight: 600;
+  }
+
+  .glass-card,
+  .hero-card,
+  .metric-card {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.8), rgba(15, 23, 42, 0.62));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.28);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-radius: 24px;
+    padding: 1.25rem 1.35rem;
+  }
+
+  .metric-card {
+    background: linear-gradient(180deg, rgba(24, 36, 61, 0.92), rgba(17, 24, 39, 0.78));
+    border-color: rgba(129, 140, 248, 0.35);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.24);
+  }
+
+  .hero-card h1 { font-size: clamp(2rem, 5.2vw, 3rem); margin-bottom: 1.2rem; }
+  .hero-copy {
+    max-width: 44rem;
+    color: var(--copy);
+    font-size: clamp(1.05rem, 2.4vw, 1.25rem);
+    margin: 0;
+  }
+
+  /* stretch cards to equal height per row so card bottoms align (designer-review fix) */
+  .grid { display: grid; gap: 1.25rem; align-items: stretch; }
+  .grid > .glass-card,
+  .grid > .metric-card { display: flex; flex-direction: column; }
+  .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  @media (max-width: 760px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+
+  .tight-list, .mini-list {
+    margin: 0;
+    padding-left: 1.1rem;
+    color: #e2e8f0;
+  }
+  .tight-list li + li { margin-top: 0.4rem; }
+  .mini-list li + li { margin-top: 0.45rem; }
+
+  .chip-row { display: flex; gap: 0.65rem; flex-wrap: wrap; margin-top: 1.1rem; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem 0.85rem;
+    border-radius: 9999px;
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(167, 139, 250, 0.35);
+    color: var(--accent-soft);
+    font-size: 0.86rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  /* single full-width card: cap measure so lines stay readable; anchor left under the title */
+  .card-narrow { max-width: 58rem; }
+
+  /* closing line: center it in its card and give it punchline weight */
+  .closer { justify-content: center; }
+  .closer .hero-copy {
+    text-align: center;
+    font-weight: 620;
+    font-size: clamp(1.15rem, 2.6vw, 1.5rem);
+    line-height: 1.35;
+    color: var(--accent-soft);
+  }
+
+  /* flow card: keep diagram visually centered when copy is short */
+  .flow-card { justify-content: center; }
+
+  .soft-note { color: var(--copy); margin-top: 0.85rem; font-size: 0.95rem; }
+  .section-lead { color: var(--copy); font-size: clamp(1rem, 2.2vw, 1.1rem); margin: 0 0 0.4rem; }
+  .card-label { color: var(--accent-soft); font-weight: 650; margin: 0 0 0.7rem; }
+
+  /* inline flow diagrams */
+  .flow-scroll {
+    margin-top: 1.4rem;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+  }
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    min-width: max-content;
+  }
+  .flow-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    justify-content: center;
+  }
+  .node {
+    background: linear-gradient(180deg, rgba(24, 36, 61, 0.92), rgba(17, 24, 39, 0.82));
+    border: 1px solid rgba(129, 140, 248, 0.4);
+    border-radius: 14px;
+    padding: 0.55rem 0.85rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.82rem;
+    color: #e2e8f0;
+    white-space: nowrap;
+    text-align: center;
+  }
+  .node.accent { border-color: rgba(167, 139, 250, 0.7); color: var(--accent-soft); }
+  .node.start { border-color: rgba(147, 197, 253, 0.6); color: var(--kicker); }
+  .edge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: rgba(148, 163, 184, 0.8);
+    padding: 0 0.6rem;
+    min-width: 2.8rem;
+  }
+  .edge .arrow { font-size: 1.1rem; line-height: 1; }
+  .edge .edge-label {
+    font-size: 0.66rem;
+    color: var(--kicker);
+    text-align: center;
+    margin-top: 0.2rem;
+    max-width: 7rem;
+    line-height: 1.2;
+  }
+</style>
+</head>
+<body>
+
+<section class="slide" id="hero">
+  <div class="slide-inner">
+    <div class="hero-card">
+      <p class="kicker">dev-loops</p>
+      <h1>AI Writes the Code in Seconds. Then the Work Sits for Hours.</h1>
+      <p class="hero-copy">Generating a change is the fast part now. The slow part is everything between actions &mdash; the wait for someone to pick the work up, rebuild the context, and decide what happens next. That waiting is invisible, unmeasured, and where your real lead time goes.</p>
+      <div class="chip-row">
+        <span class="pill">wait states</span>
+        <span class="pill">handoff cost</span>
+        <span class="pill">coordination delay</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="interrupt-cost">
+  <div class="slide-inner">
+    <p class="kicker">The delay pattern</p>
+    <h2>One Interrupt Costs Five Transitions, Not Five Minutes</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li>A five-minute question doesn't cost five minutes. It costs the <strong>switch out, the rebuild, and the recovery</strong> on both sides.</li>
+          <li>Every interruption walks the same five steps &mdash; <em>notice, switch, rebuild, act, recover</em> &mdash; and each one has its own latency.</li>
+          <li>Across a queue of work, repeated interrupts don't add up. They <strong>multiply</strong>.</li>
+        </ul>
+      </div>
+      <div class="glass-card flow-card">
+        <p class="card-label">What one interrupt actually triggers</p>
+        <div class="flow-scroll">
+          <div class="flow">
+            <div class="node start">Need&nbsp;response</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Notice</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Switch</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node accent">Rebuild&nbsp;state</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Act</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Recover</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="handoff">
+  <div class="slide-inner">
+    <p class="kicker">Handoff cost</p>
+    <h2>Every Handoff Restarts the Same Discovery From Scratch</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <p class="card-label">What the receiver pays for, every time</p>
+        <ul class="tight-list">
+          <li>Reconstruct what changed since they last looked.</li>
+          <li>Gather enough context to act with confidence.</li>
+          <li>Confirm who owns it now and what's blocking it.</li>
+          <li>Absorb the round-trip if any of that is unclear.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Why it's worse with mixed actors</p>
+        <ul class="tight-list">
+          <li>Ambiguous ownership <strong>pauses a human</strong> until they ask.</li>
+          <li>Missing context <strong>halts an AI agent</strong> &mdash; it guesses or stops.</li>
+          <li>Every human&harr;AI swap is one more place the state can drop.</li>
+          <li><em>More hands speed things up only when the state crosses intact.</em></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="blind-spot">
+  <div class="slide-inner">
+    <p class="kicker">The blind spot</p>
+    <h2>Your Git History Hides Exactly Where the Time Went</h2>
+    <div class="glass-card card-narrow">
+      <ul class="tight-list">
+        <li>Commits record the <strong>output</strong> &mdash; they say nothing about the hours the work sat idle before someone touched it.</li>
+        <li>Review threads bury the cost of re-reading and re-explaining inside ordinary back-and-forth.</li>
+        <li>CI timestamps end at green. They miss the gap before a human notices and acts on the result.</li>
+        <li>So the single biggest drag on lead time &mdash; <em>coordination waiting</em> &mdash; is invisible to every tool you already trust.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="observable-state">
+  <div class="slide-inner">
+    <p class="kicker">Observable state</p>
+    <h2>Four Fields Decide Whether the Next Actor Starts or Stalls</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <p class="section-lead">The fix isn't more meetings or more status pings. It's making the state of the work <strong>explicit</strong>, so picking it up becomes <em>continuation</em> instead of investigation.</p>
+        <p class="soft-note">Keep these four current and the next actor &mdash; human or agent &mdash; starts immediately, with nothing to reconstruct.</p>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">State that turns pickup into continuation</p>
+        <ul class="tight-list">
+          <li><strong>Who owns it now</strong> &mdash; no guessing whose move it is.</li>
+          <li><strong>What's blocking it</strong> &mdash; and what would unblock it.</li>
+          <li><strong>The latest decision</strong> &mdash; so nobody re-litigates settled ground.</li>
+          <li><strong>The safe next step</strong> &mdash; the one move that's known to be safe.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="measurement-loop">
+  <div class="slide-inner">
+    <p class="kicker">The measurement loop</p>
+    <h2>You Can't Shorten a Wait You Never Measured</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li>Capture the state, and the waits between actors stop being anecdotes &mdash; they become <strong>numbers you can point at</strong>.</li>
+          <li>Find the transition that stalls most, change the process there, and check whether the wait actually dropped.</li>
+          <li>Then confirm the change didn't <em>trade speed for quality</em>. Faster only counts if it's still correct.</li>
+        </ul>
+      </div>
+      <div class="glass-card flow-card">
+        <p class="card-label">A loop you can actually run</p>
+        <div class="flow-scroll">
+          <div class="flow">
+            <div class="node start">State&nbsp;captured</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Waits&nbsp;measured</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node accent">Process&nbsp;changed</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Outcomes&nbsp;verified</div>
+            <div class="edge"><span class="arrow">&#8635;</span><span class="edge-label">back to: state captured</span></div>
+            <div class="node start">State&nbsp;captured</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="instrumented">
+  <div class="slide-inner">
+    <p class="kicker">From idea to instrument</p>
+    <h2>Those Four Fields Aren't a Wish &mdash; They're Where the Work Already Lives</h2>
+    <div class="grid grid-3">
+      <div class="glass-card">
+        <p class="card-label">Owner &amp; next step are a board</p>
+        <ul class="mini-list">
+          <li>Work moves through visible columns: waiting, in progress, done.</li>
+          <li>The column <em>is</em> the current owner and the safe next step.</li>
+          <li>A deterministic resolver picks the next action &mdash; no guessing whose move it is.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Decisions leave a trail</p>
+        <ul class="mini-list">
+          <li>Each review gate records its verdict in the open, with the findings behind it.</li>
+          <li>The latest decision is written down, not held in someone's head.</li>
+          <li>Pick the work up tomorrow and the reasoning is still there.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Automate only where it's safe</p>
+        <ul class="mini-list">
+          <li>The wait at CI is handled by waiting on the real result, on any provider.</li>
+          <li>After a merge, finished workspaces are reclaimed and long-done items archived.</li>
+          <li>Automation runs only where the state says continuing is safe.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="metrics">
+  <div class="slide-inner">
+    <p class="kicker">Why it pays off</p>
+    <h2>Visible State Moves Three Numbers at Once</h2>
+    <div class="grid grid-3">
+      <div class="glass-card">
+        <p class="card-label">Quality</p>
+        <ul class="mini-list">
+          <li>Fewer wrong resumptions from stale context.</li>
+          <li>Cleaner fix loops.</li>
+          <li>Regressions are easier to trace back.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Waiting time</p>
+        <ul class="mini-list">
+          <li>Faster first action after a handoff.</li>
+          <li>Context is already present at pickup.</li>
+          <li>Approvals stop sitting unnoticed.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Throughput</p>
+        <ul class="mini-list">
+          <li>Higher flow efficiency.</li>
+          <li>Fewer items stalled in the dark.</li>
+          <li>Less coordination drag per merge.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="close">
+  <div class="slide-inner">
+    <p class="kicker">The takeaway</p>
+    <h2>The Cheapest Speed-Up Is Making the Waiting Visible</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li><strong>Make the state explicit,</strong> and pickup becomes continuation instead of an investigation.</li>
+          <li><strong>Measure the waits,</strong> and the biggest stall stops hiding behind your commit history.</li>
+          <li><strong>Automate only where state proves it's safe,</strong> and you remove the stall without removing the judgment.</li>
+        </ul>
+      </div>
+      <div class="metric-card closer">
+        <p class="hero-copy">Stop optimizing how fast you write code. Start measuring how long it waits.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>
