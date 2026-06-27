@@ -609,7 +609,17 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     input = buildPlanFileInput({ planFilePath: options.planFile });
   } else if (options.inputPath !== undefined) {
     const text = await readFile(path.resolve(options.inputPath), "utf8");
-    input = parseJsonText(text);
+    const parsed = parseJsonText(text);
+    // `--input` is untrusted external JSON. Strip the resolver-only intake fields
+    // so it cannot inject them — `planFileExempt` would otherwise waive the
+    // worktree-isolation guard for a normal local_implementation, and the intake
+    // state is owned by the internal plan-file path (buildPlanFileInput), not the
+    // caller.
+    if (parsed && typeof parsed === "object") {
+      delete parsed.planFileExempt;
+      delete parsed.planFileIntakeState;
+    }
+    input = parsed;
   } else if (options.issue !== undefined) {
     input = buildAutoResolvedInput({
       issue: options.issue,

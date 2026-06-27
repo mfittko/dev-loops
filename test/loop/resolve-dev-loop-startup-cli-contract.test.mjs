@@ -273,6 +273,37 @@ test("--plan-file with a valid base plan resolves to a local_phase bundle with n
   });
 });
 
+test("--input cannot inject planFileExempt to bypass the worktree-isolation guard", async () => {
+  // Untrusted external --input must not be able to set the resolver-only intake
+  // fields. A local_implementation route from a non-worktree dir must still hit
+  // the worktree guard even though the input file sets planFileExempt: true.
+  await withInputFile({
+    planFileExempt: true,
+    planFileIntakeState: "plan_refined_ready_for_promotion",
+    currentState: {
+      target: { kind: "local_branch", branch: "feature/inject" },
+      ownership: "local",
+      nextActor: "local",
+      status: "active",
+      authorization: "needs_confirmation",
+    },
+    artifactState: "not_applicable",
+    loopState: "active",
+    retrospectiveCheckpointState: "complete",
+  }, async (inputPath, tmpDir) => {
+    const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
+      cwd: tmpDir,
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(result.stdout || result.stderr);
+    // Exemption was stripped: the worktree-isolation guard fires (not a clean
+    // resolved/exempted bundle), and no injected intake state leaks through.
+    assert.notEqual(parsed.bundleKind, "resolved");
+    assert.match(parsed.nextAction || "", /worktree/i);
+    assert.equal(parsed.planFileIntakeState, undefined);
+  });
+});
+
 test("--plan-file carrying AC + DoD resolves to plan_refined_ready_for_promotion", async () => {
   await withPlanFile(`${BASE_PLAN}\n${REFINEMENT_SECTIONS}`, async (planPath, tmpDir) => {
     const result = spawnSync(process.execPath, [cliPath, "--plan-file", planPath], {
