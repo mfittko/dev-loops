@@ -9,9 +9,16 @@ import { captureNamedUiState, startFixtureServer, stopFixtureServer } from "./ha
 
 const DECK_PATH = fileURLToPath(new URL("../../docs/presentations/applied-dev-loops.html", import.meta.url));
 
-// ponytail: one-file static server is enough for a single self-contained deck.
+// A single-file static server is enough for one self-contained deck: serve the
+// deck only at the root, and 404 everything else so requests stay deterministic.
 function makeDeckServer() {
-  return createServer(async (_req, res) => {
+  return createServer(async (req, res) => {
+    const route = (req.url ?? "/").split("?")[0];
+    if (route !== "/" && route !== "/index.html") {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("Not found");
+      return;
+    }
     try {
       const html = await readFile(DECK_PATH, "utf8");
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });

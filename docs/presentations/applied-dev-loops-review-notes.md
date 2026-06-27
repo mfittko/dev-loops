@@ -14,7 +14,7 @@ fan-out/fan-in flow readable, cards consistent across rows.
 | --- | --- | --- |
 | hero | Hierarchy clean, no issues. | `named-states/hero/screenshot.png` |
 | gate-fanout | Inline flow (boxes + arrows) legible; cards fit; no clipping. | `named-states/gate-fan-out/screenshot.png` |
-| v0.4.0-capabilities | Three cards had **ragged bottoms** (unequal heights in the row) — looks unpolished against the deck identity. | `named-states/v0-4-0-capabilities/screenshot.png` |
+| v040-capabilities | Three cards had **ragged bottoms** (unequal heights in the row) — looks unpolished against the deck identity. | `named-states/v0-4-0-capabilities/screenshot.png` |
 | impact | Same ragged-bottom issue on the three metric cards. | `named-states/impact/screenshot.png` |
 
 ## Corrective actions applied
