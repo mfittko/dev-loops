@@ -85,7 +85,7 @@ The effective default for a consumer comes from the config-merge layering in `pa
 
 With nothing but the shipped package in place, the extension layer resolves `strategy.default` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy.default: github-first` in its own `.devloops`.
 
-The legacy `.pi/dev-loop/defaults.*` and `.pi/dev-loop/settings.*` files are a deprecated repo-local layer that loads only when no `.devloops` is present; the package no longer ships a `.pi/dev-loop/defaults.yaml`. Authority lives in the extension-defaults layer plus repo `.devloops`.
+Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`). They differ in how they load: `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`; `.pi/dev-loop/settings.*` (and the older `overrides.*`) load only when no `.devloops` is present — when `.devloops` exists it is authoritative and those files are ignored (with a deprecation warning). The full precedence, low to high, is: `BUILT_IN_DEFAULTS` < extension defaults < `.pi/dev-loop/defaults.*` < repo `.devloops` (or, when `.devloops` is absent, `.pi/dev-loop/settings.*` / `overrides.*`).
 
 ### Explicit non-knobs
 
