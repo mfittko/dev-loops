@@ -1,11 +1,10 @@
 name: Deploy presentation decks to GitHub Pages
 
-# build (assemble site/ + upload artifact) runs on push to main and validates
-# the assembly. It makes no Pages API call, so a push never turns red while
-# Pages is disabled. configure-pages + deploy live in the deploy job, which is
-# workflow_dispatch-only (private-repo plan caveat — see
-# docs/presentations/README.md). After enabling Pages (Settings -> Pages ->
-# Source: GitHub Actions), an operator runs this workflow via "Run workflow".
+# Pages is enabled (Settings -> Pages -> Source: GitHub Actions). build
+# (assemble site/ + upload artifact) and deploy (configure-pages + deploy-pages)
+# both run on every push to main, so a merge auto-publishes. workflow_dispatch
+# also triggers a manual deploy. The deploy job is scoped to the main ref. See
+# docs/presentations/README.md.
 
 on:
   push:
@@ -43,10 +42,10 @@ jobs:
           path: site
 
   deploy:
-    # Gated to workflow_dispatch: deploying before Pages is enabled fails, so
-    # only an operator triggers it (after enabling Pages). Pushes to main stop
-    # at build, which still validates the assembly.
-    if: github.event_name == 'workflow_dispatch'
+    # Pages is enabled (Source: GitHub Actions), so deploy runs on every push to
+    # main (auto-publish) and on manual workflow_dispatch. The job is scoped to
+    # main so a deploy never fires from another ref.
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     environment:
