@@ -30,9 +30,9 @@ const PAYLOAD = {
   acceptanceCriteria: "- The thing works.",
   definitionOfDone: "- Tests pass; CHANGELOG updated.",
   coverageMatrix: "| Item | Type | Status | Evidence | Notes |\n|---|---|---|---|---|\n| The thing works | AC | Met | test | |",
-  grillFindings: [
-    { kind: "drift", docOnly: false, summary: "claim X contradicts contract Y" },
-    { kind: "cosmetic", summary: "typo in heading" },
+  grillDispositions: [
+    { kind: "drift", summary: "claim X contradicts contract Y", disposition: "record_finding" },
+    { kind: "cosmetic", summary: "typo in heading", disposition: "ignore_cosmetic" },
   ],
 };
 
@@ -76,7 +76,7 @@ describe("refinePlanFileInPlace", () => {
   test("no grill findings still records an explicit none-recorded line", () => {
     const result = refinePlanFileInPlace({
       ...newPlanFacts(BASE_PLAN),
-      payload: { ...PAYLOAD, grillFindings: [] },
+      payload: { ...PAYLOAD, grillDispositions: [] },
     });
     assert.equal(result.ok, true);
     assert.match(result.refinedMarkdown, /None recorded; the docs-grill step ran/u);
@@ -147,10 +147,12 @@ describe("refinePlanFileInPlace", () => {
     }
   });
 
-  test("fail closed: malformed docs-grill finding fails the grill", () => {
+  test("fail closed: a grill disposition that is missing/invalid fails the grill", () => {
+    // The CLI classifies findings and passes dispositions in; an unclassifiable
+    // finding arrives with a null disposition, which must fail the grill closed.
     const result = refinePlanFileInPlace({
       ...newPlanFacts(BASE_PLAN),
-      payload: { ...PAYLOAD, grillFindings: [{ kind: "not-a-real-kind" }] },
+      payload: { ...PAYLOAD, grillDispositions: [{ kind: "x", summary: "", disposition: null }] },
     });
     assert.equal(result.ok, false);
     assert.equal(result.reason, "docs_grill_failed");

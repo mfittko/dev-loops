@@ -130,6 +130,32 @@ describe("refine-plan-file CLI", () => {
     }
   });
 
+  test("fail closed: an unclassifiable docs-grill finding fails the grill without writing", async () => {
+    // The CLI owns finding classification; an unrecognized kind yields a null
+    // disposition, which the core contract fails closed on (docs_grill_failed).
+    const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
+      ...PAYLOAD,
+      grillFindings: [{ kind: "not-a-real-kind", summary: "mystery" }],
+    });
+    try {
+      const before = await readFile(planPath, "utf8");
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--payload", payloadPath, "--json"], {
+        cwd: tempDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 1);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.reason, "docs_grill_failed");
+      const after = await readFile(planPath, "utf8");
+      assert.equal(after, before, "plan file must be untouched on fail-closed");
+      const ghLog = await readFile(ghStub.ghLogPath, "utf8");
+      assert.equal(ghLog.trim(), "");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects missing --plan-file / --payload", async () => {
     const result = await runNode(cliPath, ["--plan-file", "x.md"], {});
     assert.equal(result.code, 1);

@@ -12,6 +12,7 @@ import {
   PLAN_FILE_REFINE_STOP,
 } from "@dev-loops/core/loop/plan-file-refine-contract";
 import { PLAN_FILE_REFINEMENT_SECTIONS } from "@dev-loops/core/loop/plan-file-intake-contract";
+import { classifyDocsGrillFinding } from "../loop/docs-grill-contract.mjs";
 
 const USAGE = `Usage:
   refine-plan-file.mjs --plan-file <path> --payload <path> [--json]
@@ -96,13 +97,27 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // Read the section-presence facts with the P1 surfaces, then hand them to the
   // pure refine contract. The contract owns the state-machine gate and the
   // in-place rewrite; this script owns I/O only.
+  // The docs-grill runs as a step of refinement. Classify each finding here (this
+  // script owns the scripts/ boundary) with #948's classifier and pass the
+  // dispositions to the pure core contract; an invalid finding yields a null
+  // disposition, which the contract fails closed on (docs_grill_failed).
+  const rawFindings = Array.isArray(payload?.grillFindings) ? payload.grillFindings : [];
+  const grillDispositions = rawFindings.map((finding) => {
+    const classified = classifyDocsGrillFinding(finding);
+    return {
+      kind: finding?.kind,
+      summary: typeof finding?.summary === "string" ? finding.summary : "",
+      disposition: classified.ok ? classified.disposition : null,
+    };
+  });
+
   const [acHeading, dodHeading] = PLAN_FILE_REFINEMENT_SECTIONS;
   const result = refinePlanFileInPlace({
     markdownText,
     baseSectionsValid: validatePlanFile(markdownText).ok,
     hasAcceptanceCriteria: extractSection(markdownText, acHeading) ? true : false,
     hasDefinitionOfDone: extractSection(markdownText, dodHeading) ? true : false,
-    payload,
+    payload: { ...payload, grillDispositions },
   });
 
   if (!result.ok) {

@@ -17,12 +17,11 @@
  *
  * It composes the already-shipped contracts: P2 `evaluatePlanFileIntakeState` +
  * `PLAN_FILE_REFINEMENT_SECTIONS` (this step acts on `new_plan_needs_refinement`
- * and drives the transition to `plan_refined_ready_for_promotion`) and #948
- * `classifyDocsGrillFinding` (the docs-grill runs as a step of refinement and
- * its findings are recorded into the plan file).
+ * and drives the transition to `plan_refined_ready_for_promotion`) and #948's
+ * docs-grill: the caller classifies each finding with `classifyDocsGrillFinding`
+ * and passes the dispositions in, and this module validates and records them.
  */
 
-import { classifyDocsGrillFinding } from "../../../../scripts/loop/docs-grill-contract.mjs";
 import {
   evaluatePlanFileIntakeState,
   PLAN_FILE_INTAKE_STATE,
@@ -155,21 +154,18 @@ export function refinePlanFileInPlace({
     return { ok: false, reason: "missing_coverage_matrix", planFileIntakeState: startState };
   }
 
-  // The docs-grill runs as a step of refinement. Classify each finding with
-  // #948's classifier; an invalid finding kind fails the grill closed so a
-  // malformed grill cannot advance the state.
-  const rawFindings = Array.isArray(payload.grillFindings) ? payload.grillFindings : [];
-  const grillDispositions = [];
-  for (const finding of rawFindings) {
-    const classified = classifyDocsGrillFinding(finding);
-    if (!classified.ok) {
+  // The docs-grill runs as a step of refinement. The caller (the CLI, which owns
+  // I/O and the scripts/ boundary) classifies each finding with #948's
+  // `classifyDocsGrillFinding` and passes the dispositions in. This core module
+  // validates and renders them but does NOT import the classifier — keeping it
+  // free of any scripts/ import so the published @dev-loops/core package does not
+  // break for consumers. A missing or invalid disposition fails the grill closed
+  // so a malformed grill cannot advance the state.
+  const grillDispositions = Array.isArray(payload.grillDispositions) ? payload.grillDispositions : [];
+  for (const d of grillDispositions) {
+    if (!d || typeof d.disposition !== "string" || d.disposition.length === 0) {
       return { ok: false, reason: "docs_grill_failed", planFileIntakeState: startState };
     }
-    grillDispositions.push({
-      kind: finding?.kind,
-      summary: typeof finding?.summary === "string" ? finding.summary : "",
-      disposition: classified.disposition,
-    });
   }
 
   // A managed section body must not contain a top-level `## ` heading: stripSection
