@@ -46,6 +46,27 @@ test("codeownersMatch: anchored, directory, glob, bare-name", () => {
   assert.equal(codeownersMatch("docs", "a/docs/x.md"), true);
 });
 
+test("codeownersMatch: dir/ pattern matches at any depth (gitignore semantics)", () => {
+  // `build/` has no leading/internal slash -> matches at any depth.
+  assert.equal(codeownersMatch("build/", "a/build/file.js"), true);
+  assert.equal(codeownersMatch("build/", "build/x"), true);
+  // `/src/` keeps its anchor: matches at root only, no prefix leak.
+  assert.equal(codeownersMatch("/src/", "src/a.mjs"), true);
+  assert.equal(codeownersMatch("/src/", "lib/src/a.mjs"), false);
+  // No prefix leak for bare names.
+  assert.equal(codeownersMatch("docs/", "docsX/y"), false);
+  // `*.mjs` matches at any depth.
+  assert.equal(codeownersMatch("*.mjs", "src/sub/app.mjs"), true);
+});
+
+test("ownersForPaths: nested dir/ pattern resolves owner at any depth", () => {
+  const rules = parseCodeowners(`
+build/   @build-team
+`);
+  const byOwner = ownersForPaths(rules, ["src/build/x.js"]);
+  assert.deepEqual([...byOwner.get("build-team")], ["src/build/x.js"]);
+});
+
 test("ownersForPaths: last matching rule wins per path", () => {
   const rules = parseCodeowners(`
 *         @default
@@ -105,6 +126,21 @@ test("configured assignees are highest priority and deduped across sources", asy
   assert.deepEqual(logins, ["alice", "bob", "carol"]);
   assert.equal(out.candidates[0].source, "assignees");
   assert.equal(out.candidates.find((c) => c.login === "carol").source, "recent-committers");
+});
+
+test("canonical priority: codeowners ranks above recent-committers regardless of candidatesFrom order", async () => {
+  const out = await resolveHandoffCandidates(
+    { repo: "o/n", pr: 1, changedFiles: ["src/a.mjs"], prAuthor: "me" },
+    {
+      // candidatesFrom lists recent-committers FIRST, but canonical order wins.
+      config: enabled(["recent-committers", "codeowners"]),
+      readFile: async () => "src/* @owner\n",
+      run: fakeRun((cmd) => cmd === "git" ? { code: 0, stdout: "committer@users.noreply.github.com\n", stderr: "" } : null),
+    },
+  );
+  assert.deepEqual(out.candidates.map((c) => c.login), ["owner", "committer"]);
+  assert.equal(out.candidates[0].source, "codeowners");
+  assert.equal(out.candidates[1].source, "recent-committers");
 });
 
 test("recent-committers excludes PR author and bots", async () => {

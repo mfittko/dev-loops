@@ -143,7 +143,11 @@ export function codeownersMatch(pattern, filePath) {
     return re;
   };
 
-  if (!anchored && !pattern.includes("/")) {
+  // Bare-vs-anchored is decided on the NORMALIZED pattern: a trailing-only `/`
+  // (e.g. `build/`) normalizes to a bare token with no leading/internal slash,
+  // so it matches at any depth like gitignore. Only a leading or internal slash
+  // anchors the match.
+  if (!anchored && !pat.includes("/")) {
     // Bare token: match a full segment anywhere, plus its subtree.
     const seg = toRegex(pat);
     return new RegExp(`(?:^|/)${seg}(?:/|$)`).test(file);
@@ -332,16 +336,18 @@ export async function resolveHandoffCandidates(input, deps = {}) {
     ordered.push({ login: login.replace(/^@/, ""), source: "assignees", isTeam: login.includes("/") });
   }
 
-  // 2/3. Configured sources, in the configured order.
-  for (const source of handoff.candidatesFrom) {
-    let result;
-    if (source === "codeowners") {
-      result = await resolveCodeownersSource(changedFiles, { repoRoot, readFile });
-    } else if (source === "recent-committers") {
-      result = await resolveRecentCommittersSource(changedFiles, { repoRoot, prAuthor, run });
-    } else {
-      continue;
-    }
+  // 2/3. Other sources, in the CANONICAL priority order
+  // (assignees > codeowners > recent-committers), regardless of the order they
+  // appear in candidatesFrom. candidatesFrom only selects WHICH sources run,
+  // not their relative rank.
+  const enabledSources = new Set(handoff.candidatesFrom);
+  if (enabledSources.has("codeowners")) {
+    const result = await resolveCodeownersSource(changedFiles, { repoRoot, readFile });
+    ordered.push(...result.candidates);
+    warnings.push(...result.warnings);
+  }
+  if (enabledSources.has("recent-committers")) {
+    const result = await resolveRecentCommittersSource(changedFiles, { repoRoot, prAuthor, run });
     ordered.push(...result.candidates);
     warnings.push(...result.warnings);
   }
@@ -372,7 +378,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   try {
     options = parseResolveCandidatesCliArgs(argv);
   } catch (error) {
-    process.stderr.write(formatCliError(error));
+    process.stderr.write(`${formatCliError(error)}\n`);
     return 1;
   }
   if (options.help) {
