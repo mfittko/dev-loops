@@ -184,21 +184,19 @@
 
   <p class="kicker">dev-loops</p>
   <h1>Make the Waiting Visible</h1>
-  <p class="dek">AI writes the code in seconds. Then the work sits for hours. The slow part isn&rsquo;t generation anymore &mdash; it&rsquo;s the waiting between actions, and it&rsquo;s invisible.</p>
+  <p class="dek">AI writes the code in seconds. Then it sits for hours. The slow part is no longer generation. It&rsquo;s the waiting between actions, and nobody is measuring it.</p>
 
-  <p>Watch an AI agent work and the first thing you notice is the speed. A change that used to take an afternoon lands in seconds. The diff is there before you&rsquo;ve finished reading the request. Generation, the part we spent decades trying to accelerate, is no longer the bottleneck.</p>
+  <p>A change that used to take an afternoon now lands in seconds. The diff shows up before you&rsquo;ve finished reading the request. Generation, the part we spent decades trying to speed up, stopped being the bottleneck.</p>
 
-  <p>Then the work <em>sits</em>.</p>
+  <p>Then the work sits. It sits while someone notices it&rsquo;s ready. It sits while a reviewer rebuilds enough context to have an opinion. It sits in a queue, waiting for the one person who knows whether the next step is safe. The code was written in seconds, but the change ships hours later, and almost none of that gap shows up anywhere you&rsquo;d think to look.</p>
 
-  <p>It sits while someone notices it&rsquo;s ready. It sits while a reviewer rebuilds enough context to have an opinion. It sits in a queue, waiting for the one person who knows whether the next step is safe. The code was written in seconds; the change ships hours later. And almost none of that gap shows up anywhere you&rsquo;d think to look.</p>
-
-  <p>That gap &mdash; the waiting between actions &mdash; is where your real lead time goes now. It&rsquo;s the most expensive part of delivery and the least measured. This is an argument for measuring it, and for a cheap, concrete way to start.</p>
+  <p>The waiting between actions is where your lead time goes now. It&rsquo;s the most expensive part of delivery and the part nobody measures. So measure it. Here is a cheap, concrete way to start.</p>
 
   <h2>One Interrupt Costs Five Transitions, Not Five Minutes</h2>
 
-  <p>Start with the unit of waiting everyone underestimates: the interruption.</p>
+  <p>Everyone underestimates the interruption.</p>
 
-  <p>A &ldquo;quick question&rdquo; feels like it costs the minute it takes to answer. It doesn&rsquo;t. The real cost is the chain it sets off. You have to <em>notice</em> the request, <em>switch</em> away from what you were doing, <em>rebuild</em> the mental state for the new thing, <em>act</em> on it, and then <em>recover</em> &mdash; climb back into the work you abandoned, reconstructing where you were. Each link in that chain has its own latency, and most of them are pure overhead with nothing to show for it.</p>
+  <p>A &ldquo;quick question&rdquo; feels like it costs the minute it takes to answer, but the real cost is the chain it sets off. You notice the request, switch away from what you were doing, rebuild the mental state for the new thing, act on it, and then recover by climbing back into the work you abandoned and reconstructing where you were. Each link in that chain has its own latency, and most of them are overhead with nothing to show for it.</p>
 
   <figure>
     <div class="diagram-scroll">
@@ -219,13 +217,13 @@
     <figcaption><span class="fig-label">Figure 1 &mdash;</span> The interrupt-cost chain. A five-minute question triggers five transitions, and the answer itself (Act) is only one of them.</figcaption>
   </figure>
 
-  <p>The five minutes of answering is the small box in the middle. The notice, the switch, the rebuild, and the recover are the tax, paid on <em>both</em> sides of the exchange. And across a queue of work, these don&rsquo;t add up &mdash; they multiply. Each handoff is an interrupt for whoever receives it, and a backlog of pending handoffs is a backlog of context switches waiting to happen.</p>
+  <p>The five minutes of answering is the small box in the middle. The notice, switch, rebuild, and recover are the tax, and both sides of the exchange pay it. Across a queue of work, these costs multiply rather than add. Each handoff is an interrupt for whoever receives it, so a backlog of pending handoffs is a backlog of context switches waiting to happen.</p>
 
   <h2>Every Handoff Restarts the Same Discovery From Scratch</h2>
 
-  <p>Zoom out from a single interrupt to a single handoff, and the pattern repeats at a larger scale.</p>
+  <p>The same pattern repeats one level up, at the handoff.</p>
 
-  <p>When work crosses from one actor to another, the receiver doesn&rsquo;t just pick up where the sender left off. They start an investigation. What changed since I last looked? Do I have enough context to act with confidence? Who owns this now, and what&rsquo;s blocking it? If any of that is unclear, they have to ask &mdash; and now you&rsquo;ve paid for a round trip before any real work happens.</p>
+  <p>When work crosses from one actor to another, the receiver rarely picks up where the sender left off. They start an investigation instead: what changed since they last looked, whether they have enough context to act with confidence, who owns this now, and what&rsquo;s blocking it. When any of that is unclear, they ask, and you&rsquo;ve paid for a round trip before any real work happens.</p>
 
   <figure>
     <div class="diagram-scroll">
@@ -244,36 +242,36 @@
     <figcaption><span class="fig-label">Figure 2 &mdash;</span> One handoff round trip. Every question the state can&rsquo;t answer becomes an ask &rarr; answer &rarr; confirm cycle, and the work waits until it closes &mdash; then the next ambiguity restarts it.</figcaption>
   </figure>
 
-  <p>It gets worse when the actors are a mix of humans and AI agents. Ambiguous ownership <em>pauses a human</em> until they ask. Missing context <em>halts an agent</em> &mdash; it either guesses (and you inherit the cleanup) or it stops cold. Every human-to-agent and agent-to-human swap is one more place the state can quietly drop on the floor. The promise of &ldquo;more hands make it faster&rdquo; only holds when the state crosses the handoff intact. Otherwise you&rsquo;ve just added more boundaries for it to fall through.</p>
+  <p>A mix of humans and AI agents makes it worse. Ambiguous ownership pauses a human until they ask. Missing context halts an agent, which either guesses and leaves you the cleanup, or stops cold. Every human-to-agent and agent-to-human swap is one more place the state can drop on the floor. &ldquo;More hands make it faster&rdquo; only holds when the state crosses the handoff intact; otherwise you&rsquo;ve added more boundaries for it to fall through.</p>
 
   <h2>Your Git History Hides Exactly Where the Time Went</h2>
 
-  <p>Here&rsquo;s the part that makes this so hard to fix: the waiting is invisible to every tool you already trust.</p>
+  <p>This is the hard part: none of the tools you already trust can see the waiting.</p>
 
-  <p>Commits record output. They tell you a change happened, not that it sat idle for six hours before anyone touched it. Review threads bury the cost of re-reading and re-explaining inside ordinary back-and-forth &mdash; the conversation looks like progress. CI timestamps end at green; they say nothing about the gap between &ldquo;checks passed&rdquo; and &ldquo;a human noticed and acted.&rdquo; Every instrument you have is pointed at the work, and the waiting happens <em>between</em> the work, in the dark.</p>
+  <p>Commits record output. They tell you a change happened, not that it sat idle for six hours before anyone touched it. Review threads bury the cost of re-reading and re-explaining inside ordinary back-and-forth, so the conversation reads like progress. CI timestamps end at green and say nothing about the gap between &ldquo;checks passed&rdquo; and &ldquo;a human noticed and acted.&rdquo; Every instrument points at the work itself, and the waiting happens in between.</p>
 
-  <p>So the single biggest drag on lead time is the one thing none of your dashboards can see. You can optimize generation forever and the chart of &ldquo;time from request to shipped&rdquo; will barely move, because you were never optimizing the slow part.</p>
+  <p>The biggest drag on lead time is the one thing none of your dashboards can see. You can optimize generation forever and the chart of &ldquo;time from request to shipped&rdquo; will barely move, because you were never optimizing the slow part.</p>
 
   <h2>Four Fields Decide Whether the Next Actor Starts or Stalls</h2>
 
-  <p>The fix is not more meetings or more status pings &mdash; those are <em>more</em> interrupts. The fix is to make the state of the work explicit, so picking it up becomes <em>continuation</em> instead of <em>investigation</em>.</p>
+  <p>More meetings and status pings won&rsquo;t fix this; they are themselves interrupts. What fixes it is making the state of the work explicit, so picking it up becomes continuation instead of investigation.</p>
 
-  <p>Concretely, four fields do almost all of the work:</p>
+  <p>Four fields carry most of that state:</p>
 
   <ul>
-    <li><strong>Who owns it now</strong> &mdash; so there&rsquo;s no guessing whose move it is.</li>
-    <li><strong>What&rsquo;s blocking it</strong> &mdash; and what would unblock it.</li>
-    <li><strong>The latest decision</strong> &mdash; so nobody re-litigates settled ground.</li>
-    <li><strong>The safe next step</strong> &mdash; the one move that&rsquo;s known to be safe to take.</li>
+    <li><strong>Who owns it now</strong>, so nobody guesses whose move it is.</li>
+    <li><strong>What&rsquo;s blocking it</strong>, and what would unblock it.</li>
+    <li><strong>The latest decision</strong>, so nobody re-litigates settled ground.</li>
+    <li><strong>The safe next step</strong>, the one move known to be safe to take.</li>
   </ul>
 
-  <p>Keep these four current and the next actor, human or agent, starts immediately. There&rsquo;s nothing to reconstruct, because the reconstruction has already been written down. The investigation that every handoff used to trigger collapses into a glance.</p>
+  <p>Keep these four current and the next actor, human or agent, starts right away. There&rsquo;s nothing to reconstruct, because the reconstruction is already written down. The investigation that every handoff used to trigger collapses into a glance.</p>
 
   <h2>You Can&rsquo;t Shorten a Wait You Never Measured</h2>
 
-  <p>Explicit state does more than speed up the next pickup. It turns the waiting into something you can measure &mdash; and measurement is what lets you actually shorten it.</p>
+  <p>Explicit state does more than speed up the next pickup. It turns the waiting into something you can measure, and measurement is what lets you shorten it.</p>
 
-  <p>Once state is captured at each transition, the waits between actors stop being anecdotes (&ldquo;review felt slow this sprint&rdquo;) and become numbers you can point at. From there you can run a real loop: find the transition that stalls the most, change the process at exactly that point, and check whether the wait actually dropped. Then &mdash; and this is the step people skip &mdash; confirm the change didn&rsquo;t trade speed for quality. Faster only counts if it&rsquo;s still correct.</p>
+  <p>Once you capture state at each transition, the waits between actors stop being anecdotes (&ldquo;review felt slow this sprint&rdquo;) and become numbers you can point at. From there you can run a real loop: find the transition that stalls the most, change the process at exactly that point, and check whether the wait dropped. Then confirm the change didn&rsquo;t trade speed for quality, the step people skip. Faster only counts if it&rsquo;s still correct.</p>
 
   <figure>
     <div class="diagram-scroll">
@@ -292,17 +290,17 @@
     <figcaption><span class="fig-label">Figure 3 &mdash;</span> The measurement loop. Capture, measure, change, verify &mdash; then back to capture. It&rsquo;s a cycle, not a one-time audit, because the slowest transition moves as you fix things.</figcaption>
   </figure>
 
-  <p>This is the ordinary discipline of improvement applied to the part of delivery we&rsquo;d been flying blind on. You can&rsquo;t shorten a wait you never measured, and you can&rsquo;t measure a wait whose state was never captured.</p>
+  <p>This is ordinary improvement discipline, applied to the part of delivery we&rsquo;d been flying blind on. You can&rsquo;t shorten a wait you never measured, and you can&rsquo;t measure a wait whose state you never captured.</p>
 
-  <h2>Those Four Fields Aren&rsquo;t a Wish &mdash; They&rsquo;re Where the Work Already Lives</h2>
+  <h2>Those Four Fields Already Live in the Work</h2>
 
-  <p>It&rsquo;s fair to ask whether &ldquo;make the state explicit&rdquo; is just a nicer way of saying &ldquo;write better tickets.&rdquo; It isn&rsquo;t, because each of those four fields maps onto a mechanism that already does the work, if you let it.</p>
+  <p>You might suspect &ldquo;make the state explicit&rdquo; is just a nicer way of saying &ldquo;write better tickets.&rdquo; It isn&rsquo;t, because each of the four fields maps onto a mechanism that already does the work when you let it.</p>
 
-  <p><strong>Owner and safe next step are a board.</strong> Work moves through visible columns &mdash; waiting, in progress, done. The column <em>is</em> the current owner and the safe next step; you don&rsquo;t annotate it, you read it. A deterministic resolver can then pick the next action from the board&rsquo;s state, so &ldquo;whose move is it?&rdquo; has one answer instead of a debate.</p>
+  <p><strong>Owner and safe next step are a board.</strong> Work moves through visible columns: waiting, in progress, done. The column is the current owner and the safe next step, so you read it rather than annotate it. A deterministic resolver picks the next action from the board&rsquo;s state, so &ldquo;whose move is it?&rdquo; has one answer instead of a debate.</p>
 
-  <p><strong>The latest decision leaves a trail.</strong> Each review gate records its verdict in the open, with the findings that justified it attached. The decision is written down, not held in someone&rsquo;s head and lost when they log off. Pick the work up tomorrow and the reasoning is still there, exactly where the verdict was.</p>
+  <p><strong>The latest decision leaves a trail.</strong> Each review gate records its verdict in the open, with the findings that justified it attached. The decision lives written down rather than in someone&rsquo;s head, where it would be lost when they log off. Pick the work up tomorrow and the reasoning is still there, right where the verdict was.</p>
 
-  <p><strong>Automation runs only where the state proves it&rsquo;s safe.</strong> The wait at CI is handled by waiting on the real result &mdash; the actual check status, from whatever provider runs it &mdash; not by guessing from a timer. After a merge, finished workspaces are reclaimed and long-done items are archived. Each of those automations is gated on state that says continuing is safe; the judgment stays human, but the waiting in between gets handled.</p>
+  <p><strong>Automation runs only where the state proves it&rsquo;s safe.</strong> Handle the wait at CI by waiting on the real result, the actual check status from whatever provider runs it, instead of guessing from a timer. After a merge, finished workspaces get reclaimed and long-done items get archived. Each of those automations is gated on state that says continuing is safe. The judgment stays human, and the waiting in between gets handled.</p>
 
   <figure>
     <div class="diagram-scroll">
@@ -348,20 +346,20 @@
     <figcaption><span class="fig-label">Figure 4 &mdash;</span> Grounding &ldquo;observable state&rdquo; in real mechanisms. The board carries owner and next step, the gate trail carries the latest decision, the resolver answers whose move it is &mdash; and only then does safe automation run.</figcaption>
   </figure>
 
-  <p>None of this is exotic. It&rsquo;s the recognition that the four fields aren&rsquo;t aspirations to bolt on later; they&rsquo;re already latent in the board, the gates, and the resolver. Making them explicit just stops them from leaking.</p>
+  <p>None of this is exotic. The four fields aren&rsquo;t aspirations to bolt on later; they already sit latent in the board, the gates, and the resolver. Making them explicit stops them from leaking.</p>
 
   <h2>Stop Optimizing How Fast You Write Code</h2>
 
-  <p>The temptation, in a world where an agent can write a feature in seconds, is to chase generation speed &mdash; a faster model, a tighter prompt, one more agent. But generation was never the slow part, and shaving it gets you almost nothing.</p>
+  <p>When an agent can write a feature in seconds, the tempting move is to chase generation speed with a faster model, a tighter prompt, one more agent. But generation was never the slow part, and shaving it gets you almost nothing.</p>
 
-  <p>The slow part is the waiting, and the waiting is cheap to fix once you can see it. Make the state explicit and pickup becomes continuation instead of investigation. Measure the waits and the biggest stall stops hiding behind your commit history. Automate only where the state proves it&rsquo;s safe and you remove the stall without removing the judgment.</p>
+  <p>The waiting is the slow part, and it&rsquo;s cheap to fix once you can see it. Make the state explicit and pickup becomes continuation instead of investigation. Measure the waits and the biggest stall stops hiding behind your commit history. Automate only where the state proves it&rsquo;s safe and you cut the stall without losing the human judgment.</p>
 
-  <p><strong>So stop optimizing how fast you write code. Start measuring how long it waits.</strong></p>
+  <p><strong>The next agent will write your code in seconds either way. What you control is how long it waits afterward, so measure that.</strong></p>
 
   <hr />
 
   <h3>Rendering the diagrams on Medium</h3>
-  <p>Medium doesn&rsquo;t natively render Mermaid. To publish the Markdown version of this article, paste each <code>mermaid</code> block into a Mermaid live editor, export the result as <strong>SVG or PNG</strong>, and upload it as an image where the block appears. Each diagram is captioned so it reads correctly as a static image, and keeping the <em>Figure N</em> lines as image captions preserves the top-to-bottom flow. (This HTML render already draws the diagrams inline &mdash; no Mermaid runtime, no remote assets &mdash; so it works offline as a preview.)</p>
+  <p>Medium doesn&rsquo;t natively render Mermaid. To publish the Markdown version of this article, paste each <code>mermaid</code> block into a Mermaid live editor, export the result as <strong>SVG or PNG</strong>, and upload it as an image where the block appears. Each diagram is captioned so it reads correctly as a static image, and keeping the <em>Figure N</em> lines as image captions preserves the top-to-bottom flow. (This HTML render draws the diagrams inline, with no Mermaid runtime and no remote assets, so it works offline as a preview.)</p>
 
 </article>
 </body>
