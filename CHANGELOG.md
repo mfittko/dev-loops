@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.4.0
+
 ### Added
 
 - **Opt-in human reviewer/assignee handoff at the pre-approval gate** (#920, pairs with #910). A new `approval.humanHandoff` config (`{ enabled (default false), candidatesFrom: ["codeowners"|"recent-committers"], assignees: [...] }`) plus `scripts/github/resolve-handoff-candidates.mjs` resolve a deduped, priority-ordered candidate list (configured `assignees` → CODEOWNERS last-match-wins for the PR's changed paths → recent committers via `git log`, excluding the PR author/bots; team handles flagged). `dev-loops gate offer-human-handoff --repo <o/n> --pr <n> [--assign <login>] [--request-review <login>]` prints the offer and, only on an explicit `--assign`/`--request-review` flag, runs `gh pr edit --add-assignee/--add-reviewer` — OFFER-only, never auto-assigns. Surfaced at the human-merge handoff so `autonomy.humanMergeOnly` routes the PR to a named human instead of parking silently. Disabled by default; fail-soft per source.
