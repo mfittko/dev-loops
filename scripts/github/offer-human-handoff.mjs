@@ -42,6 +42,15 @@ function nextValue(args, i, flag) {
   return value;
 }
 
+// A login flag value with the leading `@` stripped and trimmed. Reject an empty
+// result (e.g. `--assign @`) so a blank login can never reach `gh pr edit
+// --add-assignee ""`.
+function loginValue(args, i, flag) {
+  const login = nextValue(args, i, flag).trim().replace(/^@/, "").trim();
+  if (login === "") throw parseError(`${flag} requires a non-empty login`);
+  return login;
+}
+
 export function parseOfferCliArgs(argv) {
   const args = [...argv];
   if (args.includes("--help") || args.includes("-h")) return { help: true };
@@ -53,8 +62,8 @@ export function parseOfferCliArgs(argv) {
     const token = args[i];
     if (token === "--repo") { options.repo = nextValue(args, ++i, "--repo"); continue; }
     if (token === "--pr") { options.pr = parsePrNumber(nextValue(args, ++i, "--pr"), parseError); continue; }
-    if (token === "--assign") { options.assign.push(nextValue(args, ++i, "--assign").trim().replace(/^@/, "")); continue; }
-    if (token === "--request-review") { options.requestReview.push(nextValue(args, ++i, "--request-review").trim().replace(/^@/, "")); continue; }
+    if (token === "--assign") { options.assign.push(loginValue(args, ++i, "--assign")); continue; }
+    if (token === "--request-review") { options.requestReview.push(loginValue(args, ++i, "--request-review")); continue; }
     if (token === "--changed-files") {
       options.changedFiles = nextValue(args, ++i, "--changed-files")
         .split(",").map((s) => s.trim()).filter((s) => s.length > 0);

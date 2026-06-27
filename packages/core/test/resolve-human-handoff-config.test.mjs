@@ -28,8 +28,15 @@ test("resolveHumanHandoffConfig: enabled parses sources + assignees", () => {
   assert.deepEqual(out, {
     enabled: true,
     candidatesFrom: ["codeowners", "recent-committers"],
-    assignees: ["alice", "@bob"],
+    assignees: ["alice", "bob"],
   });
+});
+
+test("resolveHumanHandoffConfig: normalizes assignees — strips @, trims, drops empties", () => {
+  const out = resolveHumanHandoffConfig({
+    approval: { humanHandoff: { enabled: true, assignees: ["@", "", "alice", " @bob ", "@ "] } },
+  });
+  assert.deepEqual(out.assignees, ["alice", "bob"]);
 });
 
 test("resolveHumanHandoffConfig: enabled with no sources/assignees => empty arrays", () => {

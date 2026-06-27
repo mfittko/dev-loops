@@ -1199,10 +1199,16 @@ export function resolveHumanHandoffConfig(config) {
   const candidatesFrom = list(hh?.candidatesFrom).filter(
     (s) => s === "codeowners" || s === "recent-committers"
   );
+  // Normalize assignees: strip a leading `@`, trim, and drop empties so an empty
+  // login (e.g. config value of `"@"` or `""`) can never leak downstream into
+  // `gh pr edit --add-assignee ""`.
+  const assignees = list(hh?.assignees)
+    .map((s) => s.replace(/^@/, "").trim())
+    .filter((s) => s.length > 0);
   return {
     enabled,
     candidatesFrom: enabled ? candidatesFrom : [],
-    assignees: enabled ? list(hh?.assignees) : [],
+    assignees: enabled ? assignees : [],
   };
 }
 

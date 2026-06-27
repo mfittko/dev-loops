@@ -100,7 +100,10 @@ export function parseResolveCandidatesCliArgs(argv) {
 export function parseCodeowners(content) {
   const rules = [];
   for (const rawLine of String(content).split("\n")) {
-    const line = rawLine.replace(/#.*$/, "").trim();
+    // A `#` starts a comment only at line start (after leading whitespace) or
+    // when preceded by whitespace; a mid-token `#` is part of the pattern/owner
+    // (gitignore/CODEOWNERS semantics).
+    const line = rawLine.replace(/(^|\s)#.*$/, "").trim();
     if (line === "") continue;
     const [pattern, ...owners] = line.split(/\s+/);
     if (!pattern) continue;
@@ -193,12 +196,18 @@ export function ownersForPaths(rules, changedFiles) {
 // ---------------------------------------------------------------------------
 
 async function resolveCodeownersSource(changedFiles, { repoRoot, readFile }) {
+  const warnings = [];
   for (const rel of CODEOWNERS_PATHS) {
     let content;
     try {
       content = await readFile(path.join(repoRoot, rel), "utf8");
-    } catch {
-      continue; // not at this location — try the next
+    } catch (error) {
+      // ENOENT => genuinely absent at this location: try the next path quietly.
+      // Any other error (EACCES / IO) is real: surface it rather than silently
+      // claiming "no CODEOWNERS file found".
+      if (error && error.code === "ENOENT") continue;
+      warnings.push(`codeowners: failed to read ${rel}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
     }
     const rules = parseCodeowners(content);
     const byOwner = ownersForPaths(rules, changedFiles);
@@ -209,11 +218,12 @@ async function resolveCodeownersSource(changedFiles, { repoRoot, readFile }) {
         isTeam: login.includes("/"),
         paths: [...paths],
       })),
-      warnings: [],
+      warnings,
     };
   }
-  // Fail-soft: no CODEOWNERS file anywhere -> no candidates, no abort.
-  return { candidates: [], warnings: ["codeowners: no CODEOWNERS file found"] };
+  // Fail-soft: no CODEOWNERS file anywhere -> no candidates, no abort. Keep any
+  // non-ENOENT read warnings so a permissions/IO failure is not masked.
+  return { candidates: [], warnings: [...warnings, "codeowners: no CODEOWNERS file found"] };
 }
 
 /**

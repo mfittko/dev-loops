@@ -23,6 +23,17 @@ test("parseOfferCliArgs: requires repo + pr", () => {
   assert.throws(() => parseOfferCliArgs(["--repo", "o/n"]), /requires both/);
 });
 
+test("parseOfferCliArgs: `--assign @` is rejected (never an empty add-assignee)", () => {
+  assert.throws(
+    () => parseOfferCliArgs(["--repo", "o/n", "--pr", "5", "--assign", "@"]),
+    /--assign requires a non-empty login/,
+  );
+  assert.throws(
+    () => parseOfferCliArgs(["--repo", "o/n", "--pr", "5", "--request-review", "@"]),
+    /--request-review requires a non-empty login/,
+  );
+});
+
 test("applyHandoff: invokes `gh pr edit --add-assignee/--add-reviewer`", async () => {
   let captured;
   const result = await applyHandoff(

@@ -36,6 +36,20 @@ src/*.mjs   @carol  # trailing comment
   ]);
 });
 
+test("parseCodeowners: `#` is a comment only at line start or after whitespace, not mid-token", () => {
+  const rules = parseCodeowners(`
+# full-line comment
+docs/c#sharp/   @alice  # trailing comment
+src/* @org/team#sub
+`);
+  assert.deepEqual(rules, [
+    // mid-token `#` in the pattern is preserved; trailing ` # ...` is stripped
+    { pattern: "docs/c#sharp/", owners: ["@alice"] },
+    // mid-token `#` in an owner handle is preserved (no whitespace before it)
+    { pattern: "src/*", owners: ["@org/team#sub"] },
+  ]);
+});
+
 test("codeownersMatch: anchored, directory, glob, bare-name", () => {
   assert.equal(codeownersMatch("*", "anything/here.txt"), true);
   assert.equal(codeownersMatch("/docs/", "docs/readme.md"), true);
@@ -171,11 +185,26 @@ test("codeowners: team handles included and flagged isTeam", async () => {
 test("fail-soft: missing CODEOWNERS yields no candidates + warning (no abort)", async () => {
   const out = await resolveHandoffCandidates(
     { repo: "o/n", pr: 1, changedFiles: ["src/a.mjs"], prAuthor: "me" },
-    { config: enabled(["codeowners"]), readFile: async () => { const e = new Error("ENOENT"); throw e; }, run: fakeRun(() => null) },
+    { config: enabled(["codeowners"]), readFile: async () => { const e = new Error("ENOENT"); e.code = "ENOENT"; throw e; }, run: fakeRun(() => null) },
   );
   assert.equal(out.ok, true);
   assert.deepEqual(out.candidates, []);
   assert.ok(out.warnings.some((w) => w.includes("codeowners")));
+});
+
+test("fail-soft: non-ENOENT CODEOWNERS read error surfaces a distinct warning (not 'no file found')", async () => {
+  const out = await resolveHandoffCandidates(
+    { repo: "o/n", pr: 1, changedFiles: ["src/a.mjs"], prAuthor: "me" },
+    {
+      config: enabled(["codeowners"]),
+      readFile: async () => { const e = new Error("permission denied"); e.code = "EACCES"; throw e; },
+      run: fakeRun(() => null),
+    },
+  );
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.candidates, []);
+  assert.ok(out.warnings.some((w) => /failed to read/.test(w) && /permission denied/.test(w)),
+    `expected a real read-error warning, got: ${JSON.stringify(out.warnings)}`);
 });
 
 test("fail-soft: git error yields no committers + warning (no abort)", async () => {
