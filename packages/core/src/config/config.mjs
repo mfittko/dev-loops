@@ -140,6 +140,16 @@ const WorktreeConfig = z.strictObject({
   linkOnInit: z.array(z.string().trim().min(1)).optional(),
 });
 
+/**
+ * Local-planning config (#949): where persisted markdown plan files (phase-doc
+ * format) live when work originates from a plan file rather than a tracker
+ * issue. `plansDir` is a repo-relative directory; defaults to the existing
+ * phase-docs directory. See skills/docs/plan-file-contract.md.
+ */
+const LocalPlanningConfig = z.strictObject({
+  plansDir: z.string().trim().min(1).optional(),
+});
+
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */
 const InternalPatternsConfig = z.array(z.string().trim().min(1)).min(1);
 
@@ -190,6 +200,7 @@ export const DevLoopConfigSchema = z.strictObject({
   personas: PersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.optional(),
+  localPlanning: LocalPlanningConfig.optional(),
 });
 
 // ============================================================================
@@ -239,6 +250,7 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
     "^test/",
   ]),
   worktree: Object.freeze({ copyOnInit: Object.freeze([]), linkOnInit: Object.freeze([]) }),
+  localPlanning: Object.freeze({ plansDir: "docs/phases/" }),
 });
 
 // ============================================================================
@@ -260,6 +272,7 @@ export const FileConfigSchema = z.strictObject({
   personas: FilePersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.partial().optional(),
+  localPlanning: LocalPlanningConfig.partial().optional(),
 });
 
 // ============================================================================
@@ -1175,6 +1188,24 @@ export function resolveWorktreeConfig(config) {
       ? v.map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
       : [];
   return { copyOnInit: list(wt?.copyOnInit), linkOnInit: list(wt?.linkOnInit) };
+}
+
+/**
+ * Resolve the local-planning plans directory from the merged dev-loop config.
+ *
+ * Returns the configured `localPlanning.plansDir` (trimmed) when present and
+ * non-empty, otherwise the built-in default (`docs/phases/`) — the existing
+ * phase-docs directory. See skills/docs/plan-file-contract.md.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {string}
+ */
+export function resolvePlansDir(config) {
+  const raw = config?.localPlanning?.plansDir;
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return raw.trim();
+  }
+  return BUILT_IN_DEFAULTS.localPlanning.plansDir;
 }
 
 /**
