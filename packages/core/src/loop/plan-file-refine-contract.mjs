@@ -96,13 +96,13 @@ function renderGrillFindings(classified) {
  * @param {object} params
  * @param {string} params.markdownText  current plan-file markdown
  * @param {boolean} params.baseSectionsValid  whether the plan passes the base-section validator
- * @param {boolean} params.hasAcceptanceCriteria  whether the plan already carries an Acceptance criteria section
- * @param {boolean} params.hasDefinitionOfDone  whether the plan already carries a Definition of done section
+ * @param {boolean} params.hasAcceptanceCriteria  whether the plan already carries a non-empty Acceptance criteria section marker (per the intake contract)
+ * @param {boolean} params.hasDefinitionOfDone  whether the plan already carries a non-empty Definition of done section marker (per the intake contract)
  * @param {object} params.payload  refiner-produced refinement output
  * @param {string} params.payload.acceptanceCriteria  Acceptance criteria section body
  * @param {string} params.payload.definitionOfDone  Definition of done section body
  * @param {string} params.payload.coverageMatrix  AC/DoD/Non-goal coverage matrix (markdown table)
- * @param {object[]} [params.payload.grillFindings]  docs-grill findings (classified via #948)
+ * @param {object[]} [params.payload.grillDispositions]  docs-grill dispositions the caller pre-classified via #948's `classifyDocsGrillFinding`; each entry is `{ kind, summary, disposition }` and a null/invalid `disposition` fails the grill closed
  * @returns {{
  *   ok: boolean,
  *   reason?: string,
