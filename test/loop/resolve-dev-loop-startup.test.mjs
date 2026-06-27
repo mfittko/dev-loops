@@ -911,25 +911,13 @@ test("local-first phase-doc intake fires no tracker artifact / Copilot call befo
     assert.equal(parsed.selectedStrategy, "local_implementation");
     assert.equal(parsed.bundle.issueLinkageResolution, "not_applicable");
 
-    // No tracker artifact creation and no Copilot dispatch fired during intake.
-    // Parse the call log per line (each gh invocation is one logged JSON array)
-    // so a multi-call sequence like `issue view` then a later `pr create` can
-    // never cross-match — the property is asserted per single invocation. The
-    // load-bearing guarantee is the local_implementation / not_applicable routing
-    // above; this is the explicit no-side-effect check on top of it.
+    // Zero tracker side effects during intake. The stub is scripted with an
+    // empty sequence and exits non-zero on ANY gh invocation, so `result.code
+    // === 0` above already proves intake made no gh call at all — and therefore
+    // no `gh issue/pr create` and no Copilot dispatch. The empty call log is the
+    // direct evidence of that property (mirrors the P3/P4 refine/promote tests).
     const ghLog = await readFile(ghStub.ghLogPath, "utf8");
-    for (const line of ghLog.split("\n").map((l) => l.trim()).filter(Boolean)) {
-      let call;
-      try {
-        call = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!Array.isArray(call)) continue;
-      assert.ok(!(call[0] === "issue" && call.includes("create")), `unexpected gh issue create: ${line}`);
-      assert.ok(!(call[0] === "pr" && call.includes("create")), `unexpected gh pr create: ${line}`);
-      assert.doesNotMatch(call.join(" "), /copilot/iu, `unexpected Copilot request: ${line}`);
-    }
+    assert.equal(ghLog.trim(), "", `local-first intake made no gh call; got: ${ghLog}`);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
