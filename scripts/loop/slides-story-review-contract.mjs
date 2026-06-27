@@ -10,6 +10,10 @@ export const STORY_REVIEW_OUTCOMES = Object.freeze([
 export const STORY_REVIEW_SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 
 export function validateSlidesStoryReviewInput(input = {}) {
+  // Coerce a null / non-object argument to {} so this validator always returns
+  // its structured status rather than throwing (the module's contract is a
+  // structured result, never an exception).
+  if (!input || typeof input !== 'object') input = {};
   if (input.workType !== 'slides' || input.storyReviewRequested !== true) {
     return {
       ok: true,
@@ -43,7 +47,8 @@ export function validateSlidesStoryReviewInput(input = {}) {
   // Captured slide screenshots are optional, but if present each entry must be complete.
   const incompleteArtifacts = [];
   const slideScreenshots = Array.isArray(deckBundle.slideScreenshots) ? deckBundle.slideScreenshots : [];
-  slideScreenshots.forEach((shot, index) => {
+  slideScreenshots.forEach((rawShot, index) => {
+    const shot = rawShot && typeof rawShot === 'object' ? rawShot : {};
     if (typeof shot.slideId !== 'string' || shot.slideId.trim().length === 0) {
       incompleteArtifacts.push(`deckBundle.slideScreenshots[${index}].slideId`);
     }
@@ -68,6 +73,9 @@ export function validateSlidesStoryReviewInput(input = {}) {
 }
 
 export function validateSlidesStoryReviewResult(result = {}) {
+  // Coerce a null / non-object argument to {} so this validator returns its
+  // structured `invalid` result rather than throwing.
+  if (!result || typeof result !== 'object') result = {};
   const invalid = [];
   if (!STORY_REVIEW_OUTCOMES.includes(result.outcome)) {
     invalid.push('outcome');
@@ -79,7 +87,8 @@ export function validateSlidesStoryReviewResult(result = {}) {
   if (findings === null) {
     invalid.push('findings');
   } else {
-    findings.forEach((finding, index) => {
+    findings.forEach((rawFinding, index) => {
+      const finding = rawFinding && typeof rawFinding === 'object' ? rawFinding : {};
       if (!STORY_REVIEW_SEVERITIES.includes(finding.severity)) {
         invalid.push(`findings[${index}].severity`);
       }

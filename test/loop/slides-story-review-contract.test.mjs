@@ -182,3 +182,35 @@ test('validateSlidesStoryReviewResult rejects incomplete findings', () => {
     'findings[0].correctiveAction',
   ]);
 });
+
+test('validators fail closed (not throw) on null / non-object arguments', () => {
+  for (const bad of [null, undefined, 'x', 42]) {
+    const inp = validateSlidesStoryReviewInput(bad);
+    assert.equal(inp.ok, true);
+    assert.equal(inp.status, 'skip_non_slides'); // non-object → not a slides story-review request
+    const res = validateSlidesStoryReviewResult(bad);
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 'invalid_result_shape');
+  }
+});
+
+test('null array elements are reported, not thrown (screenshots + findings)', () => {
+  const inp = validateSlidesStoryReviewInput({
+    workType: 'slides',
+    storyReviewRequested: true,
+    acceptanceCriteria: 'AC',
+    storytellingBrief: 'brief',
+    deckBundle: { deckSourcePath: 'docs/x.md', slideScreenshots: [null] },
+  });
+  assert.equal(inp.ok, false);
+  assert.equal(inp.status, 'blocked_incomplete_deck_bundle');
+  assert.ok(inp.missing.some((m) => m.includes('slideScreenshots[0]')));
+
+  const res = validateSlidesStoryReviewResult({
+    outcome: 'needs_iteration',
+    summary: 'has a null finding',
+    findings: [null],
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.invalid.some((m) => m.startsWith('findings[0]')));
+});
