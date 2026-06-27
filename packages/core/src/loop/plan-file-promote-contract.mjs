@@ -1,8 +1,9 @@
 /**
  * Local-planning plan-file PR-FIRST promotion (P4).
  *
- * This is the P4 promotion step. A plan refined to P2's
- * `plan_refined_ready_for_promotion` state is the spec-of-record. Promotion
+ * This is the P4 promotion step. A plan refined to the
+ * `plan_refined_ready_for_promotion` state (P3 refinement produces it; P2
+ * defines the intake-state machine) is the spec-of-record. Promotion
  * commits that plan doc and opens EXACTLY ONE draft PR — it never mints a
  * GitHub issue. The PR body links the committed plan doc path and carries the
  * full Acceptance criteria + Definition of done so the PR is a self-contained
@@ -17,8 +18,9 @@
  * no-issue-mint / zero-pre-promotion-mutation guarantee structural here: there
  * is no gh/network surface to reach from this module.
  *
- * It composes the already-shipped P2 intake contract: promotion is only
- * eligible from `plan_refined_ready_for_promotion`.
+ * It composes the already-shipped P2 intake-state machine: promotion is only
+ * eligible from `plan_refined_ready_for_promotion` (the state P3 refinement
+ * produces).
  */
 
 import {
@@ -72,6 +74,8 @@ export function parsePlanFrontMatter(markdownText) {
     if (sep === -1) continue;
     const key = line.slice(0, sep).trim();
     if (key.length === 0) continue;
+    // Plan content is untrusted: never let prototype-pollution keys through.
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
     frontMatter[key] = line.slice(sep + 1).trim();
   }
   return { frontMatter, body };
@@ -117,8 +121,8 @@ export function writeLinkedPrNumber(markdownText, prNumber) {
 /**
  * Pure promote-eligibility decision.
  *
- * Fail-closed: promotion is eligible ONLY from P2's
- * `plan_refined_ready_for_promotion` state. Any other intake state returns
+ * Fail-closed: promotion is eligible ONLY from the
+ * `plan_refined_ready_for_promotion` state (produced by P3 refinement). Any other intake state returns
  * `ok: false` with a reason and no action — the caller must make zero GitHub
  * mutation on that path. When the plan already carries a linked PR number in
  * front-matter, the decision is `already_promoted` (idempotent: open nothing,

@@ -81,6 +81,17 @@ describe("plan-file-promote-contract: front-matter link", () => {
     assert.equal(body, text);
   });
 
+  test("front-matter parsing ignores prototype-pollution keys from untrusted plans", () => {
+    const text = "---\n__proto__: polluted\nconstructor: x\nprototype: y\nprNumber: 7\n---\n# Plan\n";
+    const { frontMatter } = parsePlanFrontMatter(text);
+    assert.equal(frontMatter.prNumber, "7");
+    // The dangerous keys are dropped, and the object prototype is untouched.
+    assert.equal(Object.prototype.hasOwnProperty.call(frontMatter, "__proto__"), false);
+    assert.equal(Object.getPrototypeOf(frontMatter), Object.prototype);
+    assert.equal({}.polluted, undefined);
+    assert.equal(readLinkedPrNumber(text), 7);
+  });
+
   test("readLinkedPrNumber returns the number when present and valid", () => {
     assert.equal(readLinkedPrNumber("---\nprNumber: 12\n---\n# Plan\n"), 12);
     assert.equal(readLinkedPrNumber("# Plan\n"), null);

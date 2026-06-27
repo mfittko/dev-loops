@@ -186,7 +186,11 @@ export async function runCli(argv = process.argv.slice(2), {
   // symlink between the resolved plan path and git's toplevel does not yield a
   // spurious `../..` relative path.
   const realRoot = repoRoot ? safeRealpath(repoRoot) : null;
-  const planDocRelPath = realRoot ? path.relative(realRoot, safeRealpath(planPath)) : path.basename(planPath);
+  // Normalize to POSIX separators so the repo-relative path is identical on
+  // Windows and stays linkable in the commit messages and PR body.
+  const planDocRelPath = (realRoot ? path.relative(realRoot, safeRealpath(planPath)) : path.basename(planPath))
+    .split(path.sep)
+    .join("/");
   const acceptanceCriteria = extractSection(markdownText, acHeading);
   const definitionOfDone = extractSection(markdownText, dodHeading);
   const prBody = buildPromotionPrBody({
@@ -206,8 +210,16 @@ export async function runCli(argv = process.argv.slice(2), {
     return summary;
   };
 
-  // Create/switch to the branch (idempotent: -B resets/creates).
-  const checkout = await runChildFn("git", ["checkout", "-B", branch], env);
+  // Non-destructive branch selection: reuse an existing branch (never `-B`,
+  // which resets the ref and would discard unrelated commits on a same-named
+  // branch), else create it. Keeps reruns idempotent without rewriting history.
+  const branchExists =
+    (await runChildFn("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], env)).code === 0;
+  const checkout = await runChildFn(
+    "git",
+    ["checkout", ...(branchExists ? [branch] : ["-b", branch])],
+    env,
+  );
   if (checkout.code !== 0) {
     return fail("git_checkout_failed", checkout.stderr.trim());
   }
@@ -263,7 +275,7 @@ export async function runCli(argv = process.argv.slice(2), {
       planFile: planPath,
       branch,
       prNumber,
-      recovery: `PR #${prNumber} is open but the plan->PR link commit failed. The plan file now carries prNumber: ${prNumber}; commit ${planDocRelPath} and push to record the link.`,
+      recovery: `PR #${prNumber} is open but the plan->PR link commit failed. ${planDocRelPath} now carries prNumber: ${prNumber} in its front-matter; record the link with: git add ${planDocRelPath} && git commit -m "docs(plan): link to PR #${prNumber}" && git push.`,
     };
     emit(stdout, options.json, summary, [
       `promote-plan: FAIL (${reason})${detail ? `: ${detail}` : ""}`,
