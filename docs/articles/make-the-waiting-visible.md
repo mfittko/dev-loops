@@ -123,6 +123,7 @@ The next agent will write your code in seconds either way. What you control is h
 
 Medium doesn't natively render Mermaid. To publish these:
 
+- Remove the YAML front-matter block (the `---` fenced `title` / `dek` / `tags` at the top) before pasting — Medium shows it as literal text. Use the title and dek as the Medium headline and subtitle, and the tags as Medium tags.
 - Paste each `mermaid` block into a Mermaid live editor (or any tool that renders Mermaid), then export the result as **SVG or PNG** and upload it as an image where the block appears.
 - Each diagram is captioned so it reads correctly as a static image, with the caption carrying the point even when the diagram appears without its source.
 - Keep the figure captions (the *Figure N* lines) as image captions in Medium so the flow still reads top to bottom.
