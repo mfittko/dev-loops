@@ -25,6 +25,10 @@ Each base section has a non-empty body. Refinement is a later phase that adds ac
 
 The thin CLI accepts `--input <path>`, `--json`, and `--help`. The validation verdict is reported in the JSON payload; the process exits non-zero for argument or path errors (house style — see the [Validation Policy](validation-policy.md)).
 
+## Optional front-matter (plan↔PR link)
+
+A plan file may carry an optional leading YAML front-matter block — a `---` line, `key: value` lines, a closing `---` line — before its first heading. It is additive: a plan without front-matter is unchanged and fully valid. The only key the tooling reads or writes today is `prNumber:`, the number of the draft PR a plan was promoted into (PR-FIRST promotion never mints an issue; the committed plan doc is the spec-of-record and the PR body links it). The link is recorded bidirectionally — the PR body references the committed plan-doc path; the plan's `prNumber` front-matter references the PR. Promotion (`scripts/refine/promote-plan.mjs`) writes `prNumber` and is idempotent on a plan that already carries one. The parser/serializer lives in the pure `@dev-loops/core/loop/plan-file-promote-contract` module.
+
 ## Relationship to other docs
 
 | Doc | Relationship |

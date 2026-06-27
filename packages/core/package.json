@@ -38,6 +38,7 @@
     "./loop/phase-files": "./src/loop/phase-files.mjs",
     "./loop/policy-constants": "./src/loop/policy-constants.mjs",
     "./loop/plan-file-intake-contract": "./src/loop/plan-file-intake-contract.mjs",
+    "./loop/plan-file-promote-contract": "./src/loop/plan-file-promote-contract.mjs",
     "./loop/plan-file-refine-contract": "./src/loop/plan-file-refine-contract.mjs",
     "./loop/pr-gate-coordination": "./src/loop/pr-gate-coordination.mjs",
     "./loop/pr-title-markers": "./src/loop/pr-title-markers.mjs",
