@@ -68,8 +68,9 @@ structure, and grounding only.
 
 ## Visual pass — designer/vision review
 
-Captured the load-bearing named states via `npm run test:playwright:obs-deck`
-(WebKit): `hero`, `observable-state`, `instrumented`, `metrics`, `close`. Each
+Captured the named states via `npm run test:playwright:obs-deck`
+(WebKit): `hero`, `interrupt-cost` (delay pattern), `observable-state`,
+`measurement-loop`, `instrumented`, `metrics`, `close`. Each
 `screenshot.png` was opened and critiqued; a 390px-wide pass confirmed the
 responsive collapse (no horizontal overflow).
 
@@ -97,7 +98,7 @@ centered flow cards, and the `.closer` punchline style were all carried over, so
 the defects the applied deck's review found (ragged card bottoms, edge-to-edge
 measure, stranded diagrams, a flat close) do not recur here. No corrective CSS
 beyond the ported baseline was required. No horizontal body overflow at desktop
-or 390px. Playwright obs-deck spec passes (all named sections present, 5 states
+or 390px. Playwright obs-deck spec passes (all named sections present, 7 states
 captured).
 
 Result: `ui_review_satisfied`.
