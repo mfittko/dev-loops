@@ -162,4 +162,16 @@ describe("refinePlanFileInPlace", () => {
     assert.equal(result.ok, false);
     assert.equal(result.reason, "missing_plan_markdown");
   });
+
+  test("fail closed: a section body containing a top-level heading", () => {
+    // An embedded `## ` in a managed section body would break the strip-then-append
+    // idempotency (stripSection scans to the next `## `), so it must fail closed.
+    const result = refinePlanFileInPlace({
+      ...newPlanFacts(BASE_PLAN),
+      payload: { ...PAYLOAD, acceptanceCriteria: "- ok\n## Sneaky inner heading\nmore" },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "section_body_contains_heading");
+    assert.equal(result.refinedMarkdown, undefined);
+  });
 });

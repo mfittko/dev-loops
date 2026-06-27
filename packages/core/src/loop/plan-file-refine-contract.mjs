@@ -172,6 +172,15 @@ export function refinePlanFileInPlace({
     });
   }
 
+  // A managed section body must not contain a top-level `## ` heading: stripSection
+  // finds a section's end by scanning to the next `## `, so an embedded H2 in a body
+  // would break the strip-then-append idempotency on a re-run (the inner heading and
+  // its text would orphan into the document body). Fail closed on such a payload.
+  const grillBody = renderGrillFindings(grillDispositions);
+  if ([acceptanceCriteria, definitionOfDone, coverageMatrix, grillBody].some((b) => /^##\s/mu.test(String(b)))) {
+    return { ok: false, reason: "section_body_contains_heading", planFileIntakeState: startState };
+  }
+
   // Write the refinement sections in-place. Strip any prior copy first so a
   // re-run replaces rather than duplicates (idempotency), then append the fresh
   // sections in a stable order.
@@ -183,7 +192,7 @@ export function refinePlanFileInPlace({
   refinedMarkdown = appendSection(refinedMarkdown, acHeading, acceptanceCriteria);
   refinedMarkdown = appendSection(refinedMarkdown, dodHeading, definitionOfDone);
   refinedMarkdown = appendSection(refinedMarkdown, COVERAGE_MATRIX_HEADING, coverageMatrix);
-  refinedMarkdown = appendSection(refinedMarkdown, DOCS_GRILL_FINDINGS_HEADING, renderGrillFindings(grillDispositions));
+  refinedMarkdown = appendSection(refinedMarkdown, DOCS_GRILL_FINDINGS_HEADING, grillBody);
 
   // Re-classify against the refined text using the facts the write just created.
   // A correct refine carries the base sections forward (untouched) and adds both
