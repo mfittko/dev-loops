@@ -357,6 +357,8 @@ See [Merge Preconditions](../docs/merge-preconditions.md). Verify: zero unresolv
 After merge-ready preconditions pass, verify [Merge Preconditions](../docs/merge-preconditions.md) authoritatively before reporting merge-ready. Stop at the human approval checkpoint by default. Cross-check via `dev-loops gate capture-threads` (not prose assertion).
 Follow [Merge Preconditions](../docs/merge-preconditions.md): stop at `waiting_for_merge_authorization` after approval unless merge explicitly authorized. Run pre-merge gate evidence check before any `gh pr merge`.
 
+When `approval.humanHandoff.enabled` is set, don't just park silently at this stop: run `dev-loops gate offer-human-handoff --repo <owner/name> --pr <number>` to surface candidate reviewers/assignees, then **offer** them to the operator. Only on operator confirmation, route the PR with `--assign <login>` / `--request-review <login>`. This is OFFER-only — never auto-assign. See the `approval.humanHandoff` section in [Merge Preconditions](../docs/merge-preconditions.md); it pairs with `autonomy.humanMergeOnly`.
+
 ### Mechanical pre-merge gate evidence check
 
 Immediately before any `gh pr merge`, run:

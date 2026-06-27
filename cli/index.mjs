@@ -27,6 +27,7 @@ const SUBCOMMAND_ROUTES = {
     "probe-copilot":      "scripts/github/probe-copilot-review.mjs",
     "capture-threads":    "scripts/github/capture-review-threads.mjs",
     "reply-resolve":      "scripts/github/reply-resolve-review-threads.mjs",
+    "offer-human-handoff": "scripts/github/offer-human-handoff.mjs",
   },
   loop: {
     startup:        "scripts/loop/resolve-dev-loop-startup.mjs",
@@ -117,6 +118,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "probe-copilot": "Poll for Copilot review activity",
     "capture-threads": "Capture review threads",
     "reply-resolve": "Reply and resolve review threads",
+    "offer-human-handoff": "Offer to assign PR to a human reviewer/assignee",
   },
   loop: {
     startup: "Resolve dev-loop startup bundle",

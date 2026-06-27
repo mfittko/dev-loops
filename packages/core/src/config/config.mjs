@@ -82,6 +82,25 @@ const AutonomyConfig = z.strictObject({
   humanMergeOnly: z.boolean().optional(),
 });
 
+/**
+ * Human-handoff config (#920, Request B of #910): at the pre-approval /
+ * merge-handoff boundary, OFFER to assign the PR to a named human
+ * reviewer/assignee. Opt-in (default off). Pairs with autonomy.humanMergeOnly.
+ * `candidatesFrom` selects which sources the resolver queries; `assignees` is a
+ * static highest-priority candidate list. Absent/empty = disabled no-op.
+ */
+const HumanHandoffConfig = z.strictObject({
+  enabled: z.boolean().default(false),
+  candidatesFrom: z
+    .array(z.enum(["codeowners", "recent-committers"]))
+    .optional(),
+  assignees: z.array(z.string().trim().min(1)).optional(),
+});
+
+const ApprovalConfig = z.strictObject({
+  humanHandoff: HumanHandoffConfig.optional(),
+});
+
 const WorkflowConfig = z.strictObject({
   asyncStartMode: z.enum(["required", "allowed"]).default("required"),
   requireRetrospective: z.boolean(),
@@ -164,6 +183,7 @@ export const DevLoopConfigSchema = z.strictObject({
   refinement: RefinementConfig.optional(),
   gates: GatesConfig.optional(),
   autonomy: AutonomyConfig.optional(),
+  approval: ApprovalConfig.optional(),
   workflow: WorkflowConfig.optional(),
   localImplementation: LocalImplementationConfig.optional(),
   queue: QueueConfig.optional(),
@@ -184,6 +204,13 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
   refinement: Object.freeze({ fanOut: 3, mode: "parallel", maxCopilotRounds: 5, stopOnLowSignal: false, lowSignalRoundThreshold: 3, lowSignalMaxComments: 2 }),
   gates: Object.freeze({}),
   autonomy: Object.freeze({ stopAt: Object.freeze(["merge"]), humanMergeOnly: false }),
+  approval: Object.freeze({
+    humanHandoff: Object.freeze({
+      enabled: false,
+      candidatesFrom: Object.freeze([]),
+      assignees: Object.freeze([]),
+    }),
+  }),
   workflow: Object.freeze({
     asyncStartMode: "required",
     requireRetrospective: false,
@@ -226,6 +253,7 @@ export const FileConfigSchema = z.strictObject({
   refinement: RefinementConfig.partial().optional(),
   gates: FileGatesConfig.optional(),
   autonomy: AutonomyConfig.partial().optional(),
+  approval: ApprovalConfig.partial().optional(),
   workflow: WorkflowConfig.partial().optional(),
   localImplementation: LocalImplementationConfig.partial().optional(),
   queue: QueueConfig.partial().optional(),
@@ -1147,6 +1175,35 @@ export function resolveWorktreeConfig(config) {
       ? v.map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
       : [];
   return { copyOnInit: list(wt?.copyOnInit), linkOnInit: list(wt?.linkOnInit) };
+}
+
+/**
+ * Resolve the human-handoff config from the merged dev-loop config (#920).
+ *
+ * Returns a normalized `{ enabled, candidatesFrom, assignees }`. Defaults to
+ * disabled with empty arrays when the `approval.humanHandoff` section is absent.
+ * When disabled (default), this is a no-op: callers must not source candidates
+ * or assign anyone. Pairs with `autonomy.humanMergeOnly`: when human-merge is
+ * enforced, this names who should take the merge.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {{ enabled: boolean, candidatesFrom: ("codeowners"|"recent-committers")[], assignees: string[] }}
+ */
+export function resolveHumanHandoffConfig(config) {
+  const hh = config?.approval?.humanHandoff;
+  const enabled = hh?.enabled === true;
+  const list = (v) =>
+    Array.isArray(v)
+      ? v.map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
+      : [];
+  const candidatesFrom = list(hh?.candidatesFrom).filter(
+    (s) => s === "codeowners" || s === "recent-committers"
+  );
+  return {
+    enabled,
+    candidatesFrom: enabled ? candidatesFrom : [],
+    assignees: enabled ? list(hh?.assignees) : [],
+  };
 }
 
 export function resolveInternalPathPatterns(config) {

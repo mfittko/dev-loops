@@ -49,6 +49,44 @@ human action and this authorization step is **non-overridable**:
 This makes human-gated merge an enforced repo invariant, not a per-run default an
 explicit instruction can unlock.
 
+### `approval.humanHandoff` — offer to assign a human at the handoff (opt-in)
+
+When a repo sets `approval.humanHandoff.enabled: true` in `.devloops`, the loop
+does not just park silently at the human-merge stop — at the
+`pre_approval_gate` / `waiting_for_merge_authorization` boundary it **offers**
+to route the PR to a named human (pairs with `autonomy.humanMergeOnly`: when
+human-merge is enforced, the handoff names who should take it). Disabled by
+default; no candidate sourcing when disabled.
+
+```yaml
+approval:
+  humanHandoff:
+    enabled: true
+    candidatesFrom: [codeowners, recent-committers]
+    assignees: [alice, bob]
+```
+
+At the handoff boundary, resolve and surface candidates:
+
+```sh
+dev-loops gate offer-human-handoff --repo <owner/name> --pr <number>
+```
+
+This prints the deduped, ordered candidate list (priority:
+`assignees` > `codeowners` for the touched paths (last-match-wins) >
+`recent-committers` to those paths, PR author/bots excluded). It assigns no one.
+
+**OFFER-only — the operator confirms the assignee** (auto-assigning without
+confirmation is a non-goal). On confirmation, perform the action:
+
+```sh
+dev-loops gate offer-human-handoff --repo <owner/name> --pr <number> \
+  --assign <login> --request-review <login>
+```
+
+which runs `gh pr edit --add-assignee` / `--add-reviewer` for the confirmed
+human(s).
+
 ## Post-merge
 
 - Remove merged worktree (canonical): `node scripts/loop/cleanup-worktree.mjs --repo-root <main> (--issue <n> | --pr <n>)`.
