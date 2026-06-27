@@ -80,6 +80,20 @@
         "preApproval": {
           "$ref": "#/$defs/gateConfig",
           "description": "Pre-approval gate config. `requireCi` is accepted for parity with runtime config, but preApproval always requires CI so that field has no effect here."
+        },
+        "requireFanoutEvidence": {
+          "type": "boolean",
+          "description": "Require fan-out/fan-in review evidence on gate verdicts (rejects inline_single_agent)."
+        },
+        "maxFanoutReviewers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Maximum number of fan-out reviewers per gate."
+        },
+        "postFindingsComments": {
+          "type": "boolean",
+          "description": "Whether to post gate findings comments (default true). Local-first keeps them on: findings live on the PR as review evidence."
         }
       }
     },
