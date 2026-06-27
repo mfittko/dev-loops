@@ -249,15 +249,43 @@ export async function runCli(argv = process.argv.slice(2), {
   }
 
   // Write the PR number back into the plan's front-matter (the plan->PR link),
-  // then commit the link so the committed plan doc records its PR.
+  // then commit the link so the committed plan doc records its PR. The PR is
+  // ALREADY open here, so a write-back failure is NOT a clean fail-closed: the
+  // tracker artifact exists. Surface it with the open PR number and a recovery
+  // hint instead of reporting success — otherwise the uncommitted link leaves a
+  // partial state that defeats idempotency (a re-run sees no prNumber, re-enters
+  // promote, and gh rejects the already-open head).
+  const failAfterPrOpen = (reason, detail) => {
+    const summary = {
+      ok: false,
+      reason,
+      detail: detail ?? null,
+      planFile: planPath,
+      branch,
+      prNumber,
+      recovery: `PR #${prNumber} is open but the plan->PR link commit failed. The plan file now carries prNumber: ${prNumber}; commit ${planDocRelPath} and push to record the link.`,
+    };
+    emit(stdout, options.json, summary, [
+      `promote-plan: FAIL (${reason})${detail ? `: ${detail}` : ""}`,
+      `  pr: #${prNumber} (open; plan->PR link NOT committed — recover manually)`,
+    ]);
+    process.exitCode = 1;
+    return summary;
+  };
   const linkedMarkdown = writeLinkedPrNumber(markdownText, prNumber);
   await writeFile(planPath, linkedMarkdown, "utf8");
-  await runChildFn("git", ["add", planPath], env);
-  await runChildFn(
+  const linkAdd = await runChildFn("git", ["add", planPath], env);
+  if (linkAdd.code !== 0) {
+    return failAfterPrOpen("git_link_add_failed", linkAdd.stderr.trim());
+  }
+  const linkCommit = await runChildFn(
     "git",
     ["commit", "-m", `docs(plan): link ${planDocRelPath} to PR #${prNumber}`],
     env,
   );
+  if (linkCommit.code !== 0) {
+    return failAfterPrOpen("git_link_commit_failed", linkCommit.stderr.trim());
+  }
 
   const summary = {
     ok: true,

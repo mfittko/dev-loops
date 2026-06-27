@@ -173,6 +173,41 @@ describe("promote-plan CLI", () => {
     }
   });
 
+  test("partial state: link write-back commit failure reports the open PR for recovery, exits 1", async () => {
+    const { tempDir, repoDir, planPath, ghStub } = await setup();
+    try {
+      // Install a commit-msg hook that rejects only the link commit (its message
+      // carries "to PR #"), so the PR opens and the first commit lands but the
+      // link write-back commit fails — exactly the partial-state hazard.
+      const { mkdir, chmod } = await import("node:fs/promises");
+      const hookDir = path.join(repoDir, ".git", "hooks");
+      await mkdir(hookDir, { recursive: true });
+      const hookPath = path.join(hookDir, "commit-msg");
+      await writeFile(hookPath, "#!/bin/sh\ngrep -q 'to PR #' \"$1\" && exit 1\nexit 0\n", "utf8");
+      await chmod(hookPath, 0o755);
+
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--json"], {
+        cwd: repoDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 1);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.reason, "git_link_commit_failed");
+      // The PR opened: its number is surfaced so the operator can recover.
+      assert.equal(parsed.prNumber, 321);
+      assert.match(parsed.recovery, /PR #321 is open/u);
+
+      // Exactly one PR was opened (no duplicate); the on-disk plan carries the link.
+      const ghLog = (await readFile(ghStub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+      assert.equal(ghLog.length, 1, `expected one gh call, got: ${ghLog.join(" | ")}`);
+      const written = await readFile(planPath, "utf8");
+      assert.match(written, /^---\nprNumber: 321\n---\n/u);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects missing --plan-file", async () => {
     const result = await runNode(cliPath, [], {});
     assert.equal(result.code, 1);
