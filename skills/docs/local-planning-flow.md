@@ -31,7 +31,7 @@ Hand the plan to startup with `--plan-file` (mutually exclusive with `--issue`, 
 node scripts/loop/resolve-dev-loop-startup.mjs --plan-file docs/phases/phase-<n>.md
 ```
 
-Startup validates the plan and threads an intake state onto its output. A plan with valid base sections and no refinement sections is `new_plan_needs_refinement`; the same plan once it also carries `Acceptance criteria` and `Definition of done` is `plan_refined_ready_for_promotion`. A plan that fails the base validator, or carries only one of the two refinement sections, is `ambiguous_fail_closed` and startup stops.
+Startup validates the plan and threads an intake state onto its output. A plan with valid base sections and no refinement sections is `new_plan_needs_refinement`; the same plan once it also carries `Acceptance criteria` and `Definition of done` is `plan_refined_ready_for_promotion`. A base-valid plan that carries only one of the two refinement sections is reported as `ambiguous_fail_closed` with exit 0 and is not routed forward — the operator completes the missing section first. A plan that is missing/unreadable or fails the base validator makes startup fail closed (exit 1, no readiness bundle).
 
 ## 3. Refine in place and stop at the local human-review checkpoint
 

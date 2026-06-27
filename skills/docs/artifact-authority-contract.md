@@ -29,7 +29,7 @@ Key contract:
 
 ### Local-planning
 
-**Persisted markdown plan files are the authoritative artifact store.** Work originates from a markdown plan file committed to the repository, and no GitHub issue is required. GitHub PRs carry review and merge while the plan file stays the canonical spec.
+**Persisted markdown plan files are the authoritative artifact store.** Work originates from a local markdown plan file in the repo working tree, and no GitHub issue is required. The plan file is authored, refined, and reviewed locally; it is committed during promotion (the helper sequence commits it as part of opening the PR), not before. GitHub PRs carry review and merge while the plan file stays the canonical spec.
 
 Artifacts:
 - **Planning artifact:** Persisted markdown plan file (e.g., `docs/phases/phase-<n>.md`); its format and required base sections are defined in the [Plan-file Contract](plan-file-contract.md)
@@ -56,7 +56,7 @@ Key contract:
 
 ## Settings mechanism
 
-Artifact authority mode is controlled by `strategy.default`, set in `.devloops` at repo root and resolved against the layered config defaults:
+The repo's default artifact-authority posture is declared by `strategy.default`, set in `.devloops` at repo root and resolved against the layered config defaults:
 
 ```yaml
 # .devloops
@@ -68,8 +68,10 @@ inputSource:
 ```
 
 The `strategy.default` key carries two jobs:
-1. It selects the artifact authority mode (local-planning under `local-first`, tracker-first under `github-first`).
-2. It sets the routing preference for `targetPreference` in dev-loop startup.
+1. It declares the repo's default artifact-authority posture (local-planning under `local-first`, tracker-first under `github-first`).
+2. It sets the routing preference (`targetPreference`) in dev-loop startup — `prefer_local` under `local-first`, `prefer_github_first` under `github-first`.
+
+The authoritative artifact for a given run is selected by the explicit startup input. `scripts/loop/resolve-dev-loop-startup.mjs` takes `--issue` / `--pr` / `--input` / `--plan-file` (mutually exclusive), and `strategy.default` supplies the default routing preference; it does not force the artifact per invocation.
 
 The `inputSource.default` key disambiguates local-first startup:
 - `tracker` (default): the local agent implements from the GitHub issue body; the issue is the canonical spec
@@ -81,7 +83,8 @@ The effective default for a consumer comes from the config-merge layering in `pa
 
 1. `BUILT_IN_DEFAULTS` (frozen in `config.mjs`) — `strategy.default: github-first`. This is the code-level fallback when no other layer sets the key.
 2. Extension-packaged defaults (`packages/core/src/config/extension-defaults.yaml`, loaded as the `extensionDefaults` layer) — `strategy.default: local-first`. This is the opinion the package ships and the layer that wins over the built-in fallback.
-3. Repo `.devloops` at repo root — the per-repo override, highest precedence.
+3. Repo-local `.pi/dev-loop/defaults.*` (legacy) — applied when present.
+4. Repo `.devloops` at repo root — the per-repo override, highest precedence. When `.devloops` is absent, the legacy `.pi/dev-loop/settings.*` / `overrides.*` apply at this position instead.
 
 With nothing but the shipped package in place, the extension layer resolves `strategy.default` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy.default: github-first` in its own `.devloops`.
 
@@ -110,7 +113,9 @@ The plan file is a phase-doc-format markdown document. Its directory is `localPl
 |---|---|
 | `new_plan_needs_refinement` | Base sections valid; the refinement sections are not yet present |
 | `plan_refined_ready_for_promotion` | Base sections valid and both `PLAN_FILE_REFINEMENT_SECTIONS` (`Acceptance criteria`, `Definition of done`) present |
-| `ambiguous_fail_closed` | Base sections invalid, or only one refinement section present — the intake fails closed |
+| `ambiguous_fail_closed` | Base sections invalid, or only one refinement section present — the resolver does not route the plan forward |
+
+In the CLI, a base-valid plan carrying only one refinement section is reported as `ambiguous_fail_closed` with exit 0 (the operator completes the missing section before refine/promote); a missing/unreadable plan, or one that fails the base-section validator, makes startup exit 1 with no readiness bundle.
 
 ### P3 — Local refine + review checkpoint (#951)
 
