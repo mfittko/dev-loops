@@ -198,6 +198,81 @@ stateDiagram-v2
 
 ---
 
+<p class="kicker">Gate Sub-Loop · v0.4.0</p>
+
+## Fan-Out / Fan-In on One Neutral Context Bundle
+
+<div class="grid grid-cols-2 gap-5 items-start">
+<div class="glass-card">
+<ul class="tight-list">
+  <li><strong>Build once</strong> — one neutral bundle: full diff + 1-hop import adjacency (callers / callees / imports), size-guarded</li>
+  <li><strong>Fan out</strong> — independent reviewers seeded with the <em>identical</em> bundle, one per angle, fresh context — independent from the MAIN agent</li>
+  <li><strong>Fan in</strong> — <code>consolidateFanin</code> merges per-angle verdicts into one disposition</li>
+  <li>No fork primitive, no Workflow-tool dependency</li>
+</ul>
+</div>
+<div class="glass-card">
+<p><strong>Fail-closed verdict evidence</strong></p>
+<div class="chip-row">
+  <span class="pill">draft_gate</span>
+  <span class="pill">pre_approval_gate</span>
+  <span class="pill">fanout_fanin</span>
+  <span class="pill">findings-log</span>
+</div>
+<p class="soft-note note-top-md">Enforced severity counts gate a clean verdict — the audit trail records how the gate was actually run.</p>
+</div>
+</div>
+
+```mermaid {scale: 0.58}
+stateDiagram-v2
+  direction LR
+  write_gate_context --> neutral_bundle: full diff + 1-hop adjacency
+  neutral_bundle --> reviewer_scope: per angle
+  neutral_bundle --> reviewer_coverage: per angle
+  neutral_bundle --> reviewer_security: per angle
+  reviewer_scope --> consolidateFanin
+  reviewer_coverage --> consolidateFanin
+  reviewer_security --> consolidateFanin
+  consolidateFanin --> fanout_fanin_verdict: enforced severity counts
+```
+
+---
+
+<p class="kicker">Coordination Runtime · v0.4.0</p>
+
+## The Coordination Runtime Owns the Full Lifecycle
+
+<div class="grid grid-cols-3 gap-5 items-start">
+<div class="glass-card">
+<p><strong>Enforced human merge</strong></p>
+<ul class="mini-list">
+  <li><code>autonomy.humanMergeOnly</code> fails closed</li>
+  <li>The agent never runs <code>gh pr merge</code></li>
+  <li>Routes the PR to a named human at the pre-approval gate</li>
+</ul>
+</div>
+<div class="glass-card">
+<p><strong>Managed worktrees</strong></p>
+<ul class="mini-list">
+  <li>Namespaced <code>tmp/worktrees/dev-loops/</code></li>
+  <li>create → provision → cleanup</li>
+  <li>Post-merge reclaim</li>
+</ul>
+</div>
+<div class="glass-card">
+<p><strong>Provider-agnostic CI wait</strong></p>
+<ul class="mini-list">
+  <li><code>watch-ci</code> over check-runs + commit-status</li>
+  <li>CircleCI / external, not Actions-only</li>
+  <li>Race-safe: never fabricates green</li>
+</ul>
+</div>
+</div>
+
+<p class="soft-note note-top-md">The queue board is a <strong>deterministic adapter</strong> — it only reflects a verifiable terminal signal (a merged PR), never fabricates <code>done</code>.</p>
+
+---
+
 <p class="kicker">Impact</p>
 
 ## Quality Up, Wait Time Down, Throughput Up
