@@ -23,18 +23,28 @@ import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
 import { loadDevLoopConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
+import { validatePlanFile } from "../refine/validate-plan-file.mjs";
+import { extractSection } from "../refine/_refine-helpers.mjs";
+import {
+  evaluatePlanFileIntakeState,
+  PLAN_FILE_REFINEMENT_SECTIONS,
+} from "@dev-loops/core/loop/plan-file-intake-contract";
 import { parseArgs } from "node:util";
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
   resolve-dev-loop-startup.mjs --pr <number>
   resolve-dev-loop-startup.mjs --input <path>
+  resolve-dev-loop-startup.mjs --plan-file <path>
 Resolve the authoritative public dev-loop startup/resume bundle.
 Auto-resolves state from GitHub API, git remote, and settings when
 --issue or --pr is used. Use --input for non-standard states.
+Use --plan-file to start local planning from a phase-doc-format plan
+(read-only: no tracker mutation, no issue/PR number).
 Required (exactly one):
   --issue <n>    Target an issue by number (auto-resolves all state)
   --pr <n>       Target a PR by number (auto-resolves all state)
   --input <path>  Path to a JSON file with canonical-state payload
+  --plan-file <path>  Path to a phase-doc-format plan to start locally
 Exit codes:
   0  Success
   1  Argument error, runtime failure, or async-start contract rejection`.trim();
@@ -102,6 +112,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     inputPath: undefined,
     issue: undefined,
     pr: undefined,
+    planFile: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -110,6 +121,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       input: { type: "string" },
       issue: { type: "string" },
       pr: { type: "string" },
+      "plan-file": { type: "string" },
     },
     allowPositionals: true,
     strict: false,
@@ -138,14 +150,18 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       options.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError);
       continue;
     }
+    if (token.name === "plan-file") {
+      options.planFile = requireTokenValue(token, parseError);
+      continue;
+    }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  const modeCount = [options.inputPath, options.issue, options.pr].filter(v => v !== undefined).length;
+  const modeCount = [options.inputPath, options.issue, options.pr, options.planFile].filter(v => v !== undefined).length;
   if (modeCount > 1) {
-    throw parseError("--issue, --pr, and --input are mutually exclusive; provide exactly one");
+    throw parseError("--issue, --pr, --input, and --plan-file are mutually exclusive; provide exactly one");
   }
   if (modeCount === 0) {
-    throw parseError("--input <path>, --issue <n>, or --pr <n> is required");
+    throw parseError("--input <path>, --issue <n>, --pr <n>, or --plan-file <path> is required");
   }
   return options;
 }
@@ -368,6 +384,62 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     },
   };
 }
+/**
+ * Read + validate a `--plan-file` path and build a local_phase startup input.
+ *
+ * Read-only: no tracker mutation, no GitHub calls, no issue/PR number. A
+ * missing/unreadable file, or one failing the base-section validator, throws so
+ * the CLI fails closed (exit 1, no readiness bundle). The plan-file path is
+ * carried as the target `phase` and is exempt from the worktree-isolation guard
+ * because there is no issue to key a worktree on before promotion.
+ *
+ * @returns {object} startup input with a `planFileIntakeState` field threaded onto output
+ */
+export function buildPlanFileInput({ planFilePath }) {
+  const resolvedPath = path.resolve(planFilePath);
+  let markdownText;
+  try {
+    markdownText = readFileSync(resolvedPath, "utf8");
+  } catch (err) {
+    throw new Error(`Plan file is missing or unreadable: ${resolvedPath} (${err instanceof Error ? err.message : String(err)})`);
+  }
+  const validation = validatePlanFile(markdownText);
+  if (!validation.ok) {
+    const codes = validation.errors.map(e => e.code).join(", ");
+    throw new Error(`Plan file failed validation (${resolvedPath}): ${codes}`);
+  }
+  // Refined-vs-needs-refinement: refinement adds Acceptance criteria + Definition
+  // of done on top of the base authoring sections. Detect each via extractSection
+  // (non-null trimmed body == present and non-empty), then classify with the pure
+  // intake evaluator.
+  const [acHeading, dodHeading] = PLAN_FILE_REFINEMENT_SECTIONS;
+  const hasAcceptanceCriteria = extractSection(markdownText, acHeading) ? true : false;
+  const hasDefinitionOfDone = extractSection(markdownText, dodHeading) ? true : false;
+  const { state: planFileIntakeState } = evaluatePlanFileIntakeState({
+    baseSectionsValid: true,
+    hasAcceptanceCriteria,
+    hasDefinitionOfDone,
+  });
+  return {
+    intent: "start_issue_locally",
+    mode: "bounded_handoff",
+    targetPreference: "prefer_local",
+    artifactState: "not_applicable",
+    issueLinkageResolution: "not_applicable",
+    issueReadiness: "not_applicable",
+    issueAssignmentState: "not_applicable",
+    loopState: "implementation_pending",
+    planFileIntakeState,
+    planFileExempt: true,
+    currentState: {
+      target: { kind: "local_phase", issue: null, pr: null, linkedPr: null, branch: null, phase: resolvedPath },
+      ownership: "local",
+      nextActor: "local",
+      status: "active",
+      authorization: "authorized",
+    },
+  };
+}
 export function summarizeCanonicalState(bundle) {
   return {
     target: bundle.canonicalState?.target ?? null,
@@ -390,6 +462,12 @@ export function summarizeCanonicalState(bundle) {
 export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdapter(), env, cwd, asyncStartMode = "required" } = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
   const effectiveCwd = cwd ?? adapter.getCwd();
+  // Plan-file intake carries two resolver-only fields that the pure routing
+  // evaluator does not model. Strip them before evaluation and re-apply them to
+  // the result; `planFileExempt` waives the worktree-isolation guard because a
+  // pre-promotion plan has no issue to key a worktree on.
+  const { planFileExempt = false, planFileIntakeState = null, ...routingInput } = input;
+  input = routingInput;
   try {
     const checkpointText = readFileSync(
       path.join(effectiveCwd, ".pi", "dev-loop-retrospective-checkpoint.json"),
@@ -440,6 +518,7 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
   const DEVLOOPS_WORKTREE_BYPASS_VAR = "DEVLOOPS_WORKTREE_BYPASS";
   if (
     strategyKey === "local_implementation" &&
+    !planFileExempt &&
     (effectiveEnv[DEVLOOPS_WORKTREE_BYPASS_VAR] ?? "").trim() !== "1"
   ) {
     try {
@@ -496,6 +575,7 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
     requiredReads: STRATEGY_REQUIRED_READS[strategyKey],
     nextAction: bundle.nextAction,
     canonicalStateSummary: summarizeCanonicalState(bundle),
+    ...(planFileIntakeState !== null ? { planFileIntakeState } : {}),
     bundle,
   };
 }
@@ -521,7 +601,9 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     ? normalizeConfigInputSource(devLoopConfig?.inputSource?.default)
     : "tracker";
   let input;
-  if (options.inputPath !== undefined) {
+  if (options.planFile !== undefined) {
+    input = buildPlanFileInput({ planFilePath: options.planFile });
+  } else if (options.inputPath !== undefined) {
     const text = await readFile(path.resolve(options.inputPath), "utf8");
     input = parseJsonText(text);
   } else if (options.issue !== undefined) {

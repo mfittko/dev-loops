@@ -1,13 +1,47 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { writeGhStub } from "../_helpers.mjs";
+
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const cliPath = path.join(repoRoot, "scripts", "loop", "resolve-dev-loop-startup.mjs");
+
+const BASE_PLAN = [
+  "# my plan",
+  "",
+  "## Status",
+  "",
+  "in progress",
+  "",
+  "## Objective",
+  "",
+  "Prove the thing works.",
+  "",
+  "## In scope",
+  "",
+  "- the bounded slice",
+  "",
+  "## Explicit non-goals",
+  "",
+  "- no broad rewrite",
+  "",
+].join("\n");
+
+const REFINEMENT_SECTIONS = [
+  "## Acceptance criteria",
+  "",
+  "- it works",
+  "",
+  "## Definition of done",
+  "",
+  "- merged + green",
+  "",
+].join("\n");
 
 async function withInputFile(input, fn) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-cli-contract-"));
@@ -32,6 +66,7 @@ test("resolve-dev-loop-startup help documents accepted flags and JSON contracts"
   assert.match(result.stdout, /--issue <n>\s+Target an issue/);
   assert.match(result.stdout, /--pr <n>\s+Target a PR/);
   assert.match(result.stdout, /--input <path>\s+Path to a JSON file/);
+  assert.match(result.stdout, /--plan-file <path>\s+Path to a phase-doc-format plan/);
   assert.match(result.stdout, /Exit codes:\n  0  Success\n  1  Argument error, runtime failure, or async-start contract rejection/);
 });
 
@@ -187,6 +222,104 @@ test("resolve-dev-loop-startup honors maintainer-controlled asyncStartMode=allow
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
+  });
+});
+
+async function withPlanFile(markdown, fn) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-plan-file-"));
+  const planPath = path.join(tmpDir, "plan.md");
+  await writeFile(planPath, markdown, "utf8");
+  try {
+    return await fn(planPath, tmpDir);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+test("--plan-file with a valid base plan resolves to a local_phase bundle with no issue/PR", async () => {
+  await withPlanFile(BASE_PLAN, async (planPath, tmpDir) => {
+    // A gh stub on PATH with logCalls lets us assert the read-only contract:
+    // the plan-file path must make ZERO gh calls (no tracker mutation, no reads).
+    // repeatLastOnOverflow keeps the stub from exiting before it logs, so any
+    // attempted call is recorded — an empty log then proves zero invocations.
+    const { env, ghLogPath } = await writeGhStub(tmpDir, [{ stdout: "{}\n" }], {
+      logCalls: true,
+      repeatLastOnOverflow: true,
+    });
+
+    const result = spawnSync(process.execPath, [cliPath, "--plan-file", planPath], {
+      // Run from a plain (non-worktree) dir to exercise the worktree-guard exemption.
+      cwd: tmpDir,
+      encoding: "utf8",
+      env,
+    });
+
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    // Exempt from the worktree guard: stays local_implementation, never needs_reconcile.
+    assert.equal(parsed.bundleKind, "resolved");
+    assert.equal(parsed.selectedStrategy, "local_implementation");
+    assert.equal(parsed.planFileIntakeState, "new_plan_needs_refinement");
+    const target = parsed.canonicalStateSummary.target;
+    assert.equal(target.kind, "local_phase");
+    assert.equal(target.issue, null);
+    assert.equal(target.pr, null);
+    assert.equal(target.phase, planPath);
+
+    // No-tracker-mutation: gh was never invoked on the plan-file path.
+    const log = await readFile(ghLogPath, "utf8");
+    assert.equal(log.trim(), "", `expected zero gh calls, got: ${log}`);
+  });
+});
+
+test("--plan-file carrying AC + DoD resolves to plan_refined_ready_for_promotion", async () => {
+  await withPlanFile(`${BASE_PLAN}\n${REFINEMENT_SECTIONS}`, async (planPath, tmpDir) => {
+    const result = spawnSync(process.execPath, [cliPath, "--plan-file", planPath], {
+      cwd: tmpDir,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.planFileIntakeState, "plan_refined_ready_for_promotion");
+  });
+});
+
+test("--plan-file with only one refinement section is unsupported intake input", async () => {
+  // Base + Acceptance criteria but no Definition of done: the intake state machine
+  // fails closed (ambiguous) rather than guessing refine-vs-promote.
+  const partial = `${BASE_PLAN}\n## Acceptance criteria\n\n- it works\n`;
+  await withPlanFile(partial, async (planPath, tmpDir) => {
+    const result = spawnSync(process.execPath, [cliPath, "--plan-file", planPath], {
+      cwd: tmpDir,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.planFileIntakeState, "ambiguous_fail_closed");
+  });
+});
+
+test("--plan-file pointing at a missing file fails closed (exit 1, no bundle)", () => {
+  const result = spawnSync(process.execPath, [cliPath, "--plan-file", "/nonexistent/plan.md"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /missing or unreadable/i);
+});
+
+test("--plan-file failing base validation fails closed (exit 1, no bundle)", async () => {
+  await withPlanFile("# incomplete\n\n## Status\n\nopen\n", async (planPath) => {
+    const result = spawnSync(process.execPath, [cliPath, "--plan-file", planPath], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /failed validation/i);
   });
 });
 

@@ -35,12 +35,14 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     inputPath: "state.json",
     issue: undefined,
     pr: undefined,
+    planFile: undefined,
   });
   assert.deepEqual(parseResolveDevLoopStartupCliArgs(["--help"]), {
     help: true,
     inputPath: undefined,
     issue: undefined,
     pr: undefined,
+    planFile: undefined,
   });
 });
 
@@ -70,6 +72,33 @@ test("parseResolveDevLoopStartupCliArgs rejects --issue combined with --pr", () 
 test("parseResolveDevLoopStartupCliArgs rejects --issue combined with --input", () => {
   assert.throws(
     () => parseResolveDevLoopStartupCliArgs(["--issue", "511", "--input", "state.json"]),
+    /mutually exclusive/i,
+  );
+});
+
+test("parseResolveDevLoopStartupCliArgs parses --plan-file", () => {
+  const opts = parseResolveDevLoopStartupCliArgs(["--plan-file", "docs/phases/foo.md"]);
+  assert.equal(opts.help, false);
+  assert.equal(opts.planFile, "docs/phases/foo.md");
+  assert.equal(opts.issue, undefined);
+  assert.equal(opts.pr, undefined);
+  assert.equal(opts.inputPath, undefined);
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --plan-file combined with --issue", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--plan-file", "p.md", "--issue", "511"]),
+    /mutually exclusive/i,
+  );
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --plan-file combined with --pr and --input", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--plan-file", "p.md", "--pr", "7"]),
+    /mutually exclusive/i,
+  );
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--plan-file", "p.md", "--input", "s.json"]),
     /mutually exclusive/i,
   );
 });
