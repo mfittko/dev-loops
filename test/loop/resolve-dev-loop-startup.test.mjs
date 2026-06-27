@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
@@ -880,6 +880,42 @@ test("runCli --issue uses config inputSource=phase-docs to choose phase-doc loca
     assert.equal(parsed.selectedStrategy, "local_implementation");
     assert.equal(parsed.bundle.issueLinkageResolution, "not_applicable");
     assert.match(parsed.bundle.nextAction, /current branch or phase slice/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("local-first phase-doc intake fires no tracker artifact / Copilot call before promotion (#953 AC3)", async () => {
+  // local-first comes from the shipped extension defaults (settings only sets
+  // inputSource), proving the low-noise intake holds with the shipped posture.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-953-ac3-"));
+  try {
+    execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+    await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
+    await writeFile(
+      path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
+      "version: 1\ninputSource:\n  default: phase-docs\n",
+      "utf8",
+    );
+
+    // Logging stub: any gh invocation appends to the log.
+    const ghStub = await writeGhStubHelper(tempDir, [], { logCalls: true });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.selectedStrategy, "local_implementation");
+    assert.equal(parsed.bundle.issueLinkageResolution, "not_applicable");
+
+    // No tracker artifact creation and no Copilot dispatch fired during intake.
+    const ghLog = await readFile(ghStub.ghLogPath, "utf8");
+    assert.doesNotMatch(ghLog, /"issue"[\s\S]*"create"/u, `unexpected gh issue create: ${ghLog}`);
+    assert.doesNotMatch(ghLog, /"pr"[\s\S]*"create"/u, `unexpected gh pr create: ${ghLog}`);
+    assert.doesNotMatch(ghLog, /copilot/iu, `unexpected Copilot request: ${ghLog}`);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

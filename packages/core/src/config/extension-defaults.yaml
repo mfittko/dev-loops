@@ -49,6 +49,9 @@ gates:
     requireCi: true
     mandatoryAngles:
       - pr-description
+  # Gate findings comments live ON the PR (the local-first spec-of-record /
+  # human-review surface), so they are evidence, not tracker noise — keep them on.
+  postFindingsComments: true
   preApproval:
     angles:
       - dry
@@ -72,6 +75,8 @@ gates:
 autonomy:
   stopAt:
     - merge
+  # Local-first never auto-merges; a human always merges.
+  humanMergeOnly: true
 
 # Workflow enforcement defaults.
 workflow:
@@ -104,7 +109,9 @@ localImplementation:
 # Queue defaults (repo-specific projectNumber/boardTitle omitted by design).
 queue:
   maxParallel: 3
-  maxAutoFiledIssues: 10
+  # Local-first is PR-first (issues are skipped, #952), so auto-filing issues is
+  # near-zero; a low cap keeps tracker noise minimal, especially early.
+  maxAutoFiledIssues: 1
   reDispatchMaxRetries: 1
 
 # Persona registry used by gate review angle resolution.

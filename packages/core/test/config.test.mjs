@@ -372,6 +372,18 @@ describe("BUILT_IN_DEFAULTS", () => {
     assert.equal(BUILT_IN_DEFAULTS.autonomy.humanMergeOnly, false);
   });
 
+  // P5 (#953) AC2: the github-first/built-in posture is unchanged by the
+  // local-first extension-defaults opinion. These constants are the built-in
+  // surface and must stay github-first / high-noise-tolerant.
+  test("queue.maxAutoFiledIssues built-in default stays 10 (#953 AC2)", () => {
+    assert.equal(BUILT_IN_DEFAULTS.queue.maxAutoFiledIssues, 10);
+  });
+
+  test("gates.postFindingsComments built-in resolves true (#953 AC2)", () => {
+    // Built-in gates is empty; resolver default is post-on.
+    assert.equal(resolveGatePostFindingsComments(BUILT_IN_DEFAULTS), true);
+  });
+
   test("workflow defaults exist and use required async start with false boolean gates by default", () => {
     assert.deepEqual(BUILT_IN_DEFAULTS.workflow, {
       asyncStartMode: "required",
@@ -1189,6 +1201,23 @@ describe("extension defaults", () => {
       assert.equal(result.config.strategy.default, "local-first");
       assert.equal(result.config.workflow.requireDraftFirst, true);
       assert.equal(result.config.localImplementation.lightMode.enabled, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("E1b: shipped extension defaults yield the local-first low-noise posture (#953 AC1)", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-E1b-"));
+    try {
+      const { loadDevLoopConfig, resolveGatePostFindingsComments } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      // Local-first never auto-merges; a human always merges.
+      assert.equal(result.config.autonomy.humanMergeOnly, true);
+      // PR-first means auto-filing issues is near-zero; keep the cap minimal.
+      assert.equal(result.config.queue.maxAutoFiledIssues, 1);
+      // Gate findings live on the PR as evidence, not tracker noise — keep them on.
+      assert.equal(result.config.gates.postFindingsComments, true);
+      assert.equal(resolveGatePostFindingsComments(result.config), true);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
