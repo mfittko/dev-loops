@@ -8,6 +8,9 @@ Start here for repository documentation.
 - [Implementation Workflow](./IMPLEMENTATION_WORKFLOW.md) — workflow/process authority boundaries
 - [Conductor Routing Contract](./conductor-routing-contract.md) — canonical outer-loop routing contract
 - [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) — canonical family-local PR lifecycle contract
+- [Artifact Authority Contract](../skills/docs/artifact-authority-contract.md) — canonical artifact-selection model (tracker-first and local-planning) and the local-first plan-file flow
+- [Local-Planning Flow](../skills/docs/local-planning-flow.md) — operator sequence for the local-first plan-file flow
+- [Local-Planning Worked Example](../skills/docs/local-planning-worked-example.md) — one plan file through every stage of the flow
 - [Tracker Story PR Contract](./tracker-story-pr-contract.md) — canonical tracker-first story/PR contract
 - [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) — deterministic pattern for epic decomposition with GitHub sub-issue trees
 - [Copilot Loop State Graph](./copilot-loop-state-graph.md)
