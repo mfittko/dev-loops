@@ -387,10 +387,10 @@ Do not report completion or advance to the next PR queue item until `.pi/dev-loo
 
 ### Post-merge board archive (best-effort)
 
-After the retrospective checkpoint write, optionally tidy the queue board locally:
+After the retrospective checkpoint write, run the post-merge board archive as a standard step of the post-merge hook (see [Merge Preconditions](../docs/merge-preconditions.md) "Post-merge"):
 
 ```sh
-node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name>
+node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name> || true
 ```
 
 Board and threshold resolve from `.devloops` (`queue.projectNumber`/`queue.boardTitle`, `queue.archiveOlderThanDays`, default 7d), using local `gh` auth — no CI, cron, or PAT. This step is best-effort and NON-FATAL: ignore any failure and never let it block the merge or the retrospective.
