@@ -2,6 +2,8 @@
 
 This document defines the bounded designer-persona review loop introduced for issue #122 under umbrella issue #97.
 
+A sibling loop, the [Slides Content & Storytelling Review Loop](./slides-story-review-loop.md), judges a deck's narrative rather than its pixels; both run behind `dev-loop`.
+
 ## Public entrypoint and dependency boundary
 
 - `dev-loop` remains the single public entrypoint.

@@ -274,3 +274,4 @@ CI splits into a small changed-files gate plus parallel `verify` and conditional
 - [UI Smoke Harness](./docs/ui-smoke-harness.md) — reusable local Playwright/WebKit smoke baseline
 - [UI Artifact Contract](./docs/ui-artifact-contract.md) — screenshot/state artifact contract and CI-promotion rules
 - [UI Designer Review Loop](./docs/ui-designer-review-loop.md) — designer + vision (`uiReviewMode: vision`) review loop contract
+- [Slides Story Review Loop](./docs/slides-story-review-loop.md) — bounded slides content & storytelling reviewer (narrative, not pixels)

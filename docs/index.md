@@ -19,6 +19,7 @@ Start here for repository documentation.
 - [UI Smoke Harness](./ui-smoke-harness.md)
 - [UI Artifact Contract](./ui-artifact-contract.md)
 - [UI Designer + Vision Review Loop](./ui-designer-review-loop.md)
+- [Slides Content & Storytelling Review Loop](./slides-story-review-loop.md)
 
 ## Active local phase doc
 
