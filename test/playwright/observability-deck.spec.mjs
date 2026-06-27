@@ -36,11 +36,11 @@ function makeDeckServer() {
 // so the structure can't silently drift.
 const NAMED_STATES = [
   { id: "hero", stateName: "Hero", capture: true },
-  { id: "interrupt-cost", stateName: "Interrupt cost", capture: false },
+  { id: "interrupt-cost", stateName: "Interrupt cost (delay pattern)", capture: true },
   { id: "handoff", stateName: "Handoff cost", capture: false },
   { id: "blind-spot", stateName: "Blind spot", capture: false },
   { id: "observable-state", stateName: "Observable state", capture: true },
-  { id: "measurement-loop", stateName: "Measurement loop", capture: false },
+  { id: "measurement-loop", stateName: "Measurement loop", capture: true },
   { id: "instrumented", stateName: "Instrumented", capture: true },
   { id: "metrics", stateName: "Metrics", capture: true },
   { id: "close", stateName: "Close", capture: true },
