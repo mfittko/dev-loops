@@ -38,11 +38,13 @@ and is gitignored — only the script and workflow are committed.
 (`configure-pages` + `upload-pages-artifact` + `deploy-pages`):
 
 - The **build** job assembles `site/` via the build script and uploads the
-  artifact. It runs on push to `main` and on `workflow_dispatch`, so every push
-  validates the assembly.
+  artifact (`upload-pages-artifact`). It makes no Pages API call, so every push
+  to `main` validates the assembly without turning the workflow red while Pages
+  is disabled.
 - The **deploy** job is gated to `workflow_dispatch` (`if: github.event_name == 'workflow_dispatch'`).
-  Deploying before Pages is enabled fails, so an operator triggers it manually
-  rather than letting a push to `main` turn the workflow red.
+  It runs `configure-pages` + `deploy-pages`, which require Pages to be enabled,
+  so an operator triggers it manually rather than letting a push to `main` turn
+  the workflow red.
 
 ### One-time operator step
 

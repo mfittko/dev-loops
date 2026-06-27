@@ -1,8 +1,9 @@
 name: Deploy presentation decks to GitHub Pages
 
 # build (assemble site/ + upload artifact) runs on push to main and validates
-# the assembly. deploy is workflow_dispatch-only so a push to main never turns
-# red while Pages is disabled (private-repo plan caveat — see
+# the assembly. It makes no Pages API call, so a push never turns red while
+# Pages is disabled. configure-pages + deploy live in the deploy job, which is
+# workflow_dispatch-only (private-repo plan caveat — see
 # docs/presentations/README.md). After enabling Pages (Settings -> Pages ->
 # Source: GitHub Actions), an operator runs this workflow via "Run workflow".
 
@@ -36,9 +37,6 @@ jobs:
       - name: Assemble site/
         run: node scripts/pages/build-site.mjs
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -55,6 +53,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
