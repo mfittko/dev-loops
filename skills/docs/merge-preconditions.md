@@ -57,8 +57,9 @@ explicit instruction can unlock.
   [worktree guidance](../../docs/worktree-guidance.md).
 - Archive long-done queue items (operator-induced, NOT a cron): `node scripts/projects/archive-done-items.mjs --repo <owner/name>`.
   Runs as part of this post-merge hook. It applies the configured `queue.archiveOlderThanDays` (default `7d`) and archives
-  board items whose issue/PR has been closed at least that long. Best-effort/non-fatal — `archive-done-items.mjs` exits 0 on
-  skip/failure, so it never blocks merge completion. See [projects queue usage](../../docs/projects-queue-usage.md).
+  board items whose issue/PR has been closed at least that long. Best-effort: run it as a standard post-merge step but ignore
+  any non-zero exit (a no-op skip exits 0; a board/API failure exits non-zero) — a failure here must never block merge
+  completion. See [projects queue usage](../../docs/projects-queue-usage.md).
 - Clean up stale branches
 
 ## Cross-references
