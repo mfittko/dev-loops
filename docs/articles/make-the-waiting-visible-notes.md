@@ -8,15 +8,15 @@ HTML preview: [`make-the-waiting-visible.html`](make-the-waiting-visible.html).
 Public, non-insider audience (engineers, EMs, anyone shipping software with AI
 in the loop). Intended takeaway: *generation is fast now; the waiting between
 actions is the slow, unmeasured part — make the state observable, measure the
-waits, then change the process.* Pay extra attention to: a real hook (not a
-symptom statement), no internal enum/identifier walls, every claim grounded,
-and a close that lands as a line rather than a feature list.
+waits, then change the process.* Pay extra attention to: a real hook that opens
+on a concrete claim, no internal enum/identifier walls, every claim grounded,
+and a close that lands as a single line.
 
 ## Lens applied
 
 One pass through the [slides content & storytelling review loop](../slides-story-review-loop.md)
 lens, adapted from per-slide to per-section prose: **arc** (hook → tension →
-resolution), **one message per section** (heading states a claim, not a topic),
+resolution), **one message per section** (each heading states a claim),
 **sequencing** (no forward references; terms introduced before use),
 **audience calibration** (no raw identifiers / version pegging), **cut / merge /
 reorder**, and a **memorable close**.
@@ -28,7 +28,7 @@ reorder**, and a **memorable close**.
 | 1 | Figure 2's handoff diagram used a single compound node ("Work resumes... then waits again") that smuggled two ideas into one box and read awkwardly as a static image. | Every Handoff… | medium | Split into four crisp nodes (ask → answer → confirm → resumes) with the loop-back as a dashed "next ambiguity" edge; moved the "then waits again" idea into the caption where it reads as narration. |
 | 2 | In the interrupt chain, the body says "the answer itself is the small box in the middle," but neither the Markdown nor HTML diagram marked *which* node is the answer — the reader had to infer it. | One Interrupt… | medium | In the HTML render, accented the `Act` node (it is the answer) so the "small box in the middle" claim is visible; caption now names Act explicitly. (Markdown kept plain — mermaid styling left out to avoid theme noise; caption carries it.) |
 | 3 | Risk of the "four fields" reading as an unsupported wish — the classic floating-promise failure the deck's review flagged. | Four Fields… → grounding | high | Confirmed the grounding section (board / gate trail / resolver) directly answers the skeptic ("just better tickets?") and Figure 4 visually ties each field to a mechanism. No rewrite needed; verified the forward reference is *paid off* within two sections, not dangling. |
-| 4 | Close risked restating the body as a checklist (mechanism list) rather than landing a line. | Stop Optimizing… | medium | Kept the three-mechanism recap and landed on a single closing line. The storytelling pass first mirrored the deck punchline, but the later deslop pass (see below) replaced it as a formulaic binary-imperative; the article's final close is "The next agent will write your code in seconds either way. What you control is how long it waits afterward, so measure that." |
+| 4 | Close risked restating the body as a checklist (mechanism list) and losing the single closing line. | The Waiting… | medium | Kept the three-mechanism recap and landed on a single closing line. The storytelling pass first mirrored the deck punchline; the deslop and A/B passes (see below) then restated it. The article's final close is "The next agent will write your code in seconds. The lever you control is how long it waits afterward, so measure that." |
 | 5 | Audience calibration: scanned for version pegging and raw enum/state-machine identifiers. | all | low | None present — mechanisms are described in plain language (board columns, review gate verdicts, deterministic resolver, provider-agnostic CI wait, post-merge reclaim/archive); no version numbers, no raw config keys. No change. |
 
 ## Sequencing / arc check
@@ -97,7 +97,15 @@ Tells removed (representative before → after):
   afterward, so measure that."
 
 Bold-led bullets and bold-led grounding paragraphs were kept: the bold spans are
-the names of the four fields and the three mechanisms (load-bearing labels, not
-decoration). Only the em-dashes trailing them were converted to commas.
+the names of the four fields and the three mechanisms (load-bearing labels the
+prose depends on). Only the em-dashes trailing them were converted to commas.
 
 Verify: `npm run verify` exits 0.
+
+## A/B contrast pass
+
+A dedicated pass removed the binary-contrast / negation-by-contrast antipattern in both orderings ("X, not Y" and "Y, not X"). The deslop pass had cleared the obvious fragments and the one headline, yet the construction still ran through the body. Following the standard step: a per-document analysis flagged every instance, a final-check pass caught misses and protected the tone, and each point now reads as a direct statement.
+
+The rule was to cut the contrast scaffolding while keeping genuine technical distinctions plain. CI waiting reads "by waiting on the real result, the actual check status from whatever provider runs it" with the timer-guess contrast dropped; the section heading "One Interrupt Costs Five Transitions, Not Five Minutes" became "One Interrupt Costs Five Transitions"; "Four Fields Decide Whether the Next Actor Starts or Stalls" became "Four Fields Get the Next Actor Moving"; the close heading "Stop Optimizing How Fast You Write Code" became "The Waiting Is the Part Worth Fixing"; and the final line became "The next agent will write your code in seconds. The lever you control is how long it waits afterward, so measure that." A human-likeness pass then restored natural cadence where the cuts had flattened the rhythm, without reintroducing any contrast.
+
+Verification: `npm run verify` exits 0; a residual check finds zero of the flagged constructions in the `.md` or `.html`.
