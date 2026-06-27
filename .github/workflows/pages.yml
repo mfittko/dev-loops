@@ -2,9 +2,10 @@ name: Deploy presentation decks to GitHub Pages
 
 # Pages is enabled (Settings -> Pages -> Source: GitHub Actions). build
 # (assemble site/ + upload artifact) and deploy (configure-pages + deploy-pages)
-# both run on every push to main, so a merge auto-publishes. workflow_dispatch
-# also triggers a manual deploy. The deploy job is scoped to the main ref. See
-# docs/presentations/README.md.
+# both run on every push to main, so a merge auto-publishes. The deploy job is
+# scoped to the main ref (if: github.ref == 'refs/heads/main'), so a manual
+# workflow_dispatch deploys only when run against main; dispatching any other
+# branch/tag still builds but skips deploy. See docs/presentations/README.md.
 
 on:
   push:
@@ -43,8 +44,9 @@ jobs:
 
   deploy:
     # Pages is enabled (Source: GitHub Actions), so deploy runs on every push to
-    # main (auto-publish) and on manual workflow_dispatch. The job is scoped to
-    # main so a deploy never fires from another ref.
+    # main (auto-publish). Scoped to the main ref, so a manual workflow_dispatch
+    # deploys only when run against main; a dispatch on any other ref skips this
+    # job (build still runs).
     if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest

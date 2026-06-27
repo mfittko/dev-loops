@@ -41,7 +41,8 @@ and is gitignored — only the script and workflow are committed.
   artifact (`upload-pages-artifact`).
 - The **deploy** job runs `configure-pages` + `deploy-pages` on every push to
   `main` (scoped via `if: github.ref == 'refs/heads/main'`), so a merge
-  **auto-publishes**. `workflow_dispatch` also triggers a manual deploy. The
+  **auto-publishes**. A manual `workflow_dispatch` deploys only when run against
+  `main`; dispatching any other branch/tag still builds but skips deploy. The
   published URL appears on the deploy job and the Pages settings page.
 
 Pages is enabled (repo **Settings → Pages → Source: GitHub Actions**), so no
