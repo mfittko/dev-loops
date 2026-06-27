@@ -198,7 +198,7 @@ test('null array elements are reported, not thrown (screenshots + findings)', ()
   const inp = validateSlidesStoryReviewInput({
     workType: 'slides',
     storyReviewRequested: true,
-    acceptanceCriteria: 'AC',
+    acceptanceCriteria: ['AC'],
     storytellingBrief: 'brief',
     deckBundle: { deckSourcePath: 'docs/x.md', slideScreenshots: [null] },
   });
