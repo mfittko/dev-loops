@@ -48,7 +48,9 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    overflow: hidden;
+    /* visible (not hidden): a slide taller than the viewport must grow and let
+       the page scroll, never clip its content at the bottom. */
+    overflow: visible;
     scroll-snap-align: start;
     background:
       radial-gradient(circle at 85% 12%, rgba(139, 92, 246, 0.24), transparent 24%),
@@ -142,8 +144,7 @@
 
   /* stretch cards to equal height per row so card bottoms align (designer-review fix) */
   .grid { display: grid; gap: 1.25rem; align-items: stretch; }
-  /* min-width:0 lets a wide child (max-content flow) scroll within its card
-     instead of forcing the grid track past the viewport and getting clipped */
+  /* min-width:0 keeps a wide child from forcing its grid track past the viewport */
   .grid > * { min-width: 0; }
   .grid > .glass-card,
   .grid > .metric-card { display: flex; flex-direction: column; min-width: 0; }
@@ -200,17 +201,20 @@
   /* inline flow diagrams */
   .flow-scroll {
     margin-top: 1.4rem;
-    overflow-x: auto;
     padding-bottom: 0.5rem;
-    /* min-width:0 so this scroller, not its flex parent, absorbs the wide flow */
     min-width: 0;
     max-width: 100%;
+    /* ponytail: last-resort safety only — the layout FITS without scrolling
+       (desktop: nodes are short; mobile: .flow stacks vertically below). */
+    overflow-x: auto;
   }
   .flow {
     display: flex;
     align-items: center;
     gap: 0;
-    min-width: max-content;
+    /* fit the container width, don't force it wider; nodes are short enough */
+    flex-wrap: wrap;
+    justify-content: center;
   }
   .flow-col {
     display: flex;
@@ -247,6 +251,26 @@
     margin-top: 0.2rem;
     max-width: 7rem;
     line-height: 1.2;
+  }
+
+  /* Mobile: fit the phone width — the flow stacks vertically (arrows point
+     down) so nothing scrolls sideways or clips, and the type/spacing scale
+     down so a slide's content fits comfortably. */
+  @media (max-width: 600px) {
+    .slide { padding: 2rem 1.1rem; justify-content: flex-start; }
+    .glass-card, .hero-card, .metric-card { padding: 1rem 1.05rem; border-radius: 18px; }
+    h2 { font-size: clamp(1.3rem, 6vw, 1.6rem); }
+    .hero-card h1 { font-size: clamp(1.6rem, 7.5vw, 2.1rem); }
+    .hero-copy { font-size: 1rem; }
+    p, li { font-size: 0.95rem; }
+
+    .flow-scroll { margin-top: 1rem; }
+    .flow { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+    .flow-col { gap: 0.5rem; }
+    .node { white-space: normal; }
+    .edge { flex-direction: row; padding: 0; min-width: 0; }
+    .edge .arrow { transform: rotate(90deg); }
+    .edge .edge-label { max-width: none; margin-top: 0; margin-left: 0.4rem; }
   }
 </style>
 </head>
