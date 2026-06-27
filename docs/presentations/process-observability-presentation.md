@@ -24,7 +24,7 @@ css: ./style.css
 
 <p class="kicker">The delay pattern</p>
 
-## One Interrupt Costs Five Transitions, Not Five Minutes
+## One Interrupt, Five Transitions
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -53,7 +53,7 @@ flowchart LR
 
 <p class="kicker">Handoff cost</p>
 
-## Every Handoff Restarts the Same Discovery From Scratch
+## Handoffs Restart Discovery
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -80,7 +80,7 @@ flowchart LR
 
 <p class="kicker">The blind spot</p>
 
-## Your Git History Hides Exactly Where the Time Went
+## Git History Hides the Wait
 
 <div class="glass-card">
 <ul class="tight-list">
@@ -95,7 +95,7 @@ flowchart LR
 
 <p class="kicker">Observable state</p>
 
-## Four Fields Decide Whether the Next Actor Starts or Stalls
+## Four Fields Unblock the Next Actor
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -117,7 +117,7 @@ flowchart LR
 
 <p class="kicker">The measurement loop</p>
 
-## You Can't Shorten a Wait You Never Measured
+## Measure the Wait First
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -145,7 +145,7 @@ flowchart LR
 
 <p class="kicker">From idea to instrument</p>
 
-## Those Four Fields Aren't a Wish — They're Where the Work Already Lives
+## The Fields Already Live in the Work
 
 <div class="grid grid-cols-3 gap-5 items-start">
 <div class="glass-card">
@@ -178,7 +178,7 @@ flowchart LR
 
 <p class="kicker">Why it pays off</p>
 
-## Visible State Moves Three Numbers at Once
+## Visible State Moves Three Numbers
 
 <div class="grid grid-cols-3 gap-5 items-start">
 <div class="glass-card">
@@ -211,7 +211,7 @@ flowchart LR
 
 <p class="kicker">The takeaway</p>
 
-## The Cheapest Speed-Up Is Making the Waiting Visible
+## Make the Waiting Visible
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
