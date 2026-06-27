@@ -55,9 +55,11 @@ export function classifyDocsGrillFinding(finding = {}) {
     return { ok: true, disposition: 'ignore_cosmetic', status: 'classified', reason: 'cosmetic_nit' };
   }
 
-  // drift | stale_reference: real (code/behavior) drift is always recorded.
+  // drift | stale_reference against live code/behavior is always recorded; the
+  // reason reflects the kind so downstream filtering stays accurate.
   if (finding.docOnly !== true) {
-    return { ok: true, disposition: 'record_finding', status: 'classified', reason: 'real_drift' };
+    const reason = finding.kind === 'stale_reference' ? 'stale_reference' : 'real_drift';
+    return { ok: true, disposition: 'record_finding', status: 'classified', reason };
   }
 
   // Doc-only drift: fix it here when small, otherwise route a follow-up.

@@ -26,6 +26,14 @@ test('real code-vs-doc drift is recorded as a finding', () => {
 test('a stale reference with no doc-only flag is recorded as a finding', () => {
   const r = classifyDocsGrillFinding({ kind: 'stale_reference' });
   assert.equal(r.disposition, 'record_finding');
+  // reason reflects the kind (not a misleading "real_drift")
+  assert.equal(r.reason, 'stale_reference');
+});
+
+test('recorded drift keeps the real_drift reason', () => {
+  const r = classifyDocsGrillFinding({ kind: 'drift' });
+  assert.equal(r.disposition, 'record_finding');
+  assert.equal(r.reason, 'real_drift');
 });
 
 test('doc-only drift small enough for this branch is fixed in place', () => {
