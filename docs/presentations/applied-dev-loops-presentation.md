@@ -198,7 +198,7 @@ stateDiagram-v2
 
 ---
 
-<p class="kicker">Gate Sub-Loop · v0.4.0</p>
+<p class="kicker">Gate Sub-Loop</p>
 
 ## Fan-Out / Fan-In on One Neutral Context Bundle
 
@@ -238,7 +238,7 @@ stateDiagram-v2
 
 ---
 
-<p class="kicker">Coordination Runtime · v0.4.0</p>
+<p class="kicker">Coordination Runtime</p>
 
 ## The Coordination Runtime Owns the Full Lifecycle
 
