@@ -122,7 +122,7 @@ async function ghJson(run, ghCommand, args, env, label) {
 }
 
 function tailLines(text, n) {
-  const lines = String(text).replace(/\n$/u, "").split(/\r?\n/u);
+  const lines = String(text).replace(/\r?\n$/u, "").split(/\r?\n/u);
   return lines.slice(Math.max(0, lines.length - n)).join("\n");
 }
 

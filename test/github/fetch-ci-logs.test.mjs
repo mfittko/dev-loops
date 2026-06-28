@@ -78,6 +78,17 @@ test("fetchCiLogs: returns failing job log tail for a red PR", async () => {
   assert.ok(calls.some((a) => isRunList(a) && a.includes("abc123")));
 });
 
+test("fetchCiLogs: CRLF log tail normalizes without a stray trailing \\r", async () => {
+  const logBody = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`).join("\r\n") + "\r\n";
+  const { run } = stubGh([
+    { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "crlf01" }) } },
+    { match: isRunList, resp: { stdout: JSON.stringify([{ databaseId: 1, name: "ci", conclusion: "failure", status: "completed" }]) } },
+    { match: (a) => isRunView(a) && a.includes("--log-failed"), resp: { stdout: logBody } },
+  ]);
+  const result = await fetchCiLogs({ repo: "o/n", pr: 5, failedOnly: true, tail: 2 }, { run });
+  assert.equal(result.runs[0].logTail, "line 4\nline 5");
+});
+
 test("fetchCiLogs: without --failed-only includes all runs and uses --log for non-failures", async () => {
   const { run } = stubGh([
     { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "def456" }) } },
