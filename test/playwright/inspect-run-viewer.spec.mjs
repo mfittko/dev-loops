@@ -1,65 +1,16 @@
 import { test, expect } from "@playwright/test";
 
 import { createInspectRunViewerServer } from "../../scripts/loop/inspect-run-viewer.mjs";
-import { captureNamedUiState, startFixtureServer, stopFixtureServer } from "./harness/webkit-smoke-harness.mjs";
-import { makeInspectionSnapshot } from "./fixtures/inspect-run-viewer-fixture.mjs";
-
-async function startViewer(snapshot = makeInspectionSnapshot(), assignedPullRequests = []) {
-  const normalizedAssignedPullRequests = assignedPullRequests.some((entry) => entry?.target?.repo === "owner/repo" && entry?.target?.pr === 55)
-    ? assignedPullRequests
-    : [{ target: { repo: "owner/repo", pr: 55 }, title: "Current PR" }, ...assignedPullRequests];
-
-  return startFixtureServer(() => createInspectRunViewerServer(
-    { repo: "owner/repo", pr: "55", host: "127.0.0.1", port: 0 },
-    {
-      adapter: {
-        async loadSnapshot() {
-          return snapshot;
-        },
-        async loadHandoffEnvelope() {
-          return {
-            handoffVersion: 1,
-            derivedAt: new Date().toISOString(),
-            target: { kind: "pr", repo: "owner/repo", pr: 55 },
-            currentGate: "draft",
-            currentHeadSha: "abc1234",
-            ciStatus: "success",
-            unresolvedThreadCount: 0,
-            copilotRoundCount: 0,
-            maxCopilotRounds: 5,
-            executionMode: "bounded_handoff",
-            nextAction: "Run draft gate review",
-            requiredReads: ["skills/docs/gate-review-comment-contract.md"],
-            gateConfig: { angles: ["scope", "coverage"], blockCleanOnFindingSeverities: ["must-fix"], requireCi: true },
-            stopRules: ["draft-pr", "merge"],
-            asyncStartMode: "required",
-            requireDraftFirst: true,
-            cwd: "/tmp/worktrees/pr-55",
-            worktreeRequired: true,
-            acceptance: { criteria: [{ id: "ac", must: "Test", severity: "required" }], evidence: ["commands-run"], maxFinalizationTurns: 4 },
-            control: { needsAttentionAfterMs: 300000, activeNoticeAfterMs: 300000 },
-          };
-        },
-        async listAssignedPullRequests() {
-          return normalizedAssignedPullRequests;
-        },
-      },
-    },
-  ));
-}
-
-async function openTab(page, tabName) {
-  await page.locator(`.viewer-tab[data-tab="${tabName}"]`).click();
-}
-
-async function waitForMermaidGraph(page) {
-  const graphPanel = page.locator("#tab-graph");
-  await expect(graphPanel).toHaveClass(/active/);
-  const graph = graphPanel.locator(".mermaid-state-graph");
-  await expect(graph).toHaveAttribute("data-rendered", "true");
-  await expect(graph.locator("svg")).toBeVisible();
-  return graph;
-}
+import { startFixtureServer, stopFixtureServer } from "./harness/webkit-smoke-harness.mjs";
+import { assertSectionIdsAndNoHorizontalScroll } from "./harness/deck-fit-harness.mjs";
+import {
+  VIEWER_REGISTRY,
+  captureViewerState,
+  makeInspectionSnapshot,
+  openTab,
+  startViewer,
+  waitForMermaidGraph,
+} from "./harness/inspect-run-viewer-harness.mjs";
 
 test("webkit renders overview-first tabs, matches tab panels, and captures a screenshot", async ({ page }, testInfo) => {
   const { server, url } = await startViewer(makeInspectionSnapshot(), [
@@ -73,6 +24,10 @@ test("webkit renders overview-first tabs, matches tab panels, and captures a scr
 
   try {
     await page.goto(url, { waitUntil: "domcontentloaded" });
+
+    // Shared structural guard: the dashboard's registered panel ids are present
+    // exactly once and the layout has no sideways scroll.
+    await assertSectionIdsAndNoHorizontalScroll(page, VIEWER_REGISTRY.sectionIds);
 
     await expect(page.getByRole("link", { name: "owner/repo#55" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Current PR" })).toBeVisible();
@@ -253,17 +208,7 @@ test("webkit renders overview-first tabs, matches tab panels, and captures a scr
     await expect(page.locator('#tab-overview')).toHaveClass(/active/);
     await expect(page.locator('#tab-overview .viewer-card-grid-overview')).toBeVisible();
 
-    await captureNamedUiState({
-      page,
-      testInfo,
-      sliceId: "inspect-run-viewer",
-      stateName: "Current PR dashboard",
-      metadata: {
-        fixture: "makeInspectionSnapshot",
-        route: "/",
-        reviewHint: "Use this state for the reusable dashboard smoke baseline.",
-      },
-    });
+    await captureViewerState(page, testInfo, "Current PR dashboard", "Use this state for the reusable dashboard smoke baseline.");
   } finally {
     await stopFixtureServer(server);
   }
@@ -296,17 +241,7 @@ test("webkit shows checkpoint-only graph uncertainty without guessing missing tr
     await expect(page.getByText(/copilot layer:\s*current\s*current state unavailable; current state unavailable; full authoritative state machine shown; transition data unavailable in this snapshot/i)).toBeVisible();
     await expect(page.getByText(/reviewer layer:\s*current\s*current state unavailable; current state unavailable; full authoritative state machine shown; transition data unavailable in this snapshot/i)).toBeVisible();
 
-    await captureNamedUiState({
-      page,
-      testInfo,
-      sliceId: "inspect-run-viewer",
-      stateName: "Checkpoint only graph uncertainty",
-      metadata: {
-        fixture: "makeInspectionSnapshot",
-        route: "/",
-        reviewHint: "Confirms the harness can capture an uncertainty state without inferred transitions.",
-      },
-    });
+    await captureViewerState(page, testInfo, "Checkpoint only graph uncertainty", "Confirms the harness can capture an uncertainty state without inferred transitions.");
   } finally {
     await stopFixtureServer(server);
   }
@@ -325,17 +260,7 @@ test("webkit shows degraded graph messaging when snapshot trust is partial", asy
     await openTab(page, 'graph');
     await waitForMermaidGraph(page);
 
-    await captureNamedUiState({
-      page,
-      testInfo,
-      sliceId: "inspect-run-viewer",
-      stateName: "Degraded graph messaging",
-      metadata: {
-        fixture: "makeInspectionSnapshot",
-        route: "/",
-        reviewHint: "Demonstrates the partial-trust path for reusable smoke coverage.",
-      },
-    });
+    await captureViewerState(page, testInfo, "Degraded graph messaging", "Demonstrates the partial-trust path for reusable smoke coverage.");
   } finally {
     await stopFixtureServer(server);
   }
@@ -377,17 +302,7 @@ test("webkit shows terminal merged states clearly in the Mermaid graph", async (
     await expect(graph).toContainText(/done/);
     await expect(page.getByText(/copilot layer:\s*current\s*done; done; full authoritative state machine shown; no allowed transitions/i)).toBeVisible();
 
-    await captureNamedUiState({
-      page,
-      testInfo,
-      sliceId: "inspect-run-viewer",
-      stateName: "Terminal merged state",
-      metadata: {
-        fixture: "makeInspectionSnapshot",
-        route: "/",
-        reviewHint: "Confirms the terminal merged state remains reviewable in WebKit.",
-      },
-    });
+    await captureViewerState(page, testInfo, "Terminal merged state", "Confirms the terminal merged state remains reviewable in WebKit.");
   } finally {
     await stopFixtureServer(server);
   }
@@ -410,17 +325,7 @@ test("webkit shows the unavailable-state fallback for unavailable snapshots", as
     await expect(page.locator(".mermaid-state-graph")).toHaveCount(0);
     await expect(page.locator('#tab-graph')).toContainText(/Snapshot unavailable, so no state graph can be rendered yet/i);
 
-    await captureNamedUiState({
-      page,
-      testInfo,
-      sliceId: "inspect-run-viewer",
-      stateName: "Unavailable snapshot fallback",
-      metadata: {
-        fixture: "makeInspectionSnapshot",
-        route: "/",
-        reviewHint: "Captures the no-graph fallback for unavailable snapshots.",
-      },
-    });
+    await captureViewerState(page, testInfo, "Unavailable snapshot fallback", "Captures the no-graph fallback for unavailable snapshots.");
   } finally {
     await stopFixtureServer(server);
   }
