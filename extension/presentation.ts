@@ -35,11 +35,25 @@ export function orderedSetupSteps(checks: DevLoopCheck[]): string[] {
   ];
 }
 
+export function buildEntrypointLines(action: string, intent: string): string[] {
+  return [
+    `dev-loops ${action}`,
+    `Dispatch this public intent through the dev-loop skill:`,
+    `/skill:dev-loop ${intent}`,
+    'The dev-loop skill resolves authoritative state and routes deterministically — no strategy choice needed.',
+  ];
+}
+
 export function buildHelpLines(): string[] {
   return [
     'dev-loops help',
     'Workflow entry:',
     '- /skill:dev-loop — single public entrypoint; routing handles the rest',
+    'Direct entrypoints:',
+    '- /dev-loops start <issue>',
+    '- /dev-loops auto <issue>',
+    '- /dev-loops continue <pr>',
+    '- /dev-loops info <issue|pr>',
     'Commands:',
     '- /dev-loops status',
     '- /dev-loops doctor',

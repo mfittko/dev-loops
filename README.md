@@ -30,6 +30,20 @@ Use **`dev-loop`** as the single public workflow entrypoint:
 
 The `dev-loop` entrypoint resolves authoritative state, picks the correct internal strategy, and routes work deterministically. Users never need to choose internal strategy names. See the canonical shorthand example mapping in the [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md).
 
+### Direct commands
+
+The same entrypoints are also available as direct named commands — thin wrappers over the public contract, no separate routing:
+
+| Command | Equivalent intent |
+| --- | --- |
+| `/dev-loops:start <issue>` | start dev loop on issue `<issue>` |
+| `/dev-loops:auto <issue>` | auto dev loop on issue `<issue>` (autonomous until human approval) |
+| `/dev-loops:continue <pr>` | continue dev loop on PR `<pr>` |
+| `/dev-loops:info <issue|pr>` | read-only state summary (`loop info`) |
+| `/dev-loops:status` | dev-loop readiness (gh auth, git repo, subagent) |
+
+`/dev-loops:dev-loop` remains the catch-all router. Inside Pi the same set is reachable as `/dev-loops start|auto|continue|info|status …`.
+
 ## Install from npm
 
 ### CLI only
@@ -231,9 +245,13 @@ subagent({
 
 Do not call internal routed skills such as `local-implementation`, `copilot-pr-followup`, or `final-approval` directly; `dev-loop` selects them from the current GitHub/repo state.
 
-The `/dev-loops` command surface is for readiness and configuration UX:
+The `/dev-loops` command surface covers the direct dev-loop entrypoints plus readiness and configuration UX:
 
 ```bash
+/dev-loops start <issue>     # dispatch: start dev loop on issue <issue>
+/dev-loops auto <issue>      # dispatch: auto dev loop on issue <issue>
+/dev-loops continue <pr>     # dispatch: continue dev loop on PR <pr>
+/dev-loops info <issue|pr>   # read-only state summary
 /dev-loops status
 /dev-loops doctor
 /dev-loops gates

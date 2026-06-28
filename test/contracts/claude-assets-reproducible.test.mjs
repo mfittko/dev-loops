@@ -137,6 +137,31 @@ test("checkAssets flags a stale generated hook-bundle module but not hand-author
   }
 });
 
+test("direct slash commands are generated and map to the public dev-loop entrypoints (#972)", () => {
+  const assets = collectGeneratedAssets({ repoRoot });
+  const byTarget = new Map(assets.map((a) => [a.target, a.content]));
+  // Each public entrypoint has a generated `.claude/commands/<name>.md`.
+  for (const name of ["start", "auto", "continue", "info", "status"]) {
+    assert.ok(byTarget.has(`.claude/commands/${name}.md`), `expected generated command ${name}.md`);
+  }
+  // Each wraps the matching public intent / read-only shortcut — no internal strategy names.
+  assert.match(byTarget.get(".claude/commands/start.md"), /start dev loop on issue \$ARGUMENTS/);
+  assert.match(byTarget.get(".claude/commands/auto.md"), /auto dev loop on issue \$ARGUMENTS/);
+  assert.match(byTarget.get(".claude/commands/continue.md"), /continue dev loop on PR \$ARGUMENTS/);
+  assert.match(byTarget.get(".claude/commands/info.md"), /loop info --issue \$ARGUMENTS/);
+  // Commands are thin wrappers: they must not name internal strategies or invent routing.
+  // Guard every canonical strategy id, in both underscore (strategy id) and hyphenated
+  // (skill-dir) form, so an accidental `copilot-pr-followup` reference also fails.
+  const internalStrategy = /copilot[_-]pr[_-]followup|issue[_-]intake|local[_-]implementation|reviewer[_-]fixer|final[_-]approval/;
+  for (const name of ["start", "auto", "continue", "info"]) {
+    assert.equal(
+      internalStrategy.test(byTarget.get(`.claude/commands/${name}.md`)),
+      false,
+      `${name}.md must not reference internal strategy names`,
+    );
+  }
+});
+
 test("every canonical agent and non-doc skill has a generated counterpart", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   const targets = assets.map((a) => a.target);

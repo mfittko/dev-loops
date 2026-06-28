@@ -170,6 +170,32 @@ export function transformAgent({ source, raw, version = "latest" }) {
 }
 
 /**
+ * Transform a canonical `commands/<name>.command.md` into a Claude `.claude/commands/<name>.md`
+ * slash command (#972). Commands are thin wrappers over the public dev-loop contract: the body
+ * is a prompt (with `$ARGUMENTS`) that invokes the existing entrypoint, so there is NO routing
+ * logic here. Frontmatter keeps Claude's command fields (`description`, `argument-hint`); the body
+ * is passed through `stripPiOnlyBlocks` + `rewriteCliInvocation` like agents/skills.
+ * @param {{ source: string, raw: string, version?: string }} input
+ * @returns {string} Full generated file content.
+ */
+export function transformCommand({ source, raw, version = "latest" }) {
+  const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
+  const body = rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version);
+
+  const lines = ["---"];
+  if (frontmatter.description != null) {
+    lines.push(`description: ${JSON.stringify(String(frontmatter.description))}`);
+  }
+  if (frontmatter["argument-hint"] != null) {
+    lines.push(`argument-hint: ${JSON.stringify(String(frontmatter["argument-hint"]))}`);
+  }
+  lines.push("---");
+  lines.push(GENERATED_NOTE(source));
+  lines.push("");
+  return `${lines.join("\n")}\n${body}`;
+}
+
+/**
  * Transform a canonical `skills/<name>/SKILL.md` into a Claude `.claude/skills/<name>/SKILL.md`.
  * @param {{ source: string, raw: string, version?: string }} input
  * @returns {string} Full generated file content.
