@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { formatCliError } from "../_core-helpers.mjs";
 import {
   DEFAULT_USAGE_SUFFIX,
-  extractSection,
+  checkBaseSections,
   parseCheckerCliArgs,
   writeCheckerOutput,
   isDirectCliRun,
@@ -16,16 +16,19 @@ Validate the base authoring sections of a phase-doc-format plan file: Status, Ob
 
 /**
  * Base authoring sections a phase doc carries before refinement adds AC/DoD.
- * Heading → distinct missing_* error code.
+ * Heading → distinct missing_* error code. Single source of truth: the section
+ * list is derived from these keys so the validator and the exported list cannot
+ * drift.
  */
-export const PLAN_FILE_BASE_SECTIONS = ["Status", "Objective", "In scope", "Explicit non-goals"];
-
 const SECTION_CODES = {
   Status: "missing_status",
   Objective: "missing_objective",
   "In scope": "missing_in_scope",
   "Explicit non-goals": "missing_explicit_non_goals",
 };
+
+/** Base authoring section headings, in order (derived from SECTION_CODES). */
+export const PLAN_FILE_BASE_SECTIONS = Object.keys(SECTION_CODES);
 
 /**
  * Pure validator. Reports whether a plan file (phase-doc format) carries every
@@ -36,16 +39,9 @@ const SECTION_CODES = {
  * @returns {{ checker: "validate-plan-file", ok: boolean, errors: { code: string, message: string }[] }}
  */
 export function validatePlanFile(markdownText) {
-  const errors = [];
-  // extractSection returns the trimmed body (empty string for an empty section)
-  // or null when the heading is absent — both are malformed here.
-  for (const heading of PLAN_FILE_BASE_SECTIONS) {
-    const body = extractSection(markdownText, heading);
-    if (!body) {
-      errors.push({ code: SECTION_CODES[heading], message: `Missing or empty ## ${heading} section.` });
-    }
-  }
-  return { checker: "validate-plan-file", ok: errors.length === 0, errors };
+  // checkBaseSections reports each absent/empty section under its distinct
+  // missing_* code; an empty-body section is malformed here too.
+  return checkBaseSections(markdownText, "validate-plan-file", SECTION_CODES);
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {

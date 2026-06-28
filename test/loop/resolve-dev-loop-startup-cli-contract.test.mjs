@@ -67,6 +67,7 @@ test("resolve-dev-loop-startup help documents accepted flags and JSON contracts"
   assert.match(result.stdout, /--pr <n>\s+Target a PR/);
   assert.match(result.stdout, /--input <path>\s+Path to a JSON file/);
   assert.match(result.stdout, /--plan-file <path>\s+Path to a phase-doc-format plan/);
+  assert.match(result.stdout, /--spike <path>\s+Path to a spike artifact/);
   assert.match(result.stdout, /Exit codes:\n  0  Success\n  1  Argument error, runtime failure, or async-start contract rejection/);
 });
 
@@ -280,6 +281,7 @@ test("--input cannot inject planFileExempt to bypass the worktree-isolation guar
   await withInputFile({
     planFileExempt: true,
     planFileIntakeState: "plan_refined_ready_for_promotion",
+    spikeIntakeState: "spike_ready_for_exit",
     currentState: {
       target: { kind: "local_branch", branch: "feature/inject" },
       ownership: "local",
@@ -301,6 +303,9 @@ test("--input cannot inject planFileExempt to bypass the worktree-isolation guar
     assert.notEqual(parsed.bundleKind, "resolved");
     assert.match(parsed.nextAction || "", /worktree/i);
     assert.equal(parsed.planFileIntakeState, undefined);
+    // The spike intake field is a resolver-only output too: untrusted --input
+    // must not be able to inject it.
+    assert.equal(parsed.spikeIntakeState, undefined);
   });
 });
 
@@ -351,6 +356,145 @@ test("--plan-file failing base validation fails closed (exit 1, no bundle)", asy
     assert.equal(result.status, 1);
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /failed validation/i);
+  });
+});
+
+const BASE_SPIKE = [
+  "# my spike",
+  "",
+  "## Question",
+  "",
+  "Can we use approach X to solve Y?",
+  "",
+  "## Approach",
+  "",
+  "- prototype the call path",
+  "",
+  "## Findings",
+  "",
+  "- X works but is slow",
+  "",
+  "## Recommendation",
+  "",
+  "- adopt X with a cache",
+  "",
+].join("\n");
+
+// A spike carrying the exploration scaffold (Question/Approach/Findings) with no
+// Recommendation section yet: a valid artifact that is still in progress.
+const SPIKE_IN_PROGRESS = [
+  "# my spike",
+  "",
+  "## Question",
+  "",
+  "Can we use approach X to solve Y?",
+  "",
+  "## Approach",
+  "",
+  "- prototype the call path",
+  "",
+  "## Findings",
+  "",
+  "- exploring",
+  "",
+].join("\n");
+
+async function withSpikeFile(markdown, fn) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-spike-file-"));
+  const spikePath = path.join(tmpDir, "spike.md");
+  await writeFile(spikePath, markdown, "utf8");
+  try {
+    return await fn(spikePath, tmpDir);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+test("--spike with a complete spike artifact resolves to a local_phase bundle with no issue/PR", async () => {
+  await withSpikeFile(BASE_SPIKE, async (spikePath, tmpDir) => {
+    // gh stub on PATH proves the read-only contract: the spike path makes ZERO
+    // gh calls (no tracker artifact, no tracker mutation) at entry.
+    const { env, ghLogPath } = await writeGhStub(tmpDir, [{ stdout: "{}\n" }], {
+      logCalls: true,
+      repeatLastOnOverflow: true,
+    });
+
+    const result = spawnSync(process.execPath, [cliPath, "--spike", spikePath], {
+      // Run from a plain (non-worktree) dir to exercise the worktree-guard exemption.
+      cwd: tmpDir,
+      encoding: "utf8",
+      env,
+    });
+
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    // Exempt from the worktree guard: stays local_implementation, never needs_reconcile.
+    assert.equal(parsed.bundleKind, "resolved");
+    assert.equal(parsed.selectedStrategy, "local_implementation");
+    assert.equal(parsed.spikeIntakeState, "spike_ready_for_exit");
+    const target = parsed.canonicalStateSummary.target;
+    assert.equal(target.kind, "local_phase");
+    assert.equal(target.issue, null);
+    assert.equal(target.pr, null);
+    assert.equal(target.phase, spikePath);
+
+    // Zero tracker artifacts at entry: gh was never invoked on the spike path.
+    const log = await readFile(ghLogPath, "utf8");
+    assert.equal(log.trim(), "", `expected zero gh calls, got: ${log}`);
+  });
+});
+
+test("--spike with an in-progress spike (no recommendation) resolves to spike_in_progress", async () => {
+  await withSpikeFile(SPIKE_IN_PROGRESS, async (spikePath, tmpDir) => {
+    const result = spawnSync(process.execPath, [cliPath, "--spike", spikePath], {
+      cwd: tmpDir,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.spikeIntakeState, "spike_in_progress");
+  });
+});
+
+test("--spike pointing at a missing file fails closed (exit 1, no bundle)", () => {
+  const result = spawnSync(process.execPath, [cliPath, "--spike", "/nonexistent/spike.md"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /missing or unreadable/i);
+});
+
+test("--spike with a malformed spike artifact fails closed (exit 1, no bundle)", async () => {
+  await withSpikeFile("# incomplete\n\n## Question\n\nwhat?\n", async (spikePath) => {
+    const result = spawnSync(process.execPath, [cliPath, "--spike", spikePath], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /failed validation/i);
+  });
+});
+
+test("--spike is mutually exclusive with --issue and --plan-file", async () => {
+  await withSpikeFile(BASE_SPIKE, async (spikePath) => {
+    const withIssue = spawnSync(process.execPath, [cliPath, "--spike", spikePath, "--issue", "511"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    assert.equal(withIssue.status, 1);
+    assert.match(withIssue.stderr, /mutually exclusive/i);
+
+    const withPlanFile = spawnSync(process.execPath, [cliPath, "--spike", spikePath, "--plan-file", "p.md"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    assert.equal(withPlanFile.status, 1);
+    assert.match(withPlanFile.stderr, /mutually exclusive/i);
   });
 });
 
