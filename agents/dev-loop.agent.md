@@ -26,7 +26,14 @@ The envelope is the primary handoff artifact — it is derived from resolver out
 
 **Construction sequence:**
 <!-- pi-only -->
-**CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` from this agent's own installed path: this agent is installed at `<package-root>/.pi/agents/dev-loop.agent.md`, so the package root is `../..` from this agent's directory (`agents` → `.pi` → package root). (The `dev-loop` skill resolves it analogously from its own installed path.)
+**CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` via the first of these **bounded** candidates whose `cli/index.mjs` exists — never assume a single fixed layout (this agent may be installed user-level at `~/.agents/`, where the old `../..` package-relative guess resolves to `~`, not the package):
+
+1. **Node module resolution** (best-effort first try): `node -e "try{const p=require('node:path');console.log(p.resolve(p.dirname(require.resolve('dev-loops/cli/index.mjs')),'..'))}catch{process.exit(1)}"` — resolves the package root when `dev-loops` is reachable from Node's module search path (notably under `~/.pi/agent/npm`); this is cwd-dependent and commonly misses from a target-repo cwd, so the probe is wrapped in try/catch (no stack trace, exits non-zero on miss) — treat a non-zero exit as "probe missed, try the next candidate", not a hard failure.
+2. **Pi user-agent npm root** (reliable for user-level installs): `~/.pi/agent/npm/node_modules/dev-loops`.
+3. **Package-relative (legacy):** `../..` from this agent's own directory (the original package-local install layout).
+4. **Global npm root:** `$(npm root -g)/dev-loops`.
+
+NEVER fall back to `find /` or any unbounded filesystem walk to locate the CLI — it stalls and trips the needs-attention timeout. If every bounded candidate fails, stop and ask the orchestrator/operator for the dev-loops package root rather than searching. (The `dev-loop` skill resolves it analogously.)
 <!-- /pi-only -->
 
 1. Run the deterministic startup resolver to produce the authoritative state bundle: `node <dev-loops-package-root>/cli/index.mjs loop startup --issue <n>` for issues, or `node <dev-loops-package-root>/cli/index.mjs loop startup --pr <n>` for PRs.
