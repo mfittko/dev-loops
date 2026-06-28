@@ -62,7 +62,7 @@ async function gitInit(repoDir, env) {
   await sh(["commit", "-q", "--allow-empty", "-m", "root"]);
 }
 
-async function setup(plan = READY_PLAN, ghEntries = [PR_CREATE_ENTRY]) {
+async function setup(plan = READY_PLAN, ghEntries = [PR_CREATE_ENTRY], { withRemote = true } = {}) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "promote-plan-"));
   // A real git repo so the promote path's git add/commit/branch run for real.
   const repoDir = path.join(tempDir, "repo");
@@ -73,6 +73,16 @@ async function setup(plan = READY_PLAN, ghEntries = [PR_CREATE_ENTRY]) {
   await mkdir(stubDir, { recursive: true });
   const ghStub = await writeGhStub(stubDir, ghEntries, { logCalls: true });
   await gitInit(repoDir, ghStub.env);
+  if (withRemote) {
+    // A real bare remote so the promote path's `git push -u origin <branch>`
+    // (the pre-PR push) succeeds against an actual ref store.
+    const remoteDir = path.join(tempDir, "remote.git");
+    const { spawnSync } = await import("node:child_process");
+    const init = spawnSync("git", ["init", "-q", "--bare", remoteDir], { env: ghStub.env, encoding: "utf8" });
+    assert.equal(init.status, 0, init.stderr);
+    const add = spawnSync("git", ["remote", "add", "origin", remoteDir], { cwd: repoDir, env: ghStub.env, encoding: "utf8" });
+    assert.equal(add.status, 0, add.stderr);
+  }
   const planPath = path.join(repoDir, "docs", "phases", "phase-x.md");
   await mkdir(path.dirname(planPath), { recursive: true });
   await writeFile(planPath, plan, "utf8");
@@ -122,6 +132,76 @@ describe("promote-plan CLI", () => {
       const log = spawnSync("git", ["log", "--oneline"], { cwd: repoDir, encoding: "utf8" }).stdout;
       assert.match(log, /promote docs\/phases\/phase-x\.md/u);
       assert.match(log, /link docs\/phases\/phase-x\.md to PR #321/u);
+
+      // The head branch was pushed to the remote BEFORE the PR was opened, so a
+      // fresh branch needs no manual push — the remote now has the branch ref.
+      assert.match(parsed.branch, /promote-plan\/phase-x/u);
+      const remoteRefs = spawnSync("git", ["ls-remote", "--heads", "origin"], { cwd: repoDir, env: ghStub.env, encoding: "utf8" }).stdout;
+      assert.match(remoteRefs, new RegExp(`refs/heads/${parsed.branch}$`, "mu"));
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("partial-state re-run: plan already committed at HEAD with no PR recovers (no git_commit_failed)", async () => {
+    const { tempDir, repoDir, planPath, ghStub } = await setup();
+    try {
+      const branch = "promote-plan/phase-x";
+      const { spawnSync } = await import("node:child_process");
+      const sh = (args) => {
+        const r = spawnSync("git", args, { cwd: repoDir, env: ghStub.env, encoding: "utf8" });
+        assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
+      };
+      // Simulate a prior partial run: the plan doc is committed on the head
+      // branch, but no PR was opened and no prNumber was written back. This is
+      // exactly the dead-end state the bug produced (re-run would have hit
+      // git_commit_failed on an empty index).
+      // Leave the repo on the head branch (where a mid-promote failure strands
+      // it) with the plan committed and the prNumber unwritten.
+      sh(["checkout", "-q", "-b", branch]);
+      sh(["add", "--", planPath]);
+      sh(["commit", "-q", "-m", "docs(plan): promote docs/phases/phase-x.md"]);
+
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--json"], {
+        cwd: repoDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, true);
+      assert.equal(parsed.action, "promote");
+      assert.equal(parsed.prNumber, 321);
+
+      // It recovered: pushed the branch, opened the PR, wrote the link.
+      const remoteRefs = spawnSync("git", ["ls-remote", "--heads", "origin"], { cwd: repoDir, env: ghStub.env, encoding: "utf8" }).stdout;
+      assert.match(remoteRefs, new RegExp(`refs/heads/${branch}$`, "mu"));
+      const written = await readFile(planPath, "utf8");
+      assert.match(written, /^---\nprNumber: 321\n---\n/u);
+      const ghLog = (await readFile(ghStub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+      assert.equal(ghLog.length, 1, `expected one gh call, got: ${ghLog.join(" | ")}`);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fail closed: a push failure surfaces git_push_failed and opens no PR", async () => {
+    // No remote configured, so `git push -u origin <branch>` fails — the
+    // pre-PR push must fail-closed before any gh mutation.
+    const { tempDir, repoDir, planPath, ghStub } = await setup(READY_PLAN, [PR_CREATE_ENTRY], { withRemote: false });
+    try {
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--json"], {
+        cwd: repoDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 1);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.reason, "git_push_failed");
+      assert.ok(parsed.detail && parsed.detail.length > 0, "git_push_failed must carry a detail");
+
+      // Zero gh mutation: the PR is never opened when the push fails.
+      const ghLog = await readFile(ghStub.ghLogPath, "utf8");
+      assert.equal(ghLog.trim(), "", `expected zero gh calls, got: ${ghLog}`);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

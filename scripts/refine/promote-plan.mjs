@@ -226,18 +226,36 @@ export async function runCli(argv = process.argv.slice(2), {
     return fail("git_checkout_failed", checkout.stderr.trim());
   }
 
-  // Stage and commit the plan doc as the spec-of-record.
+  // Stage and commit the plan doc as the spec-of-record. The commit is made
+  // re-runnable: if a prior partial run already committed the plan (plan at
+  // HEAD, no PR), there is nothing to stage, so we skip the commit instead of
+  // failing `git_commit_failed` and continue on to push + pr-create. This lets
+  // a partial state (plan committed, no prNumber) recover on a plain re-run.
   const add = await runChildFn("git", ["add", "--", planPath], env);
   if (add.code !== 0) {
     return fail("git_add_failed", add.stderr.trim());
   }
-  const commit = await runChildFn(
-    "git",
-    ["commit", "-m", `docs(plan): promote ${planDocRelPath}`],
-    env,
-  );
-  if (commit.code !== 0) {
-    return fail("git_commit_failed", commit.stderr.trim());
+  // `git diff --cached --quiet` exits 0 when the index matches HEAD (nothing to
+  // commit), 1 when there are staged changes. Only commit when there is a diff.
+  const hasStaged = (await runChildFn("git", ["diff", "--cached", "--quiet"], env)).code !== 0;
+  if (hasStaged) {
+    const commit = await runChildFn(
+      "git",
+      ["commit", "-m", `docs(plan): promote ${planDocRelPath}`],
+      env,
+    );
+    if (commit.code !== 0) {
+      return fail("git_commit_failed", commit.stderr.trim());
+    }
+  }
+
+  // Push the head branch to the remote BEFORE opening the PR. A fresh local
+  // branch absent on the remote makes `gh pr create --head <branch>` fail, which
+  // would commit the plan but open no PR — the unrecoverable partial state this
+  // fix targets. Pushing first guarantees the head ref exists for gh.
+  const push = await runChildFn("git", ["push", "-u", "origin", branch], env);
+  if (push.code !== 0) {
+    return fail("git_push_failed", push.stderr.trim() || push.stdout.trim());
   }
 
   // Open EXACTLY ONE draft PR via the canonical wrapper (never raw gh).
