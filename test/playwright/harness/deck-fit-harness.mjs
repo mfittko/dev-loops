@@ -86,7 +86,10 @@ export async function measureArticleFit(page) {
     const inScrollContainer = (el) => {
       for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
         const ox = getComputedStyle(p).overflowX;
-        if (ox === "auto" || ox === "scroll" || ox === "hidden") return true;
+        // Only auto/scroll is intentional horizontal scroll. overflow-x:hidden
+        // CLIPS content (it's invisible, not scrollable) — exempting it would
+        // mask a real layout bug, so it is deliberately not a scroll container.
+        if (ox === "auto" || ox === "scroll") return true;
       }
       return false;
     };

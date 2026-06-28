@@ -4,8 +4,8 @@
 // *rendered* HTML artifact (a presentation deck, an article page, or the
 // inspect-run viewer's served page/component) MUST run the shared UI e2e
 // assertions (mobile + desktop) AND have that artifact registered in the e2e
-// suite (DECK_REGISTRY / VIEWER_REGISTRY). Inclusion is triggered by the
-// changed-file set, never by a human annotating the PR.
+// suite (DECK_REGISTRY / ARTICLE_REGISTRY / VIEWER_REGISTRY). Inclusion is
+// triggered by the changed-file set, never by a human annotating the PR.
 //
 // This module is the testable core of that criterion: classify changed paths
 // → rendered-artifact set → check each is registered → fail closed if a
@@ -135,8 +135,9 @@ export function evaluateUiE2eScoping(changedPaths = [], { uiE2ePassed = null } =
       reason:
         `UI e2e coverage is required: this PR changes rendered artifact(s) ` +
         `${unregistered.join(", ")} that are not registered in the shared UI e2e suite ` +
-        `(DECK_REGISTRY in test/playwright/harness/deck-fit-harness.mjs, or VIEWER_REGISTRY ` +
-        `in inspect-run-viewer-harness.mjs). Register the artifact and add a spec that runs ` +
+        `(DECK_REGISTRY or ARTICLE_REGISTRY in test/playwright/harness/deck-fit-harness.mjs, ` +
+        `or VIEWER_REGISTRY in test/playwright/harness/inspect-run-viewer-harness.mjs). ` +
+        `Register the artifact and add a spec that runs ` +
         `the mobile + desktop assertions before this gate can pass.`,
     };
   }
