@@ -53,6 +53,12 @@ const GatesConfig = z.strictObject({
   // `requireCi` is only behaviorally configurable for the draft gate.
   // preApproval always requires CI even if config repeats `requireCi`.
   preApproval: GateConfig.optional(),
+  // Relaxed spike gate profile (#965). A spike's deliverable is a findings doc,
+  // not production code, so it should not carry the full draft → pre-approval →
+  // Copilot production set. Resolved through the same config-merge layering and
+  // the same resolveGateConfig path as draft/preApproval — no new strategy→knob
+  // resolver. Absent for non-spike work, so production gates are unaffected.
+  spike: GateConfig.optional(),
   // Fail-closed enforcement that a gate verdict was produced by the
   // fan-out/fan-in review sub-loop (executionMode === "fanout_fanin" plus a
   // durable findings-log ledger), not an inline single-agent run. Default
@@ -169,6 +175,7 @@ const FileGateConfig = GateConfig.partial();
 const FileGatesConfig = z.strictObject({
   draft: FileGateConfig.optional(),
   preApproval: FileGateConfig.optional(),
+  spike: FileGateConfig.optional(),
   requireFanoutEvidence: z.boolean().optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).optional(),
   postFindingsComments: z.boolean().optional(),
@@ -929,7 +936,7 @@ export function resolveRefinement(config) {
  * flags always resolve to stable defaults.
  *
  * @param {DevLoopConfig} config
- * @param {"draft"|"preApproval"} gate
+ * @param {"draft"|"preApproval"|"spike"} gate
  * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean }}
  */
 export function resolveGateConfig(config, gate) {

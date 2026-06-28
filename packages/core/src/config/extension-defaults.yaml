@@ -70,6 +70,20 @@ gates:
     required: true
     mandatoryAngles:
       - pr-checklist-matrix
+  # Relaxed spike gate profile (#965). A spike's deliverable is a findings doc,
+  # not production code, so it is intentionally lighter than the production
+  # draft -> pre-approval -> Copilot set: a small docs-first angle set, not a
+  # required gate, and no CI prerequisite. Resolved through the same
+  # config-merge layering and resolveGateConfig path as draft/preApproval; only
+  # applies to spike-mode work, so production gates are unaffected.
+  spike:
+    angles:
+      - scope
+      - docs
+    excludeAngles: []
+    required: false
+    requireCi: false
+    mandatoryAngles: []
 
 # Autonomy: only merge requires operator confirmation by default.
 autonomy:
