@@ -288,7 +288,7 @@ test("direct entrypoints parse to the canonical public intent (#972)", () => {
   for (const [input, intent] of [
     [["start", "112"], "start dev loop on issue 112"],
     [["auto", "112"], "auto dev loop on issue 112"],
-    [["continue", "88"], "continue dev loop on PR 88"],
+    [["continue", "88"], "continue dev loop on 88"],
     [["info", "88"], "inspect dev loop state on 88"],
     [["start", "#112"], "start dev loop on issue 112"], // tolerate a leading #
   ]) {
@@ -309,7 +309,7 @@ test("direct entrypoints reject missing or non-numeric targets (#972)", () => {
 
 test("malformed entrypoint message names the target kind per verb (#972)", () => {
   assert.match(parseDevLoopsCommand(["start", "x"], { surface: "extension" }).message, /numeric issue,/);
-  assert.match(parseDevLoopsCommand(["continue", "main"], { surface: "extension" }).message, /numeric PR,/);
+  assert.match(parseDevLoopsCommand(["continue", "main"], { surface: "extension" }).message, /numeric issue\/PR,/);
   assert.match(parseDevLoopsCommand(["info", "x"], { surface: "extension" }).message, /numeric issue\/PR,/);
 });
 
@@ -322,5 +322,44 @@ test("executor surfaces the entrypoint intent for dispatch (#972)", async () => 
   assert.equal(result.kind, "entrypoint");
   assert.equal(result.action, "continue");
   assert.equal(result.number, "88");
-  assert.equal(result.intent, "continue dev loop on PR 88");
+  assert.equal(result.intent, "continue dev loop on 88");
+});
+
+test("continue is dual-routed (#988): widened target + bare + URL normalize", async () => {
+  // Widened to issue OR pr (like info), not PR-only.
+  const issueArg = parseDevLoopsCommand(["continue", "112"], { surface: "extension" });
+  assert.equal(issueArg.kind, "entrypoint");
+  assert.equal(issueArg.target, "either");
+  assert.equal(issueArg.number, "112");
+  assert.equal(issueArg.intent, "continue dev loop on 112");
+
+  // Bare /continue — no number — defers to the board resolver via the command/skill.
+  const bare = parseDevLoopsCommand(["continue"], { surface: "extension" });
+  assert.equal(bare.kind, "entrypoint");
+  assert.equal(bare.number, null);
+  assert.equal(bare.intent, "continue the current dev loop");
+
+  // #123 and a GitHub URL normalize to the bare number.
+  assert.equal(parseDevLoopsCommand(["continue", "#88"], { surface: "extension" }).number, "88");
+  assert.equal(
+    parseDevLoopsCommand(["continue", "https://github.com/o/n/pull/88"], { surface: "extension" }).number,
+    "88",
+  );
+  assert.equal(
+    parseDevLoopsCommand(["continue", "https://github.com/o/n/issues/77"], { surface: "extension" }).number,
+    "77",
+  );
+
+  // Other verbs do NOT accept a bare form.
+  assert.equal(parseDevLoopsCommand(["start"], { surface: "extension" }).kind, "malformed");
+
+  // Bare surfaces through the executor too.
+  const bareExec = await executeDevLoopsCommand({
+    input: ["continue"],
+    surface: "extension",
+    runtime: createRuntime(),
+  });
+  assert.equal(bareExec.kind, "entrypoint");
+  assert.equal(bareExec.number, null);
+  assert.equal(bareExec.intent, "continue the current dev loop");
 });

@@ -58,6 +58,7 @@ const SUBCOMMAND_ROUTES = {
     "archive-done": "scripts/projects/archive-done-items.mjs",
     "sync-status": "scripts/projects/sync-item-status.mjs",
     ensure:  "scripts/projects/ensure-queue-board.mjs",
+    "resolve-active": "scripts/projects/resolve-active-board-item.mjs",
   },
   queue: {
     run:            "scripts/loop/run-queue.mjs",
@@ -68,6 +69,7 @@ const SUBCOMMAND_ROUTES = {
     "archive-done": "scripts/projects/archive-done-items.mjs",
     "sync-status": "scripts/projects/sync-item-status.mjs",
     ensure:  "scripts/projects/ensure-queue-board.mjs",
+    "resolve-active": "scripts/projects/resolve-active-board-item.mjs",
   },
   inspect: {
     run:    "scripts/loop/inspect-run.mjs",
