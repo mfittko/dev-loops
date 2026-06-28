@@ -16,16 +16,19 @@ Validate the base authoring sections of a phase-doc-format plan file: Status, Ob
 
 /**
  * Base authoring sections a phase doc carries before refinement adds AC/DoD.
- * Heading → distinct missing_* error code.
+ * Heading → distinct missing_* error code. Single source of truth: the section
+ * list is derived from these keys so the validator and the exported list cannot
+ * drift.
  */
-export const PLAN_FILE_BASE_SECTIONS = ["Status", "Objective", "In scope", "Explicit non-goals"];
-
 const SECTION_CODES = {
   Status: "missing_status",
   Objective: "missing_objective",
   "In scope": "missing_in_scope",
   "Explicit non-goals": "missing_explicit_non_goals",
 };
+
+/** Base authoring section headings, in order (derived from SECTION_CODES). */
+export const PLAN_FILE_BASE_SECTIONS = Object.keys(SECTION_CODES);
 
 /**
  * Pure validator. Reports whether a plan file (phase-doc format) carries every
