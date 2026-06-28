@@ -386,6 +386,9 @@ test("start-spike parses free text / --file on a SEPARATE path from the numeric 
   assert.equal(parseDevLoopsCommand(["start-spike"], { surface: "extension" }).kind, "malformed");
   assert.equal(parseDevLoopsCommand(["start-spike", "--file"], { surface: "extension" }).kind, "malformed");
   assert.equal(parseDevLoopsCommand(["start-spike", "--file", "a.md", "b.md"], { surface: "extension" }).kind, "malformed");
+  // --file value with any leading `-` is rejected (option-injection guard) — the
+  // path is forwarded verbatim to `resolve-dev-loop-startup --spike`.
+  assert.equal(parseDevLoopsCommand(["start-spike", "--file", "-x"], { surface: "extension" }).kind, "malformed");
 
   // The numeric verbs are UNAFFECTED: still reject non-numeric, no bare start-spike leakage.
   assert.equal(parseDevLoopsCommand(["start", "a question"], { surface: "extension" }).kind, "malformed");

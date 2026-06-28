@@ -23,7 +23,8 @@ import { SPIKE_FILE_EXPLORATION_SECTIONS } from "./validate-spike-file.mjs";
 // exit marker, written when the spike concludes.)
 const PLACEHOLDER = "TBD — filled in during the spike.";
 
-const USAGE = `Usage: dev-loops refine scaffold-spike --question <text> --out <path>
+const USAGE = `Usage:
+  scaffold-spike-file.mjs --question <text> --out <path>
 
 Scaffold a startable spike findings artifact from an inline question. Writes a
 file carrying the exploration scaffold (## Question filled from --question,
@@ -124,7 +125,20 @@ export async function main(args, { writeFileImpl = writeFile, mkdirImpl = mkdir 
   const body = buildSpikeScaffold(args.question);
   const outPath = path.resolve(args.out);
   await mkdirImpl(path.dirname(outPath), { recursive: true });
-  await writeFileImpl(outPath, body, "utf8");
+  // Fail closed on an existing file: the slash-command picks a fresh path and
+  // must never clobber a spike already in progress. `wx` makes write+exclusive
+  // atomic, so a concurrent create still loses (no overwrite).
+  try {
+    await writeFileImpl(outPath, body, { encoding: "utf8", flag: "wx" });
+  } catch (err) {
+    if (err?.code === "EEXIST") {
+      throw Object.assign(new Error(`--out already exists, refusing to overwrite: ${outPath}`), {
+        usage: USAGE,
+        code: "INVALID_ARGS",
+      });
+    }
+    throw err;
+  }
   return { ok: true, path: outPath, question: String(args.question).trim() };
 }
 

@@ -46,6 +46,20 @@ describe("scaffold-spike-file (#988 P2)", () => {
     }
   });
 
+  test("CLI fails closed instead of overwriting an existing --out", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "spike-scaffold-exist-"));
+    try {
+      const out = path.join(dir, "spike.md");
+      const first = await main({ question: "First", out });
+      assert.equal(first.ok, true);
+      await assert.rejects(main({ question: "Second", out }), /already exists/);
+      // Original content is untouched.
+      assert.match(await readFile(out, "utf8"), /## Question\n\nFirst/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("CLI emits JSON and the file is startable end-to-end", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "spike-scaffold-cli-"));
     try {
