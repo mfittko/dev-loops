@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
+<title>dev-loops: Introducing dev-loops</title>
+<style>
+  :root {
+    --ground-1: #08101f;
+    --ground-2: #0b1220;
+    --ground-3: #0f172a;
+    --ink: #e5e7eb;
+    --heading: #f8fafc;
+    --copy: #cbd5e1;
+    --accent: #a78bfa;
+    --accent-soft: #ddd6fe;
+    --kicker: #93c5fd;
+    --card-border: rgba(148, 163, 184, 0.18);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Helvetica Neue", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    body { scroll-snap-type: none; }
+    .slide { scroll-snap-align: none; }
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font);
+    color: var(--ink);
+    background: var(--ground-3);
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+    scroll-snap-type: y proximity;
+    height: 100vh;
+    overflow-y: auto;
+  }
+
+  .slide {
+    position: relative;
+    min-height: 100vh;
+    padding: clamp(2rem, 5vh, 3.5rem) clamp(1.25rem, 5vw, 3rem);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    /* visible (not hidden): a slide taller than the viewport must grow and let
+       the page scroll, never clip its content at the bottom. */
+    overflow: visible;
+    scroll-snap-align: start;
+    background:
+      radial-gradient(circle at 85% 12%, rgba(139, 92, 246, 0.24), transparent 24%),
+      radial-gradient(circle at 15% 8%, rgba(59, 130, 246, 0.18), transparent 20%),
+      linear-gradient(180deg, var(--ground-1) 0%, var(--ground-2) 42%, var(--ground-3) 100%);
+    border-top: 1px solid rgba(148, 163, 184, 0.08);
+  }
+
+  .slide::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px);
+    background-size: 42px 42px;
+    -webkit-mask-image: linear-gradient(180deg, rgba(255,255,255,0.28), transparent 72%);
+    mask-image: linear-gradient(180deg, rgba(255,255,255,0.28), transparent 72%);
+  }
+
+  .slide > * { position: relative; z-index: 1; }
+
+  .slide-inner {
+    width: 100%;
+    max-width: 72rem;
+    margin: 0 auto;
+  }
+
+  h1, h2, h3 {
+    color: var(--heading);
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    margin-top: 0;
+  }
+
+  h1 { font-weight: 760; margin-bottom: 0.6rem; }
+  h2 { margin-bottom: 1rem; font-size: clamp(1.5rem, 3.2vw, 2.2rem); font-weight: 720; }
+  h3 { margin-bottom: 0.6rem; }
+
+  p, li { line-height: 1.5; overflow-wrap: anywhere; }
+  strong { color: var(--accent-soft); }
+  em { color: #e2e8f0; font-style: italic; }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 6px;
+    padding: 0.05em 0.4em;
+    color: #e2e8f0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .kicker {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 0.72rem;
+    color: var(--kicker);
+    margin: 0 0 0.45rem;
+    font-weight: 600;
+  }
+
+  .glass-card,
+  .hero-card,
+  .metric-card {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.8), rgba(15, 23, 42, 0.62));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.28);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-radius: 24px;
+    padding: 1.25rem 1.35rem;
+  }
+
+  .metric-card {
+    background: linear-gradient(180deg, rgba(24, 36, 61, 0.92), rgba(17, 24, 39, 0.78));
+    border-color: rgba(129, 140, 248, 0.35);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.24);
+  }
+
+  .hero-card h1 { font-size: clamp(2rem, 5.2vw, 3rem); margin-bottom: 1.2rem; }
+  .hero-copy {
+    max-width: 44rem;
+    color: var(--copy);
+    font-size: clamp(1.05rem, 2.4vw, 1.25rem);
+    margin: 0;
+  }
+
+  /* stretch cards to equal height per row so card bottoms align (designer-review fix) */
+  .grid { display: grid; gap: 1.25rem; align-items: stretch; }
+  /* min-width:0 keeps a wide child from forcing its grid track past the viewport */
+  .grid > * { min-width: 0; }
+  .grid > .glass-card,
+  .grid > .metric-card { display: flex; flex-direction: column; min-width: 0; }
+  .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  @media (max-width: 760px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+
+  .tight-list, .mini-list {
+    margin: 0;
+    padding-left: 1.1rem;
+    color: #e2e8f0;
+  }
+  .tight-list li + li { margin-top: 0.4rem; }
+  .mini-list li + li { margin-top: 0.45rem; }
+
+  .chip-row { display: flex; gap: 0.65rem; flex-wrap: wrap; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem 0.85rem;
+    border-radius: 9999px;
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(167, 139, 250, 0.35);
+    color: var(--accent-soft);
+    font-size: 0.86rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  /* single full-width card: cap measure so lines stay readable; anchor left under the title */
+  .card-narrow { max-width: 58rem; }
+
+  /* closing line: center it in its card and give it punchline weight */
+  .closer { justify-content: center; }
+  .closer .hero-copy {
+    text-align: center;
+    font-weight: 620;
+    font-size: clamp(1.15rem, 2.6vw, 1.5rem);
+    line-height: 1.35;
+    color: var(--accent-soft);
+  }
+
+  /* flow card: keep diagram visually centered when copy is short */
+  .flow-card { justify-content: center; }
+
+  .soft-note { color: var(--copy); margin-top: 0.85rem; font-size: 0.95rem; }
+  .note-top-md { margin-top: 0.75rem; }
+  .note-top-sm { margin-top: 0.5rem; }
+  .card-label { color: var(--accent-soft); font-weight: 650; margin: 0 0 0.7rem; }
+
+  /* big metric figure for the proof slide */
+  .metric-figure { font-size: clamp(2rem, 6vw, 2.8rem); font-weight: 740; color: var(--accent-soft); line-height: 1; margin: 0 0 0.35rem; letter-spacing: -0.02em; }
+  .metric-label { color: var(--copy); font-size: 0.92rem; margin: 0; }
+
+  /* inline flow diagrams */
+  .flow-scroll {
+    margin-top: 1.4rem;
+    padding-bottom: 0.5rem;
+    min-width: 0;
+    max-width: 100%;
+    /* Fallback safety net only — the layout FITS without scrolling
+       (desktop: nodes are short; mobile: .flow stacks vertically below). */
+    overflow-x: auto;
+  }
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    /* fit the container width, don't force it wider; nodes are short enough */
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .flow-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    justify-content: center;
+  }
+  .node {
+    background: linear-gradient(180deg, rgba(24, 36, 61, 0.92), rgba(17, 24, 39, 0.82));
+    border: 1px solid rgba(129, 140, 248, 0.4);
+    border-radius: 14px;
+    padding: 0.55rem 0.85rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.82rem;
+    color: #e2e8f0;
+    white-space: nowrap;
+    text-align: center;
+  }
+  .node.accent { border-color: rgba(167, 139, 250, 0.7); color: var(--accent-soft); }
+  .node.start { border-color: rgba(147, 197, 253, 0.6); color: var(--kicker); }
+  .edge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: rgba(148, 163, 184, 0.8);
+    padding: 0 0.65rem;
+    min-width: 3.2rem;
+  }
+  .edge .arrow { font-size: 1.1rem; line-height: 1; }
+  .edge .edge-label {
+    font-size: 0.66rem;
+    color: var(--kicker);
+    text-align: center;
+    margin-top: 0.2rem;
+    max-width: 7rem;
+    line-height: 1.2;
+  }
+
+  /* Mobile: fit the phone width — the flow stacks vertically (arrows point
+     down) so nothing scrolls sideways or clips, and the type/spacing scale
+     down so a slide's content fits comfortably. */
+  @media (max-width: 600px) {
+    .slide { padding: 2rem 1.1rem; justify-content: flex-start; }
+    .glass-card, .hero-card, .metric-card { padding: 1rem 1.05rem; border-radius: 18px; }
+    h2 { font-size: clamp(1.3rem, 6vw, 1.6rem); }
+    .hero-card h1 { font-size: clamp(1.6rem, 7.5vw, 2.1rem); }
+    .hero-copy { font-size: 1rem; }
+    p, li { font-size: 0.95rem; }
+    .metric-figure { font-size: clamp(1.8rem, 9vw, 2.2rem); }
+
+    .flow-scroll { margin-top: 1rem; }
+    .flow { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+    .flow-col { gap: 0.5rem; }
+    .node { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+    .edge { flex-direction: row; padding: 0; min-width: 0; }
+    .edge .arrow { transform: rotate(90deg); }
+    .edge .edge-label { max-width: none; margin-top: 0; margin-left: 0.4rem; }
+  }
+</style>
+</head>
+<body>
+
+<section class="slide" id="hero">
+  <div class="slide-inner">
+    <div class="hero-card">
+      <p class="kicker">dev-loops</p>
+      <h1>Introducing dev-loops</h1>
+      <p class="hero-copy">A coordination runtime for AI-assisted development. It carries a change from an idea to a merged pull request and treats every handoff along the way as a decision that gets written down, with a person merging by default.</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="coordination-cost">
+  <div class="slide-inner">
+    <p class="kicker">The problem</p>
+    <h2>Coordination Is the Cost</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li>AI writes the code in seconds, so the expensive part of the work moved.</li>
+          <li>It now sits in the coordination around the code: the wait for someone to notice a change is ready, to rebuild context to review it, to decide the next step is safe.</li>
+          <li>That waiting between actions is where the lead time of an AI-assisted workflow goes once the typing is fast.</li>
+        </ul>
+      </div>
+      <div class="glass-card flow-card">
+        <p class="card-label">Where the hours leak</p>
+        <div class="flow-scroll">
+          <div class="flow">
+            <div class="node start">Code&nbsp;written</div>
+            <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">wait to notice</span></div>
+            <div class="node">Review</div>
+            <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">wait for CI</span></div>
+            <div class="node">CI</div>
+            <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">wait to decide</span></div>
+            <div class="node accent">Merge</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="compounding">
+  <div class="slide-inner">
+    <p class="kicker">Why it caps throughput</p>
+    <h2>Manual Handoffs Compound</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li>Every change carries a handful of transitions: is it ready, who reviews it, did review pass, is CI green, is it safe to merge.</li>
+          <li>Each one a person handles by hand is an interrupt with its own switching cost.</li>
+          <li>Their number is the transitions per change times the volume, so hand-run coordination acts like a power over the throughput.</li>
+          <li>A person's effective load grows far faster than the change count, and that caps how much an AI-assisted team can ship.</li>
+        </ul>
+      </div>
+      <div class="metric-card flow-card">
+        <p class="card-label">Load grows on the volume</p>
+        <div class="flow-scroll">
+          <div class="flow">
+            <div class="node start">More&nbsp;changes</div>
+            <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">x transitions each</span></div>
+            <div class="node">Manual&nbsp;handoffs</div>
+            <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">interrupts</span></div>
+            <div class="node accent">Human&nbsp;load</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="the-loop">
+  <div class="slide-inner">
+    <p class="kicker">The idea</p>
+    <h2>Every Handoff a Decision</h2>
+    <div class="grid grid-3">
+      <div class="glass-card">
+        <p class="card-label">Same path for every change</p>
+        <ul class="mini-list">
+          <li>A draft check, a review round, and a final green-CI gate.</li>
+          <li>Nothing skips the path, including the changes that built dev-loops itself.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">A person merges by default</p>
+        <ul class="mini-list">
+          <li>The loop prepares the change and reports it ready.</li>
+          <li>A human makes the final call, and you choose how much autonomy to grant.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Work starts from an artifact</p>
+        <ul class="mini-list">
+          <li>A change begins from a short local plan or a tracked issue.</li>
+          <li>That artifact is the spec, carried through review to merge.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="the-work">
+  <div class="slide-inner">
+    <p class="kicker">What it does to the work</p>
+    <h2>One Decision per Change</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li>Each transition becomes a decision the system takes and records.</li>
+          <li>Every change follows the same path, so there is no bespoke ceremony to design and no question about what happens next.</li>
+          <li>A person is pulled in where one is genuinely needed: the merge, and anything the loop flags as ambiguous.</li>
+          <li>What is left for the human is roughly one bounded decision per change.</li>
+        </ul>
+      </div>
+      <div class="glass-card flow-card">
+        <p class="card-label">The repeatable path</p>
+        <div class="flow-scroll">
+          <div class="flow">
+            <div class="node start">Draft</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Review</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Green&nbsp;CI</div>
+            <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">human</span></div>
+            <div class="node accent">Merge</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="proof">
+  <div class="slide-inner">
+    <p class="kicker">The project's own history</p>
+    <h2>A Cadence That Holds</h2>
+    <div class="grid grid-3">
+      <div class="metric-card">
+        <p class="metric-figure">~100</p>
+        <p class="metric-label">pull requests merged in a recent two-week stretch.</p>
+      </div>
+      <div class="metric-card">
+        <p class="metric-figure">~7 / day</p>
+        <p class="metric-label">each one drafted, reviewed, gated on green tests, and merged by a person.</p>
+      </div>
+      <div class="metric-card">
+        <p class="metric-figure">~7 in 8</p>
+        <p class="metric-label">tied to a tracked item, so the trail from intent to merge stays legible.</p>
+      </div>
+    </div>
+    <p class="soft-note">The cadence held as the change count rose because the extra work landed as machine transitions, with the human's part staying that one bounded decision at the merge.</p>
+  </div>
+</section>
+
+<section class="slide" id="setup">
+  <div class="slide-inner">
+    <p class="kicker">Set it up</p>
+    <h2>Install and Run a Loop</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <p class="card-label">Install</p>
+        <p class="soft-note note-top-sm">Claude Code, from inside the editor:</p>
+        <div class="chip-row note-top-sm">
+          <span class="pill">/plugin marketplace add mfittko/dev-loops</span>
+          <span class="pill">/plugin install dev-loops@dev-loops</span>
+        </div>
+        <p class="soft-note note-top-md">Pi:</p>
+        <div class="chip-row note-top-sm">
+          <span class="pill">pi install npm:dev-loops</span>
+        </div>
+        <p class="soft-note">One plain-language entrypoint: <code>start</code>, <code>auto</code>, or <code>continue dev loop</code>. You never pick internal modes.</p>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Three choices shape the posture</p>
+        <ul class="mini-list">
+          <li><strong>Where work starts.</strong> <code>strategy.default</code> reads <code>local-first</code> for a plan in the repo, or <code>github-first</code> for a tracked issue.</li>
+          <li><strong>Automated review.</strong> <code>refinement.maxCopilotRounds</code> sets the review rounds; set <code>0</code> to turn Copilot off.</li>
+          <li><strong>Autonomy.</strong> <code>autonomy.humanMergeOnly</code> keeps the merge a human's call. Begin with the defaults and dial each setting toward what your team is comfortable with.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="close">
+  <div class="slide-inner">
+    <p class="kicker">Where to go deeper</p>
+    <h2>Two Companion Pieces</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <p class="card-label">Eliminating Coordination Delay</p>
+        <p class="soft-note note-top-sm">Why every handoff becomes an explicit decision, and why the loop runs on a state graph.</p>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Make the Waiting Visible</p>
+        <p class="soft-note note-top-sm">Measuring the waiting between actions, which is where the lead time goes once the code is fast to write.</p>
+      </div>
+    </div>
+    <div class="metric-card closer note-top-md">
+      <p class="hero-copy">Carry every change along the same recorded path, with a person merging by default.</p>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>
