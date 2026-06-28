@@ -70,7 +70,7 @@
   },
   "dependencies": {
     "mermaid": "11.15.0",
-    "@dev-loops/core": "^0.4.0"
+    "@dev-loops/core": "^0.5.0"
   },
   "repository": {
     "type": "git",
@@ -80,7 +80,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "files": [
     "cli/",
     "lib/",
