@@ -35,5 +35,11 @@ the workflow does it (and is idempotent if you already created one).
 - Tag not on `main`: the release workflow fails the on-main guard — re-tag the
   correct commit.
 - Missing CHANGELOG section: the extraction step exits non-zero and no Release is
-  created — add the `## <version>` section, then push the tag again (or re-run the
-  workflow).
+  created. The workflow checks out the tagged commit, so editing `CHANGELOG.md`
+  alone is not enough — commit the `## <version>` section, then move the tag to
+  the new commit and re-push:
+
+  ```bash
+  git tag -f v<version>
+  git push --force origin v<version>
+  ```

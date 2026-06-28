@@ -87,7 +87,7 @@ export async function main(argv = process.argv.slice(2)) {
   const section = extractChangelogSection(changelog, normalized);
   if (section === null || section === "") {
     process.stderr.write(
-      `error: no CHANGELOG.md section found for version ${normalized}. ` +
+      `error: no section found for version ${normalized} in ${changelogPath}. ` +
         `Refusing to create a release for an undocumented version.\n`,
     );
     return 1;

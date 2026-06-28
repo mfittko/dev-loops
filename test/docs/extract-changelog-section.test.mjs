@@ -98,7 +98,8 @@ test("CLI exits 1 (fail closed) for an absent version", async () => {
       { encoding: "utf8" },
     );
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /no CHANGELOG\.md section found/);
+    assert.match(result.stderr, /no section found for version 9\.9\.9 in/);
+    assert.match(result.stderr, new RegExp(clPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
