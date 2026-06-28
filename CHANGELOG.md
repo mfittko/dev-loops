@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Direct dev-loop slash commands as thin wrappers over the public contract (#972): `/dev-loops:start <issue>`, `/dev-loops:auto <issue>`, `/dev-loops:continue <pr>`, `/dev-loops:info <issue|pr>`, and `/dev-loops:status` for the Claude Code plugin (generated under `.claude/commands/` from `commands/*.command.md`), with equivalent `/dev-loops start|auto|continue|info` subcommands in the Pi extension. `/dev-loops:dev-loop` remains the catch-all router; no new routing logic was added.
+
 ## 0.5.0 - 2026-06-28
 
 ### Added

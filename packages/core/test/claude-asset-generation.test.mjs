@@ -10,6 +10,7 @@ import {
   rewriteCliInvocation,
   transformAgent,
   transformSkill,
+  transformCommand,
 } from "../src/claude/asset-generation.mjs";
 
 test("rewriteCliInvocation pins the package-local CLI to npx dev-loops@<version> (#801, #833)", () => {
@@ -148,6 +149,15 @@ test("transformSkill maps allowed-tools (space), preserves user-invocable, drops
   assert.equal(out.includes("compatibility:"), false, "Pi-specific compatibility should be dropped");
   assert.match(out, /<!-- GENERATED from skills\/local-implementation\/SKILL\.md by/);
   assert.match(out, /# Local Implementation\nbody text/);
+});
+
+test("transformCommand keeps description+argument-hint, rewrites CLI, adds banner (#972)", () => {
+  const raw = `---\ndescription: "Show state."\nargument-hint: "<issue|pr>"\n---\nRun \`node <dev-loops-package-root>/cli/index.mjs loop info --issue $ARGUMENTS\`.\n`;
+  const out = transformCommand({ source: "commands/info.command.md", raw, version: "1.2.3" });
+  assert.match(out, /^---\ndescription: "Show state\."\nargument-hint: "<issue\|pr>"\n---\n/);
+  assert.match(out, /<!-- GENERATED from commands\/info\.command\.md by/);
+  assert.ok(out.includes("npx dev-loops@1.2.3 loop info --issue $ARGUMENTS"));
+  assert.equal(out.includes("<dev-loops-package-root>"), false);
 });
 
 test("transformSkill preserves user-invocable: true for the public entry skill", () => {

@@ -283,3 +283,37 @@ test("gates action receives stdout and prints without ReferenceError", async () 
   assert.ok(output.includes("draft gate"), "should print draft gate section");
   assert.ok(output.includes("pre-approval gate"), "should print pre-approval gate section");
 });
+
+test("direct entrypoints parse to the canonical public intent (#972)", () => {
+  for (const [input, intent] of [
+    [["start", "112"], "start dev loop on issue 112"],
+    [["auto", "112"], "auto dev loop on issue 112"],
+    [["continue", "88"], "continue dev loop on PR 88"],
+    [["start", "#112"], "start dev loop on issue 112"], // tolerate a leading #
+  ]) {
+    const parsed = parseDevLoopsCommand(input, { surface: "extension" });
+    assert.equal(parsed.kind, "entrypoint");
+    assert.equal(parsed.action, input[0]);
+    assert.equal(parsed.intent, intent);
+    // Parity: same parse on the CLI surface (these are public entrypoints, not Pi-only UX).
+    assert.deepEqual(parseDevLoopsCommand(input, { surface: "cli" }), parsed);
+  }
+});
+
+test("direct entrypoints reject missing or non-numeric targets (#972)", () => {
+  assert.equal(parseDevLoopsCommand(["start"], { surface: "extension" }).kind, "malformed");
+  assert.equal(parseDevLoopsCommand(["continue", "main"], { surface: "extension" }).kind, "malformed");
+  assert.equal(parseDevLoopsCommand(["info", "1", "2"], { surface: "extension" }).kind, "malformed");
+});
+
+test("executor surfaces the entrypoint intent for dispatch (#972)", async () => {
+  const result = await executeDevLoopsCommand({
+    input: ["continue", "88"],
+    surface: "extension",
+    runtime: createRuntime(),
+  });
+  assert.equal(result.kind, "entrypoint");
+  assert.equal(result.action, "continue");
+  assert.equal(result.number, "88");
+  assert.equal(result.intent, "continue dev loop on PR 88");
+});

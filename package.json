@@ -91,6 +91,7 @@
     ".claude-plugin/",
     ".claude/.claude-plugin/",
     ".claude/agents/",
+    ".claude/commands/",
     ".claude/skills/",
     ".claude/hooks/",
     "README.md",

@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { transformAgent, transformSkill, stripPiOnlyBlocks } from "@dev-loops/core/claude/asset-generation";
+import { transformAgent, transformSkill, transformCommand, stripPiOnlyBlocks } from "@dev-loops/core/claude/asset-generation";
 
 /**
  * Collect the generated assets as { target, content } pairs (target is repo-relative).
@@ -42,6 +42,19 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
       const raw = fs.readFileSync(path.join(repoRoot, source), "utf8");
       const base = entry.slice(0, -".agent.md".length);
       assets.push({ target: `.claude/agents/${base}.md`, content: transformAgent({ source, raw, version }) });
+    }
+  }
+
+  // Direct slash commands (#972): thin generated wrappers over the public dev-loop contract,
+  // one `.claude/commands/<name>.md` per `commands/<name>.command.md` source. No routing logic.
+  const commandsDir = path.join(repoRoot, "commands");
+  if (fs.existsSync(commandsDir)) {
+    for (const entry of fs.readdirSync(commandsDir).sort()) {
+      if (!entry.endsWith(".command.md")) continue;
+      const source = `commands/${entry}`;
+      const raw = fs.readFileSync(path.join(repoRoot, source), "utf8");
+      const base = entry.slice(0, -".command.md".length);
+      assets.push({ target: `.claude/commands/${base}.md`, content: transformCommand({ source, raw, version }) });
     }
   }
 
@@ -171,6 +184,7 @@ function listFilesRecursive(repoRoot, rel) {
 function listExistingAssetFiles(repoRoot) {
   const files = [
     ...listFilesRecursive(repoRoot, ".claude/agents"),
+    ...listFilesRecursive(repoRoot, ".claude/commands"),
     ...listFilesRecursive(repoRoot, ".claude/skills"),
   ];
   // `.claude/hooks/` mixes hand-authored scripts (hooks.json, _hook-io.mjs, the three hook
