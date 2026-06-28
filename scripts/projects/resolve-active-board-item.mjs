@@ -41,7 +41,9 @@ Exit codes (default / unfiltered output):
   0 — exactly one in-progress item resolved
   1 — usage or argument error
   2 — GitHub API error / invalid --jq filter
-  3 — fail closed: zero or multiple in-progress items (pass an explicit issue/PR)
+  3 — fail closed (pass an explicit issue/PR): zero or multiple in-progress
+      items, or the board/project could not be resolved (project, status
+      field, or "${IN_PROGRESS_COLUMN}" column not found)
 
 With --jq/--silent the result is filtered to a value/predicate, so the exit code
 follows the shared jq-output contract (0 = truthy/ok, 1 = falsy/non-ok, 2 =
@@ -81,6 +83,9 @@ function parseCliArgs(argv) {
     }
     switch (token.name) {
       case "help":
+        if (token.value !== undefined) {
+          throw parseError(`Unknown flag: ${token.rawName}=${token.value}`);
+        }
         args.help = true;
         break;
       case "repo":
