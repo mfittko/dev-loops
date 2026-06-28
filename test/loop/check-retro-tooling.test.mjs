@@ -42,6 +42,16 @@ test("node -e and node --eval are violations; node scripts/x.mjs is not", () => 
   assert.ok(violations.every((v) => v.startsWith("node -e:")));
 });
 
+test("--eval after the script path is a script arg, not inline eval — clean", () => {
+  const transcript = [
+    "node scripts/github/foo.mjs --eval 'console.log(1)'",
+    "node scripts/loop/check-retro-tooling.mjs --transcript x --eval",
+  ].join("\n");
+  const { violations, internalToolingOnly } = analyzeTranscript(transcript);
+  assert.equal(violations.length, 0);
+  assert.equal(internalToolingOnly, true);
+});
+
 test("script-internal gh (node scripts/github/foo.mjs) does NOT trip the verifier", () => {
   const { violations, internalToolingOnly } = analyzeTranscript("node scripts/github/foo.mjs --gh api");
   assert.deepEqual(violations, []);

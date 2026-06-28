@@ -132,8 +132,15 @@ function classifySegment(rawSegment) {
   // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
   // eval forms are violations. Check node first so script invocations pass.
   if (/^node\b/.test(segment)) {
-    if (/^node\s+(?:[^|;&]*\s)?(?:-e|--eval)\b/.test(segment)) {
-      return { kind: "violation", tool: "node -e" };
+    // Inline eval (`-e`/`--eval`) is a violation only before the script path:
+    // once a non-flag token (the script) appears, a later `--eval` is just a
+    // script argument, not Node's inline-eval mode (avoids false positives).
+    const tokens = segment.split(/\s+/).slice(1);
+    for (const tok of tokens) {
+      if (tok === "-e" || tok === "--eval" || /^--eval=/.test(tok)) {
+        return { kind: "violation", tool: "node -e" };
+      }
+      if (!tok.startsWith("-")) break; // script path reached
     }
     return { kind: "clean" };
   }
