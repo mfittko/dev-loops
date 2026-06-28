@@ -5,6 +5,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId as resolveEnvRunId } from "@dev-loops/core/loop/run-context";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import {
   assertRunnerOwnership,
   claimRunnerOwnership,
@@ -23,6 +24,7 @@ If --run-id is omitted for claim/assert/release/takeover, DEVLOOPS_RUN_ID is use
 Output:
   stdout: { "ok": true, ... }
   stderr: { "ok": false, "error": "...", ... }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success / clean stop-compatible result
   1  Argument error or coordination conflict`.trim();
@@ -36,6 +38,8 @@ function parseCliArgs(argv) {
     pr: undefined,
     runId: undefined,
     requireExisting: false,
+    jq: undefined,
+    silent: false,
   };
   const command = args.shift();
   if (command === undefined || command === "--help" || command === "-h") {
@@ -51,6 +55,7 @@ function parseCliArgs(argv) {
       pr: { type: "string" },
       "run-id": { type: "string" },
       "require-existing": { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -81,6 +86,14 @@ function parseCliArgs(argv) {
     }
     if (token.name === "require-existing") {
       options.requireExisting = true;
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -146,11 +159,14 @@ async function main() {
     }
     const result = await runPrRunnerCoordination(options, { env: process.env });
     if (!result.ok) {
-      console.error(JSON.stringify(result));
-      process.exitCode = 1;
-      return;
+      // Preserve the established stderr-on-failure contract when not filtering.
+      if (options.jq === undefined && !options.silent) {
+        console.error(JSON.stringify(result));
+        process.exitCode = 1;
+        return;
+      }
     }
-    console.log(JSON.stringify(result));
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
     const payload = formatCliError(error, { usage: USAGE });
     console.error(JSON.stringify(payload));

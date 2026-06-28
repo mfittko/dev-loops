@@ -70,6 +70,9 @@ gates:
 workflow:
   requireRetrospective: true
   requireRetrospectiveGate: true
+  # Developer mode: this repo dogfoods the dev-loops tooling, so it enforces the
+  # internal-tooling-only retro discipline on itself (#982). Consumers default OFF.
+  requireRetrospectiveInternalTooling: true
   requireDraftFirst: true
   devModeDefault: true
 

@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
-import { buildAttemptBudget, buildPollDelayMs, findFreshCopilotActivity, parseWatchCliArgs, watchCopilotReview } from "../../scripts/github/probe-copilot-review.mjs";
+import { buildAttemptBudget, buildPollDelayMs, findFreshCopilotActivity, formatProbeConcise, parseWatchCliArgs, watchCopilotReview } from "../../scripts/github/probe-copilot-review.mjs";
 
 const scriptPath = path.resolve("scripts/github/probe-copilot-review.mjs");
 
@@ -287,4 +287,39 @@ test("probe-copilot-review uses production-safe defaults (1-minute poll, 30-minu
 test("probe-copilot-review trims surrounding whitespace from --repo", () => {
   const options = parseWatchCliArgs(["--repo", " owner/repo ", "--pr", "17"]);
   assert.equal(options.repo, "owner/repo");
+});
+
+test("probe-copilot-review parses --concise/--summary, --jq, --silent flags", () => {
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--concise"]).concise, true);
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--summary"]).concise, true);
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--jq", ".status"]).jq, ".status");
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--silent"]).silent, true);
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "-s"]).silent, true);
+});
+
+test("formatProbeConcise surfaces status, counts, and new Copilot comment bodies", () => {
+  const text = formatProbeConcise({
+    ok: true,
+    status: "changed",
+    repo: "o/r",
+    pr: 17,
+    attempts: 2,
+    newComments: [{ body: "fix the null check" }],
+    newReviews: [{ body: "2 issues found" }],
+    newIssueComments: [],
+  });
+  assert.match(text, /status:\s+changed/);
+  assert.match(text, /new threadComments: 1/);
+  assert.match(text, /new reviews:\s+1/);
+  assert.match(text, /new Copilot comment bodies this round:/);
+  assert.match(text, /2 issues found/);
+  assert.match(text, /fix the null check/);
+});
+
+test("formatProbeConcise reports (none) when no new bodies", () => {
+  const text = formatProbeConcise({
+    ok: true, status: "timeout", repo: "o/r", pr: 1, attempts: 5,
+    newComments: [], newReviews: [], newIssueComments: [],
+  });
+  assert.match(text, /new Copilot comment bodies this round: \(none\)/);
 });

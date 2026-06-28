@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { runNode } from "../_helpers.mjs";
 import {
   assertRunnerOwnership,
   claimRunnerOwnership,
@@ -235,4 +236,49 @@ test("ensureAsyncRunnerOwnership auto-claims after release when no active owner 
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// End-to-end CLI proof of the shared --jq/--silent output helper (issue #981).
+// `status` needs no run-id and no gh, so it is a clean read-script vehicle.
+const cliScript = path.resolve("scripts/loop/pr-runner-coordination.mjs");
+const runCli = (args) => runNode(cliScript, args, { cwd: process.cwd() });
+
+test("CLI --jq extracts a field from the result", async () => {
+  const { code, stdout } = await runCli(["status", "--repo", "owner/repo", "--pr", "17", "--jq", ".ok"]);
+  assert.equal(code, 0);
+  assert.equal(stdout.trim(), "true");
+});
+
+test("CLI invalid --jq filter fails closed (exit 2 + stderr)", async () => {
+  const { code, stdout, stderr } = await runCli(["status", "--repo", "owner/repo", "--pr", "17", "--jq", "bogus"]);
+  assert.equal(code, 2);
+  assert.equal(stdout.trim(), "");
+  assert.match(stderr, /--jq/);
+});
+
+test("CLI --silent pass exits 0 silently", async () => {
+  const { code, stdout } = await runCli(["status", "--repo", "owner/repo", "--pr", "17", "-s"]);
+  assert.equal(code, 0);
+  assert.equal(stdout.trim(), "");
+});
+
+test("CLI --jq predicate + --silent: false predicate exits 1 silently", async () => {
+  const { code, stdout } = await runCli(["status", "--repo", "owner/repo", "--pr", "17", "--jq", ".pr==99999", "--silent"]);
+  assert.equal(code, 1);
+  assert.equal(stdout.trim(), "");
+});
+
+test("CLI --silent + invalid --jq fails closed distinct from predicate-false (exit 2)", async () => {
+  const { code, stderr } = await runCli(["status", "--repo", "owner/repo", "--pr", "17", "--jq", "nope", "--silent"]);
+  assert.equal(code, 2);
+  assert.match(stderr, /--jq/);
+});
+
+test("CLI without --jq/--silent leaves JSON shape unchanged", async () => {
+  const { code, stdout } = await runCli(["status", "--repo", "owner/repo", "--pr", "17"]);
+  assert.equal(code, 0);
+  const parsed = JSON.parse(stdout);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.command, "status");
+  assert.equal(parsed.pr, 17);
 });
