@@ -170,7 +170,7 @@
 
   <p>AI writes the code in seconds. The expensive part moved. It now sits in the coordination around the code: the wait for someone to notice a change is ready, to rebuild enough context to review it, to decide the next step is safe. That waiting between actions is where the lead time of an AI-assisted workflow goes once the typing is fast.</p>
 
-  <p>dev-loops is a coordination runtime for that problem. It carries a change from an idea to a merged pull request and treats every handoff along the way as an explicit decision that gets written down, with a person merging by default. This article introduces the idea and shows how to run it on your own project. A deeper piece is linked at the end.</p>
+  <p>dev-loops is a coordination runtime for that problem. Like a Kanban board, the next step is always known: the system computes the next action for any change at any time, and whoever is free &mdash; agent or human &mdash; pulls that step from the visible state. So nobody waits for the previous actor to package up context and hand it over. The handoff becomes optional; when it happens it adds a note, and it stays a recorded decision, with a person merging by default. This article introduces the idea and shows how to run it on your own project. A deeper piece is linked at the end.</p>
 
   <h2>The idea</h2>
 
@@ -207,7 +207,7 @@
 
   <h2 id="model-agnostic-by-construction">Model-agnostic by construction</h2>
 
-  <p>The guardrails are what make the model choice cheap. Every handoff is an explicit decision the system records, so each step runs the same gate: a draft check, a review round, a green-CI confirmation, and a person at the merge. When a step is ambiguous, the loop fails closed and waits for a human. All that structure constrains how far any single step can stray, which means a strong open-source model can drive most or all of the work. Top-tier open-source models are enough here because the process does the constraining, so you can reserve a frontier model for the moments that genuinely call for one.</p>
+  <p>The guardrails are what make the model choice cheap. The next action for any change is always computed and visible, so each step runs the same gate: a draft check, a review round, a green-CI confirmation, and a person at the merge. When a step is ambiguous, the loop fails closed and waits for a human. All that structure constrains how far any single step can stray, which means a strong open-source model can drive most or all of the work. Top-tier open-source models are enough here because the process does the constraining, so you can reserve a frontier model for the moments that genuinely call for one.</p>
 
   <p>That has practical consequences. A model you can self-host is cheaper to run and keeps the work clear of any one vendor's roadmap. The gate is what holds the quality bar: it catches the kind of slip a smaller model would let through, so the bar sits where the gate sets it and the model's job is to propose work the gate then checks.</p>
 
@@ -246,7 +246,7 @@ autonomy:
 
   <section class="deeper">
     <h2>Where to go deeper</h2>
-    <p>The <a href="./dev-loops-deep-dive.html">dev-loops deep dive</a> takes these ideas apart in detail, in two parts: why every handoff becomes an explicit decision and why the loop runs on a state graph, then how to measure the waiting between actions, which is where the lead time goes once the code itself is fast to write.</p>
+    <p>The <a href="./dev-loops-deep-dive.html">dev-loops deep dive</a> takes these ideas apart in detail, in two parts: why the next step is always known so the next actor pulls it from the state graph and the handoff turns optional, then how to measure the waiting between actions, which is where the lead time goes once the code itself is fast to write.</p>
   </section>
 
 </article>

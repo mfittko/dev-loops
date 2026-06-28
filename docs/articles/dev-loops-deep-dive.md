@@ -17,19 +17,19 @@ An AI agent can write a working function in seconds. That part is solved. The ha
 
 That gap has a name: coordination delay. It is the time work spends waiting between people and steps, plus the rework caused when someone, or something, guesses wrong about where the work actually is. Code is cheap to write now, and the cost has moved into getting it through the pipeline.
 
-This deep dive runs in two parts. The first part is about closing the gap: never guess a handoff, make every transition an explicit decision, and run that on a state graph so the guarantee holds. The second part is about the gap itself: the waiting between actions is where lead time goes now, and the reason it stays expensive is that nothing measures it.
+This deep dive runs in two parts. The first part is about closing the gap: the next step is always known, so whoever is free pulls it from a state graph and the handoff turns optional. The second part is about the gap itself: the waiting between actions is where lead time goes now, and the reason it stays expensive is that nothing measures it.
 
 # Part 1 — Eliminating coordination delay
 
-## The one idea: never guess a handoff
+## The one idea: the next step is always known
 
-Here is the whole thing in a sentence: never guess a handoff. Make every handoff an explicit, observable decision.
+Here is the whole thing in a sentence: the next step is always known, like the next card on a Kanban board. The system computes the next action for any change at any time, and whoever is free pulls it from the visible state.
 
-That sounds modest, yet most of the lost hours in an AI-assisted workflow happen in the seams between steps, where the system has to answer a question like *who acts next?* or *is this ready?* and answers it with a hopeful assumption it never checks.
+That sounds modest, yet it dissolves most of the lost hours in an AI-assisted workflow. Those hours live in the seams between steps, where someone usually has to package up context and hand it to the next actor, who then waits for that handoff to arrive. When the next action is already computed and on the board, the next actor reads it and pulls the work. The waiting-for-handoff disappears, because there is nothing left to wait to be handed.
 
-The fix is to refuse the assumption everywhere. Every transition (author to reviewer, reviewer back to author, ready-to-merge to merged) becomes a decision the system makes deliberately and writes down where you can see it. When the situation is ambiguous, the system stops and asks, and a human resolves it before the work moves on.
+The handoff turns optional, at most additive. When one happens it adds a note or extra context, and it stays a decision the system records where you can see it. It is no longer the load-bearing step the work blocks on. When the next action is genuinely ambiguous, the system stops and asks, and a human resolves it before the work moves on.
 
-Hold that rule and the work falls into loops nested inside loops. An outer loop asks, every cycle, *who acts next?*, then makes exactly one move before asking again. Inside it, one loop walks a single pull request from first draft to merged. Another tracks every review comment from raised to resolved, so nothing falls through. Every layer works the same way: one deliberate move, then back to the question of who acts next.
+The work falls into loops nested inside loops. An outer loop asks, every cycle, *what is the next action here?*, then makes exactly one move before asking again. Inside it, one loop walks a single pull request from first draft to merged. Another tracks every review comment from raised to resolved, so nothing falls through. Every layer works the same way: read the next action, make one deliberate move, then ask again.
 
 ```mermaid
 stateDiagram-v2
@@ -45,9 +45,9 @@ stateDiagram-v2
 
 *Diagram 1 — The nested loops. An outer "who acts next?" decision routes each cycle to exactly one move, then returns to ask again. When the next step is ambiguous, the loop hands control to a human.*
 
-## What an explicit handoff buys you
+## What a known next step buys you
 
-Treating every handoff as a real decision makes four behaviors possible that a guess-based workflow cannot offer.
+Computing the next action for any change makes four behaviors possible that a guess-based workflow cannot offer.
 
 The first is safe pauses. Because the system always knows where it is, it can stop without making a mess. Ask it to stop mid-edit and it finishes the current step, lands it clean, and hands you a stopping point with the file intact. There are only a few honest answers to "can I stop now?": stop this instant, stop at the next clean boundary, or not yet because a required check is missing. The system gives you whichever one holds.
 
@@ -115,9 +115,9 @@ flowchart TD
 
 You could try to get all of this from prompting alone: write a long, careful instruction and trust the model to follow it. It will follow it most of the time, then drift without warning. Steer a workflow with prose and its behavior shifts with every model update, every longer context window, every change in sampling. That drift surfaces in production.
 
-Run the workflow on a state graph instead. The set of possible moves is closed and listable, so every next step is known up front. That buys two things prose alone cannot. A known set of moves is a testable set, so a wrong transition shows up in a test run before it reaches production. And the system can always say exactly where it is and what it is allowed to do next, which is what makes safe pauses, steering, and an honest "done" possible at all.
+Run the workflow on a state graph instead. The set of possible moves is closed and listable, so the resolver can compute the one next action for any change and surface it. This is what makes the next step always known and pullable: the next actor reads the current state and takes the move waiting there, with no handoff to wait for. It buys two things prose alone cannot. A known set of moves is a testable set, so a wrong transition shows up in a test run before it reaches production. And the system can always say exactly where it is and what it is allowed to do next, which is what makes safe pauses, steering, and an honest "done" possible at all.
 
-A state graph guarantees the behavior a prompt can only request. When the whole point is to stop guessing, the coordination layer itself should rest on something checkable.
+A state graph guarantees the behavior a prompt can only request. When the next step has to be knowable at any moment, the coordination layer itself should rest on something checkable.
 
 # Part 2 — Make the waiting visible
 
@@ -229,9 +229,9 @@ These are the same mechanisms from Part 1, read from the other side. The board, 
 
 AI made the code cheap, and the coordination around it is now the expensive part. Most of that cost is paid in bad handoffs: wrong routing, stalls nobody noticed, and a "done" that was only assumed. The rest is paid in the waiting between actions, which stays expensive because nothing measures it.
 
-So stop guessing handoffs and start measuring the waits. Make every handoff a decision you can see: who acts next, whether it is safe to pause, what a mid-flight instruction means, and above all whether the work has actually merged. Build that on a state graph so the guarantee holds even when the model underneath you changes. Then capture state at each transition so the biggest stall shows up in plain numbers, and automate only where the state proves it's safe.
+So make the next step always known, and measure the waits. Compute the next action for any change and put it on the board, so whoever is free pulls it: who acts next, whether it is safe to pause, what a mid-flight instruction means, and above all whether the work has actually merged. A handoff still happens when someone adds a note, and it stays a decision you can see. Build that on a state graph so the guarantee holds even when the model underneath you changes. Then capture state at each transition so the biggest stall shows up in plain numbers, and automate only where the state proves it's safe.
 
-The next agent will write your code in seconds. The lever you control is the coordination around it: make every handoff a decision you can see, and measure how long the work waits.
+The next agent will write your code in seconds. The lever you control is the coordination around it: keep the next step known so the next actor pulls it, and measure how long the work waits.
 
 ---
 

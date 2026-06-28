@@ -296,9 +296,9 @@
     <div class="hero-card">
       <p class="kicker">dev-loops</p>
       <h1>A Deep Dive: Coordination Delay and the Waiting Between Actions</h1>
-      <p class="hero-copy">AI agents made writing code cheap. The cost moved to the handoffs around it &mdash; author to reviewer, reviewer to CI, CI back to a human &mdash; where the hours leak and agents guess wrong. dev-loops makes every handoff an explicit, visible decision, and turns the waiting between actions into something you can measure.</p>
+      <p class="hero-copy">AI agents made writing code cheap. The cost moved to the coordination around it &mdash; author to reviewer, reviewer to CI, CI back to a human &mdash; where the hours leak while work waits to be handed over. dev-loops keeps the next step always known, so whoever is free pulls it from the visible state, and it turns the waiting between actions into something you can measure.</p>
       <div class="chip-row">
-        <span class="pill">explicit handoffs</span>
+        <span class="pill">known next step</span>
         <span class="pill">wait states</span>
         <span class="pill">coordination delay</span>
       </div>
@@ -310,14 +310,15 @@
   <div class="slide-inner">
     <span class="part-tag">Part 1 &middot; Eliminating coordination delay</span>
     <p class="kicker">The core idea</p>
-    <h2>Loops Inside Loops</h2>
+    <h2>The Next Step Is Always Known</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
-          <li><strong>Who acts next?</strong> An outer loop decides each cycle which role takes the work, making one move at a time.</li>
+          <li><strong>Like a Kanban board.</strong> The system computes the next action for any change; whoever is free pulls it from the visible state, so the handoff turns optional.</li>
+          <li><strong>Who acts next?</strong> An outer loop reads that next action each cycle and makes one move at a time.</li>
           <li><strong>The PR's life.</strong> An inner loop walks each pull request from first draft to merged, one explicit step at a time.</li>
           <li><strong>The feedback.</strong> A second inner loop tracks every review comment from raised to resolved, so nothing gets lost.</li>
-          <li>When the situation is ambiguous, it stops and asks before acting.</li>
+          <li>When the next action is ambiguous, it stops and asks before acting.</li>
         </ul>
       </div>
       <div class="glass-card flow-card">
@@ -457,8 +458,8 @@
     <div class="glass-card card-narrow">
       <ul class="tight-list">
         <li>Steer a workflow with prose alone and its behavior shifts with every model update, longer context, or change in temperature, with no warning.</li>
-        <li>dev-loops runs the workflow on a <strong>state graph</strong> instead: the moves are a closed, listable set, so every possible next step is known up front.</li>
-        <li>A known set of moves is testable, so a wrong transition is caught in CI.</li>
+        <li>dev-loops runs the workflow on a <strong>state graph</strong>: the moves are a closed, listable set, so the resolver computes the one next action for any change and surfaces it.</li>
+        <li>That is what makes the next step always known and pullable, and a known set of moves is testable, so a wrong transition is caught in CI.</li>
       </ul>
     </div>
   </div>
@@ -664,18 +665,18 @@
 <section class="slide" id="close">
   <div class="slide-inner">
     <p class="kicker">The takeaway</p>
-    <h2>See Every Handoff, Measure Every Wait</h2>
+    <h2>Keep the Next Step Known, Measure Every Wait</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
-          <li><strong>Make every handoff a decision you can see,</strong> so wrong routing and silent stalls surface the moment they happen.</li>
+          <li><strong>Keep the next step always known,</strong> so whoever is free pulls it and a handoff, when it happens, is a recorded decision you can see.</li>
           <li><strong>Make the state explicit,</strong> and pickup becomes a continuation of work already under way.</li>
           <li><strong>Measure the waits,</strong> and the biggest stall stops hiding behind your commit history.</li>
           <li><strong>Automate only where state proves it's safe,</strong> and you remove the stall while keeping the judgment human.</li>
         </ul>
       </div>
       <div class="metric-card closer">
-        <p class="hero-copy">Make every handoff a decision you can see, and measure how long the work waits.</p>
+        <p class="hero-copy">Keep the next step known so the next actor pulls it, and measure how long the work waits.</p>
       </div>
     </div>
   </div>
