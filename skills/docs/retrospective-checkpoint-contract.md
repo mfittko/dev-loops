@@ -93,17 +93,45 @@ When `workflow.requireRetrospectiveGate` is enabled in `.devloops` at repo root,
 - has `state: "complete"`
 - includes a `behavioralReview` with `mergeApproved: true`, `followedWorkingAgreement` (boolean), `gateQualityAcceptable` (boolean), and `drifts` (array)
 - includes `mergeRecommendation` (non-empty string)
+- includes `behavioralReview.internalToolingOnly: true` (boolean) and `behavioralReview.rawCallViolations: []` (empty array) — see **Internal-tooling-only rule** below
 
 The enforcement function is `evaluateRetrospectiveMergeApproval(checkpoint)` in `packages/core/src/loop/pr-gate-coordination.mjs`, called from `evaluatePrGateCoordination` at each merge-ready boundary.
+
+### Internal-tooling-only rule (issue #982)
+
+The loop's own execution must use internal dev-loops tooling only. **Agent-level top-level raw calls are all the same breach and all block the merge gate:**
+
+- `gh ...` (including `gh api`, `gh ... --jq`) — use `gate capture-threads`, `gate reply-resolve`, `dev-loops loop info`, `queue …`, or a `node scripts/...` wrapper instead
+- `python` / `python3` — parse JSON with the tool's `--jq`/built-in output, not an inline Python one-liner
+- `node -e` / `node --eval` — inline eval to read/parse tool output is a violation; `node scripts/foo.mjs` is **not**
+
+**Allowed (NOT violations):** dev-loops subcommands, and `node scripts/*.mjs` invocations — those scripts legitimately call `gh`/GraphQL internally; that is the tooling. The rule targets the agent's own top-level shell calls, not a script's internals.
+
+The retrospective author records the result in the checkpoint:
+- `behavioralReview.internalToolingOnly` (boolean) — `true` only when the run used internal tooling throughout
+- `behavioralReview.rawCallViolations` (array of strings) — one entry per agent-level raw call; empty when clean
+
+**Fail-closed:** the merge gate blocks (`retrospective_gate_pending`) when `internalToolingOnly` is not `true` **OR** `rawCallViolations` is missing/non-empty. `state: "complete"` alone is **not** sufficient — a clean tooling record is also required.
+
+**Back-compat:** an OLD checkpoint that omits `internalToolingOnly`/`rawCallViolations` fails closed (blocked), consistent with `requireRetrospectiveGate` being a hard gate. Re-record the retrospective with the new fields to clear it.
+
+**Write-op allowlist (verifier only):** `gh pr merge`, `gh pr ready`, `gh issue create`, `gh issue edit` have no internal wrapper today. The deterministic verifier (below) records these as `allowedWriteOps` rather than violations so the gate is not blocked forever on an unavoidable gap. Close the gap with a wrapper to remove an entry. The gate itself still fails on any non-empty `rawCallViolations` the author records.
+
+### Deterministic verifier
+
+`node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]` reads a newline-delimited transcript of the shell commands the agent ran (one top-level command per line, via `--transcript` or stdin) and reports agent-level raw `gh`/`python`/`python3`/`node -e`/`node --eval` calls. Use it to derive the `rawCallViolations` array the retrospective author records. Exit code `1` when violations are found, `0` when clean. The pure `analyzeTranscript(transcript)` export returns `{ violations, allowedWriteOps, internalToolingOnly }`.
+
+Matching rules: a tool name at the start of a command segment (start of line, or after `&&`/`||`/`|`/`;`); `node` is a violation only with `-e`/`--eval`. Known limitation: segment splitting does not parse shell quoting, so a separator inside a quoted argument may over-report (never under-report) — prefer single-line, single-purpose commands in transcripts.
 
 ### Merge gate states
 
 | Retrospective state | Merge gate result |
 |---|---|
 | No checkpoint file | Blocked: `retrospective_gate_pending` |
-| `state: "complete"` with `mergeApproved: true` and valid fields | Allowed: proceeds to `FINAL_APPROVAL_READY` |
+| `state: "complete"` with `mergeApproved: true`, valid fields, `internalToolingOnly: true`, and empty `rawCallViolations` | Allowed: proceeds to `FINAL_APPROVAL_READY` |
 | `state: "complete"` without `mergeApproved: true` | Blocked |
-| Missing required fields (`followedWorkingAgreement`, `gateQualityAcceptable`, `drifts`, `mergeRecommendation`) | Blocked |
+| `internalToolingOnly` not `true`, or `rawCallViolations` missing/non-empty | Blocked |
+| Missing required fields (`followedWorkingAgreement`, `gateQualityAcceptable`, `drifts`, `mergeRecommendation`, `internalToolingOnly`, `rawCallViolations`) | Blocked |
 | `state: "skipped"` or `state: "required"` | Blocked |
 
 ### Configuration
@@ -130,11 +158,25 @@ The checkpoint file is written by `.pi/extensions/dev-loop-behavioral-review.ts`
 
 ### After retrospective is done (written by operator or skill)
 
+A minimal completion clears the startup gate. To also clear the **merge gate**
+(`requireRetrospectiveGate`), include the `behavioralReview`, `gateQuality`, and
+`mergeRecommendation` fields:
+
 ```json
 {
   "state": "complete",
   "completedAt": "2026-05-29T16:30:00.000Z",
-  "notes": "Loop followed working agreement; minor drift on thread resolution."
+  "notes": "Loop followed working agreement; minor drift on thread resolution.",
+  "gateQuality": "Real gates with concrete findings and follow-through.",
+  "mergeRecommendation": "Merge approved — all gates passed clean.",
+  "behavioralReview": {
+    "mergeApproved": true,
+    "followedWorkingAgreement": true,
+    "gateQualityAcceptable": true,
+    "drifts": [],
+    "internalToolingOnly": true,
+    "rawCallViolations": []
+  }
 }
 ```
 
@@ -153,7 +195,9 @@ The checkpoint file is written by `.pi/extensions/dev-loop-behavioral-review.ts`
 | Artifact | Location |
 |---|---|
 | Checkpoint state machine | `packages/core/src/loop/retrospective-checkpoint.mjs` (internal core module; not part of the public package exports surface) |
-| Tests | `packages/core/test/retrospective-checkpoint.test.mjs` |
+| Merge gate evaluator | `packages/core/src/loop/pr-gate-coordination.mjs` — `evaluateRetrospectiveMergeApproval` |
+| Internal-tooling verifier | `scripts/loop/check-retro-tooling.mjs` (+ `test/loop/check-retro-tooling.test.mjs`) |
+| Tests | `packages/core/test/retrospective-checkpoint.test.mjs`, `packages/core/test/pr-gate-coordination.test.mjs` |
 | Extension (writes required marker, fires review prompt) | `.pi/extensions/dev-loop-behavioral-review.ts` |
 | Checkpoint file | `.pi/dev-loop-retrospective-checkpoint.json` |
 | AGENTS.md repo contract | [Agent Instructions](../../AGENTS.md) — concise repo contract and working rules |

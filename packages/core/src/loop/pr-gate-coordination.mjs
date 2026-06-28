@@ -278,6 +278,30 @@ function evaluateRetrospectiveMergeApproval(checkpoint) {
     return { approved: false, reason: "Retrospective is missing explicit `mergeRecommendation`." };
   }
 
+  // internalToolingOnly: the loop's own execution must have used internal dev-loops
+  // tooling only — no agent-level raw `gh`/`python`/`python3`/`node -e` (issue #982).
+  // Fail closed: a complete checkpoint must explicitly attest a clean tooling record.
+  // Back-compat: an OLD checkpoint missing `internalToolingOnly` is treated as a
+  // failure (not a silent pass), consistent with requireRetrospectiveGate being a
+  // hard, fail-closed gate. Re-record the retrospective with the new fields to clear it.
+  const internalToolingOnly = br !== null ? br.internalToolingOnly : checkpoint.internalToolingOnly;
+  if (internalToolingOnly !== true) {
+    return {
+      approved: false,
+      reason: "Retrospective does not attest internal-tooling-only execution (`internalToolingOnly: true` is required; agent-level raw gh/python/node -e is a violation).",
+    };
+  }
+  const rawCallViolations = br !== null ? br.rawCallViolations : checkpoint.rawCallViolations;
+  if (!Array.isArray(rawCallViolations)) {
+    return { approved: false, reason: "Retrospective is missing `rawCallViolations` (array; empty when clean)." };
+  }
+  if (rawCallViolations.length > 0) {
+    return {
+      approved: false,
+      reason: `Retrospective records ${rawCallViolations.length} raw-call violation(s) (agent-level gh/python/node -e): ${rawCallViolations.join("; ")}.`,
+    };
+  }
+
   return { approved: true, reason: null };
 }
 
