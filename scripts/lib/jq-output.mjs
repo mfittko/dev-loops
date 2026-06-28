@@ -66,7 +66,10 @@ function resolvePath(value, path) {
   // Tokenize into .field and [index] steps.
   const stepRe = /\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]/g;
   let cursor = value;
-  let lastIndex = 0;
+  // Root index access (`.[N]`) starts with a leading '.' that is not part of any
+  // step token; consume it so the first `[N]` match aligns at the cursor.
+  let lastIndex = trimmed.startsWith(".[") ? 1 : 0;
+  stepRe.lastIndex = lastIndex;
   let match;
   let consumedAny = false;
   while ((match = stepRe.exec(trimmed)) !== null) {

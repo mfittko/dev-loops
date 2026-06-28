@@ -24,6 +24,9 @@ test("evaluateJqFilter: identity, field, chain, index, iterate, pipe", () => {
   assert.deepEqual(evaluateJqFilter(sample, ".ciStatus"), ["success"]);
   assert.deepEqual(evaluateJqFilter(sample, ".snapshot.nested.deep"), ["v"]);
   assert.deepEqual(evaluateJqFilter(sample, ".items[1].n"), [2]);
+  // Root index access `.[N]` (and `.[N].field`) against an array value.
+  assert.deepEqual(evaluateJqFilter([10, 20, 30], ".[0]"), [10]);
+  assert.deepEqual(evaluateJqFilter([{ n: 1 }, { n: 2 }], ".[1].n"), [2]);
   assert.deepEqual(evaluateJqFilter(sample, ".items[]"), sample.items);
   assert.deepEqual(evaluateJqFilter(sample, ".newComments[] | .body"), ["a", "b"]);
   assert.deepEqual(evaluateJqFilter(sample, ".items | length"), [3]);
