@@ -11,7 +11,7 @@ shipped the shared harness, UE2 #976 made it required).
 
 UI e2e coverage is **not** opted into by annotating a phase doc or PR description.
 A PR is required to carry passing UI e2e coverage when its **changed-file set**
-touches a registered rendered artifact, matched against explicit globs:
+touches a rendered artifact, matched against explicit globs:
 
 - a presentation deck — `docs/presentations/*.html`
 - an article page — `docs/articles/*.html`

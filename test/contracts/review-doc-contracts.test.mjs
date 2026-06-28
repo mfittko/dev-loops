@@ -124,7 +124,7 @@ test("consolidated PR lifecycle contract freezes the family-local lifecycle boun
   assert.match(conductorRouting, /skills\/docs\/pr-lifecycle-contract\.md/i);
 });
 
-test("dev-loop skill documents the auto-scoped rendered-artifact UI e2e requirement", async () => {
+test("local-implementation skill documents the auto-scoped rendered-artifact UI e2e requirement", async () => {
   const localImplementationSkill = await readRepo("skills/local-implementation/SKILL.md");
 
   assert.match(localImplementationSkill, /required and auto-scoped/i);
