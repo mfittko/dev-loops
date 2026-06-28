@@ -4,15 +4,14 @@ prNumber: 971
 # Introducing dev-loops — public intro article
 
 ## Status
-Draft. Authored locally as a plan file (local-first), to be refined and promoted through the dev-loop itself — the article documents the same flow that produced it.
+Promoted — in PR review (#971). Refined and promoted through the local-first flow; the acceptance criteria and definition of done below are met (see the coverage matrix).
 
 ## Objective
 Publish a top-of-funnel public article that introduces dev-loops to a general engineering audience: what it is, why it exists, and how to start using it. The two existing articles (eliminating-coordination-delay, make-the-waiting-visible) are concept deep-dives; there is no single "what / why / how-do-I-start" entry point, and this fills that gap. The piece shows off the approach with concrete, verified evidence from this repository's own history and then hands the reader a path to adopt dev-loops in their project with Pi or Claude Code.
 
-## In scope
-- One article, two acts. Act 1 — why + proof: the coordination-delay problem in brief, the verified throughput (100 merged PRs in ~14 days, every one through the same gate), and a handful of concrete worked examples from this repo (the local-first epic as a waterfall; the docs-grill catching real code-vs-doc drift; Copilot rounds converging under a round cap; the gate catching a real defect; dogfooding surfacing its own tooling bug).
-- Act 2 — hands-on adoption: drop dev-loops into a project with Pi or Claude Code; the config forks — start local (`strategy.default: local-first`) vs issue-intake (`github-first`), `inputSource` tracker vs phase-docs, the waterfall refinement (epic → phase tree), Copilot reviews on/off (`refinement.maxCopilotRounds`, `0` to disable), human-merge-only.
-- Every cited number, config key, flag, and script verified against shipped code/history (not prose).
+- A generic public introduction to the underlying concepts: the coordination-delay problem in brief, the manual-coordination-compounding argument, and the verified aggregate throughput (~100 merged PRs in ~14 days, every one gated and human-merged) used to show the straightforward, repeatable process the loop produces. Concepts and aggregate data only — no internal PR/issue numbers, script paths, contract names, or phase labels in the prose.
+- Concrete setup instructions: drop dev-loops into a project with Pi or Claude Code (the Claude Code plugin slash commands, `pi install`), the plain-language `start/auto/continue dev loop` entrypoint, and the config forks — start local (`strategy.default: local-first`) vs issue-intake (`github-first`), `inputSource.default` tracker vs phase-docs, Copilot reviews on/off (`refinement.maxCopilotRounds`, `0` to disable), human-merge-only (`autonomy.humanMergeOnly`).
+- Every cited number, config key, flag, and command verified against shipped code/history (not prose).
 - Deliverables: a Markdown source under `docs/articles/`, a CSP-safe self-contained HTML rendering for the Artifact/Pages surface, and publication as a Claude artifact.
 - A/B-contrast deslop step applied; the piece reads as human-written and stays neutral while stating the full truth.
 
