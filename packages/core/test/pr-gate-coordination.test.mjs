@@ -623,7 +623,7 @@ function approvedRetroBase(overrides = {}) {
   };
 }
 
-function retroGateInputs(retrospectiveCheckpoint) {
+function retroGateInputs(retrospectiveCheckpoint, { developerMode = true } = {}) {
   return {
     pr: 982,
     currentHeadSha: "fedcba987654",
@@ -633,6 +633,10 @@ function retroGateInputs(retrospectiveCheckpoint) {
     sameHeadCleanConverged: true,
     ciStatus: "success",
     requireRetrospectiveGate: true,
+    // The internal-tooling-only check is a developer-mode step (#982): default the
+    // helper to ON so existing blocking assertions hold; the consumer (OFF) path is
+    // covered by its own test below.
+    requireRetrospectiveInternalTooling: developerMode,
     retrospectiveCheckpoint,
     draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
@@ -695,6 +699,30 @@ test("retrospective merge gate: clean internal-tooling-only record allows final 
 
   assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+});
+
+test("retrospective merge gate: consumer (developer mode OFF) is NOT blocked by the internal-tooling check (#982)", () => {
+  // Consumer default: requireRetrospectiveInternalTooling is OFF. A complete,
+  // merge-approved checkpoint must reach final approval even when it lacks the
+  // internalToolingOnly/rawCallViolations fields entirely (back-compat) AND even
+  // when it records a raw-call "violation" — the check is inert for consumers.
+  const missingFields = approvedRetroBase();
+  delete missingFields.behavioralReview.internalToolingOnly;
+  delete missingFields.behavioralReview.rawCallViolations;
+  const missing = evaluatePrGateCoordination(
+    retroGateInputs(missingFields, { developerMode: false }),
+  );
+  assert.equal(missing.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(missing.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+
+  const withViolation = evaluatePrGateCoordination(
+    retroGateInputs(
+      approvedRetroBase({ internalToolingOnly: false, rawCallViolations: ["gh: gh api repos/x/y"] }),
+      { developerMode: false },
+    ),
+  );
+  assert.equal(withViolation.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(withViolation.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
 });
 
 test("non-draft PR with clean draft_gate on a different head still allows post-draft flow (one-time boundary)", () => {

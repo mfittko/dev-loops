@@ -93,13 +93,15 @@ When `workflow.requireRetrospectiveGate` is enabled in `.devloops` at repo root,
 - has `state: "complete"`
 - includes a `behavioralReview` with `mergeApproved: true`, `followedWorkingAgreement` (boolean), `gateQualityAcceptable` (boolean), and `drifts` (array)
 - includes `mergeRecommendation` (non-empty string)
-- includes `behavioralReview.internalToolingOnly: true` (boolean) and `behavioralReview.rawCallViolations: []` (empty array) — see **Internal-tooling-only rule** below
+- **(developer mode only)** includes `behavioralReview.internalToolingOnly: true` (boolean) and `behavioralReview.rawCallViolations: []` (empty array) — see **Internal-tooling-only rule** below
 
-The enforcement function is `evaluateRetrospectiveMergeApproval(checkpoint)` in `packages/core/src/loop/pr-gate-coordination.mjs`, called from `evaluatePrGateCoordination` at each merge-ready boundary.
+The enforcement function is `evaluateRetrospectiveMergeApproval(checkpoint, { developerMode })` in `packages/core/src/loop/pr-gate-coordination.mjs`, called from `evaluatePrGateCoordination` at each merge-ready boundary.
 
-### Internal-tooling-only rule (issue #982)
+### Internal-tooling-only rule (issue #982) — DEVELOPER MODE ONLY, opt-in
 
-The loop's own execution must use internal dev-loops tooling only. **Agent-level top-level raw calls are all the same breach and all block the merge gate:**
+This is a **developer-mode** retro step: it enforces the dev-loops maintainers' own dogfooding discipline and is **opt-in** via `workflow.requireRetrospectiveInternalTooling` (**default OFF**). **Consumers of the dev-loops extension are never blocked by it** — a consumer may legitimately use raw `gh`/`python`/`node -e` in their own workflow, so when the flag is OFF (the consumer default) the `internalToolingOnly`/`rawCallViolations` fields are neither required nor enforced, and a complete, merge-approved checkpoint passes exactly as it would without these fields. The check only requires and enforces them when `workflow.requireRetrospectiveInternalTooling: true` (the dev-loops repo opts in via its own repo-root `.devloops`).
+
+When developer mode is ON, the loop's own execution must use internal dev-loops tooling only. **Agent-level top-level raw calls are all the same breach and all block the merge gate:**
 
 - `gh ...` (including `gh api`, `gh ... --jq`) — use `gate capture-threads`, `gate reply-resolve`, `dev-loops loop info`, `queue …`, or a `node scripts/...` wrapper instead
 - `python` / `python3` — parse JSON with the tool's `--jq`/built-in output, not an inline Python one-liner
@@ -111,9 +113,9 @@ The retrospective author records the result in the checkpoint:
 - `behavioralReview.internalToolingOnly` (boolean) — `true` only when the run used internal tooling throughout
 - `behavioralReview.rawCallViolations` (array of strings) — one entry per agent-level raw call; empty when clean
 
-**Fail-closed:** the merge gate blocks (`retrospective_gate_pending`) when `internalToolingOnly` is not `true` **OR** `rawCallViolations` is missing/non-empty. `state: "complete"` alone is **not** sufficient — a clean tooling record is also required.
+**Fail-closed (developer mode only):** when `requireRetrospectiveInternalTooling` is ON, the merge gate blocks (`retrospective_gate_pending`) if `internalToolingOnly` is not `true` **OR** `rawCallViolations` is missing/non-empty. `state: "complete"` alone is **not** sufficient — a clean tooling record is also required. When the flag is OFF (consumer default) this check is inert: it never blocks, even for a checkpoint that omits the fields or records a violation.
 
-**Back-compat:** an OLD checkpoint that omits `internalToolingOnly`/`rawCallViolations` fails closed (blocked), consistent with `requireRetrospectiveGate` being a hard gate. Re-record the retrospective with the new fields to clear it.
+**Back-compat:** an OLD checkpoint that omits `internalToolingOnly`/`rawCallViolations` only fails closed in developer mode; with the flag OFF (consumer default) it passes unchanged. Re-record the retrospective with the new fields to clear a developer-mode block.
 
 **Write-op allowlist (verifier only):** `gh pr merge`, `gh pr ready`, `gh issue create`, `gh issue edit` have no internal wrapper today. The deterministic verifier (below) records these as `allowedWriteOps` rather than violations so the gate is not blocked forever on an unavoidable gap. Close the gap with a wrapper to remove an entry. The gate itself still fails on any non-empty `rawCallViolations` the author records.
 
@@ -128,10 +130,11 @@ Matching rules: a tool name at the start of a command segment (start of line, or
 | Retrospective state | Merge gate result |
 |---|---|
 | No checkpoint file | Blocked: `retrospective_gate_pending` |
-| `state: "complete"` with `mergeApproved: true`, valid fields, `internalToolingOnly: true`, and empty `rawCallViolations` | Allowed: proceeds to `FINAL_APPROVAL_READY` |
+| `state: "complete"` with `mergeApproved: true` and valid base fields (consumer default; internal-tooling check OFF) | Allowed: proceeds to `FINAL_APPROVAL_READY` |
 | `state: "complete"` without `mergeApproved: true` | Blocked |
-| `internalToolingOnly` not `true`, or `rawCallViolations` missing/non-empty | Blocked |
-| Missing required fields (`followedWorkingAgreement`, `gateQualityAcceptable`, `drifts`, `mergeRecommendation`, `internalToolingOnly`, `rawCallViolations`) | Blocked |
+| **Developer mode ON** + `internalToolingOnly` not `true`, or `rawCallViolations` missing/non-empty | Blocked |
+| **Developer mode OFF** (consumer default) + missing `internalToolingOnly`/`rawCallViolations` or a recorded violation | Allowed (check is inert) |
+| Missing base required fields (`followedWorkingAgreement`, `gateQualityAcceptable`, `drifts`, `mergeRecommendation`) | Blocked |
 | `state: "skipped"` or `state: "required"` | Blocked |
 
 ### Configuration
@@ -139,8 +142,9 @@ Matching rules: a tool name at the start of a command segment (start of line, or
 ```yaml
 # .devloops at repo root
 workflow:
-  requireRetrospective: true        # startup/resume gate
-  requireRetrospectiveGate: true    # merge gate after pre_approval_gate
+  requireRetrospective: true                  # startup/resume gate
+  requireRetrospectiveGate: true               # merge gate after pre_approval_gate
+  requireRetrospectiveInternalTooling: true    # developer-mode internal-tooling-only check (default OFF; consumers leave unset)
 ```
 
 ## Durable artifact format
