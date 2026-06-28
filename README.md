@@ -39,7 +39,7 @@ The same entrypoints are also available as direct named commands — thin wrappe
 | `/dev-loops:start <issue>` | start dev loop on issue `<issue>` |
 | `/dev-loops:auto <issue>` | auto dev loop on issue `<issue>` (autonomous until human approval) |
 | `/dev-loops:continue <pr>` | continue dev loop on PR `<pr>` |
-| `/dev-loops:info <issue\|pr>` | read-only state summary (`loop info`) |
+| `/dev-loops:info <issue|pr>` | read-only state summary (`loop info`) |
 | `/dev-loops:status` | dev-loop readiness (gh auth, git repo, subagent) |
 
 `/dev-loops:dev-loop` remains the catch-all router. Inside Pi the same set is reachable as `/dev-loops start|auto|continue|info|status …`.

@@ -307,6 +307,12 @@ test("direct entrypoints reject missing or non-numeric targets (#972)", () => {
   assert.equal(parseDevLoopsCommand(["info", "1", "2"], { surface: "extension" }).kind, "malformed");
 });
 
+test("malformed entrypoint message names the target kind per verb (#972)", () => {
+  assert.match(parseDevLoopsCommand(["start", "x"], { surface: "extension" }).message, /numeric issue,/);
+  assert.match(parseDevLoopsCommand(["continue", "main"], { surface: "extension" }).message, /numeric PR,/);
+  assert.match(parseDevLoopsCommand(["info", "x"], { surface: "extension" }).message, /numeric issue\/PR,/);
+});
+
 test("executor surfaces the entrypoint intent for dispatch (#972)", async () => {
   const result = await executeDevLoopsCommand({
     input: ["continue", "88"],
