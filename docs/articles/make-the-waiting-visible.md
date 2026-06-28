@@ -6,6 +6,8 @@ tags: [software-delivery, ai-engineering, process, lead-time, developer-producti
 
 # Make the Waiting Visible
 
+> New here? Start with [Introducing dev-loops](./introducing-dev-loops.md) for the overview; this article is a deep dive beneath it.
+
 A change that used to take an afternoon now lands in seconds. The diff shows up before you've finished reading the request. Generation, the part we spent decades trying to speed up, is now fast enough to drop off the timeline.
 
 Then the work sits. It sits while someone notices it's ready. It sits while a reviewer rebuilds enough context to have an opinion. It sits in a queue, waiting for the one person who knows whether the next step is safe. The code is written in seconds, and the change ships hours later. Almost none of that gap shows up anywhere you'd think to look.

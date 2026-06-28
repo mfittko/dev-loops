@@ -1,13 +1,26 @@
 #!/usr/bin/env node
-// Assembles the GitHub Pages publishable dir deterministically: copies the
-// self-contained deck HTML renders and generates an index linking them.
-// The deck HTML files are the source of truth; site/ is assembled, never
-// hand-maintained. Usage: node scripts/pages/build-site.mjs [--out <dir>] [--repo-root <dir>]
-import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
+// Assembles the GitHub Pages publishable dir deterministically. The landing
+// page (index.html) is the "Introducing dev-loops" article; the two deep-dive
+// articles and the two decks are published alongside it and reached through a
+// shared navigation bar injected into the article pages. The source HTML files
+// under docs/ are the source of truth; site/ is assembled, never hand-maintained.
+// Usage: node scripts/pages/build-site.mjs [--out <dir>] [--repo-root <dir>]
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, parse as parsePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// The landing page: the intro article, published as index.html. file is
+// relative to docs/articles/.
+export const LANDING = { file: 'introducing-dev-loops.html' };
+
+// Deep-dive articles published alongside the landing page. file is relative to
+// docs/articles/; navLabel is how the nav refers to them.
+export const ARTICLES = [
+  { file: 'eliminating-coordination-delay.html', navLabel: 'Coordination Delay' },
+  { file: 'make-the-waiting-visible.html', navLabel: 'Make the Waiting Visible' },
+];
 
 // The decks to publish. file is relative to docs/presentations/.
 export const DECKS = [
@@ -16,160 +29,58 @@ export const DECKS = [
     title: 'Applied dev-loops',
     subtitle: 'Eliminating Coordination Delay',
     description: 'How a coordination runtime turns review and merge handoffs into a parallel, fail-closed pipeline.',
+    navLabel: 'Applied (deck)',
   },
   {
     file: 'process-observability.html',
     title: 'Process Observability',
     subtitle: 'Make the Waiting Visible',
     description: 'Why measuring how long work waits — not how fast you write code — is what cuts delivery delay.',
+    navLabel: 'Observability (deck)',
   },
 ];
 
-function renderIndex(decks) {
-  const cards = decks
-    .map(
-      (d) => `      <a class="card" href="${d.file}">
-        <span class="card-title">${d.title}</span>
-        <span class="card-subtitle">${d.subtitle}</span>
-        <span class="card-desc">${d.description}</span>
-      </a>`,
-    )
-    .join('\n');
+// The other resources linked from the navigation, in order.
+export const NAV_LINKS = [
+  ...ARTICLES.map((a) => ({ file: a.file, label: a.navLabel })),
+  ...DECKS.map((d) => ({ file: d.file, label: d.navLabel })),
+];
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
-<title>dev-loops: Presentation Decks</title>
-<style>
-  :root {
-    --ground-1: #08101f;
-    --ground-2: #0b1220;
-    --ground-3: #0f172a;
-    --ink: #e5e7eb;
-    --heading: #f8fafc;
-    --copy: #cbd5e1;
-    --accent: #a78bfa;
-    --accent-soft: #ddd6fe;
-    --kicker: #93c5fd;
-    --card-border: rgba(148, 163, 184, 0.18);
-    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Helvetica Neue", sans-serif;
+// Nav styling, appended to each article page's own <style> block so it reuses
+// the article design-system variables (--heading/--kicker/--accent-soft).
+const NAV_CSS = `
+  .site-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.1rem; max-width: 64rem; margin: 0 auto; padding: 0.9rem clamp(1.1rem, 5vw, 2rem); border-bottom: 1px solid rgba(148, 163, 184, 0.16); }
+  .site-nav-brand { font-weight: 700; letter-spacing: -0.01em; color: var(--heading); text-decoration: none; border: 0; margin-right: auto; }
+  .site-nav-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.1rem; }
+  .site-nav a { color: var(--kicker); text-decoration: none; font-size: 0.9rem; border: 0; }
+  .site-nav a:hover { color: var(--accent-soft); }`;
+
+function navMarkup() {
+  const links = NAV_LINKS.map((l) => `        <a href="${l.file}">${l.label}</a>`).join('\n');
+  return `<nav class="site-nav" aria-label="dev-loops resources">
+      <a class="site-nav-brand" href="index.html">dev-loops</a>
+      <div class="site-nav-links">
+${links}
+      </div>
+    </nav>`;
+}
+
+// Inject the shared nav into an article page: nav CSS before </style>, nav
+// markup right after <body>. Idempotent enough for assembly (each source file
+// is read once). Throws if the page lacks the expected anchors so a structural
+// drift fails the build rather than publishing an un-navigable page.
+export function injectNav(html) {
+  if (!html.includes('</style>') || !/<body[^>]*>/.test(html)) {
+    throw new Error('cannot inject nav: page is missing a <style> block or <body> tag');
   }
-
-  * { box-sizing: border-box; }
-
-  body {
-    margin: 0;
-    min-height: 100vh;
-    font-family: var(--font);
-    color: var(--ink);
-    background:
-      radial-gradient(circle at 85% 12%, rgba(139, 92, 246, 0.24), transparent 24%),
-      radial-gradient(circle at 15% 8%, rgba(59, 130, 246, 0.18), transparent 20%),
-      linear-gradient(180deg, var(--ground-1) 0%, var(--ground-2) 42%, var(--ground-3) 100%);
-    -webkit-text-size-adjust: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    padding: clamp(2rem, 6vh, 4rem) clamp(1.25rem, 5vw, 3rem);
-  }
-
-  main {
-    width: 100%;
-    max-width: 64rem;
-    margin: 0 auto;
-  }
-
-  .kicker {
-    font-size: 0.8rem;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--kicker);
-    margin: 0 0 0.75rem;
-  }
-
-  h1 {
-    color: var(--heading);
-    font-size: clamp(1.9rem, 5vw, 3rem);
-    line-height: 1.05;
-    margin: 0 0 0.75rem;
-  }
-
-  .lede {
-    color: var(--copy);
-    font-size: clamp(1rem, 2.2vw, 1.2rem);
-    margin: 0 0 2.5rem;
-    max-width: 44rem;
-  }
-
-  .cards {
-    display: grid;
-    gap: 1.25rem;
-    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-  }
-
-  .card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    text-decoration: none;
-    padding: 1.5rem;
-    border: 1px solid var(--card-border);
-    border-radius: 14px;
-    background: rgba(15, 23, 42, 0.55);
-    transition: border-color 120ms ease, transform 120ms ease;
-  }
-
-  .card:hover,
-  .card:focus-visible {
-    border-color: var(--accent);
-    transform: translateY(-2px);
-    outline: none;
-  }
-
-  .card-title {
-    color: var(--heading);
-    font-size: 1.3rem;
-    font-weight: 600;
-  }
-
-  .card-subtitle {
-    color: var(--accent-soft);
-    font-size: 0.95rem;
-  }
-
-  .card-desc {
-    color: var(--copy);
-    font-size: 0.9rem;
-    margin-top: 0.35rem;
-    line-height: 1.5;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .card { transition: none; }
-    .card:hover,
-    .card:focus-visible { transform: none; }
-  }
-</style>
-</head>
-<body>
-  <main>
-    <p class="kicker">dev-loops</p>
-    <h1>Presentation Decks</h1>
-    <p class="lede">Self-contained talks on cutting coordination delay and making process latency observable.</p>
-    <nav class="cards">
-${cards}
-    </nav>
-  </main>
-</body>
-</html>
-`;
+  return html
+    .replace('</style>', `${NAV_CSS}\n</style>`)
+    .replace(/<body([^>]*)>/, `<body$1>\n    ${navMarkup()}`);
 }
 
 export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   const out = outDir ? resolve(outDir) : join(repoRoot, 'site');
+  const articlesDir = join(repoRoot, 'docs', 'articles');
   const decksDir = join(repoRoot, 'docs', 'presentations');
 
   // Guard: out is wiped before assembly. Refuse paths that would nuke the
@@ -183,12 +94,25 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
 
+  // Landing page: the intro article, navigable, published as index.html.
+  const landingHtml = await readFile(join(articlesDir, LANDING.file), 'utf8');
+  await writeFile(join(out, 'index.html'), injectNav(landingHtml), 'utf8');
+
+  // Deep-dive articles: published with the same nav so the set is navigable.
+  for (const article of ARTICLES) {
+    const html = await readFile(join(articlesDir, article.file), 'utf8');
+    await writeFile(join(out, article.file), injectNav(html), 'utf8');
+  }
+
+  // Decks: self-contained slide renders, copied as-is (no nav injection).
   for (const deck of DECKS) {
     await cp(join(decksDir, deck.file), join(out, deck.file));
   }
-  await writeFile(join(out, 'index.html'), renderIndex(DECKS), 'utf8');
 
-  return { out, files: ['index.html', ...DECKS.map((d) => d.file)] };
+  return {
+    out,
+    files: ['index.html', ...ARTICLES.map((a) => a.file), ...DECKS.map((d) => d.file)],
+  };
 }
 
 const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
