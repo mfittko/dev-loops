@@ -25,6 +25,13 @@ export const ARTICLES = [
 // The decks to publish. file is relative to docs/presentations/.
 export const DECKS = [
   {
+    file: 'introducing-dev-loops.html',
+    title: 'Introducing dev-loops',
+    subtitle: 'A coordination runtime for AI-assisted development',
+    description: 'The concept, the data behind it, and how to run the loop on your own project.',
+    navLabel: 'Intro (deck)',
+  },
+  {
     file: 'applied-dev-loops.html',
     title: 'Applied dev-loops',
     subtitle: 'Eliminating Coordination Delay',
