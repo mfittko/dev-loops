@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Automated GitHub Release on tag push (#996).** Pushing a `v*` tag now creates the GitHub Release automatically, which fires `npm-publish.yml` — tag → Release → publish is hands-off (closing the gap where v0.5.0 was tagged but never published because no Release was created). New `.github/workflows/release.yml` triggers `on: push: tags: ['v*']`: it mirrors npm-publish's on-main guard (tag commit must be an ancestor of `origin/main`), extracts the release notes from the `## <version>` CHANGELOG.md section, is idempotent (no-op if a Release for the tag already exists), and fails closed if the version has no CHANGELOG section (no empty/auto-generated release for an undocumented version). Notes extraction is factored into `scripts/release/extract-changelog-section.mjs` (`--version <v> [--changelog <path>]`) with `node:test` coverage: present section, fail-closed absent version, the `## Unreleased`-above-latest layout, stop-at-next-`## ` boundary, and version-prefix disambiguation. `npm-publish.yml` is unchanged (still `on: release: published`). Tagging stays the only manual step — see [release-runbook](skills/docs/release-runbook.md).
+
 ## 0.5.0 - 2026-06-28
 
 ### Added

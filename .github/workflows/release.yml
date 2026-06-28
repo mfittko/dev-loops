@@ -1,0 +1,65 @@
+name: Create GitHub Release
+
+# Tagging is the only manual release step. Pushing a "v*" tag creates the
+# GitHub Release (notes = the matching CHANGELOG.md section), which in turn
+# fires npm-publish.yml (on: release: published).
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release commit is on main
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Release tag commit $(git rev-parse HEAD) is not an ancestor of origin/main. Releasing is only allowed from the main branch."
+            exit 1
+          fi
+
+      - name: Skip if release already exists (idempotent)
+        id: exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::notice::Release ${{ steps.version.outputs.tag }} already exists; nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract release notes from CHANGELOG.md (fail closed)
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          node scripts/release/extract-changelog-section.mjs \
+            --version "${{ steps.version.outputs.version }}" \
+            > release-notes.md
+
+      - name: Create GitHub Release
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --notes-file release-notes.md \
+            --latest \
+            --verify-tag
