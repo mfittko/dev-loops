@@ -55,7 +55,7 @@ describe("resolveAdditiveChangelog", () => {
 // ── real-git fixtures ────────────────────────────────────────────────
 
 function git(cwd, args) {
-  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_ENV });
   assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
   return r.stdout;
 }
