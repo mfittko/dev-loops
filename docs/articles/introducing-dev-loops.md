@@ -1,6 +1,6 @@
 ---
 title: "Introducing dev-loops"
-subtitle: "A coordination runtime for AI-assisted development, dogfooded so hard it builds itself."
+subtitle: "A coordination runtime for AI-assisted development — and a guide to running it yourself."
 tags:
   - AI
   - Software Engineering
@@ -11,58 +11,73 @@ tags:
 
 # Introducing dev-loops
 
-AI writes the code in seconds. The hours now go somewhere else: into the handoffs around the code. A change waits for someone to notice it is ready, waits for a reviewer to rebuild enough context to have an opinion, waits in a queue for the one person who can say whether the next step is safe. That waiting between actions is coordination delay, and it is where the lead time of an AI-assisted workflow actually goes.
+AI writes the code in seconds. The expensive part moved. It now sits in the coordination around the code: the wait for someone to notice a change is ready, to rebuild enough context to review it, to decide the next step is safe. That waiting between actions is where the lead time of an AI-assisted workflow goes once the typing is fast.
 
-dev-loops is a coordination runtime that closes that gap. It walks a change from a plan or an issue through review and into a merged pull request, treating every handoff as an explicit decision a human can see, with a human merging by default. This article covers what it does, the evidence that it works, and how to put it in your own project.
+dev-loops is a coordination runtime for that problem. It carries a change from an idea to a merged pull request and treats every handoff along the way as an explicit decision that gets written down, with a person merging by default. This article introduces the idea and shows how to run it on your own project. Two deeper pieces are linked at the end.
 
-It is also written through its own flow. This piece began as a plan file, was validated and refined in place, paused at a local human-review checkpoint, and was promoted to a single draft pull request that then ran the same gates as everything else. The loop that ships the loop also ships its articles.
+## The idea
 
-## Act 1 — Why it exists, and the proof
+Left alone, an agent tends to assume its way past the hard moments. It marks the build passed, calls the review done, decides the work is finished — and those assumptions go unchecked until something breaks downstream. dev-loops takes the assumption out. Every transition — is this ready, who acts next, is it safe to merge — becomes a decision the system makes deliberately and records where you can read it. When the answer is unclear, the loop stops and a person decides before the work moves on.
 
-The deep mechanics live in two companion articles linked at the end. Here is the short version. Most lost hours in an AI-assisted workflow happen in the seams between steps, where the system has to answer "who acts next?" or "is this ready?" and an unattended agent answers with a hopeful assumption it never checks. It marks the build passed, marks the review done, and calls the work finished while those assumptions go untested. dev-loops refuses the assumption everywhere. Every transition becomes a decision the system makes deliberately and records where you can read it; when the situation is ambiguous, it stops and a human resolves it before the work moves on.
+Three ideas carry most of the value:
 
-The proof is the repository itself. dev-loops develops dev-loops: the loop is the tool that ships its own changes, so its commit history is a continuous integration test of the claim. Over roughly fourteen days (2026-06-14 to 2026-06-28) the repository merged about 100 pull requests and closed about 96 issues, around 7 merged pull requests a day, with about 87% of merged pull requests closing a linked issue. Every one of those pull requests went through the same path: a draft gate that confirms checks are present, a Copilot review round, and a pre-approval gate that confirms CI is green, with a human performing the merge by default.
+- **Every change runs the same path.** A draft check confirms the basics are in place, a review round looks for real problems, and a final gate confirms the tests are green. Nothing skips the path, including the changes that built dev-loops itself.
+- **A person merges by default.** The loop does the preparation and reports that a change is ready; a human makes the final call. The autonomy is bounded on purpose, and you choose how much of it to grant.
+- **Work starts from a durable artifact.** A change begins from a short plan you write locally or from a tracked issue. That artifact is the spec, and the pull request carries it through review to merge, so there is always something to check the result against.
 
-A handful of concrete runs show what that path catches.
+None of this depends on a particular model or a particular editor. It is a runtime for the decisions around a change, and it runs inside the AI coding tools teams already use.
 
-**A waterfall that mints almost no tracker noise.** The local-first epic (#947) decomposed into six refined phase sub-issues, each promoted to its own gated pull request: #956, #957, #959, #960, #961, #962, plus the docs-grill formalization (#948 to #958). One phase, P4 (#960), added PR-first promotion: when work starts from a plan rather than an epic sub-issue, the promote step commits the plan document and opens a single draft pull request, minting no issue at all. The committed plan doc and the pull request are one artifact, so there is no second authority to keep in sync. (This article was promoted that way — it has a draft PR and no issue.)
+## What it does to the work
 
-**A documentation check that runs inside the loop.** The docs-grill standard step (#948 to #958) is an autonomous in-loop check of a change against the repository's own contracts: claims versus contracts, code versus documentation drift, stale references. Its first live run, during P6 (#962), caught real drift before merge: a contract still claimed the shipped default was `github-first` via a settings file that no longer ships, and still described the repository's own mode as tracker-first when its config sets `local-first`. Both were fixed in place during refinement, before the pull request reached a human.
+The point of the loop is what it does to the day-to-day of shipping. The clearest evidence is the project itself: dev-loops is built with dev-loops, so its own history shows the process it produces.
 
-**Gates catching real defects.** The mobile-fit Playwright hardening (#937 to #938) failed on the pre-fix layout and passed only after the fix, with a guard-the-guard test confirming the check itself fails on a deliberately broken element. The round-cap Copilot deadlock (#848 to #854) is the loop catching its own state machine: when a post-cap fix left the Copilot gate waiting on a review that could never satisfy it, the loop detected the unsatisfiable wait at the cap and routed to a clean fallback.
+That process is repetitive in the way you want. Each change follows the same path — draft, review, green-CI gate, human merge — so there is no bespoke ceremony to design per change and no question about what happens next. You describe the work in one line, and the loop handles the coordination that used to eat the hours: noticing a change is ready, lining up review, checking the next step is safe.
 
-**Dogfooding surfacing its own tooling gaps.** Running the loop turned up #963: the operator action scripts emit machine JSON only, so a human or an agent driving the gate cadence had to re-parse a raw blob just to read the result. The issue (still open) proposes a concise summary output mode. The same A/B-contrast deslop step — formalized for the articles in #945 and applied to the decks in #946 — runs over the loop's own writing, removing binary-contrast phrasing.
+The result is a cadence that normally takes a team and a stack of process. In a recent two-week stretch the repository merged about 100 pull requests — roughly seven a day — each one drafted, reviewed, gated on green tests, and merged by a person, with about seven in eight tied to a tracked item so the trail from intent to merge stayed legible. The straightforwardness underneath that volume is what makes it repeatable: the same short path carried a one-line fix and a six-step refactor alike, so throughput rose while the work of coordinating each change stayed flat.
 
-## Act 2 — Adopt it in your project
+And it stays honest at that speed. The review step keeps catching what slips past a tired reviewer in a hurry: a layout that broke on small screens, documentation that had drifted from the code, a review cycle that had quietly deadlocked. The loop earns its keep at the moment a change is about to land, which is where unattended automation is usually weakest — so the cadence is fast and the merges are still ones a person stands behind.
 
-dev-loops runs under two harnesses, and the configuration forks at a few decision points. The keys below are the real shipped names.
+## Set it up
 
-**Pick your harness.** Under Claude Code the dev-loop runs as a single agent that performs the steps directly: it reads and writes files, runs git and the pull-request lifecycle, and posts gate verdicts under the operating session's identity (see `skills/docs/main-agent-contract.md`). Under Pi the main agent is read-only and every mutation flows through an async `dev-loop` subagent. The contract is the same; the harness decides who holds the pen.
+dev-loops runs inside Claude Code or Pi and drives an ordinary GitHub pull-request workflow. You need Node 24 or newer and the GitHub CLI (`gh`) authenticated for your repository.
 
-**Pick where work originates.** Two config keys set the intake shape:
+**Claude Code.** Install the plugin from inside Claude Code:
 
-- `strategy.default` is `local-first` (the shipped extension default) or `github-first` (the built-in fallback in `config.mjs`). Local-first starts work from a plan file you author in the repository; github-first starts from a tracker issue.
-- `inputSource.default` is `tracker` (the issue body is the spec) or `phase-docs` (a phase document is the spec).
+```text
+/plugin marketplace add mfittko/dev-loops
+/plugin install dev-loops@dev-loops
+```
 
-These ship in `packages/core/src/config/extension-defaults.yaml`; the built-in `github-first` fallback lives in `packages/core/src/config/config.mjs`, and your repo's `.devloops` overrides both.
+**Pi.** Install the extension:
 
-**The local-first flow.** When work starts from a plan file, four helper scripts run in order (see `skills/docs/local-planning-flow.md`):
+```bash
+pi install npm:dev-loops
+```
 
-1. `scripts/refine/validate-plan-file.mjs` checks the plan's base sections (Status, Objective, In scope, Explicit non-goals).
-2. `scripts/loop/resolve-dev-loop-startup.mjs --plan-file <path>` reads the plan and resolves an intake state.
-3. `scripts/refine/refine-plan-file.mjs` writes the acceptance criteria, definition of done, coverage matrix, and recorded docs-grill findings back into the plan in place, then stops at a `local_human_review` checkpoint so you approve before anything is promoted.
-4. `scripts/refine/promote-plan.mjs` commits the plan and opens exactly one draft pull request, recording a bidirectional plan-to-PR link and minting no issue.
+**Start a loop.** There is one plain-language entrypoint; you never pick internal modes:
 
-For a tracker-first epic, refinement is a waterfall instead: an epic issue decomposes into a sub-issue phase tree, and the refiner produces acceptance criteria and a definition of done for each phase. This article and the local-first epic above are both worked examples of that flow.
+```text
+start dev loop on issue 112      # begin work from a tracked issue
+auto dev loop on issue 112       # run autonomously up to the human-merge checkpoint
+continue dev loop on PR 88       # pick up an open pull request
+```
 
-**Tune the gates.** A few more keys control how strict the loop is:
+**Tune the posture (optional).** A `.devloops` file at the repo root controls how work arrives and how strict the loop is. The shipped defaults are a low-noise starting point; loosen from there.
 
-- `refinement.maxCopilotRounds` (default 5) sets how many Copilot review rounds run before the loop converges; set it to `0` to disable Copilot review entirely.
-- `autonomy.humanMergeOnly: true` makes the merge an enforced repo invariant: the loop runs the full pre-merge evidence check and reports merge-ready, and a named human performs the merge. Local-first ships with this on, so it never auto-merges.
-- `workflow.requireDraftFirst: true` requires a pull request to open as a draft and pass the draft gate before it can be marked ready.
+```yaml
+# .devloops
+strategy:
+  default: local-first    # start from a local plan file; use github-first to start from issues
+inputSource:
+  default: tracker        # for local-first: read the spec from the issue body, or phase-docs
+refinement:
+  maxCopilotRounds: 5     # automated review rounds before converging; set 0 to turn Copilot off
+autonomy:
+  humanMergeOnly: true    # the loop prepares and reports ready; a person merges
+```
 
-That is the whole adoption path: choose a harness, set `strategy.default` and `inputSource.default` for how work arrives, run the flow, and dial the gate keys to the strictness your team wants. Start with the shipped local-first defaults and loosen from there.
+Three choices shape the experience. Work can start **local-first** — you write a short plan in the repository and the loop opens a pull request straight from it, with no issue to file — or **github-first**, where a tracked issue is the starting point. The review round can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; out of the box, it stops and hands the merge to you. Begin with the defaults and dial each setting toward the autonomy your team is comfortable with.
 
 ## Where to go deeper
 
-Two companion articles take the ideas here apart in detail. [Eliminating Coordination Delay in AI-Assisted Dev Workflows](./eliminating-coordination-delay.md) explains why every handoff becomes an explicit decision and why the loop runs on a state graph. [Make the Waiting Visible](./make-the-waiting-visible.md) is about measuring the waiting between actions, which is where the lead time goes once the code itself is fast to write.
+Two companion articles take these ideas apart in detail. [Eliminating Coordination Delay in AI-Assisted Dev Workflows](./eliminating-coordination-delay.md) explains why every handoff becomes an explicit decision and why the loop runs on a state graph. [Make the Waiting Visible](./make-the-waiting-visible.md) is about measuring the waiting between actions, which is where the lead time goes once the code itself is fast to write.

@@ -51,7 +51,6 @@
   .article p,
   .article ul,
   .article ol,
-  .article .section-h,
   .article .lede { max-width: 40rem; }
 
   .kicker {
@@ -94,6 +93,27 @@
     overflow-wrap: anywhere;
   }
 
+  pre {
+    max-width: 40rem;
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.6));
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    padding: 1rem 1.15rem;
+    margin: 0 0 1.3rem;
+    overflow-x: auto;
+  }
+  pre code {
+    background: none;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    font-size: 0.86rem;
+    line-height: 1.6;
+    color: #e2e8f0;
+    white-space: pre;
+  }
+  pre code .cm { color: #94a3b8; }
+
   .hero-card {
     background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.6));
     border: 1px solid var(--card-border);
@@ -122,21 +142,8 @@
     border-radius: 16px;
     padding: 1rem 1.1rem;
   }
-  .metric .num { font-size: 1.6rem; font-weight: 720; color: var(--accent-soft); line-height: 1; }
+  .metric .num { font-size: 1.5rem; font-weight: 720; color: var(--accent-soft); line-height: 1.05; }
   .metric .lab { font-size: 0.82rem; color: var(--copy); margin-top: 0.4rem; line-height: 1.35; }
-
-  /* worked-example callout cards */
-  .example {
-    background: rgba(15, 23, 42, 0.55);
-    border: 1px solid var(--card-border);
-    border-left: 3px solid rgba(167, 139, 250, 0.6);
-    border-radius: 14px;
-    padding: 1.1rem 1.25rem;
-    margin: 0 0 1.1rem;
-    max-width: 40rem;
-  }
-  .example p { margin-bottom: 0; }
-  .example .ex-title { color: var(--accent-soft); font-weight: 650; }
 
   .rule { border: 0; border-top: 1px solid rgba(148, 163, 184, 0.16); margin: 3rem 0; }
 
@@ -149,14 +156,6 @@
   }
   .deeper h2 { margin-top: 0; font-size: 1.2rem; }
   .deeper p { margin-bottom: 0; font-size: 0.98rem; color: var(--copy); }
-
-  .closer {
-    color: var(--accent-soft);
-    font-weight: 620;
-    font-size: clamp(1.12rem, 2.6vw, 1.4rem);
-    line-height: 1.4;
-    margin: 1.6rem 0 0;
-  }
 </style>
 </head>
 <body>
@@ -166,98 +165,79 @@
   <header class="hero-card">
     <p class="kicker">dev-loops</p>
     <h1>Introducing dev-loops</h1>
-    <p class="lede">AI writes the code in seconds. The hours now go into the handoffs around the code, where work waits for a human to notice it, review it, and decide it is safe to merge.</p>
+    <p class="lede">AI writes the code in seconds. The expensive part moved to the coordination around it &mdash; and that is the part dev-loops takes over, one explicit decision at a time, with a person merging by default.</p>
   </header>
 
-  <p>AI writes the code in seconds. The hours now go somewhere else: into the handoffs around the code. A change waits for someone to notice it is ready, waits for a reviewer to rebuild enough context to have an opinion, waits in a queue for the one person who can say whether the next step is safe. That waiting between actions is coordination delay, and it is where the lead time of an AI-assisted workflow actually goes.</p>
+  <p>AI writes the code in seconds. The expensive part moved. It now sits in the coordination around the code: the wait for someone to notice a change is ready, to rebuild enough context to review it, to decide the next step is safe. That waiting between actions is where the lead time of an AI-assisted workflow goes once the typing is fast.</p>
 
-  <p>dev-loops is a coordination runtime that closes that gap. It walks a change from a plan or an issue through review and into a merged pull request, treating every handoff as an explicit decision a human can see, with a human merging by default. This article covers what it does, the evidence that it works, and how to put it in your own project.</p>
+  <p>dev-loops is a coordination runtime for that problem. It carries a change from an idea to a merged pull request and treats every handoff along the way as an explicit decision that gets written down, with a person merging by default. This article introduces the idea and shows how to run it on your own project. Two deeper pieces are linked at the end.</p>
 
-  <p>It is also written through its own flow. This piece began as a plan file, was validated and refined in place, paused at a local human-review checkpoint, and was promoted to a single draft pull request that then ran the same gates as everything else. The loop that ships the loop also ships its articles.</p>
+  <h2>The idea</h2>
 
-  <h2>Act 1 &mdash; Why it exists, and the proof</h2>
+  <p>Left alone, an agent tends to assume its way past the hard moments. It marks the build passed, calls the review done, decides the work is finished &mdash; and those assumptions go unchecked until something breaks downstream. dev-loops takes the assumption out. Every transition &mdash; is this ready, who acts next, is it safe to merge &mdash; becomes a decision the system makes deliberately and records where you can read it. When the answer is unclear, the loop stops and a person decides before the work moves on.</p>
 
-  <p>The deep mechanics live in two companion articles linked at the end. Here is the short version. Most lost hours in an AI-assisted workflow happen in the seams between steps, where the system has to answer <em>who acts next?</em> or <em>is this ready?</em> and an unattended agent answers with a hopeful assumption it never checks. It marks the build passed, marks the review done, and calls the work finished while those assumptions go untested. dev-loops refuses the assumption everywhere. Every transition becomes a decision the system makes deliberately and records where you can read it; when the situation is ambiguous, it stops and a human resolves it before the work moves on.</p>
-
-  <p>The proof is the repository itself. dev-loops develops dev-loops: the loop is the tool that ships its own changes, so its commit history is a continuous integration test of the claim. Over roughly fourteen days (2026-06-14 to 2026-06-28) the repository merged about 100 pull requests and closed about 96 issues, around 7 merged pull requests a day, with about 87% of merged pull requests closing a linked issue. Every one of those pull requests went through the same path: a draft gate that confirms checks are present, a Copilot review round, and a pre-approval gate that confirms CI is green, with a human performing the merge by default.</p>
-
-  <div class="metrics" role="list" aria-label="Verified throughput over roughly 14 days">
-    <div class="metric" role="listitem"><div class="num">~100</div><div class="lab">pull requests merged in ~14 days</div></div>
-    <div class="metric" role="listitem"><div class="num">~7/day</div><div class="lab">merged pull requests per day</div></div>
-    <div class="metric" role="listitem"><div class="num">~87%</div><div class="lab">of merged PRs close a linked issue</div></div>
-    <div class="metric" role="listitem"><div class="num">1 gate</div><div class="lab">draft &rarr; Copilot &rarr; pre-approval, human-merge by default</div></div>
-  </div>
-
-  <p>A handful of concrete runs show what that path catches.</p>
-
-  <div class="example">
-    <p><span class="ex-title">A waterfall that mints almost no tracker noise.</span> The local-first epic (#947) decomposed into six refined phase sub-issues, each promoted to its own gated pull request: #956, #957, #959, #960, #961, #962, plus the docs-grill formalization (#948 &rarr; #958). One phase, P4 (#960), added PR-first promotion: when work starts from a plan rather than an epic sub-issue, the promote step commits the plan document and opens a single draft pull request, minting no issue at all. The committed plan doc and the pull request are one artifact, so there is no second authority to keep in sync. (This article was promoted that way &mdash; it has a draft PR and no issue.)</p>
-  </div>
-
-  <div class="example">
-    <p><span class="ex-title">A documentation check that runs inside the loop.</span> The docs-grill standard step (#948 &rarr; #958) is an autonomous in-loop check of a change against the repository's own contracts: claims versus contracts, code versus documentation drift, stale references. Its first live run, during P6 (#962), caught real drift before merge: a contract still claimed the shipped default was <code>github-first</code> via a settings file that no longer ships, and still described the repository's own mode as tracker-first when its config sets <code>local-first</code>. Both were fixed in place during refinement, before the pull request reached a human.</p>
-  </div>
-
-  <div class="example">
-    <p><span class="ex-title">Gates catching real defects.</span> The mobile-fit Playwright hardening (#937 &rarr; #938) failed on the pre-fix layout and passed only after the fix, with a guard-the-guard test confirming the check itself fails on a deliberately broken element. The round-cap Copilot deadlock (#848 &rarr; #854) is the loop catching its own state machine: when a post-cap fix left the Copilot gate waiting on a review that could never satisfy it, the loop detected the unsatisfiable wait at the cap and routed to a clean fallback.</p>
-  </div>
-
-  <div class="example">
-    <p><span class="ex-title">Dogfooding surfacing its own tooling gaps.</span> Running the loop turned up #963: the operator action scripts emit machine JSON only, so a human or an agent driving the gate cadence had to re-parse a raw blob just to read the result. The issue (still open) proposes a concise summary output mode. The same A/B-contrast deslop step &mdash; formalized for the articles in #945 and applied to the decks in #946 &mdash; runs over the loop's own writing, removing binary-contrast phrasing.</p>
-  </div>
-
-  <h2>Act 2 &mdash; Adopt it in your project</h2>
-
-  <p>dev-loops runs under two harnesses, and the configuration forks at a few decision points. The keys below are the real shipped names.</p>
-
-  <h3>Pick your harness</h3>
-
-  <p>Under Claude Code the dev-loop runs as a single agent that performs the steps directly: it reads and writes files, runs git and the pull-request lifecycle, and posts gate verdicts under the operating session's identity (see <code>skills/docs/main-agent-contract.md</code>). Under Pi the main agent is read-only and every mutation flows through an async <code>dev-loop</code> subagent. The contract is the same; the harness decides who holds the pen.</p>
-
-  <h3>Pick where work originates</h3>
-
-  <p>Two config keys set the intake shape:</p>
+  <p>Three ideas carry most of the value:</p>
 
   <ul>
-    <li><code>strategy.default</code> is <code>local-first</code> (the shipped extension default) or <code>github-first</code> (the built-in fallback in <code>config.mjs</code>). Local-first starts work from a plan file you author in the repository; github-first starts from a tracker issue.</li>
-    <li><code>inputSource.default</code> is <code>tracker</code> (the issue body is the spec) or <code>phase-docs</code> (a phase document is the spec).</li>
+    <li><strong>Every change runs the same path.</strong> A draft check confirms the basics are in place, a review round looks for real problems, and a final gate confirms the tests are green. Nothing skips the path, including the changes that built dev-loops itself.</li>
+    <li><strong>A person merges by default.</strong> The loop does the preparation and reports that a change is ready; a human makes the final call. The autonomy is bounded on purpose, and you choose how much of it to grant.</li>
+    <li><strong>Work starts from a durable artifact.</strong> A change begins from a short plan you write locally or from a tracked issue. That artifact is the spec, and the pull request carries it through review to merge, so there is always something to check the result against.</li>
   </ul>
 
-  <p>These ship in <code>packages/core/src/config/extension-defaults.yaml</code>; the built-in <code>github-first</code> fallback lives in <code>packages/core/src/config/config.mjs</code>, and your repo's <code>.devloops</code> overrides both.</p>
+  <p>None of this depends on a particular model or a particular editor. It is a runtime for the decisions around a change, and it runs inside the AI coding tools teams already use.</p>
 
-  <h3>The local-first flow</h3>
+  <h2>What it does to the work</h2>
 
-  <p>When work starts from a plan file, four helper scripts run in order (see <code>skills/docs/local-planning-flow.md</code>):</p>
+  <p>The point of the loop is what it does to the day-to-day of shipping. The clearest evidence is the project itself: dev-loops is built with dev-loops, so its own history shows the process it produces.</p>
 
-  <ol>
-    <li><code>scripts/refine/validate-plan-file.mjs</code> checks the plan's base sections (Status, Objective, In scope, Explicit non-goals).</li>
-    <li><code>scripts/loop/resolve-dev-loop-startup.mjs --plan-file &lt;path&gt;</code> reads the plan and resolves an intake state.</li>
-    <li><code>scripts/refine/refine-plan-file.mjs</code> writes the acceptance criteria, definition of done, coverage matrix, and recorded docs-grill findings back into the plan in place, then stops at a <code>local_human_review</code> checkpoint so you approve before anything is promoted.</li>
-    <li><code>scripts/refine/promote-plan.mjs</code> commits the plan and opens exactly one draft pull request, recording a bidirectional plan-to-PR link and minting no issue.</li>
-  </ol>
+  <p>That process is repetitive in the way you want. Each change follows the same path &mdash; draft, review, green-CI gate, human merge &mdash; so there is no bespoke ceremony to design per change and no question about what happens next. You describe the work in one line, and the loop handles the coordination that used to eat the hours: noticing a change is ready, lining up review, checking the next step is safe.</p>
 
-  <p>For a tracker-first epic, refinement is a waterfall instead: an epic issue decomposes into a sub-issue phase tree, and the refiner produces acceptance criteria and a definition of done for each phase. This article and the local-first epic above are both worked examples of that flow.</p>
+  <div class="metrics" role="list">
+    <div class="metric" role="listitem"><div class="num">~100</div><div class="lab">pull requests merged in two weeks</div></div>
+    <div class="metric" role="listitem"><div class="num">~7/day</div><div class="lab">each drafted, reviewed, and gated</div></div>
+    <div class="metric" role="listitem"><div class="num">~7 in 8</div><div class="lab">tied to a tracked item</div></div>
+    <div class="metric" role="listitem"><div class="num">every one</div><div class="lab">merged by a person</div></div>
+  </div>
 
-  <h3>Tune the gates</h3>
+  <p>The result is a cadence that normally takes a team and a stack of process. Each of those pull requests was drafted, reviewed, gated on green tests, and merged by a person, with the trail from intent to merge staying legible at that pace. The straightforwardness underneath that volume is what makes it repeatable: the same short path carried a one-line fix and a six-step refactor alike, so throughput rose while the work of coordinating each change stayed flat.</p>
 
-  <p>A few more keys control how strict the loop is:</p>
+  <p>And it stays honest at that speed. The review step keeps catching what slips past a tired reviewer in a hurry: a layout that broke on small screens, documentation that had drifted from the code, a review cycle that had quietly deadlocked. The loop earns its keep at the moment a change is about to land, which is where unattended automation is usually weakest &mdash; so the cadence is fast and the merges are still ones a person stands behind.</p>
 
-  <ul>
-    <li><code>refinement.maxCopilotRounds</code> (default 5) sets how many Copilot review rounds run before the loop converges; set it to <code>0</code> to disable Copilot review entirely.</li>
-    <li><code>autonomy.humanMergeOnly: true</code> makes the merge an enforced repo invariant: the loop runs the full pre-merge evidence check and reports merge-ready, and a named human performs the merge. Local-first ships with this on, so it never auto-merges.</li>
-    <li><code>workflow.requireDraftFirst: true</code> requires a pull request to open as a draft and pass the draft gate before it can be marked ready.</li>
-  </ul>
+  <h2>Set it up</h2>
 
-  <p>That is the whole adoption path: choose a harness, set <code>strategy.default</code> and <code>inputSource.default</code> for how work arrives, run the flow, and dial the gate keys to the strictness your team wants. Start with the shipped local-first defaults and loosen from there.</p>
+  <p>dev-loops runs inside Claude Code or Pi and drives an ordinary GitHub pull-request workflow. You need Node 24 or newer and the GitHub CLI (<code>gh</code>) authenticated for your repository.</p>
 
-  <p class="closer">The loop builds itself in the open, one visible handoff at a time. Point it at your project and it will do the same there.</p>
+  <p><strong>Claude Code.</strong> Install the plugin from inside Claude Code:</p>
+  <pre><code>/plugin marketplace add mfittko/dev-loops
+/plugin install dev-loops@dev-loops</code></pre>
+
+  <p><strong>Pi.</strong> Install the extension:</p>
+  <pre><code>pi install npm:dev-loops</code></pre>
+
+  <p><strong>Start a loop.</strong> There is one plain-language entrypoint; you never pick internal modes:</p>
+  <pre><code>start dev loop on issue 112      <span class="cm"># begin work from a tracked issue</span>
+auto dev loop on issue 112       <span class="cm"># run autonomously up to the human-merge checkpoint</span>
+continue dev loop on PR 88       <span class="cm"># pick up an open pull request</span></code></pre>
+
+  <p><strong>Tune the posture (optional).</strong> A <code>.devloops</code> file at the repo root controls how work arrives and how strict the loop is. The shipped defaults are a low-noise starting point; loosen from there.</p>
+  <pre><code># .devloops
+strategy:
+  default: local-first    <span class="cm"># start from a local plan file; use github-first to start from issues</span>
+inputSource:
+  default: tracker        <span class="cm"># for local-first: read the spec from the issue body, or phase-docs</span>
+refinement:
+  maxCopilotRounds: 5     <span class="cm"># automated review rounds before converging; set 0 to turn Copilot off</span>
+autonomy:
+  humanMergeOnly: true    <span class="cm"># the loop prepares and reports ready; a person merges</span></code></pre>
+
+  <p>Three choices shape the experience. Work can start <strong>local-first</strong> &mdash; you write a short plan in the repository and the loop opens a pull request straight from it, with no issue to file &mdash; or <strong>github-first</strong>, where a tracked issue is the starting point. The review round can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; out of the box, it stops and hands the merge to you. Begin with the defaults and dial each setting toward the autonomy your team is comfortable with.</p>
 
   <hr class="rule" />
 
-  <div class="deeper">
+  <section class="deeper">
     <h2>Where to go deeper</h2>
     <p>Two companion articles take these ideas apart in detail. <a href="./eliminating-coordination-delay.html">Eliminating Coordination Delay in AI-Assisted Dev Workflows</a> explains why every handoff becomes an explicit decision and why the loop runs on a state graph. <a href="./make-the-waiting-visible.html">Make the Waiting Visible</a> is about measuring the waiting between actions, which is where the lead time goes once the code itself is fast to write.</p>
-  </div>
+  </section>
 
 </article>
 </div>
