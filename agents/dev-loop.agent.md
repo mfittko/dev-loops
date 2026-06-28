@@ -28,8 +28,8 @@ The envelope is the primary handoff artifact — it is derived from resolver out
 <!-- pi-only -->
 **CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` via the first of these **bounded** candidates whose `cli/index.mjs` exists — never assume a single fixed layout (this agent may be installed user-level at `~/.agents/`, where the old `../..` package-relative guess resolves to `~`, not the package):
 
-1. **Node module resolution** (preferred, layout-independent): `node -e "console.log(require('node:path').dirname(require.resolve('dev-loops/cli/index.mjs')) + '/..')"` — finds the package whether it is installed package-relative, in `~/.pi/agent/npm/node_modules`, or globally.
-2. **Pi user-agent npm root:** `~/.pi/agent/npm/node_modules/dev-loops`.
+1. **Node module resolution** (best-effort first try): `node -e "console.log(require('node:path').resolve(require('node:path').dirname(require.resolve('dev-loops/cli/index.mjs')), '..'))"` — resolves the package root when `dev-loops` is reachable from Node's module search path (notably under `~/.pi/agent/npm`); this is cwd-dependent and commonly misses from a target-repo cwd, so treat it as a probe, not a guarantee.
+2. **Pi user-agent npm root** (reliable for user-level installs): `~/.pi/agent/npm/node_modules/dev-loops`.
 3. **Package-relative (legacy):** `../..` from this agent's own directory (the original package-local install layout).
 4. **Global npm root:** `$(npm root -g)/dev-loops`.
 
