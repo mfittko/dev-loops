@@ -851,6 +851,68 @@ test("conflict state takes precedence over otherwise merge-ready current-head ev
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY));
 });
 
+test("CONFLICTING mergeable blocks the gate even with clean evidence and no mergeStateStatus/conflictFiles (#980)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 980,
+    currentHeadSha: "deadbeef1234",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    mergeable: "CONFLICTING",
+    draftGate: gate({ visible: true, headSha: "deadbee", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "deadbee", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "deadbee", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "deadbee", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.CONFLICT_RESOLUTION);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
+  assert.match(result.reason, /mergeable: CONFLICTING/i);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY));
+});
+
+test("UNKNOWN mergeable holds the gate for a recheck and never passes (#980)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 980,
+    currentHeadSha: "deadbeef1234",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    mergeable: "UNKNOWN",
+    draftGate: gate({ visible: true, headSha: "deadbee", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "deadbee", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "deadbee", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "deadbee", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.CONFLICT_RESOLUTION);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
+  assert.equal(result.loopDisposition, DISPOSITION.PENDING);
+  assert.match(result.reason, /mergeable=UNKNOWN/i);
+  // never a pass to final approval
+  assert.notEqual(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY));
+});
+
+test("MERGEABLE does not block the normal post-draft flow (#980)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 980,
+    currentHeadSha: "deadbeef1234",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+    draftGate: gate({ visible: true, headSha: "deadbee", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "deadbee", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.notEqual(result.gateBoundary, PR_CHECKPOINT.CONFLICT_RESOLUTION);
+});
+
 test("local git conflict files trigger the conflict-resolution boundary even without DIRTY mergeStateStatus", () => {
   const result = evaluatePrGateCoordination({
     pr: 370,
