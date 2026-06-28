@@ -5,7 +5,30 @@ import os from "node:os";
 import path from "node:path";
 import test, { describe } from "node:test";
 
-import { resolveAdditiveChangelog, resolvePrConflicts } from "../../scripts/loop/resolve-pr-conflicts.mjs";
+import {
+  parseResolvePrConflictsCliArgs,
+  resolveAdditiveChangelog,
+  resolvePrConflicts,
+} from "../../scripts/loop/resolve-pr-conflicts.mjs";
+
+// ── pure unit: CLI arg parsing fails closed ──────────────────────────
+
+describe("parseResolvePrConflictsCliArgs", () => {
+  test("rejects unknown flags (typos like --no-verfy)", () => {
+    assert.throws(() => parseResolvePrConflictsCliArgs(["--no-verfy"]), /Unknown argument: --no-verfy/);
+    assert.throws(() => parseResolvePrConflictsCliArgs(["--pus"]), /Unknown argument: --pus/);
+  });
+  test("rejects positional arguments", () => {
+    assert.throws(() => parseResolvePrConflictsCliArgs(["stray"]), /Unknown argument: stray/);
+  });
+  test("parses known flags", () => {
+    const o = parseResolvePrConflictsCliArgs(["--base", "main", "--no-verify", "--push", "--json"]);
+    assert.equal(o.base, "main");
+    assert.equal(o.verify, false);
+    assert.equal(o.push, true);
+    assert.equal(o.json, true);
+  });
+});
 
 // ── pure unit: resolveAdditiveChangelog ──────────────────────────────
 

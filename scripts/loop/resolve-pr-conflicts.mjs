@@ -5,6 +5,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
 
 const USAGE = `Usage: resolve-pr-conflicts.mjs [--base <branch>] [--repo-root <dir>] [--no-verify] [--push] [--json]
 
@@ -27,9 +28,11 @@ Options:
 
 Output (stdout, JSON with --json):
   { "ok": true, "action": "clean_merge"|"resolved",
-    "base": "main", "resolvedFiles": ["CHANGELOG.md"], "pushed": false }
+    "base": "main", "resolvedFiles": ["CHANGELOG.md"], "pushed": false,
+    "verified": true }
   ("clean_merge" covers an already-up-to-date branch; "resolved" is the
-   auto-resolved additive-CHANGELOG case.)
+   auto-resolved additive-CHANGELOG case. "verified" is true when post-resolve
+   verification ran; it is absent with --no-verify.)
 Error output:
   { "ok": false, "error": "...", "conflictFiles": ["..."] }
 
@@ -50,7 +53,15 @@ const BOT_IDENTITY = [
 ];
 
 export function parseResolvePrConflictsCliArgs(argv) {
-  const { values } = parseArgs({
+  const options = {
+    help: false,
+    base: null,
+    repoRoot: process.cwd(),
+    verify: true,
+    push: false,
+    json: false,
+  };
+  const { tokens } = parseArgs({
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
@@ -62,17 +73,39 @@ export function parseResolvePrConflictsCliArgs(argv) {
     },
     allowPositionals: true,
     strict: false,
+    tokens: true,
   });
-  return {
-    help: values.help === true,
-    base: typeof values.base === "string" && values.base.trim().length > 0 ? values.base.trim() : null,
-    repoRoot: typeof values["repo-root"] === "string" && values["repo-root"].trim().length > 0
-      ? values["repo-root"].trim()
-      : process.cwd(),
-    verify: values["no-verify"] !== true,
-    push: values.push === true,
-    json: values.json === true,
-  };
+  for (const token of tokens) {
+    if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
+    if (token.kind !== "option") continue;
+    switch (token.name) {
+      case "help":
+        options.help = true;
+        return options;
+      case "base": {
+        const value = requireTokenValue(token, parseError, { flagPattern: /^-/u }).trim();
+        options.base = value.length > 0 ? value : null;
+        break;
+      }
+      case "repo-root": {
+        const value = requireTokenValue(token, parseError, { flagPattern: /^-/u }).trim();
+        options.repoRoot = value.length > 0 ? value : process.cwd();
+        break;
+      }
+      case "no-verify":
+        options.verify = false;
+        break;
+      case "push":
+        options.push = true;
+        break;
+      case "json":
+        options.json = true;
+        break;
+      default:
+        throw parseError(`Unknown argument: ${token.rawName}`);
+    }
+  }
+  return options;
 }
 
 function run(command, args, { cwd, env = process.env } = {}) {
