@@ -54,7 +54,12 @@ function parseLiteral(token) {
 // then callers coerce). Throws JqFilterError on malformed path syntax.
 function resolvePath(value, path) {
   const trimmed = path.trim();
-  if (trimmed === "." || trimmed === "") return value;
+  if (trimmed === "") {
+    // An empty path is never valid jq (no empty filter). Fail closed so
+    // malformed predicates like `select()` or `==5` don't pass as identity.
+    throw new JqFilterError("Empty path expression");
+  }
+  if (trimmed === ".") return value;
   if (!trimmed.startsWith(".")) {
     throw new JqFilterError(`Unsupported path (must start with '.'): ${path}`);
   }
@@ -217,12 +222,13 @@ export function evaluateJqFilter(value, filter) {
   return stream;
 }
 
-// jq truthiness for --silent: a stream is "true" iff it yields at least one value
-// and no yielded value is null or false (matches `jq -e` exit semantics closely
-// enough for the loop's yes/no predicates).
+// jq truthiness for --silent: matches `jq -e` exit semantics — the status is
+// based on the LAST output value (empty output is falsy; a value is truthy
+// unless it is null or false).
 function streamIsTruthy(stream) {
   if (stream.length === 0) return false;
-  return stream.every((v) => v !== null && v !== false && v !== undefined);
+  const last = stream[stream.length - 1];
+  return last !== null && last !== false && last !== undefined;
 }
 
 function renderJqStream(stream) {

@@ -62,6 +62,19 @@ test("evaluateJqFilter: fails closed on unsupported syntax", () => {
   assert.doesNotThrow(() => evaluateJqFilter(sample, ".")); // identity is valid
 });
 
+test("evaluateJqFilter: empty predicate / empty LHS fails closed (not identity)", () => {
+  assert.throws(() => evaluateJqFilter(sample, "select()"), JqFilterError);
+  assert.throws(() => evaluateJqFilter(sample, '== "x"'), JqFilterError);
+  assert.throws(() => evaluateJqFilter(sample, "select( == 1)"), JqFilterError);
+});
+
+test("evaluateJqFilter: operators inside quoted RHS literals parse correctly", () => {
+  assert.deepEqual(evaluateJqFilter({ title: "a>b" }, '.title=="a>b"'), [true]);
+  assert.deepEqual(evaluateJqFilter({ title: "a==b" }, '.title=="a==b"'), [true]);
+  assert.deepEqual(evaluateJqFilter({ name: "<svg>" }, '.name=="<svg>"'), [true]);
+  assert.deepEqual(evaluateJqFilter({ title: "a>b" }, 'select(.title=="a>b")'), [{ title: "a>b" }]);
+});
+
 test("emitResult: no jq/silent prints verbatim JSON, exit follows ok", () => {
   const out = sink();
   assert.equal(emitResult(sample, { stdout: out }), 0);
@@ -95,6 +108,19 @@ test("emitResult: --jq predicate + --silent maps truthy/falsy to exit code silen
   const out2 = sink();
   assert.equal(emitResult(sample, { jq: '.ciStatus=="failure"', silent: true, stdout: out2 }), 1);
   assert.equal(out2.get(), "");
+});
+
+test("emitResult: --silent multi-value uses last output (jq -e semantics)", () => {
+  // [false,true,true] -> jq -e exits 0 on the last value being truthy.
+  const out = sink();
+  assert.equal(emitResult(sample, { jq: ".items[] | .n>1", silent: true, stdout: out }), 0);
+  assert.equal(out.get(), "");
+  // [true,false] -> last value false -> exit 1.
+  const out2 = sink();
+  assert.equal(emitResult({ xs: [{ n: 5 }, { n: 1 }] }, { jq: ".xs[] | .n>1", silent: true, stdout: out2 }), 1);
+  // Empty output -> falsy.
+  const out3 = sink();
+  assert.equal(emitResult({ xs: [] }, { jq: ".xs[]", silent: true, stdout: out3 }), 1);
 });
 
 test("emitResult: invalid --jq fails closed (exit 2 + stderr), distinct from predicate-false", () => {

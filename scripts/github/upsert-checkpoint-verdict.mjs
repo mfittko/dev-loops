@@ -1300,7 +1300,8 @@ async function main() {
     const result = await upsertCheckpointVerdict(options);
     // Emit the inline-execution warning only on success so the JSON error
     // envelope on stderr stays clean and machine-parseable on failures.
-    if (inlineWarning) {
+    // Suppress it under --silent, which contracts to zero output (exit code only).
+    if (inlineWarning && !options.silent) {
       process.stderr.write(`${inlineWarning}\n`);
     }
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
