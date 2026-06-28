@@ -38,6 +38,7 @@ const NAMED_STATES = [
   { id: "compounding", stateName: "Compounding" },
   { id: "the-loop", stateName: "The loop" },
   { id: "the-work", stateName: "The work" },
+  { id: "model-agnostic", stateName: "Model agnostic" },
   { id: "proof", stateName: "Proof (data)" },
   { id: "setup", stateName: "Setup" },
   { id: "close", stateName: "Close" },
