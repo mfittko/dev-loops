@@ -25,23 +25,31 @@ export const VIEWER_SOURCE_PATHS = Object.freeze([
   "scripts/loop/inspect-run-viewer.mjs",
 ]);
 
-// Registered artifacts — mirrors DECK_REGISTRY (the `deck` filenames) and
-// VIEWER_REGISTRY. ponytail: kept as an explicit list here rather than
-// importing the harness (which pulls @playwright/test into core); the
-// ui-e2e-scoping.test.mjs sync test fails if a registry deck is added without
-// updating this list, so it can't silently drift.
-export const REGISTERED_DECK_FILES = Object.freeze([
-  "introducing-dev-loops.html",
-  "dev-loops-deep-dive.html",
+// Registered artifacts — keyed by FULL repo-relative path (not basename), so
+// docs/articles/X.html and docs/presentations/X.html (which share basenames,
+// e.g. introducing-dev-loops.html) are DISTINCT and can never alias onto each
+// other. Mirrors the registries' actual on-disk locations:
+//   decks   → DECK_REGISTRY served from docs/presentations/<deck>
+//   articles→ ARTICLE_REGISTRY served from docs/articles/<file>
+// ponytail: kept as an explicit list here rather than importing the harness
+// (which pulls @playwright/test into core); the ui-e2e-scoping.test.mjs sync
+// test fails if a registry entry is added without updating this list, so it
+// can't silently drift.
+export const REGISTERED_ARTIFACT_PATHS = Object.freeze([
+  "docs/presentations/introducing-dev-loops.html",
+  "docs/presentations/dev-loops-deep-dive.html",
+  "docs/articles/introducing-dev-loops.html",
+  "docs/articles/dev-loops-deep-dive.html",
 ]);
 
 export const VIEWER_ARTIFACT_ID = "inspect-run-viewer";
 
 // CI check names that constitute the shared UI e2e coverage. The detect layer
 // reads these from the statusCheckRollup to set uiE2ePassed. ponytail: a plain
-// substring/name match against the rollup is enough; the gate only needs to
-// know whether the suite passed for this head.
-export const UI_E2E_CHECK_NAMES = Object.freeze(["viewer-smoke"]);
+// name match against the rollup is enough; the gate only needs to know whether
+// the suite passed for this head. Each rendered-artifact family has a stable CI
+// job whose name appears here; an absent check is unknown → fails closed.
+export const UI_E2E_CHECK_NAMES = Object.freeze(["viewer-smoke", "deck-smoke", "article-smoke"]);
 
 function normalizePath(filePath) {
   return String(filePath ?? "").trim().replace(/^\.\/+/u, "");
@@ -70,12 +78,14 @@ export function classifyRenderedArtifactPath(filePath) {
 
   for (const glob of RENDERED_ARTIFACT_GLOBS) {
     if (matchesGlob(normalized, glob)) {
-      const file = normalized.slice(normalized.lastIndexOf("/") + 1);
+      // Key registration on the FULL repo-relative path so an article and a
+      // deck that share a basename are distinct artifacts. id is the full path
+      // too, so the fail-closed reason names the exact file to register.
       return {
         path: normalized,
-        kind: "deck",
-        id: file,
-        registered: REGISTERED_DECK_FILES.includes(file),
+        kind: normalized.startsWith("docs/articles/") ? "article" : "deck",
+        id: normalized,
+        registered: REGISTERED_ARTIFACT_PATHS.includes(normalized),
       };
     }
   }
