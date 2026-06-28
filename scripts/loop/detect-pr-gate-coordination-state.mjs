@@ -17,6 +17,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
+import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
 import { parseArgs } from "node:util";
@@ -163,7 +164,7 @@ async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghComm
 async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
   const result = await runChild(
     ghCommand,
-    ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
+    ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
     env,
   );
   if (result.code !== 0) {
@@ -198,6 +199,32 @@ export async function fetchPrFactsWithSettledMergeable(
   }
   return prData;
 }
+// Changed-file paths from `gh pr view --json files` (issue #976). Feeds the
+// path-triggered UI e2e scoping precondition in the evaluator.
+export function extractChangedFiles(prData) {
+  const files = Array.isArray(prData?.files) ? prData.files : [];
+  return files
+    .map((entry) => (typeof entry?.path === "string" ? entry.path : null))
+    .filter((p) => typeof p === "string" && p.length > 0);
+}
+
+// Whether the shared UI e2e suite passed for this head, read deterministically
+// from the statusCheckRollup: every UI e2e check that is present must be
+// SUCCESS. Returns null when no UI e2e check is present in the rollup (unknown
+// → the evaluator fails closed), false if any present UI e2e check is not a
+// success, true if all present ones succeeded.
+export function deriveUiE2ePassed(prData, checkNames = UI_E2E_CHECK_NAMES) {
+  const rollup = Array.isArray(prData?.statusCheckRollup) ? prData.statusCheckRollup : [];
+  const wanted = new Set(checkNames);
+  const present = rollup.filter((entry) => wanted.has(entry?.name) || wanted.has(entry?.context));
+  if (present.length === 0) return null;
+  return present.every((entry) => {
+    const conclusion = String(entry?.conclusion ?? "").toUpperCase();
+    const state = String(entry?.state ?? "").toUpperCase();
+    return conclusion === "SUCCESS" || state === "SUCCESS";
+  });
+}
+
 export function resolveLinkedIssueFromPr(prData) {
   if (!prData || typeof prData !== "object") return null;
   const closing = Array.isArray(prData.closingIssuesReferences) ? prData.closingIssuesReferences : [];
@@ -439,6 +466,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     mergeStateStatus: context.mergeStateStatus,
     mergeable: context.mergeable,
     conflictFiles: context.conflictFiles,
+    // UI e2e auto-scoping (#976): path-triggered + fail-closed precondition.
+    changedFiles: extractChangedFiles(context.prData),
+    uiE2ePassed: deriveUiE2ePassed(context.prData),
     lifecycleState: context.interpretation.state,
     loopDisposition: context.disposition.loopDisposition,
     ciStatus: context.snapshot?.ciStatus ?? null,

@@ -75,6 +75,48 @@ export async function measureFit(page) {
   });
 }
 
+// Article variant of measureFit: long-form prose intentionally puts wide
+// content (code samples) inside a horizontally-scrollable <pre>. Unlike a deck
+// slide, that internal scroll is correct UX, so an element is only an offender
+// when it overflows the viewport AND has no overflow-x:auto/scroll ancestor
+// clipping it. The document itself must still not scroll sideways.
+export async function measureArticleFit(page) {
+  return page.evaluate(() => {
+    const iw = window.innerWidth;
+    const inScrollContainer = (el) => {
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        const ox = getComputedStyle(p).overflowX;
+        // Only auto/scroll is intentional horizontal scroll. overflow-x:hidden
+        // CLIPS content (it's invisible, not scrollable) — exempting it would
+        // mask a real layout bug, so it is deliberately not a scroll container.
+        if (ox === "auto" || ox === "scroll") return true;
+      }
+      return false;
+    };
+    const hOffenders = [];
+    for (const el of document.querySelectorAll("body *")) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      if (r.right > iw + 1 && !inScrollContainer(el)) {
+        hOffenders.push(`<${el.tagName.toLowerCase()} class="${el.className}"> right=${Math.round(r.right)} "${(el.textContent || "").trim().slice(0, 32)}"`);
+      }
+    }
+    const clipped = [];
+    for (const el of document.querySelectorAll("section")) {
+      const oy = getComputedStyle(el).overflowY;
+      if ((oy === "hidden" || oy === "clip") && el.clientHeight + 1 < el.scrollHeight) {
+        clipped.push(`<${el.tagName.toLowerCase()} id="${el.id}"> client=${el.clientHeight} scroll=${el.scrollHeight}`);
+      }
+    }
+    return {
+      hOffenders,
+      clipped,
+      pageScrollWidth: document.scrollingElement.scrollWidth,
+      innerWidth: iw,
+    };
+  });
+}
+
 // Assert every registered section id is present exactly once and no sideways
 // scroll on the document. Shared by decks (and reusable by other artifacts).
 export async function assertSectionIdsAndNoHorizontalScroll(page, sectionIds) {
@@ -253,4 +295,104 @@ export function deckRegistryEntry(key) {
     );
   }
   return entry;
+}
+
+// The article registry. Articles are self-contained, CSP-locked rendered HTML
+// (the intro article IS the published landing page) — fit-checked like decks
+// but without the deck's named per-section states. Each article is one data
+// entry plus a thin spec that calls defineArticleSuite(ARTICLE_REGISTRY.<key>).
+// `file` is the docs/articles/<file> basename; path keying in
+// ui-e2e-scoping.mjs uses the full repo-relative path so it can't alias a deck.
+export const ARTICLE_REGISTRY = {
+  "intro-article": {
+    sliceId: "intro-article",
+    file: "introducing-dev-loops.html",
+  },
+  "deep-dive-article": {
+    sliceId: "deep-dive-article",
+    file: "dev-loops-deep-dive.html",
+  },
+};
+
+export function articleRegistryEntry(key) {
+  const entry = ARTICLE_REGISTRY[key];
+  if (!entry) {
+    throw new Error(
+      `Unknown article registry key "${key}". Known keys: ${Object.keys(ARTICLE_REGISTRY).join(", ")}`,
+    );
+  }
+  return entry;
+}
+
+// Registry-driven runner for articles. Reuses the shared deck assertions (serve
+// at /, CSP-meta lock, mobile fit: no horizontal scroll, no vertical clip) minus
+// the deck-only named-section captures, since articles carry arbitrary ids.
+//   { sliceId, articlePath }
+export function defineArticleSuite({ sliceId, articlePath }) {
+  const articleName = path.basename(articlePath);
+  const startServer = () => startFixtureServer(() => makeDeckServer(articlePath));
+
+  test(`webkit renders the ${sliceId} with a locked CSP and captures it`, async ({ page }, testInfo) => {
+    const { server, url } = await startServer();
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await assertSectionIdsAndNoHorizontalScroll(page, []);
+      await assertCspMeta(page);
+      await captureNamedUiState({
+        page,
+        testInfo,
+        sliceId,
+        stateName: sliceId,
+        fullPage: false,
+        metadata: {
+          fixture: articleName,
+          route: "/",
+          reviewHint: `Designer-review state for the ${articleName} article page.`,
+        },
+      });
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  test(`webkit ${sliceId} fits the mobile viewport (no horizontal scroll, no vertical clip)`, async ({ page }, testInfo) => {
+    const { server, url } = await startServer();
+    try {
+      await settleMobile(page, url);
+      const m = await measureArticleFit(page);
+      assertMobileFit(m);
+      await captureNamedUiState({
+        page,
+        testInfo,
+        sliceId,
+        stateName: `${sliceId} (mobile 390)`,
+        fullPage: false,
+        metadata: {
+          fixture: articleName,
+          route: "/",
+          reviewHint: `Mobile (390x844) layout for ${articleName} — fits the viewport, no scroll/clip.`,
+        },
+      });
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  // Guard the guard: a deliberately-wide element NOT inside a scroll container
+  // MUST still be caught by the article fit check.
+  test(`${sliceId} mobile fit check fails on a deliberately-wide element`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await settleMobile(page, url);
+      await page.evaluate(() => {
+        const wide = document.createElement("div");
+        wide.style.cssText = "width:1200px;height:10px";
+        document.body.appendChild(wide);
+      });
+      const m = await measureArticleFit(page);
+      expect(m.hOffenders.length).toBeGreaterThan(0);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
 }
