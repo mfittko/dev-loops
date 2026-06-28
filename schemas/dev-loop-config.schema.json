@@ -81,6 +81,10 @@
           "$ref": "#/$defs/gateConfig",
           "description": "Pre-approval gate config. `requireCi` is accepted for parity with runtime config, but preApproval always requires CI so that field has no effect here."
         },
+        "spike": {
+          "$ref": "#/$defs/gateConfig",
+          "description": "Relaxed spike gate profile (#965). Lighter than the production draft -> pre-approval set: a spike's deliverable is a findings doc, so this is a small docs-first angle set, not a required gate, and CI is not a prerequisite. Applies only to spike-mode work."
+        },
         "requireFanoutEvidence": {
           "type": "boolean",
           "description": "Require fan-out/fan-in review evidence on gate verdicts (rejects inline_single_agent)."
