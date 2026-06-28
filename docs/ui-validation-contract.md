@@ -51,10 +51,12 @@ End to end for one real artifact — `docs/presentations/introducing-dev-loops.h
 1. **Registered.** It is `DECK_REGISTRY["intro-deck"]` in
    `test/playwright/harness/deck-fit-harness.mjs` (`deck:
    "introducing-dev-loops.html"`, section ids `hero`…`close`, mobile capture
-   `compounding`). A thin spec — `test/playwright/intro-deck.spec.mjs` — calls
-   `defineDeckSuite(DECK_REGISTRY["intro-deck"])`, and its full repo-relative path
-   appears in `REGISTERED_ARTIFACT_PATHS` (a sync test keeps that list aligned with
-   the registry).
+   `compounding`). A thin spec — `test/playwright/intro-deck.spec.mjs` — reads the
+   entry via `deckRegistryEntry("intro-deck")` and passes it to `defineDeckSuite`
+   with a resolved absolute `deckPath` (the registry stores only the `deck`
+   filename; the spec resolves it against `docs/presentations/`). Its full
+   repo-relative path appears in `REGISTERED_ARTIFACT_PATHS` (a sync test keeps
+   that list aligned with the registry).
 2. **Assertions it runs.** `defineDeckSuite` runs the shared assertions above over
    the deck: section visibility, CSP-meta lock, mobile fit, and the wide-element
    negative control.
