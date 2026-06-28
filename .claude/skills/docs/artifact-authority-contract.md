@@ -156,6 +156,7 @@ dev-loops runs **local-planning**, set in its repo-root `.devloops`.
 | [Plan-file Contract](plan-file-contract.md) | Defines the plan-file format (phase-doc format) and its required base sections for local-planning mode |
 | [Local-Planning Flow](local-planning-flow.md) | Operator sequence for the local-first flow: validate → start → refine → promote, naming the shipped helper scripts |
 | [Local-Planning Worked Example](local-planning-worked-example.md) | One plan file shown through every stage, with the file content evolving |
+| [Spike-mode Contract](spike-mode-contract.md) | Time-boxed exploratory runs; a graduated spike emits a plan file that enters this local-planning tier |
 | [Tracker-First Loop State](tracker-first-loop-state.md) | Defines the PR-level state machine for tracker-first PR workflows; that is execution state, separate from artifact authority |
 | [Main Agent Contract](main-agent-contract.md) | Defines the delegation boundary; artifact authority defines which artifacts govern work |
 | AGENTS.md | Repo constitution; cites the work-origin rule and points to this contract |
