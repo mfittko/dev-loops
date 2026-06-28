@@ -5,8 +5,9 @@ import { isDirectCliRun } from "../_core-helpers.mjs";
 const USAGE = `Usage: extract-changelog-section.mjs --version <v> [--changelog <path>]
 
 Prints the CHANGELOG.md section for <version> (the block from "## <version>"
-up to the next "## " heading). Exits non-zero if no such section exists, so a
-release is never created for an undocumented version.`;
+up to the next "## " heading). Exits 1 if no such section exists or the section
+is empty, so a release is never created for an undocumented version. Exits 2 on
+usage/argument errors (missing --version, missing flag value, unreadable file).`;
 
 /**
  * Extract the changelog block for a single version.
@@ -60,11 +61,18 @@ export async function main(argv = process.argv.slice(2)) {
   let version;
   let changelogPath = "CHANGELOG.md";
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--version") {
-      version = argv[i + 1];
-      i += 1;
-    } else if (argv[i] === "--changelog") {
-      changelogPath = argv[i + 1];
+    if (argv[i] === "--version" || argv[i] === "--changelog") {
+      const flag = argv[i];
+      const value = argv[i + 1];
+      if (value === undefined) {
+        process.stderr.write(`error: ${flag} requires a value\n\n${USAGE}\n`);
+        return 2;
+      }
+      if (flag === "--version") {
+        version = value;
+      } else {
+        changelogPath = value;
+      }
       i += 1;
     }
   }

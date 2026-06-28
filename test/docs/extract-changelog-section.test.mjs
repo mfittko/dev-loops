@@ -110,3 +110,13 @@ test("CLI exits 2 when --version is missing", () => {
   assert.equal(result.status, 2);
   assert.match(result.stderr, /--version is required/);
 });
+
+test("CLI exits 2 when a flag is missing its value", () => {
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, "--version", "0.5.0", "--changelog"],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--changelog requires a value/);
+});
