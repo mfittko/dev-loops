@@ -60,10 +60,14 @@ export function evaluateSpikeExit({ spikeIntakeState, disposition } = {}) {
     return { ok: false, reason: "not_ready_for_exit", spikeIntakeState: spikeIntakeState ?? null };
   }
 
-  const action = DISPOSITION_TO_ACTION[disposition];
-  if (!action) {
+  // Own-property check: a bare index lookup would also match inherited
+  // Object.prototype keys (`toString`, `__proto__`, `constructor`), letting an
+  // unknown disposition resolve to a truthy value and bypass the fail-closed
+  // contract. Require a string that is an own key of the map.
+  if (typeof disposition !== "string" || !Object.hasOwn(DISPOSITION_TO_ACTION, disposition)) {
     return { ok: false, reason: "unknown_disposition", spikeIntakeState };
   }
+  const action = DISPOSITION_TO_ACTION[disposition];
 
   return { ok: true, action, spikeIntakeState };
 }

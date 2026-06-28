@@ -46,6 +46,15 @@ describe("evaluateSpikeExit (pure)", () => {
     assert.equal(result.reason, "unknown_disposition");
   });
 
+  test("fail closed on inherited prototype keys (no fail-closed bypass)", () => {
+    for (const disposition of ["toString", "__proto__", "constructor", "hasOwnProperty", "valueOf"]) {
+      const result = evaluateSpikeExit({ spikeIntakeState: READY, disposition });
+      assert.equal(result.ok, false, `${disposition} must not be eligible`);
+      assert.equal(result.reason, "unknown_disposition", `${disposition} -> unknown_disposition`);
+      assert.equal(result.action, undefined);
+    }
+  });
+
   test("fail closed when the spike is not ready for exit (in progress)", () => {
     const result = evaluateSpikeExit({
       spikeIntakeState: SPIKE_INTAKE_STATE.SPIKE_IN_PROGRESS,
