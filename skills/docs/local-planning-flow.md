@@ -6,9 +6,9 @@ The flow applies under local-planning mode (`strategy.default: local-first`, the
 
 ## Stages
 
-| Stage | Helper script | Pure core contract |
+| Stage | Helper script | Pure logic |
 |---|---|---|
-| Validate | `scripts/refine/validate-plan-file.mjs` | `validatePlanFile` |
+| Validate | `scripts/refine/validate-plan-file.mjs` | `validatePlanFile` (in the helper script; not a `@dev-loops/core` export) |
 | Start | `scripts/loop/resolve-dev-loop-startup.mjs --plan-file <path>` | `evaluatePlanFileIntakeState` (`@dev-loops/core/loop/plan-file-intake-contract`) |
 | Refine | `scripts/refine/refine-plan-file.mjs` | `refinePlanFileInPlace` (`@dev-loops/core/loop/plan-file-refine-contract`) |
 | Promote | `scripts/refine/promote-plan.mjs` | `evaluatePromoteEligibility` / `buildPromotionPrBody` (`@dev-loops/core/loop/plan-file-promote-contract`) |

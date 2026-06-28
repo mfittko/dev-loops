@@ -99,7 +99,7 @@ These are not valid artifact authority mode selectors:
 
 ## Local-first plan-file flow end to end
 
-Under local-planning, one plan file moves through four stages. Each stage has a shipped helper script and a pure core contract; the [Local-Planning Flow](local-planning-flow.md) skill doc walks the same sequence as operator steps, and the [Local-Planning Worked Example](local-planning-worked-example.md) shows one plan file evolving through every stage.
+Under local-planning, one plan file moves through four stages. Each stage has a shipped helper script; the start, refine, and promote stages also expose their pure logic as an `@dev-loops/core` contract, while the validate stage's `validatePlanFile` lives in its helper script (`scripts/refine/validate-plan-file.mjs`). The [Local-Planning Flow](local-planning-flow.md) skill doc walks the same sequence as operator steps, and the [Local-Planning Worked Example](local-planning-worked-example.md) shows one plan file evolving through every stage.
 
 ### P1 — Plan-file artifact + config (#949)
 
