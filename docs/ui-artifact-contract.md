@@ -1,4 +1,4 @@
-# UI screenshot/state artifact contract and CI promotion rules
+# UI screenshot/state artifact contract and auto-scoped CI enforcement
 
 This document defines the bounded screenshot/state artifact contract introduced for issue #125 under umbrella issue #97.
 

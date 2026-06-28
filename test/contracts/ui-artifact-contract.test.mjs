@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 const fromRepoRoot = (relativePath) => new URL(`../../${relativePath}`, import.meta.url);
 const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), 'utf8');
 
-test('ui artifact contract doc defines named-state artifacts and CI promotion rules', async () => {
+test('ui artifact contract doc defines named-state artifacts and auto-scoped CI enforcement', async () => {
   const [doc, readme, indexDoc, localImplementationSkill, ciWorkflow] = await Promise.all([
     readRepo('docs/ui-artifact-contract.md'),
     readRepo('README.md'),
