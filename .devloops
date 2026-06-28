@@ -72,7 +72,11 @@ workflow:
   requireRetrospectiveGate: true
   # Developer mode: this repo dogfoods the dev-loops tooling, so it enforces the
   # internal-tooling-only retro discipline on itself (#982). Consumers default OFF.
-  requireRetrospectiveInternalTooling: true
+  # Temporarily OFF until #993 wraps the remaining agent-level gh reads (CI-log,
+  # issue list/filter, issue comment) — until those wrappers exist, zero-raw-gh
+  # compliance isn't achievable, so enforcing would block every session. Re-enable
+  # to true as part of #993's DoD.
+  requireRetrospectiveInternalTooling: false
   requireDraftFirst: true
   devModeDefault: true
 
