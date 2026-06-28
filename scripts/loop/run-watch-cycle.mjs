@@ -15,6 +15,7 @@ import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
   enforceExternalHealthyWaitTimeout,
 } from "@dev-loops/core/loop/timeout-policy";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const REMOVED_FLAGS = new Set([
   "--force-rerequest-review",
   "--probe-only",
@@ -46,9 +47,16 @@ Error output (stderr, JSON):
     { "ok": false, "error": "...", "usage": "..." }
   runtime failures:
     { "ok": false, "error": "..." }
+Concise mode:
+  --concise, --summary      Human-readable summary: loop state, copilot rounds,
+                            unresolved/actionable thread counts, round-cap-clean
+                            eligibility, CI status, next action, AND the current
+                            round's new Copilot comment bodies.
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or runtime failure`.trim();
+  1  Argument error or runtime failure
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 function rejectRemovedFlag(token) {
   throw parseError(
@@ -202,6 +210,9 @@ export function parseWatchCycleCliArgs(argv) {
     help: false,
     repo: undefined,
     pr: undefined,
+    concise: false,
+    jq: undefined,
+    silent: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -209,6 +220,9 @@ export function parseWatchCycleCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       pr: { type: "string" },
+      concise: { type: "boolean" },
+      summary: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -234,6 +248,18 @@ export function parseWatchCycleCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "concise" || token.name === "summary") {
+      options.concise = true;
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -395,6 +421,46 @@ export async function runWatchCycle(
   });
   return result;
 }
+// Human-readable concise summary covering loop state, Copilot round count,
+// unresolved/actionable thread counts, round-cap-clean eligibility, CI status,
+// next action, AND the current round's new Copilot comment bodies (from the
+// embedded watch probe result). This is the field set the loop needs to read
+// without parsing the full JSON blob (issue #981).
+export function formatWatchCycleConcise(result) {
+  const snapshot = result.snapshot ?? {};
+  const lines = [
+    `Watch cycle: PR #${snapshot.prNumber ?? "?"}`,
+    `  loop state:          ${result.state}`,
+    `  handoff action:      ${result.handoffAction}`,
+    `  copilot rounds:      ${snapshot.copilotReviewRoundCount ?? 0}`,
+    `  unresolved threads:  ${snapshot.unresolvedThreadCount ?? 0}`,
+    `  actionable threads:  ${snapshot.actionableThreadCount ?? 0}`,
+    `  round-cap clean:     ${result.roundCapCleanEligible ? "yes" : "no"}`,
+    `  CI status:           ${snapshot.ciStatus ?? "none"}`,
+    `  loop disposition:    ${result.loopDisposition}`,
+    `  cycle disposition:   ${result.cycleDisposition}`,
+    `  watch status:        ${result.watchStatus ?? "(not watched)"}`,
+    `  terminal:            ${result.terminal ? "yes" : "no"}`,
+    `  next action:         ${result.nextAction}`,
+  ];
+  const watch = result.watch ?? {};
+  const bodies = [
+    ...(watch.newReviews ?? []).map((r) => ({ kind: "review", body: r.body })),
+    ...(watch.newComments ?? []).map((c) => ({ kind: "threadComment", body: c.body })),
+    ...(watch.newIssueComments ?? []).map((c) => ({ kind: "issueComment", body: c.body })),
+  ].filter((entry) => typeof entry.body === "string" && entry.body.trim().length > 0);
+  if (bodies.length > 0) {
+    lines.push("  new Copilot comment bodies this round:");
+    for (const entry of bodies) {
+      const indented = entry.body.trim().split("\n").map((l) => `      ${l}`).join("\n");
+      lines.push(`    [${entry.kind}]`);
+      lines.push(indented);
+    }
+  } else {
+    lines.push("  new Copilot comment bodies this round: (none)");
+  }
+  return lines.join("\n");
+}
 export async function runCli(
   argv = process.argv.slice(2),
   {
@@ -417,10 +483,18 @@ export async function runCli(
     watchCopilotReviewImpl,
     detectSessionActivity: true,
   });
-  stdout.write(`${JSON.stringify(result)}\n`);
+  if (options.concise && options.jq === undefined && !options.silent) {
+    stdout.write(`${formatWatchCycleConcise(result)}\n`);
+    return result.ok === false ? 1 : 0;
+  }
+  return emitResult(result, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
-  runCli().catch((error) => {
+  runCli().then((code) => {
+    if (typeof code === "number") {
+      process.exitCode = code;
+    }
+  }).catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   });

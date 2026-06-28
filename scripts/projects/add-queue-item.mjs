@@ -2,6 +2,7 @@
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: dev-loops queue add --repo <owner/name> --project <number|id> --item <number>
        dev-loops project add … (back-compat alias for "queue add")
@@ -19,10 +20,12 @@ Options:
 Output (stdout):
   JSON: { ok: true, item: { itemId, issueNumber, prNumber, status, alreadyPresent } }
 
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0 — success (or no-op when already present)
   1 — usage or argument error
-  2 — GitHub API error
+  2 — GitHub API error / invalid --jq filter
   3 — project, field, column, or issue/PR not found
 `.trim();
 
@@ -46,6 +49,7 @@ function parseCliArgs(argv) {
       column: { type: "string" },
       status: { type: "string" },
       help: { type: "boolean", short: "h" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -92,6 +96,12 @@ function parseCliArgs(argv) {
         // conflicting `--column X --status Y` is rejected rather than silently
         // resolved by argv order.
         args.status = requireValue(token, "--status requires a value");
+        break;
+      case "jq":
+        args.jq = requireValue(token, "--jq requires a filter");
+        break;
+      case "silent":
+        args.silent = true;
         break;
       default:
         throw Object.assign(new Error(`Unknown flag: ${token.rawName}`), { code: "INVALID_ARGS", usage: USAGE });
@@ -543,7 +553,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
   }
   try {
     const result = await main(args, { env });
-    stdout.write(JSON.stringify(result) + "\n");
+    process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
   } catch (err) {
     stderr.write(JSON.stringify({ ok: false, error: err.message, code: err.code ?? "UNKNOWN" }) + "\n");
     process.exitCode = classifyExitCode(err);

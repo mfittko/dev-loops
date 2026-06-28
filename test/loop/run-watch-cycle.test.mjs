@@ -5,7 +5,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { parseWatchCycleCliArgs, runWatchCycle } from "../../scripts/loop/run-watch-cycle.mjs";
+import { formatWatchCycleConcise, parseWatchCycleCliArgs, runWatchCycle } from "../../scripts/loop/run-watch-cycle.mjs";
 
 const EMPTY_THREADS = JSON.stringify({
   data: {
@@ -938,4 +938,43 @@ test("runWatchCycle stops with round cap reached when maxCopilotRounds is exceed
   assert.equal(result.cycleDisposition, "terminal");
   assert.equal(result.terminal, true);
   assert.equal(result.roundCapCleanEligible, false);
+});
+
+test("run-watch-cycle parses --concise/--summary, --jq, --silent flags", () => {
+  assert.equal(parseWatchCycleCliArgs(["--repo", "o/r", "--pr", "1", "--concise"]).concise, true);
+  assert.equal(parseWatchCycleCliArgs(["--repo", "o/r", "--pr", "1", "--summary"]).concise, true);
+  assert.equal(parseWatchCycleCliArgs(["--repo", "o/r", "--pr", "1", "--jq", ".state"]).jq, ".state");
+  assert.equal(parseWatchCycleCliArgs(["--repo", "o/r", "--pr", "1", "--silent"]).silent, true);
+  assert.equal(parseWatchCycleCliArgs(["--repo", "o/r", "--pr", "1", "-s"]).silent, true);
+});
+
+test("formatWatchCycleConcise surfaces loop state, rounds, threads, CI, round-cap, next action, and new bodies", () => {
+  const text = formatWatchCycleConcise({
+    ok: true,
+    state: "waiting_for_copilot_review",
+    handoffAction: "watch",
+    roundCapCleanEligible: false,
+    loopDisposition: "pending",
+    cycleDisposition: "needs_followup",
+    watchStatus: "changed",
+    terminal: false,
+    nextAction: "address feedback",
+    snapshot: {
+      prNumber: 17,
+      copilotReviewRoundCount: 3,
+      unresolvedThreadCount: 2,
+      actionableThreadCount: 1,
+      ciStatus: "pending",
+    },
+    watch: { newComments: [{ body: "line 12 still wrong" }], newReviews: [], newIssueComments: [] },
+  });
+  assert.match(text, /loop state:\s+waiting_for_copilot_review/);
+  assert.match(text, /copilot rounds:\s+3/);
+  assert.match(text, /unresolved threads:\s+2/);
+  assert.match(text, /actionable threads:\s+1/);
+  assert.match(text, /round-cap clean:\s+no/);
+  assert.match(text, /CI status:\s+pending/);
+  assert.match(text, /next action:\s+address feedback/);
+  assert.match(text, /new Copilot comment bodies this round:/);
+  assert.match(text, /line 12 still wrong/);
 });

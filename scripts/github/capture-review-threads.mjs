@@ -11,6 +11,7 @@ import {
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 export const REVIEW_THREADS_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!) {",
   "  repository(owner: $owner, name: $name) {",
@@ -45,9 +46,11 @@ Modes:
 Options:
   --output <path>   Write JSON output to file in addition to stdout
   --help, -h        Show this help
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0   Success
   1   Error
+  2   Invalid --jq filter
 `;
 export function parseCaptureCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -58,6 +61,7 @@ export function parseCaptureCliArgs(argv) {
       output: { type: "string" },
       repo: { type: "string" },
       pr: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -69,6 +73,8 @@ export function parseCaptureCliArgs(argv) {
     repo: undefined,
     pr: undefined,
     help: false,
+    jq: undefined,
+    silent: false,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -95,6 +101,14 @@ export function parseCaptureCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePrNumber(requireTokenValue(token));
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw new Error(`Unknown argument: ${token.rawName}`);
@@ -188,10 +202,14 @@ export async function runCli(
   if (options.outputPath) {
     await writeOutputFile(options.outputPath, payload);
   }
-  stdout.write(`${JSON.stringify(payload)}\n`);
+  return emitResult(payload, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
-  runCli().catch((error) => {
+  runCli().then((code) => {
+    if (typeof code === "number") {
+      process.exitCode = code;
+    }
+  }).catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   });

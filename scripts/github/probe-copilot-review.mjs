@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -24,6 +25,10 @@ Required:
 Output (stdout, JSON):
   { "ok": true, "status": "changed"|"timeout"|"idle", "repo": "...", "pr": N, "attempts": N,
     "newComments": [...], "newReviews": [...], "newIssueComments": [...] }
+Concise mode:
+  --concise, --summary      Human-readable summary: status, attempts, new-activity
+                            counts, AND the current round's new Copilot comment bodies.
+${JQ_OUTPUT_USAGE}
 Activity statuses:
   changed    Fresh Copilot review activity found (check newComments/newReviews/newIssueComments)
   timeout    Watch period elapsed with no fresh Copilot activity
@@ -91,7 +96,14 @@ function rejectRemovedFlag(token) {
 export function parseWatchCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
-    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, pr: { type: "string" } },
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      concise: { type: "boolean" },
+      summary: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
+    },
     allowPositionals: true,
     strict: false,
     tokens: true,
@@ -102,6 +114,9 @@ export function parseWatchCliArgs(argv) {
     pr: undefined,
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     timeoutMs: COPILOT_REVIEW_WAIT_TIMEOUT_MS,
+    concise: false,
+    jq: undefined,
+    silent: false,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -123,6 +138,18 @@ export function parseWatchCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError);
+      continue;
+    }
+    if (token.name === "concise" || token.name === "summary") {
+      options.concise = true;
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -311,6 +338,37 @@ export function buildPollDelayMs(watchStartedAtMs, timeoutMs, pollIntervalMs, at
   const scheduledAtMs = watchStartedAtMs + Math.min(timeoutMs, attempt * pollIntervalMs);
   return Math.max(0, scheduledAtMs - nowMs);
 }
+// Human-readable concise summary of a probe result, including the current
+// round's new Copilot comment bodies (the field `loop info --pr` omits).
+export function formatProbeConcise(result) {
+  const newComments = result.newComments ?? [];
+  const newReviews = result.newReviews ?? [];
+  const newIssueComments = result.newIssueComments ?? [];
+  const lines = [
+    `Copilot probe: PR #${result.pr} (${result.repo})`,
+    `  status:        ${result.status}`,
+    `  attempts:      ${result.attempts}`,
+    `  new threadComments: ${newComments.length}`,
+    `  new reviews:        ${newReviews.length}`,
+    `  new issueComments:  ${newIssueComments.length}`,
+  ];
+  const bodies = [
+    ...newReviews.map((r) => ({ kind: "review", body: r.body })),
+    ...newComments.map((c) => ({ kind: "threadComment", body: c.body })),
+    ...newIssueComments.map((c) => ({ kind: "issueComment", body: c.body })),
+  ].filter((entry) => typeof entry.body === "string" && entry.body.trim().length > 0);
+  if (bodies.length > 0) {
+    lines.push("  new Copilot comment bodies this round:");
+    for (const entry of bodies) {
+      const indented = entry.body.trim().split("\n").map((l) => `      ${l}`).join("\n");
+      lines.push(`    [${entry.kind}]`);
+      lines.push(indented);
+    }
+  } else {
+    lines.push("  new Copilot comment bodies this round: (none)");
+  }
+  return lines.join("\n");
+}
 export async function runCli(
   argv = process.argv.slice(2),
   {
@@ -325,10 +383,18 @@ export async function runCli(
     return;
   }
   const result = await watchCopilotReview(options, { env, ghCommand });
-  stdout.write(`${JSON.stringify(result)}\n`);
+  if (options.concise && options.jq === undefined && !options.silent) {
+    stdout.write(`${formatProbeConcise(result)}\n`);
+    return result.ok === false ? 1 : 0;
+  }
+  return emitResult(result, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
-  runCli().catch((error) => {
+  runCli().then((code) => {
+    if (typeof code === "number") {
+      process.exitCode = code;
+    }
+  }).catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   });
