@@ -273,7 +273,26 @@ export async function runCli(argv = process.argv.slice(2), {
     env,
   );
   if (prCreate.code !== 0) {
-    return fail("pr_create_failed", prCreate.stderr.trim() || prCreate.stdout.trim());
+    // No PR was opened, but the plan is committed and the branch is pushed —
+    // a recoverable partial state. Mirror the post-PR-open recovery hints: keep
+    // it fail-closed (exit 1, reason pr_create_failed) while telling the
+    // operator that a plain re-run recovers, since the commit step is
+    // idempotent (skips when nothing is staged) and the push is idempotent too.
+    const detail = prCreate.stderr.trim() || prCreate.stdout.trim();
+    const summary = {
+      ok: false,
+      reason: "pr_create_failed",
+      detail: detail || null,
+      planFile: planPath,
+      branch,
+      recovery: `gh pr create failed, so no PR was opened, but the plan is committed and branch ${branch} is pushed. Re-run promote-plan to recover: the commit step is idempotent (skips when nothing is staged) and the push is idempotent, so a clean re-run will open the PR.`,
+    };
+    emit(stdout, options.json, summary, [
+      `promote-plan: FAIL (pr_create_failed)${detail ? `: ${detail}` : ""}`,
+      `  branch: ${branch} (committed and pushed; no PR opened — re-run promote-plan to recover, it is idempotent and will open the PR)`,
+    ]);
+    process.exitCode = 1;
+    return summary;
   }
   const prNumber = parsePrNumberFromGhOutput(prCreate.stdout);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {

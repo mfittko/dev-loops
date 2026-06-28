@@ -207,6 +207,62 @@ describe("promote-plan CLI", () => {
     }
   });
 
+  test("partial state: push succeeds but gh pr create fails surfaces pr_create_failed with a recovery hint, then a re-run recovers", async () => {
+    // First run: real remote present (push succeeds), but gh exits non-zero on
+    // `pr create` — the now-primary residual partial state (plan committed +
+    // branch pushed, no PR). It must fail-closed (exit 1, pr_create_failed) yet
+    // carry the recoverable hint, and a plain re-run with a working gh must
+    // recover to ok and open exactly one PR.
+    const { tempDir, repoDir, planPath, ghStub } = await setup(READY_PLAN, [
+      { assertArgs: ["pr", "create", "--draft"], exitCode: 1, stderr: "gh: pr create boom\n" },
+    ]);
+    try {
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--json"], {
+        cwd: repoDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 1);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.reason, "pr_create_failed");
+      assert.equal(parsed.branch, "promote-plan/phase-x");
+      // The recovery hint says a re-run recovers (idempotent commit-skip + push).
+      assert.match(parsed.recovery, /Re-run promote-plan to recover/u);
+      assert.match(parsed.recovery, /idempotent/u);
+
+      const { spawnSync } = await import("node:child_process");
+      // The branch WAS pushed before the PR-create failure.
+      const remoteRefs = spawnSync("git", ["ls-remote", "--heads", "origin"], { cwd: repoDir, env: ghStub.env, encoding: "utf8" }).stdout;
+      assert.match(remoteRefs, /refs\/heads\/promote-plan\/phase-x$/mu);
+      // No link written: the PR never opened.
+      const afterFail = await readFile(planPath, "utf8");
+      assert.doesNotMatch(afterFail, /prNumber:/u);
+
+      // Re-run with a gh stub that now succeeds on `pr create`, against the same
+      // repo (partial state on disk). It must recover to ok and open one PR.
+      const { mkdir } = await import("node:fs/promises");
+      const stub2Dir = path.join(tempDir, "stub2");
+      await mkdir(stub2Dir, { recursive: true });
+      const recoverStub = await writeGhStub(stub2Dir, [PR_CREATE_ENTRY], { logCalls: true });
+      const rerun = await runNode(cliPath, ["--plan-file", planPath, "--json"], {
+        cwd: repoDir,
+        env: recoverStub.env,
+      });
+      assert.equal(rerun.code, 0, rerun.stderr);
+      const reparsed = JSON.parse(rerun.stdout);
+      assert.equal(reparsed.ok, true);
+      assert.ok(reparsed.action === "promote" || reparsed.action === "already_promoted", `unexpected action ${reparsed.action}`);
+      assert.equal(reparsed.prNumber, 321);
+      // Exactly one PR opened on the recovering run.
+      const ghLog = (await readFile(recoverStub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+      assert.equal(ghLog.length, 1, `expected one gh call on recovery, got: ${ghLog.join(" | ")}`);
+      const written = await readFile(planPath, "utf8");
+      assert.match(written, /^---\nprNumber: 321\n---\n/u);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("fail closed: a not-ready plan makes ZERO gh calls and exits 1", async () => {
     const { tempDir, repoDir, planPath, ghStub } = await setup(BASE_PLAN, []);
     try {
