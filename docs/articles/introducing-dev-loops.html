@@ -179,19 +179,19 @@
 
   <p>The deep mechanics live in two companion articles linked at the end. Here is the short version. Most lost hours in an AI-assisted workflow happen in the seams between steps, where the system has to answer <em>who acts next?</em> or <em>is this ready?</em> and an unattended agent answers with a hopeful assumption it never checks. It marks the build passed, marks the review done, and calls the work finished while those assumptions go untested. dev-loops refuses the assumption everywhere. Every transition becomes a decision the system makes deliberately and records where you can read it; when the situation is ambiguous, it stops and a human resolves it before the work moves on.</p>
 
-  <p>The proof is the repository itself. dev-loops develops dev-loops: the loop is the tool that ships its own changes, so its commit history is a continuous integration test of the claim. Over roughly fourteen days (2026-06-14 to 2026-06-28) the repository merged about 100 pull requests and closed about 96 issues, around 7 merged pull requests a day, with about 89% of merged pull requests closing a linked issue. Every one of those pull requests went through the same path: a draft gate that confirms checks are present, a Copilot review round, and a pre-approval gate that confirms CI is green, with a human performing the merge by default.</p>
+  <p>The proof is the repository itself. dev-loops develops dev-loops: the loop is the tool that ships its own changes, so its commit history is a continuous integration test of the claim. Over roughly fourteen days (2026-06-14 to 2026-06-28) the repository merged about 100 pull requests and closed about 96 issues, around 7 merged pull requests a day, with about 87% of merged pull requests closing a linked issue. Every one of those pull requests went through the same path: a draft gate that confirms checks are present, a Copilot review round, and a pre-approval gate that confirms CI is green, with a human performing the merge by default.</p>
 
   <div class="metrics" role="list" aria-label="Verified throughput over roughly 14 days">
     <div class="metric" role="listitem"><div class="num">~100</div><div class="lab">pull requests merged in ~14 days</div></div>
     <div class="metric" role="listitem"><div class="num">~7/day</div><div class="lab">merged pull requests per day</div></div>
-    <div class="metric" role="listitem"><div class="num">~89%</div><div class="lab">of merged PRs close a linked issue</div></div>
+    <div class="metric" role="listitem"><div class="num">~87%</div><div class="lab">of merged PRs close a linked issue</div></div>
     <div class="metric" role="listitem"><div class="num">1 gate</div><div class="lab">draft &rarr; Copilot &rarr; pre-approval, human-merge by default</div></div>
   </div>
 
   <p>A handful of concrete runs show what that path catches.</p>
 
   <div class="example">
-    <p><span class="ex-title">A waterfall that mints almost no tracker noise.</span> The local-first epic (#947) decomposed into six refined phase sub-issues, each promoted to its own gated pull request: #956, #957, #959, #960, #961, #962, plus the docs-grill formalization (#948 &rarr; #958). One phase, P4 (#960), is PR-first by design: it commits a plan document and opens a single draft pull request, minting no issue at all. The committed plan doc and the pull request are one artifact, so there is no second authority to keep in sync.</p>
+    <p><span class="ex-title">A waterfall that mints almost no tracker noise.</span> The local-first epic (#947) decomposed into six refined phase sub-issues, each promoted to its own gated pull request: #956, #957, #959, #960, #961, #962, plus the docs-grill formalization (#948 &rarr; #958). One phase, P4 (#960), added PR-first promotion: when work starts from a plan rather than an epic sub-issue, the promote step commits the plan document and opens a single draft pull request, minting no issue at all. The committed plan doc and the pull request are one artifact, so there is no second authority to keep in sync. (This article was promoted that way &mdash; it has a draft PR and no issue.)</p>
   </div>
 
   <div class="example">
@@ -203,7 +203,7 @@
   </div>
 
   <div class="example">
-    <p><span class="ex-title">Dogfooding surfacing its own tooling gaps.</span> Running the loop turned up #963: the operator action scripts emit machine JSON only, so a human or an agent driving the gate cadence had to re-parse a raw blob just to read the result. The fix adds a concise summary output mode. The same A/B-contrast deslop step (#944 &rarr; #945/#946) that polices these articles' prose runs over the loop's own writing, removing binary-contrast phrasing from the articles and the decks.</p>
+    <p><span class="ex-title">Dogfooding surfacing its own tooling gaps.</span> Running the loop turned up #963: the operator action scripts emit machine JSON only, so a human or an agent driving the gate cadence had to re-parse a raw blob just to read the result. The issue (still open) proposes a concise summary output mode. The same A/B-contrast deslop step &mdash; formalized for the articles in #945 and applied to the decks in #946 &mdash; runs over the loop's own writing, removing binary-contrast phrasing.</p>
   </div>
 
   <h2>Act 2 &mdash; Adopt it in your project</h2>
