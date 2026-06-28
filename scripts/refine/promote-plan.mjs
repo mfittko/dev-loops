@@ -226,18 +226,43 @@ export async function runCli(argv = process.argv.slice(2), {
     return fail("git_checkout_failed", checkout.stderr.trim());
   }
 
-  // Stage and commit the plan doc as the spec-of-record.
+  // Stage and commit the plan doc as the spec-of-record. The commit is made
+  // re-runnable: if a prior partial run already committed the plan (plan at
+  // HEAD, no PR), there is nothing to stage, so we skip the commit instead of
+  // failing `git_commit_failed` and continue on to push + pr-create. This lets
+  // a partial state (plan committed, no prNumber) recover on a plain re-run.
   const add = await runChildFn("git", ["add", "--", planPath], env);
   if (add.code !== 0) {
     return fail("git_add_failed", add.stderr.trim());
   }
-  const commit = await runChildFn(
-    "git",
-    ["commit", "-m", `docs(plan): promote ${planDocRelPath}`],
-    env,
-  );
-  if (commit.code !== 0) {
-    return fail("git_commit_failed", commit.stderr.trim());
+  // `git diff --cached --quiet` exits 0 when the index matches HEAD (nothing to
+  // commit), 1 when there are staged changes, and >1 (e.g. 128) on a real git
+  // error. Treat the codes explicitly: only 1 means "commit"; an error code must
+  // fail closed rather than be misread as staged (which would attempt a commit
+  // and surface a misleading git_commit_failed).
+  const diff = await runChildFn("git", ["diff", "--cached", "--quiet"], env);
+  if (diff.code !== 0 && diff.code !== 1) {
+    return fail("git_diff_failed", `git diff --cached --quiet exited ${diff.code}${diff.stderr.trim() ? `: ${diff.stderr.trim()}` : ""}`);
+  }
+  const hasStaged = diff.code === 1;
+  if (hasStaged) {
+    const commit = await runChildFn(
+      "git",
+      ["commit", "-m", `docs(plan): promote ${planDocRelPath}`],
+      env,
+    );
+    if (commit.code !== 0) {
+      return fail("git_commit_failed", commit.stderr.trim());
+    }
+  }
+
+  // Push the head branch to the remote BEFORE opening the PR. A fresh local
+  // branch absent on the remote makes `gh pr create --head <branch>` fail, which
+  // would commit the plan but open no PR — the unrecoverable partial state this
+  // fix targets. Pushing first guarantees the head ref exists for gh.
+  const push = await runChildFn("git", ["push", "-u", "origin", branch], env);
+  if (push.code !== 0) {
+    return fail("git_push_failed", push.stderr.trim() || push.stdout.trim());
   }
 
   // Open EXACTLY ONE draft PR via the canonical wrapper (never raw gh).
@@ -255,7 +280,26 @@ export async function runCli(argv = process.argv.slice(2), {
     env,
   );
   if (prCreate.code !== 0) {
-    return fail("pr_create_failed", prCreate.stderr.trim() || prCreate.stdout.trim());
+    // No PR was opened, but the plan is committed and the branch is pushed —
+    // a recoverable partial state. Mirror the post-PR-open recovery hints: keep
+    // it fail-closed (exit 1, reason pr_create_failed) while telling the
+    // operator that a plain re-run recovers, since the commit step is
+    // idempotent (skips when nothing is staged) and the push is idempotent too.
+    const detail = prCreate.stderr.trim() || prCreate.stdout.trim();
+    const summary = {
+      ok: false,
+      reason: "pr_create_failed",
+      detail: detail || null,
+      planFile: planPath,
+      branch,
+      recovery: `gh pr create failed, so no PR was opened, but the plan is committed and branch ${branch} is pushed. Re-run promote-plan to recover: the commit step is idempotent (skips when nothing is staged) and the push is idempotent, so a clean re-run will retry opening the PR.`,
+    };
+    emit(stdout, options.json, summary, [
+      `promote-plan: FAIL (pr_create_failed)${detail ? `: ${detail}` : ""}`,
+      `  branch: ${branch} (committed and pushed; no PR opened — re-run promote-plan to recover, it is idempotent and will retry opening the PR)`,
+    ]);
+    process.exitCode = 1;
+    return summary;
   }
   const prNumber = parsePrNumberFromGhOutput(prCreate.stdout);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
