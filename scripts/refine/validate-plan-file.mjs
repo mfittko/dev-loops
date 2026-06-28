@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { formatCliError } from "../_core-helpers.mjs";
 import {
   DEFAULT_USAGE_SUFFIX,
-  extractSection,
+  checkBaseSections,
   parseCheckerCliArgs,
   writeCheckerOutput,
   isDirectCliRun,
@@ -36,16 +36,9 @@ const SECTION_CODES = {
  * @returns {{ checker: "validate-plan-file", ok: boolean, errors: { code: string, message: string }[] }}
  */
 export function validatePlanFile(markdownText) {
-  const errors = [];
-  // extractSection returns the trimmed body (empty string for an empty section)
-  // or null when the heading is absent — both are malformed here.
-  for (const heading of PLAN_FILE_BASE_SECTIONS) {
-    const body = extractSection(markdownText, heading);
-    if (!body) {
-      errors.push({ code: SECTION_CODES[heading], message: `Missing or empty ## ${heading} section.` });
-    }
-  }
-  return { checker: "validate-plan-file", ok: errors.length === 0, errors };
+  // checkBaseSections reports each absent/empty section under its distinct
+  // missing_* code; an empty-body section is malformed here too.
+  return checkBaseSections(markdownText, "validate-plan-file", SECTION_CODES);
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
