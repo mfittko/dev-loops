@@ -1,18 +1,18 @@
 # Presentation decks
 
-Public-audience talks on dev-loops. Each deck has a Slidev source (`*-presentation.md`)
-and a self-contained, CSP-safe HTML render (`*.html`) — the HTML is the source of
-truth for publishing. The HTML render carries editorial refinements applied directly
-to it (the storytelling restructure, the headline shortening, and the A/B-contrast
-deslop); the Slidev source tracks the slide headlines, but its body text predates the HTML's
-storytelling restructure and deslop, so the two diverge below the headline level and
-the HTML is not regenerated from it. Edit the `.html` for anything that ships
-(headlines and body), and mirror only headline changes back to the `.md`.
+Public-audience talks on dev-loops. The self-contained, CSP-safe HTML render
+(`*.html`) is the source of truth for publishing. Some decks also keep a Slidev
+source (`*-presentation.md`), which tracks the slide headlines; its body text
+predates the HTML's storytelling restructure and A/B-contrast deslop, so the two
+diverge below the headline level and the HTML is not regenerated from it. The
+deep-dive deck was merged directly from two earlier HTML decks and has no Slidev
+source. Edit the `.html` for anything that ships (headlines and body), and mirror
+only headline changes back to any `.md` that exists.
 
 | Deck | HTML render | Topic |
 | --- | --- | --- |
-| Applied dev-loops — Eliminating Coordination Delay | [`applied-dev-loops.html`](applied-dev-loops.html) | Turning review/merge handoffs into a parallel, fail-closed pipeline. |
-| Process Observability — Make the Waiting Visible | [`process-observability.html`](process-observability.html) | Measuring how long work waits, not how fast you write code. |
+| Introducing dev-loops | [`introducing-dev-loops.html`](introducing-dev-loops.html) | The concept, the data behind it, and how to run the loop on your own project. |
+| dev-loops: A Deep Dive | [`dev-loops-deep-dive.html`](dev-loops-deep-dive.html) | Explicit handoffs on a state graph (Part 1) and measuring the waiting between actions (Part 2). |
 
 The self-contained `.html` files inline all CSS and diagrams (no Slidev runtime,
 no CDN, no remote resources) and ship a strict `Content-Security-Policy`, so they
@@ -23,7 +23,7 @@ open directly in a browser and publish as static files.
 Open the HTML file directly:
 
 ```sh
-open docs/presentations/applied-dev-loops.html   # macOS
+open docs/presentations/dev-loops-deep-dive.html   # macOS
 ```
 
 Or serve the assembled site (mirrors what GitHub Pages publishes):
@@ -34,8 +34,9 @@ npx http-server site                       # or: python3 -m http.server -d site
 ```
 
 `scripts/pages/build-site.mjs` copies the deck HTML into `site/` and generates
-`site/index.html` linking both decks. `site/` is assembled, never hand-maintained,
-and is gitignored — only the script and workflow are committed.
+`site/index.html` (the intro article) with a nav linking the deep-dive article
+and the decks. `site/` is assembled, never hand-maintained, and is gitignored —
+only the script and workflow are committed.
 
 ## GitHub Pages deploy
 

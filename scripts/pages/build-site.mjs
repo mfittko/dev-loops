@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Assembles the GitHub Pages publishable dir deterministically. The landing
-// page (index.html) is the "Introducing dev-loops" article; the two deep-dive
-// articles and the two decks are published alongside it and reached through a
-// shared navigation bar injected into the article pages. The source HTML files
+// page (index.html) is the "Introducing dev-loops" article; the deep-dive
+// article and the deep-dive deck are published alongside it and reached through
+// a shared navigation bar injected into the article pages. The source HTML files
 // under docs/ are the source of truth; site/ is assembled, never hand-maintained.
 // Usage: node scripts/pages/build-site.mjs [--out <dir>] [--repo-root <dir>]
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -15,14 +15,16 @@ const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), '..',
 // relative to docs/articles/.
 export const LANDING = { file: 'introducing-dev-loops.html' };
 
-// Deep-dive articles published alongside the landing page. file is relative to
-// docs/articles/; navLabel is how the nav refers to them.
+// The deep-dive article published alongside the landing page. file is relative
+// to docs/articles/; navLabel is how the nav refers to it.
 export const ARTICLES = [
-  { file: 'eliminating-coordination-delay.html', navLabel: 'Coordination Delay' },
-  { file: 'make-the-waiting-visible.html', navLabel: 'Make the Waiting Visible' },
+  { file: 'dev-loops-deep-dive.html', navLabel: 'Deep dive' },
 ];
 
-// The decks to publish. file is relative to docs/presentations/.
+// The decks to publish. file is relative to docs/presentations/; outFile is the
+// published name (defaults to file). The deep-dive article and deck share the
+// source basename dev-loops-deep-dive.html under different docs/ dirs, so the
+// deck publishes under a distinct name to avoid clobbering the article in site/.
 export const DECKS = [
   {
     file: 'introducing-dev-loops.html',
@@ -32,25 +34,22 @@ export const DECKS = [
     navLabel: 'Intro (deck)',
   },
   {
-    file: 'applied-dev-loops.html',
-    title: 'Applied dev-loops',
-    subtitle: 'Eliminating Coordination Delay',
-    description: 'How a coordination runtime turns review and merge handoffs into a parallel, fail-closed pipeline.',
-    navLabel: 'Applied (deck)',
-  },
-  {
-    file: 'process-observability.html',
-    title: 'Process Observability',
-    subtitle: 'Make the Waiting Visible',
-    description: 'Why measuring how long work waits — not how fast you write code — is what cuts delivery delay.',
-    navLabel: 'Observability (deck)',
+    file: 'dev-loops-deep-dive.html',
+    outFile: 'dev-loops-deep-dive-deck.html',
+    title: 'dev-loops: A Deep Dive',
+    subtitle: 'Coordination delay and the waiting between actions',
+    description: 'How explicit handoffs on a state graph and measuring the wait between actions cut delivery delay.',
+    navLabel: 'Deep dive (deck)',
   },
 ];
+
+// Resolve a deck's published filename: distinct outFile when set, else file.
+const deckOut = (deck) => deck.outFile ?? deck.file;
 
 // The other resources linked from the navigation, in order.
 export const NAV_LINKS = [
   ...ARTICLES.map((a) => ({ file: a.file, label: a.navLabel })),
-  ...DECKS.map((d) => ({ file: d.file, label: d.navLabel })),
+  ...DECKS.map((d) => ({ file: deckOut(d), label: d.navLabel })),
 ];
 
 // Nav styling, appended to each article page's own <style> block so it reuses
@@ -105,7 +104,7 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   const landingHtml = await readFile(join(articlesDir, LANDING.file), 'utf8');
   await writeFile(join(out, 'index.html'), injectNav(landingHtml), 'utf8');
 
-  // Deep-dive articles: published with the same nav so the set is navigable.
+  // Deep-dive article: published with the same nav so the set is navigable.
   for (const article of ARTICLES) {
     const html = await readFile(join(articlesDir, article.file), 'utf8');
     await writeFile(join(out, article.file), injectNav(html), 'utf8');
@@ -113,12 +112,12 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
 
   // Decks: self-contained slide renders, copied as-is (no nav injection).
   for (const deck of DECKS) {
-    await cp(join(decksDir, deck.file), join(out, deck.file));
+    await cp(join(decksDir, deck.file), join(out, deckOut(deck)));
   }
 
   return {
     out,
-    files: ['index.html', ...ARTICLES.map((a) => a.file), ...DECKS.map((d) => d.file)],
+    files: ['index.html', ...ARTICLES.map((a) => a.file), ...DECKS.map((d) => deckOut(d))],
   };
 }
 

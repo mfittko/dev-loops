@@ -6,14 +6,21 @@ import assert from 'node:assert/strict';
 
 import { buildSite, injectNav, ARTICLES, DECKS, NAV_LINKS } from '../../scripts/pages/build-site.mjs';
 
+// A deck publishes under its outFile when set (the deep-dive article and deck
+// share the source basename), else its source file name.
+const deckOut = (d) => d.outFile ?? d.file;
+
 test('build-site: index is the intro article, all resources published, nav links the others', async () => {
   const out = await mkdtemp(join(tmpdir(), 'pages-site-'));
   try {
     const result = await buildSite({ outDir: out });
 
     // Every deep-dive article and deck is published alongside the index.
-    for (const r of [...ARTICLES, ...DECKS]) {
+    for (const r of ARTICLES) {
       await stat(join(out, r.file)); // throws if missing
+    }
+    for (const d of DECKS) {
+      await stat(join(out, deckOut(d))); // throws if missing
     }
 
     const index = await readFile(join(out, 'index.html'), 'utf8');
@@ -33,7 +40,7 @@ test('build-site: index is the intro article, all resources published, nav links
 
     assert.deepEqual(
       result.files.sort(),
-      ['index.html', ...ARTICLES.map((a) => a.file), ...DECKS.map((d) => d.file)].sort(),
+      ['index.html', ...ARTICLES.map((a) => a.file), ...DECKS.map((d) => deckOut(d))].sort(),
     );
   } finally {
     await rm(out, { recursive: true, force: true });

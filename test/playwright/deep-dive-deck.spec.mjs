@@ -7,7 +7,7 @@ import { test, expect } from "@playwright/test";
 
 import { captureNamedUiState, startFixtureServer, stopFixtureServer } from "./harness/webkit-smoke-harness.mjs";
 
-const DECK_PATH = fileURLToPath(new URL("../../docs/presentations/process-observability.html", import.meta.url));
+const DECK_PATH = fileURLToPath(new URL("../../docs/presentations/dev-loops-deep-dive.html", import.meta.url));
 
 // A single-file static server is enough for one self-contained deck: serve the
 // deck only at the root, and 404 everything else so requests stay deterministic.
@@ -31,22 +31,31 @@ function makeDeckServer() {
 }
 
 // Every named state must be a stable <section id> in the rendered deck. The
-// designer/vision review loop captures the load-bearing ones (hero,
-// observable-state, instrumented, metrics, close); the rest are asserted present
-// so the structure can't silently drift.
+// merged deck runs two movements — coordination delay (Part 1) then make the
+// waiting visible (Part 2) — under one hero and one close. The designer/vision
+// review loop captures the load-bearing ones; the rest are asserted present so
+// the structure can't silently drift.
 const NAMED_STATES = [
   { id: "hero", stateName: "Hero", capture: true },
+  // Part 1 — eliminating coordination delay
+  { id: "core-idea", stateName: "Core idea", capture: true },
+  { id: "safe-pauses", stateName: "Safe pauses", capture: false },
+  { id: "steering", stateName: "Steering", capture: false },
+  { id: "parallel-review", stateName: "Parallel review", capture: true },
+  { id: "trust", stateName: "Trust / never-lie", capture: false },
+  { id: "why-graphs", stateName: "Why graphs", capture: true },
+  // Part 2 — make the waiting visible
   { id: "interrupt-cost", stateName: "Interrupt cost (delay pattern)", capture: true },
   { id: "handoff", stateName: "Handoff cost", capture: false },
   { id: "blind-spot", stateName: "Blind spot", capture: false },
   { id: "observable-state", stateName: "Observable state", capture: true },
   { id: "measurement-loop", stateName: "Measurement loop", capture: true },
   { id: "instrumented", stateName: "Instrumented", capture: true },
-  { id: "metrics", stateName: "Metrics", capture: true },
+  { id: "metrics", stateName: "Metrics", capture: false },
   { id: "close", stateName: "Close", capture: true },
 ];
 
-test("webkit renders the observability deck and captures named states", async ({ page }, testInfo) => {
+test("webkit renders the deep-dive deck and captures named states", async ({ page }, testInfo) => {
   const { server, url } = await startFixtureServer(makeDeckServer);
 
   try {
@@ -73,7 +82,7 @@ test("webkit renders the observability deck and captures named states", async ({
       await captureNamedUiState({
         page,
         testInfo,
-        sliceId: "observability-deck",
+        sliceId: "deep-dive-deck",
         stateName,
         // Frame each capture on the in-view section, not the whole scroll
         // document, so the designer-review loop sees one state per artifact.
@@ -136,7 +145,7 @@ async function measureFit(page) {
   });
 }
 
-test("webkit observability deck fits the mobile viewport (no horizontal scroll, no vertical clip)", async ({ page }, testInfo) => {
+test("webkit deep-dive deck fits the mobile viewport (no horizontal scroll, no vertical clip)", async ({ page }, testInfo) => {
   const { server, url } = await startFixtureServer(makeDeckServer);
 
   try {
@@ -152,19 +161,19 @@ test("webkit observability deck fits the mobile viewport (no horizontal scroll, 
     expect(m.clipped, `sections clip content with overflow:hidden (taller than their box):\n${m.clipped.join("\n")}`).toEqual([]);
 
     // Capture one mobile state so the review loop sees the phone layout.
-    const interruptCost = page.locator("#interrupt-cost");
-    await interruptCost.scrollIntoViewIfNeeded();
-    await expect(interruptCost).toBeVisible();
+    const coreIdea = page.locator("#core-idea");
+    await coreIdea.scrollIntoViewIfNeeded();
+    await expect(coreIdea).toBeVisible();
     await captureNamedUiState({
       page,
       testInfo,
-      sliceId: "observability-deck",
-      stateName: "Interrupt cost (mobile 390)",
+      sliceId: "deep-dive-deck",
+      stateName: "Core idea (mobile 390)",
       fullPage: false,
       metadata: {
         fixture: path.basename(DECK_PATH),
-        route: "#interrupt-cost",
-        reviewHint: "Mobile (390x844) layout for the interrupt-cost section — fits the viewport, no scroll/clip.",
+        route: "#core-idea",
+        reviewHint: "Mobile (390x844) layout for the core-idea section — fits the viewport, no scroll/clip.",
       },
     });
   } finally {
