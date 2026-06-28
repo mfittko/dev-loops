@@ -186,9 +186,23 @@ test("direct entrypoints surface the public intent for dispatch (#972)", async (
   const helpContext = createCommandContext();
   await pi.registeredCommands.get("dev-loops").handler("", helpContext.ctx);
   const helpLines = helpContext.calls.widgets.at(-1).lines;
-  for (const re of [/\/dev-loops start <issue>/, /\/dev-loops auto <issue>/, /\/dev-loops continue \[issue\|pr\]/, /\/dev-loops info <issue\|pr>/]) {
+  for (const re of [/\/dev-loops start <issue>/, /\/dev-loops auto <issue>/, /\/dev-loops continue \[issue\|pr\]/, /\/dev-loops start-spike <question>/, /\/dev-loops info <issue\|pr>/]) {
     assert(helpLines.some((line) => re.test(line)), `help should list ${re}`);
   }
+});
+
+test("start-spike surfaces the spike intent through the Pi handler (#988 P2)", async () => {
+  const pi = readyPi();
+  registerExtension(pi);
+
+  const { ctx, calls } = createCommandContext();
+  await pi.registeredCommands.get("dev-loops").handler("start-spike Would an LRU cache help?", ctx);
+
+  const widget = calls.widgets.at(-1);
+  assert.equal(widget.key, "dev-loops.setup");
+  assert(widget.lines.some((line) => /dev-loops start-spike/.test(line)));
+  assert.match(calls.notifications.at(-1).message, /start a dev-loop spike on the question: Would an LRU cache help\?/);
+  assert.equal(calls.notifications.at(-1).level, "info");
 });
 
 test("status and doctor use the reduced readiness surface", async () => {

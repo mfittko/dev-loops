@@ -363,3 +363,41 @@ test("continue is dual-routed (#988): widened target + bare + URL normalize", as
   assert.equal(bareExec.number, null);
   assert.equal(bareExec.intent, "continue the current dev loop");
 });
+
+test("start-spike parses free text / --file on a SEPARATE path from the numeric verbs (#988 P2)", async () => {
+  // Inline free-text question — NOT a numeric target.
+  const inline = parseDevLoopsCommand(["start-spike", "Would", "an", "LRU", "cache", "help?"], { surface: "extension" });
+  assert.equal(inline.kind, "start_spike");
+  assert.equal(inline.mode, "question");
+  assert.equal(inline.question, "Would an LRU cache help?");
+  assert.equal(inline.file, null);
+  assert.match(inline.intent, /start a dev-loop spike on the question: Would an LRU cache help\?/);
+  // Parity across surfaces.
+  assert.deepEqual(parseDevLoopsCommand(["start-spike", "Would", "an", "LRU", "cache", "help?"], { surface: "cli" }), inline);
+
+  // --file <path> form skips scaffolding.
+  const file = parseDevLoopsCommand(["start-spike", "--file", "docs/spikes/x.md"], { surface: "extension" });
+  assert.equal(file.kind, "start_spike");
+  assert.equal(file.mode, "file");
+  assert.equal(file.file, "docs/spikes/x.md");
+  assert.equal(file.question, null);
+
+  // Empty / malformed forms fail closed.
+  assert.equal(parseDevLoopsCommand(["start-spike"], { surface: "extension" }).kind, "malformed");
+  assert.equal(parseDevLoopsCommand(["start-spike", "--file"], { surface: "extension" }).kind, "malformed");
+  assert.equal(parseDevLoopsCommand(["start-spike", "--file", "a.md", "b.md"], { surface: "extension" }).kind, "malformed");
+
+  // The numeric verbs are UNAFFECTED: still reject non-numeric, no bare start-spike leakage.
+  assert.equal(parseDevLoopsCommand(["start", "a question"], { surface: "extension" }).kind, "malformed");
+  assert.equal(parseDevLoopsCommand(["info", "main"], { surface: "extension" }).kind, "malformed");
+
+  // Executor surfaces the spike intent for dispatch.
+  const exec = await executeDevLoopsCommand({
+    input: ["start-spike", "Try", "thing?"],
+    surface: "extension",
+    runtime: createRuntime(),
+  });
+  assert.equal(exec.kind, "start_spike");
+  assert.equal(exec.mode, "question");
+  assert.equal(exec.question, "Try thing?");
+});
