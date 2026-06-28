@@ -174,9 +174,10 @@ async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh" 
 }
 
 // GitHub computes `mergeable` asynchronously, so a freshly-pushed head briefly
-// reads `UNKNOWN`. Re-poll a bounded number of times before deciding; never
-// treat a transient UNKNOWN as a pass — the caller fails closed to recheck if
-// it never settles. (issue #980)
+// reads `UNKNOWN`. After the initial fetch, re-poll up to `maxPolls` more times
+// while the value stays UNKNOWN (so at most 1 + maxPolls total fetches) before
+// deciding; never treat a transient UNKNOWN as a pass — the caller fails closed
+// to recheck if it never settles. (issue #980)
 export async function fetchPrFactsWithSettledMergeable(
   options,
   {

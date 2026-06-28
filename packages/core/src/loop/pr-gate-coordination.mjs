@@ -162,7 +162,7 @@ function formatBlockedMergeReason(mergeStateStatus, conflictFiles, mergeable = n
     return reason;
   }
 
-  let reason = "The current branch conflicts with the base branch, so resolve the conflict locally on the PR branch (run resolve-pr-conflicts.mjs for the safe additive-CHANGELOG case), rerun validation, rerun gate detection, and only then resume the normal gate path.";
+  let reason = "The current branch conflicts with the base branch, so resolve the conflict locally on the PR branch (run `node scripts/loop/resolve-pr-conflicts.mjs --push` for the safe additive-CHANGELOG case), rerun validation, rerun gate detection, and only then resume the normal gate path.";
 
   if (mergeable === "CONFLICTING") {
     reason += " GitHub mergeable: CONFLICTING.";

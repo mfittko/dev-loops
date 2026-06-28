@@ -26,13 +26,15 @@ Options:
   --json              Emit machine-readable JSON on stdout.
 
 Output (stdout, JSON with --json):
-  { "ok": true, "action": "resolved"|"already_mergeable"|"clean_merge",
+  { "ok": true, "action": "clean_merge"|"resolved",
     "base": "main", "resolvedFiles": ["CHANGELOG.md"], "pushed": false }
+  ("clean_merge" covers an already-up-to-date branch; "resolved" is the
+   auto-resolved additive-CHANGELOG case.)
 Error output:
   { "ok": false, "error": "...", "conflictFiles": ["..."] }
 
 Exit codes:
-  0  Resolved (or already mergeable)
+  0  Clean merge (incl. already up to date) or auto-resolved CHANGELOG
   1  Argument error, git failure, or UNRESOLVABLE conflict (fail closed)`.trim();
 
 const parseError = buildParseError(USAGE);
