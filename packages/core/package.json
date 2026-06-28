@@ -56,6 +56,7 @@
     "./loop/steering": "./src/loop/steering.mjs",
     "./loop/timeout-policy": "./src/loop/timeout-policy.mjs",
     "./loop/tracker-pr-state": "./src/loop/tracker-pr-state.mjs",
+    "./loop/ui-e2e-scoping": "./src/loop/ui-e2e-scoping.mjs",
     "./refinement/ac-dod-matrix": "./src/refinement/ac-dod-matrix.mjs",
     "./harness": "./src/harness/index.mjs",
     "./loop/worktree-guard": "./src/loop/worktree-guard.mjs",
