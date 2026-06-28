@@ -50,7 +50,7 @@ const DISPOSITION_TO_ACTION = Object.freeze({
  * @param {object} facts
  * @param {string} facts.spikeIntakeState  one of SPIKE_INTAKE_STATE values (from evaluateSpikeIntakeState)
  * @param {string} facts.disposition  one of SPIKE_EXIT_DISPOSITION values
- * @returns {{ ok: boolean, action?: string, reason?: string, spikeIntakeState?: string }}
+ * @returns {{ ok: boolean, action?: string, reason?: string, spikeIntakeState?: string | null }}
  */
 export function evaluateSpikeExit({ spikeIntakeState, disposition } = {}) {
   // The ready gate: an exit decision is only meaningful once a recommendation
