@@ -19,7 +19,7 @@ Publish a top-of-funnel public article that introduces dev-loops to a general en
 ## Explicit non-goals
 - A deep dive into any single mechanism (the existing concept articles and the spike-mode write-up are the deep dives; this links down to them).
 - A full configuration reference (the artifact-authority contract and config docs own that; the article links to them).
-- Changing any code, schema, defaults, or scripts — this is a content deliverable.
+- Changing runtime behavior, schema, or defaults — this is a content deliverable. The one script touched is `scripts/pages/build-site.mjs`, only to publish the article as the Pages landing page (no product/runtime behavior changes).
 - Marketing superlatives or competitor comparisons; the evidence carries the piece.
 
 ## Acceptance criteria
