@@ -34,16 +34,16 @@ The work falls into loops nested inside loops. An outer loop asks, every cycle, 
 ```mermaid
 stateDiagram-v2
   direction LR
-  [*] --> WhoActsNext
-  WhoActsNext --> WriteTheCode: author's turn
-  WhoActsNext --> ResolveFeedback: reviewer's turn
-  WhoActsNext --> AskAHuman: ambiguous
-  WriteTheCode --> WhoActsNext
-  ResolveFeedback --> WhoActsNext
+  [*] --> NextAction
+  NextAction --> WriteTheCode: write the code
+  NextAction --> ResolveFeedback: resolve feedback
+  NextAction --> AskAHuman: ambiguous
+  WriteTheCode --> NextAction
+  ResolveFeedback --> NextAction
   AskAHuman --> [*]
 ```
 
-*Diagram 1 — The nested loops. An outer "who acts next?" decision routes each cycle to exactly one move, then returns to ask again. When the next step is ambiguous, the loop hands control to a human.*
+*Diagram 1 — The nested loops. An outer "what is the next action here?" decision routes each cycle to exactly one move, then returns to ask again. When the next step is ambiguous, the loop hands control to a human.*
 
 ## What a known next step buys you
 
