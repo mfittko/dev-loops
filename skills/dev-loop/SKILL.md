@@ -35,7 +35,14 @@ For async-required routes (config `workflow.asyncStartMode`, default `required`)
 > Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no read-only boundary and no separate async-subagent dispatch. See [Main Agent Contract](../docs/main-agent-contract.md).
 
 <!-- pi-only -->
-**CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands below are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` from this skill's own installed path: this skill is installed at `<package-root>/.pi/skills/dev-loop/SKILL.md`, so the package root is `../../..` from this skill's directory. (The `dev-loop` agent resolves it analogously from its own installed path.)
+**CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands below are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` via the first of these **bounded** candidates whose `cli/index.mjs` exists — never assume a single fixed layout (this skill may be installed user-level at `~/.agents/`, where the old `../../..` package-relative guess resolves to `~`, not the package):
+
+1. **Node module resolution** (preferred, layout-independent): `node -e "console.log(require('node:path').dirname(require.resolve('dev-loops/cli/index.mjs')) + '/..')"` — finds the package whether it is installed package-relative, in `~/.pi/agent/npm/node_modules`, or globally.
+2. **Pi user-agent npm root:** `~/.pi/agent/npm/node_modules/dev-loops`.
+3. **Package-relative (legacy):** `../../..` from this skill's own directory (the original package-local install layout).
+4. **Global npm root:** `$(npm root -g)/dev-loops`.
+
+NEVER fall back to `find /` or any unbounded filesystem walk to locate the CLI — it stalls and trips the needs-attention timeout. If every bounded candidate fails, stop and ask the orchestrator/operator for the dev-loops package root rather than searching. (The `dev-loop` agent resolves it analogously.)
 <!-- /pi-only -->
 
 Resolve authoritative state via the startup resolver (`node <dev-loops-package-root>/cli/index.mjs loop startup --issue <n>` for issues, `node <dev-loops-package-root>/cli/index.mjs loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `node <dev-loops-package-root>/cli/index.mjs loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
