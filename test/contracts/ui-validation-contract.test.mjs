@@ -9,34 +9,40 @@ test("ui validation contract doc exists at the expected path", async () => {
   await access(fromRepoRoot("docs/ui-validation-contract.md"));
 });
 
-test("ui validation contract keeps opt-in bounded framing and smoke/regression boundary", async () => {
+test("ui validation contract states the auto-scoped, fail-closed criterion (not opt-in-by-annotation)", async () => {
   const contract = await readRepo("docs/ui-validation-contract.md");
 
-  assert.match(contract, /single public entrypoint/i);
   assert.match(contract, /`dev-loop`/i);
-  assert.match(contract, /opt.in/i);
-  assert.match(contract, /bounded/i);
+  // Inclusion is path-triggered + registry-backed, not annotation opt-in.
+  assert.match(contract, /path-triggered/i);
+  assert.match(contract, /registry-backed/i);
+  assert.match(contract, /fail-closed/i);
+  // The superseded convention is explicitly named as superseded.
+  assert.match(contract, /superseded/i);
 
-  assert.match(contract, /manual review artifacts/i);
-  assert.match(contract, /deterministic UI smoke validation/i);
-  assert.match(contract, /broader visual regression coverage/i);
+  // Cross-links to the canonical owner and the shared harness.
+  assert.match(contract, /ui-e2e-scoping-step\.md/i);
+  assert.match(contract, /deck-fit-harness\.mjs/i);
 });
 
-test("ui validation contract lists required non-goals and guardrails", async () => {
+test("ui validation contract carries the intro-deck worked example end to end", async () => {
   const contract = await readRepo("docs/ui-validation-contract.md");
 
-  assert.match(contract, /mandatory multi-browser/i);
-  assert.match(contract, /browser-heavy default workflow/i);
-  assert.match(contract, /full visual regression suite/i);
-  assert.match(contract, /always-on/i);
-  assert.match(contract, /Deferred follow-up work/i);
+  assert.match(contract, /DECK_REGISTRY\["intro-deck"\]/i);
+  assert.match(contract, /defineDeckSuite/i);
+  assert.match(contract, /REGISTERED_ARTIFACT_PATHS/i);
+  assert.match(contract, /ui_e2e_scoping/i);
+  assert.match(contract, /deck-smoke/i);
+  assert.match(contract, /UI_E2E_CHECK_NAMES/i);
+  // Mobile-fit assertions subsume the standalone slide responsive-fit goal (#939).
+  assert.match(contract, /390/);
+  assert.match(contract, /multi-browser/i);
 });
 
-test("local-implementation skill points to the ui validation contract and keeps opt-in and CI framing", async () => {
+test("local-implementation skill points to the ui validation contract and states the auto-scoped requirement", async () => {
   const localImplementationSkill = await readRepo("skills/local-implementation/SKILL.md");
 
   assert.match(localImplementationSkill, /docs\/ui-validation-contract\.md/i);
-  assert.match(localImplementationSkill, /when the user opts in/i);
-  assert.match(localImplementationSkill, /wire it into CI once it becomes required validation for that slice/i);
-  assert.doesNotMatch(localImplementationSkill, /visual regression[^.\n]*(default|always-on)/i);
+  assert.match(localImplementationSkill, /required and auto-scoped/i);
+  assert.match(localImplementationSkill, /ui-e2e-scoping-step\.md/i);
 });

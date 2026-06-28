@@ -13,7 +13,8 @@ test('ui smoke harness doc defines the bounded reusable local Playwright/WebKit 
     readRepo('skills/local-implementation/SKILL.md'),
   ]);
 
-  assert.match(doc, /minimal reusable local smoke harness\/template/i);
+  assert.match(doc, /minimal reusable local WebKit config\/server\/capture seam/i);
+  assert.match(doc, /ui-e2e-scoping-step\.md/i);
   assert.match(doc, /Playwright/i);
   assert.match(doc, /WebKit only/i);
   assert.match(doc, /fixture-backed/i);

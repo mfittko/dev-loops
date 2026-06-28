@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 const fromRepoRoot = (relativePath) => new URL(`../../${relativePath}`, import.meta.url);
 const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), 'utf8');
 
-test('ui artifact contract doc defines named-state artifacts and CI promotion rules', async () => {
+test('ui artifact contract doc defines named-state artifacts and auto-scoped CI enforcement', async () => {
   const [doc, readme, indexDoc, localImplementationSkill, ciWorkflow] = await Promise.all([
     readRepo('docs/ui-artifact-contract.md'),
     readRepo('README.md'),
@@ -22,8 +22,9 @@ test('ui artifact contract doc defines named-state artifacts and CI promotion ru
   assert.match(doc, /test-results\/ui-smoke\/<sliceId>\/named-states\/<state-slug>/i);
   assert.match(doc, /screenshot alone is acceptable/i);
   assert.match(doc, /paired state artifact is required/i);
-  assert.match(doc, /CI promotion/i);
-  assert.match(doc, /local-only validation is still acceptable/i);
+  assert.match(doc, /CI enforcement is auto-scoped, not promoted/i);
+  assert.match(doc, /ui-e2e-scoping-step\.md/i);
+  assert.match(doc, /UI_E2E_CHECK_NAMES/i);
   assert.match(doc, /missing or malformed/i);
   assert.match(doc, /viewer-smoke/i);
 
