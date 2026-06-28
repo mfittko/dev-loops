@@ -163,7 +163,7 @@ async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghComm
 async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
   const result = await runChild(
     ghCommand,
-    ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
+    ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup"],
     env,
   );
   if (result.code !== 0) {
@@ -171,6 +171,31 @@ async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh" 
     throw new Error(`gh command failed: ${detail}`);
   }
   return parseJsonText(result.stdout, { label: "gh pr view" });
+}
+
+// GitHub computes `mergeable` asynchronously, so a freshly-pushed head briefly
+// reads `UNKNOWN`. Re-poll a bounded number of times before deciding; never
+// treat a transient UNKNOWN as a pass — the caller fails closed to recheck if
+// it never settles. (issue #980)
+export async function fetchPrFactsWithSettledMergeable(
+  options,
+  {
+    env = process.env,
+    ghCommand = "gh",
+    maxPolls = 3,
+    pollDelayMs = 1500,
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+    fetch = fetchPrFacts,
+  } = {},
+) {
+  let prData = await fetch(options, { env, ghCommand });
+  let polls = 0;
+  while (String(prData?.mergeable || "").toUpperCase() === "UNKNOWN" && polls < maxPolls) {
+    polls += 1;
+    await sleep(pollDelayMs);
+    prData = await fetch(options, { env, ghCommand });
+  }
+  return prData;
 }
 export function resolveLinkedIssueFromPr(prData) {
   if (!prData || typeof prData !== "object") return null;
@@ -290,7 +315,7 @@ async function loadRetrospectiveCheckpoint(repoRoot) {
   }
 }
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
-  const prData = await fetchPrFacts(options, runtime);
+  const prData = await fetchPrFactsWithSettledMergeable(options, runtime);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
     ? prData.headRefOid.trim()
     : null;
@@ -349,6 +374,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const mergeStateStatus = typeof prData?.mergeStateStatus === "string" && prData.mergeStateStatus.trim().length > 0
     ? prData.mergeStateStatus.trim().toUpperCase()
     : null;
+  const mergeable = typeof prData?.mergeable === "string" && prData.mergeable.trim().length > 0
+    ? prData.mergeable.trim().toUpperCase()
+    : null;
   const isDraft = Boolean(prData?.isDraft);
   const isClosed = String(prData?.state || "").toUpperCase() === "CLOSED";
   const isMerged = String(prData?.state || "").toUpperCase() === "MERGED";
@@ -361,6 +389,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     pr: options.pr,
     currentHeadSha,
     mergeStateStatus,
+    mergeable,
     conflictFiles,
     prData,
     snapshot,
@@ -406,6 +435,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     prMerged: String(context.prData?.state || "").toUpperCase() === "MERGED",
     prTitle: context.prData?.title,
     mergeStateStatus: context.mergeStateStatus,
+    mergeable: context.mergeable,
     conflictFiles: context.conflictFiles,
     lifecycleState: context.interpretation.state,
     loopDisposition: context.disposition.loopDisposition,

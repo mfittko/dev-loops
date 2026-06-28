@@ -2,8 +2,43 @@
 
 Canonical owner for merge preconditions across all workflow families.
 
+## Conflict-free (mergeable) is a precondition at every gate
+
+A PR that conflicts with its base gets **no `pull_request` CI run** — GitHub can't
+compute the merge ref — so the gate silently stalls (green-less with no obvious
+cause). Conflict-free is therefore a required gate precondition, checked at **two
+seams**: before requesting CI/Copilot, and again before merge.
+
+- `gh pr view --json mergeable,mergeStateStatus` drives it. A `CONFLICTING` /
+  `DIRTY` / `BEHIND` PR does **not** pass any gate (`gateBoundary:
+  conflict_resolution`, `nextAction: resolve_merge_conflicts`).
+- `mergeable` is computed asynchronously, so a freshly-pushed head briefly reads
+  `UNKNOWN`. The detect layer **re-polls a bounded number of times**; if it never
+  settles, the gate **fails closed to a recheck** (`nextAction: wait_for_ci`) —
+  an unsettled merge state is never treated as clean.
+- `loop info` surfaces a **Mergeable:** line (mergeStateStatus included) so a
+  conflict is diagnosed immediately, never mistaken for missing CI.
+
+### Deterministic auto-resolve (additive CHANGELOG only)
+
+When a PR is behind/`CONFLICTING`, run the conservative resolver before resuming
+the gate path:
+
+```sh
+node scripts/loop/resolve-pr-conflicts.mjs [--base <branch>] [--push]
+```
+
+It merges `origin/<base>` into the PR branch and resolves **only the safe additive
+case** — a `CHANGELOG.md` conflict where both sides only ADD list/section entries
+(keep BOTH sides, in order) — then runs `npm run test:docs` and (with `--push`)
+pushes. **Any other conflicted path, or a non-additive CHANGELOG edit, FAILS
+CLOSED** naming the conflicted paths (no silent stall, no guessing — resolve those
+by hand). This encodes the exact additive-CHANGELOG resolution the loop has been
+doing manually; it is not a general conflict-resolution engine.
+
 ## Required before merge
 
+1. ✅ Conflict-free with base (`mergeable: MERGEABLE`; not `CONFLICTING`/`DIRTY`/`BEHIND`/`UNKNOWN`)
 1. ✅ CI green on current head (or crediblyGreen via `--local-validation-head-sha`)
 2. ✅ Draft gate satisfied (clean verdict)
 3. ✅ Pre-approval gate satisfied (clean verdict, current head)

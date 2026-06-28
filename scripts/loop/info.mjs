@@ -100,13 +100,32 @@ function formatCiDisplay(ciStatus, ciConclusion) {
   return `CI ${ciStatus}`;
 }
 
+function formatMergeableDisplay(mergeable, mergeStateStatus) {
+  const m = typeof mergeable === "string" ? mergeable.toUpperCase() : null;
+  const s = typeof mergeStateStatus === "string" ? mergeStateStatus.toUpperCase() : null;
+  if (m === "CONFLICTING" || s === "DIRTY" || s === "CONFLICTING") {
+    return `❌ CONFLICTING${s ? ` (${s})` : ""} — resolve before any gate`;
+  }
+  if (s === "BEHIND") {
+    return "⚠️ BEHIND — update branch from base before any gate";
+  }
+  if (m === "UNKNOWN") {
+    return "⏳ UNKNOWN — GitHub still computing; recheck before proceeding";
+  }
+  if (m === "MERGEABLE") {
+    return `✅ MERGEABLE${s ? ` (${s})` : ""}`;
+  }
+  return s || m || "unknown";
+}
+
 function formatPrSummary(prData, handoffResult) {
   const lines = [];
   lines.push(`PR #${prData.number}: ${prData.title}`);
   lines.push(`  Branch: ${formatBranchDisplay(prData.headRefName, prData.baseRefName)}`);
   lines.push(`  State: ${prData.state}${prData.isDraft ? " (draft)" : ""}`);
   lines.push(`  Author: ${prData.author?.login || "unknown"}`);
-  
+  lines.push(`  Mergeable: ${formatMergeableDisplay(prData.mergeable, prData.mergeStateStatus)}`);
+
   if (handoffResult?.snapshot) {
     const s = handoffResult.snapshot;
     if (s.ciStatus !== undefined) {
@@ -189,7 +208,7 @@ function formatIssueSummary(issueData, startupBundle, linkedPrData) {
 }
 
 function buildPrInfo(prNumber, repo, cwd) {
-  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,baseRefName,author,mergedAt,url,reviewRequests"], cwd);
+  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,baseRefName,author,mergedAt,mergeable,mergeStateStatus,url,reviewRequests"], cwd);
   
   let handoffResult = null;
   try {

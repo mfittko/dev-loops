@@ -1,0 +1,293 @@
+#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { parseArgs } from "node:util";
+
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+
+const USAGE = `Usage: resolve-pr-conflicts.mjs [--base <branch>] [--repo-root <dir>] [--no-verify] [--push] [--json]
+
+Deterministic, conservative auto-resolve for a PR branch that is behind/CONFLICTING
+with its base. Merges \`origin/<base>\` into the current branch and resolves ONLY the
+safe additive case: a CHANGELOG.md conflict where both sides only ADD list/section
+entries (keep BOTH sides, in order). ANY other conflicted path — or a non-additive
+CHANGELOG edit — FAILS CLOSED, naming the conflicted paths. Never guesses.
+
+After a clean merge (or an auto-resolved additive CHANGELOG) it runs \`npm run test:docs\`
+(unless --no-verify) and, with --push, pushes the branch.
+
+Options:
+  --base <branch>     Base branch to merge from (default: derived from \`gh pr view\`
+                      base, falling back to "main").
+  --repo-root <dir>   Repo working tree to operate in (default: cwd).
+  --no-verify         Skip \`npm run test:docs\` after resolving.
+  --push              Push the resolved branch to origin after verify.
+  --json              Emit machine-readable JSON on stdout.
+
+Output (stdout, JSON with --json):
+  { "ok": true, "action": "resolved"|"already_mergeable"|"clean_merge",
+    "base": "main", "resolvedFiles": ["CHANGELOG.md"], "pushed": false }
+Error output:
+  { "ok": false, "error": "...", "conflictFiles": ["..."] }
+
+Exit codes:
+  0  Resolved (or already mergeable)
+  1  Argument error, git failure, or UNRESOLVABLE conflict (fail closed)`.trim();
+
+const parseError = buildParseError(USAGE);
+
+const SAFE_RESOLVABLE_PATH = "CHANGELOG.md";
+
+export function parseResolvePrConflictsCliArgs(argv) {
+  const { values } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      base: { type: "string" },
+      "repo-root": { type: "string" },
+      "no-verify": { type: "boolean" },
+      push: { type: "boolean" },
+      json: { type: "boolean" },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
+  return {
+    help: values.help === true,
+    base: typeof values.base === "string" && values.base.trim().length > 0 ? values.base.trim() : null,
+    repoRoot: typeof values["repo-root"] === "string" && values["repo-root"].trim().length > 0
+      ? values["repo-root"].trim()
+      : process.cwd(),
+    verify: values["no-verify"] !== true,
+    push: values.push === true,
+    json: values.json === true,
+  };
+}
+
+function run(command, args, { cwd, env = process.env } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.on("error", reject);
+    child.on("close", (code) => { resolve({ code, stdout, stderr }); });
+  });
+}
+
+async function listUnmergedFiles({ cwd, env }) {
+  const result = await run("git", ["diff", "--name-only", "--diff-filter=U"], { cwd, env });
+  if (result.code !== 0) {
+    return [];
+  }
+  return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+}
+
+/**
+ * Decide whether a single conflicted file is the safe additive CHANGELOG case
+ * and, if so, produce the merged content (keep BOTH sides, in order).
+ *
+ * Conservative: every conflict hunk in the file must be purely ADDITIVE — both
+ * the "ours" and "theirs" blocks may only contain blank lines or list/section
+ * entries. A hunk that mutates a shared line (one side empty while the other
+ * rewrites context, or any non-list non-blank line) is NOT safe → fail closed.
+ *
+ * Keep-both order: ours block then theirs block, preserving each side's order.
+ */
+export function resolveAdditiveChangelog(content) {
+  const lines = content.split("\n");
+  const out = [];
+  let i = 0;
+  let resolvedAnyHunk = false;
+
+  const isAdditiveLine = (line) => {
+    const trimmed = line.trim();
+    // Blank lines and Markdown list items are additive; an existing prose/heading
+    // line being changed is not (we never rewrite shared context).
+    return trimmed.length === 0 || /^[-*+]\s/.test(trimmed);
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.startsWith("<<<<<<<")) {
+      out.push(line);
+      i += 1;
+      continue;
+    }
+    // Conflict hunk: <<<<<<< ours ... ======= ... >>>>>>> theirs
+    const ours = [];
+    const theirs = [];
+    i += 1; // skip <<<<<<<
+    while (i < lines.length && !lines[i].startsWith("=======")) {
+      ours.push(lines[i]);
+      i += 1;
+    }
+    if (i >= lines.length) {
+      return { safe: false, reason: "malformed conflict markers (no ======= separator)" };
+    }
+    i += 1; // skip =======
+    while (i < lines.length && !lines[i].startsWith(">>>>>>>")) {
+      theirs.push(lines[i]);
+      i += 1;
+    }
+    if (i >= lines.length) {
+      return { safe: false, reason: "malformed conflict markers (no >>>>>>> terminator)" };
+    }
+    i += 1; // skip >>>>>>>
+
+    if (![...ours, ...theirs].every(isAdditiveLine)) {
+      return { safe: false, reason: "CHANGELOG conflict is not purely additive (touches non-list content)" };
+    }
+    // Keep both sides, in order. Drop a duplicate blank seam if both sides are blank-only.
+    out.push(...ours, ...theirs);
+    resolvedAnyHunk = true;
+  }
+
+  if (!resolvedAnyHunk) {
+    return { safe: false, reason: "no conflict hunks found in CHANGELOG.md" };
+  }
+  return { safe: true, content: out.join("\n") };
+}
+
+async function abortMerge({ cwd, env }) {
+  await run("git", ["merge", "--abort"], { cwd, env });
+}
+
+export async function resolvePrConflicts(options, { env = process.env } = {}) {
+  const cwd = options.repoRoot;
+
+  // Resolve base branch: explicit flag, else `gh pr view`, else "main".
+  let base = options.base;
+  if (!base) {
+    const view = await run("gh", ["pr", "view", "--json", "baseRefName"], { cwd, env });
+    if (view.code === 0) {
+      try {
+        const parsed = JSON.parse(view.stdout);
+        if (typeof parsed?.baseRefName === "string" && parsed.baseRefName.trim().length > 0) {
+          base = parsed.baseRefName.trim();
+        }
+      } catch {
+        // fall through to default
+      }
+    }
+    if (!base) {
+      base = "main";
+    }
+  }
+
+  const fetch = await run("git", ["fetch", "origin", base], { cwd, env });
+  if (fetch.code !== 0) {
+    throw new Error(`git fetch origin ${base} failed: ${fetch.stderr.trim() || `exit ${fetch.code}`}`);
+  }
+
+  const merge = await run("git", ["merge", "--no-edit", `origin/${base}`], { cwd, env });
+  if (merge.code === 0) {
+    const result = { ok: true, action: "clean_merge", base, resolvedFiles: [], pushed: false };
+    await afterResolve(result, options, { cwd, env });
+    return result;
+  }
+
+  // Merge failed — inspect conflicts.
+  const conflictFiles = await listUnmergedFiles({ cwd, env });
+  if (conflictFiles.length === 0) {
+    await abortMerge({ cwd, env });
+    throw new Error(`git merge origin/${base} failed without resolvable conflicts: ${merge.stderr.trim() || `exit ${merge.code}`}`);
+  }
+
+  // Fail closed on ANY conflicted path other than the single safe CHANGELOG case.
+  const nonSafe = conflictFiles.filter((file) => file !== SAFE_RESOLVABLE_PATH);
+  if (nonSafe.length > 0) {
+    await abortMerge({ cwd, env });
+    const err = new Error(
+      `Unresolvable merge conflict: only additive ${SAFE_RESOLVABLE_PATH} conflicts are auto-resolved. `
+      + `Conflicting paths: ${conflictFiles.join(", ")}. Resolve manually.`,
+    );
+    err.conflictFiles = conflictFiles;
+    throw err;
+  }
+
+  // Sole conflict is CHANGELOG.md — attempt the safe additive resolution.
+  const changelogPath = path.join(cwd, SAFE_RESOLVABLE_PATH);
+  const content = await readFile(changelogPath, "utf8");
+  const resolution = resolveAdditiveChangelog(content);
+  if (!resolution.safe) {
+    await abortMerge({ cwd, env });
+    const err = new Error(
+      `Unresolvable ${SAFE_RESOLVABLE_PATH} conflict (${resolution.reason}); not purely additive, so it fails closed. `
+      + `Conflicting paths: ${SAFE_RESOLVABLE_PATH}. Resolve manually.`,
+    );
+    err.conflictFiles = [SAFE_RESOLVABLE_PATH];
+    throw err;
+  }
+
+  await writeFile(changelogPath, resolution.content, "utf8");
+  const add = await run("git", ["add", SAFE_RESOLVABLE_PATH], { cwd, env });
+  if (add.code !== 0) {
+    await abortMerge({ cwd, env });
+    throw new Error(`git add ${SAFE_RESOLVABLE_PATH} failed: ${add.stderr.trim() || `exit ${add.code}`}`);
+  }
+  const commit = await run("git", ["commit", "--no-edit"], { cwd, env });
+  if (commit.code !== 0) {
+    await abortMerge({ cwd, env });
+    throw new Error(`git commit (merge) failed: ${commit.stderr.trim() || `exit ${commit.code}`}`);
+  }
+
+  const result = { ok: true, action: "resolved", base, resolvedFiles: [SAFE_RESOLVABLE_PATH], pushed: false };
+  await afterResolve(result, options, { cwd, env });
+  return result;
+}
+
+async function afterResolve(result, options, { cwd, env }) {
+  if (options.verify) {
+    const verify = await run("npm", ["run", "test:docs"], { cwd, env });
+    if (verify.code !== 0) {
+      const err = new Error(`Post-resolve verification (npm run test:docs) failed: ${verify.stderr.trim() || verify.stdout.trim() || `exit ${verify.code}`}`);
+      err.verifyFailed = true;
+      throw err;
+    }
+    result.verified = true;
+  }
+  if (options.push) {
+    const push = await run("git", ["push"], { cwd, env });
+    if (push.code !== 0) {
+      throw new Error(`git push failed: ${push.stderr.trim() || `exit ${push.code}`}`);
+    }
+    result.pushed = true;
+  }
+}
+
+export async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+  let options;
+  try {
+    options = parseResolvePrConflictsCliArgs(argv);
+  } catch (error) {
+    stderr.write(`${formatCliError(error)}\n`);
+    return 1;
+  }
+  if (options.help) {
+    stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+  try {
+    const result = await resolvePrConflicts(options, { env });
+    if (options.json) {
+      stdout.write(`${JSON.stringify(result)}\n`);
+    } else {
+      stdout.write(`${result.action} (base ${result.base}${result.resolvedFiles.length ? `, resolved ${result.resolvedFiles.join(", ")}` : ""}${result.pushed ? ", pushed" : ""})\n`);
+    }
+    return 0;
+  } catch (error) {
+    const payload = { ok: false, error: error instanceof Error ? error.message : String(error) };
+    if (Array.isArray(error?.conflictFiles)) {
+      payload.conflictFiles = error.conflictFiles;
+    }
+    stderr.write(`${JSON.stringify(payload)}\n`);
+    return 1;
+  }
+}
+
+if (isDirectCliRun(import.meta.url)) {
+  runCli(process.argv.slice(2)).then((code) => { process.exitCode = code; });
+}

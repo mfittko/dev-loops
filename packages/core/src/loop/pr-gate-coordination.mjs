@@ -119,6 +119,19 @@ function normalizeMergeStateStatus(value) {
   return value.trim().toUpperCase();
 }
 
+function normalizeMergeable(value) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const upper = value.trim().toUpperCase();
+  if (upper === "MERGEABLE" || upper === "CONFLICTING" || upper === "UNKNOWN") {
+    return upper;
+  }
+
+  return null;
+}
+
 function normalizeConflictFiles(value) {
   if (!Array.isArray(value)) {
     return [];
@@ -142,14 +155,18 @@ function hasBlockedMergeStatus(mergeStateStatus) {
   return mergeStateStatus !== null && BLOCKED_MERGE_STATE_STATUSES.has(mergeStateStatus);
 }
 
-function formatBlockedMergeReason(mergeStateStatus, conflictFiles) {
+function formatBlockedMergeReason(mergeStateStatus, conflictFiles, mergeable = null) {
   if (mergeStateStatus === "BEHIND") {
     let reason = "Branch must be updated from base before entering any gate.";
     reason += ` GitHub mergeStateStatus: ${mergeStateStatus}.`;
     return reason;
   }
 
-  let reason = "The current branch conflicts with the base branch, so resolve the conflict locally on the PR branch, rerun validation, rerun gate detection, and only then resume the normal gate path.";
+  let reason = "The current branch conflicts with the base branch, so resolve the conflict locally on the PR branch (run resolve-pr-conflicts.mjs for the safe additive-CHANGELOG case), rerun validation, rerun gate detection, and only then resume the normal gate path.";
+
+  if (mergeable === "CONFLICTING") {
+    reason += " GitHub mergeable: CONFLICTING.";
+  }
 
   if (mergeStateStatus !== null) {
     reason += ` GitHub mergeStateStatus: ${mergeStateStatus}.`;
@@ -610,6 +627,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     ? "internal_only"
     : (typeof input.reviewMode === "string" ? input.reviewMode.trim().toLowerCase() : null);
   const mergeStateStatus = normalizeMergeStateStatus(input.mergeStateStatus);
+  const mergeable = normalizeMergeable(input.mergeable);
   const conflictFiles = normalizeConflictFiles(input.conflictFiles);
   const ciStatus = normalizeCiStatus(input.ciStatus);
   const draftGateRequireCi = input.draftGateRequireCi !== false;
@@ -694,7 +712,44 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  if (hasBlockedMergeStatus(mergeStateStatus) || conflictFiles.length > 0) {
+  // Mergeability is a required precondition at every gate (issue #980). GitHub
+  // computes `mergeable` asynchronously, so an unsettled UNKNOWN must fail closed
+  // to a recheck — never a pass. The detect layer already re-polls a bounded
+  // number of times; if it still reads UNKNOWN here, hold gate progression and
+  // recheck rather than guess.
+  if (mergeable === "UNKNOWN") {
+    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_CI]);
+    pushUnique(forbiddenActions, [
+      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+      PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+    ]);
+    return buildResult({
+      repo: input.repo ?? null,
+      pr: Number.isInteger(input.pr) ? input.pr : null,
+      currentHeadSha,
+      lifecycleState: effectiveLifecycleState,
+      loopDisposition: DISPOSITION.PENDING,
+      gateBoundary: PR_CHECKPOINT.CONFLICT_RESOLUTION,
+      draftGateAlreadySatisfied,
+      draftGate,
+      preApprovalGate,
+      allowedNextActions,
+      forbiddenActions,
+      nextAction: PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
+      reason: "GitHub has not yet computed mergeability (mergeable=UNKNOWN), so gate progression is held: recheck before proceeding rather than treating an unsettled merge state as clean.",
+      mergeStateStatus,
+      conflictFiles,
+      refinementArtifact,
+      copilotReviewRoundCount,
+    });
+  }
+
+  if (hasBlockedMergeStatus(mergeStateStatus) || mergeable === "CONFLICTING" || conflictFiles.length > 0) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]);
     pushUnique(forbiddenActions, [
       PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
@@ -723,7 +778,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       allowedNextActions,
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS,
-      reason: formatBlockedMergeReason(mergeStateStatus, conflictFiles),
+      reason: formatBlockedMergeReason(mergeStateStatus, conflictFiles, mergeable),
       mergeStateStatus,
       conflictFiles,
         refinementArtifact,
