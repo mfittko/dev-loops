@@ -241,3 +241,16 @@ export const DECK_REGISTRY = {
     ],
   },
 };
+
+// Resolve a registry entry with a clear message so a mistyped/removed key fails
+// at module load pointing straight at the missing deck, not an opaque
+// "Cannot read properties of undefined (reading 'deck')".
+export function deckRegistryEntry(key) {
+  const entry = DECK_REGISTRY[key];
+  if (!entry) {
+    throw new Error(
+      `Unknown deck registry key "${key}". Known keys: ${Object.keys(DECK_REGISTRY).join(", ")}`,
+    );
+  }
+  return entry;
+}

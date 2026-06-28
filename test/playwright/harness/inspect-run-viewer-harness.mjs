@@ -27,7 +27,9 @@ export async function startViewer(snapshot = makeInspectionSnapshot(), assignedP
         async loadHandoffEnvelope() {
           return {
             handoffVersion: 1,
-            derivedAt: new Date().toISOString(),
+            // Fixed timestamp: the viewer renders derivedAt, so a stable value
+            // keeps fixture-driven screenshots deterministic across runs.
+            derivedAt: "2024-01-01T00:00:00.000Z",
             target: { kind: "pr", repo: "owner/repo", pr: 55 },
             currentGate: "draft",
             currentHeadSha: "abc1234",

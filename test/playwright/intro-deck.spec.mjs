@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
 
-import { DECK_REGISTRY, defineDeckSuite } from "./harness/deck-fit-harness.mjs";
+import { deckRegistryEntry, defineDeckSuite } from "./harness/deck-fit-harness.mjs";
 
-const entry = DECK_REGISTRY["intro-deck"];
+const entry = deckRegistryEntry("intro-deck");
 
 defineDeckSuite({
   ...entry,
