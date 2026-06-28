@@ -103,7 +103,7 @@ Screenshot alone is acceptable only when the artifact is:
 - a manual review artifact
 - a one-off discussion aid
 - not being presented as deterministic smoke-validation evidence
-- not being required by a CI-promoted slice
+- not a registered rendered artifact whose suite is auto-scoped into CI (see [CI enforcement is auto-scoped, not promoted](#ci-enforcement-is-auto-scoped-not-promoted))
 
 ## When the paired state artifact is required
 

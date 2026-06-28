@@ -37,8 +37,10 @@ per-slice spec. For decks and articles the shared assertions are:
 
 - every registered section renders and is visible (decks only);
 - a Content-Security-Policy `<meta>` is present and locks `default-src` to `'none'`;
-- the **mobile (390×844) layout fits** — no element overflows the viewport, page
-  `scrollWidth` does not exceed it, and no section clips content vertically;
+- the **mobile (390×844) layout fits** — no element overflows the viewport (for
+  articles, elements inside an intentional `overflow-x:auto/scroll` container are
+  exempt — that internal scroll is correct UX), the page `scrollWidth` does not
+  exceed it, and no section clips content vertically;
 - a negative control: a deliberately-wide element must fail the mobile fit check.
 
 These are the responsive-fit assertions that subsume the standalone slide
