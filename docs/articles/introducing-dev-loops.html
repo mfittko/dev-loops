@@ -224,10 +224,13 @@
   <p><strong>Pi.</strong> Install the extension:</p>
   <pre><code>pi install npm:dev-loops</code></pre>
 
-  <p><strong>Start a loop.</strong> There is one plain-language entrypoint; you never pick internal modes:</p>
-  <pre><code>start dev loop on issue 112      <span class="cm"># begin work from a tracked issue</span>
-auto dev loop on issue 112       <span class="cm"># run autonomously up to the human-merge checkpoint</span>
-continue dev loop on PR 88       <span class="cm"># pick up an open pull request</span></code></pre>
+  <p><strong>Start a loop.</strong> Reach the same entrypoints through direct named commands; you never pick internal modes:</p>
+  <pre><code>/dev-loops:start 112      <span class="cm"># begin work from a tracked issue</span>
+/dev-loops:auto 112       <span class="cm"># run autonomously up to the human-merge checkpoint</span>
+/dev-loops:continue 88    <span class="cm"># pick up an open pull request (PR number)</span>
+/dev-loops:info 112       <span class="cm"># read-only state summary for an issue or PR</span>
+/dev-loops:status         <span class="cm"># check readiness: gh auth, git repo, subagent</span></code></pre>
+  <p><code>/dev-loops:dev-loop</code> stays the catch-all router for plain-language intent (<code>start dev loop on issue 112</code>, <code>continue dev loop on PR 88</code>). It resolves authoritative state and routes deterministically, so the named commands above are thin shortcuts over the same contract. Inside Pi the set is reachable as <code>/dev-loops start|auto|continue|info|status …</code>.</p>
 
   <p><strong>Tune the posture (optional).</strong> A <code>.devloops</code> file at the repo root controls how work arrives and how strict the loop is. The shipped defaults are a low-noise starting point; loosen from there.</p>
   <pre><code># .devloops

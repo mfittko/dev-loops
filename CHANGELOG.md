@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Taught the direct subcommand structure across the how-to surfaces (#1001, follows #972).** The intro article (`docs/articles/introducing-dev-loops.{md,html}`) and the intro deck setup slide (`docs/presentations/introducing-dev-loops.html`) now show the direct named commands `/dev-loops:start <issue>`, `/dev-loops:auto <issue>`, `/dev-loops:continue <pr>`, `/dev-loops:info <issue|pr>`, and `/dev-loops:status`, framing `/dev-loops:dev-loop` as the catch-all router for plain-language intent (with the Pi `/dev-loops start|auto|continue|info|status …` parity noted in the article). The deck slide stays within the 390px mobile-fit harness (#975); section ids unchanged. Conceptual/routing-contract prose (deep-dive article + deck, public-dev-loop-contract, main-agent-contract) was left untouched.
+
 ### Added
 
 - Direct dev-loop slash commands as thin wrappers over the public contract (#972): `/dev-loops:start <issue>`, `/dev-loops:auto <issue>`, `/dev-loops:continue <pr>`, `/dev-loops:info <issue|pr>`, and `/dev-loops:status` for the Claude Code plugin (generated under `.claude/commands/` from `commands/*.command.md`), with equivalent `/dev-loops start|auto|continue|info` subcommands in the Pi extension. `/dev-loops:dev-loop` remains the catch-all router; no new routing logic was added.

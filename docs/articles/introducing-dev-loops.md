@@ -64,13 +64,17 @@ dev-loops runs inside Claude Code or Pi and drives an ordinary GitHub pull-reque
 pi install npm:dev-loops
 ```
 
-**Start a loop.** There is one plain-language entrypoint; you never pick internal modes:
+**Start a loop.** Reach the same entrypoints through direct named commands; you never pick internal modes:
 
 ```text
-start dev loop on issue 112      # begin work from a tracked issue
-auto dev loop on issue 112       # run autonomously up to the human-merge checkpoint
-continue dev loop on PR 88       # pick up an open pull request
+/dev-loops:start 112      # begin work from a tracked issue
+/dev-loops:auto 112       # run autonomously up to the human-merge checkpoint
+/dev-loops:continue 88    # pick up an open pull request (PR number)
+/dev-loops:info 112       # read-only state summary for an issue or PR
+/dev-loops:status         # check readiness: gh auth, git repo, subagent
 ```
+
+`/dev-loops:dev-loop` stays the catch-all router for plain-language intent (`start dev loop on issue 112`, `continue dev loop on PR 88`). It resolves authoritative state and routes deterministically, so the named commands above are thin shortcuts over the same contract. Inside Pi the set is reachable as `/dev-loops start|auto|continue|info|status …`.
 
 **Tune the posture (optional).** A `.devloops` file at the repo root controls how work arrives and how strict the loop is. The shipped defaults are a low-noise starting point; loosen from there.
 
