@@ -32,8 +32,8 @@ after(() => {
   }
 });
 
-test("RUN_ID_MARKERS lists only the neutral var", () => {
-  assert.deepEqual(RUN_ID_MARKERS, ["DEVLOOPS_RUN_ID"]);
+test("RUN_ID_MARKERS lists the neutral primary then the Pi-injected alias", () => {
+  assert.deepEqual(RUN_ID_MARKERS, ["DEVLOOPS_RUN_ID", "PI_SUBAGENT_RUN_ID"]);
   assert.equal(NEUTRAL_RUN_ID_VAR, "DEVLOOPS_RUN_ID");
 });
 
@@ -41,12 +41,18 @@ test("resolveRunId reads the neutral var", () => {
   assert.equal(resolveRunId({ DEVLOOPS_RUN_ID: "neutral" }), "neutral");
 });
 
-// The legacy Pi run-id env var is intentionally dropped (no alias, #905). Build its
-// name dynamically so the tree-wide neutrality guard does not flag this assertion.
-const DROPPED_PI_RUN_ID = ["PI", "SUBAGENT", "RUN", "ID"].join("_");
+// The Pi runtime injects PI_SUBAGENT_RUN_ID (not DEVLOOPS_RUN_ID) into async-subagent
+// child envs (#1008): it is honored as the run-id alias so the async-start gate recognizes
+// the Pi context. The neutral var wins when both are present.
+test("resolveRunId reads the Pi-injected alias when the neutral var is absent", () => {
+  assert.equal(resolveRunId({ PI_SUBAGENT_RUN_ID: "pi-run" }), "pi-run");
+});
 
-test("resolveRunId ignores the dropped legacy Pi run-id env var", () => {
-  assert.equal(resolveRunId({ [DROPPED_PI_RUN_ID]: "pi-run" }), null);
+test("resolveRunId prefers the neutral var over the Pi-injected alias", () => {
+  assert.equal(
+    resolveRunId({ DEVLOOPS_RUN_ID: "neutral", PI_SUBAGENT_RUN_ID: "pi-run" }),
+    "neutral",
+  );
 });
 
 test("resolveRunId trims and treats blank/absent as null", () => {

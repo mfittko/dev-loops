@@ -13,6 +13,7 @@
  * Async context marker (required when workflow.asyncStartMode is `required`)
  * — see `@dev-loops/core/loop/run-context`:
  * - DEVLOOPS_RUN_ID env var (neutral, harness-agnostic)
+ * - PI_SUBAGENT_RUN_ID env var (the alias the Pi runtime injects)
  *
  * Allowed modes:
  * - workflow.asyncStartMode: required | allowed
@@ -166,7 +167,7 @@ export function validateAsyncStartContext({
       "No async context detected. " +
       "The dev-loop must run within a visible async subagent session, " +
       "not as a detached local process. " +
-      `Set ${ASYNC_CONTEXT_MARKERS[0]} to proceed. ` +
+      "Set DEVLOOPS_RUN_ID (or the PI_SUBAGENT_RUN_ID alias) to proceed. " +
       "Repository-maintained workflow policy controls any exceptions.",
     detectedMarker: null,
   };

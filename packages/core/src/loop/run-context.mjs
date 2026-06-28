@@ -7,6 +7,11 @@
  * Code) that inject no native per-subagent run id. The harness sets `DEVLOOPS_RUN_ID` when
  * dispatching an async subagent.
  *
+ * The Pi runtime injects `PI_SUBAGENT_RUN_ID` (not `DEVLOOPS_RUN_ID`) into each async
+ * subagent's child env, so that name is honored as a recognized run-id alias (precedence
+ * after the neutral primary). It is an externally-injected Pi-runtime contract var, not a
+ * dev-loops-owned var — dev-loops still mints/propagates only the neutral `DEVLOOPS_RUN_ID`.
+ *
  * This module is pure except for the explicit file/IO helpers (writeRunContext/readRunContext),
  * which take an injectable `fs` and `root` for testability.
  */
@@ -17,9 +22,10 @@ import path from "node:path";
 
 /**
  * Env var names that carry the async-context run id, in resolution precedence order.
- * The neutral `DEVLOOPS_RUN_ID` is the sole marker.
+ * The neutral `DEVLOOPS_RUN_ID` is primary; `PI_SUBAGENT_RUN_ID` is the alias the Pi
+ * runtime injects into async-subagent child envs (the only run-id marker present under Pi).
  */
-export const RUN_ID_MARKERS = Object.freeze(["DEVLOOPS_RUN_ID"]);
+export const RUN_ID_MARKERS = Object.freeze(["DEVLOOPS_RUN_ID", "PI_SUBAGENT_RUN_ID"]);
 
 /** Neutral env var name used when minting/propagating a run id. */
 export const NEUTRAL_RUN_ID_VAR = "DEVLOOPS_RUN_ID";
