@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Per-artifact Playwright deck assertions extracted into a shared harness + registry (#975, generalizes #939).** The two presentation-deck specs (`test/playwright/intro-deck.spec.mjs`, `test/playwright/deep-dive-deck.spec.mjs`) were ~190 lines of near-identical assertions each (same server, same three tests, only the deck path / section ids / mobile-capture id differed). The reusable assertions now live once in `test/playwright/harness/deck-fit-harness.mjs`: the single-file deck server, the `networkidle`+`innerWidth===390`+`document.fonts.ready` layout-settle barrier, the per-element `getBoundingClientRect().right <= innerWidth + 1` mobile-fit check (no overflow-x scroller exemption) with the defensive `scrollingElement.scrollWidth` guard and the per-section vertical-clip check (`clientHeight < scrollHeight` while `overflow-y` is hidden/clip), section-id presence + no-horizontal-scroll, a CSP-`<meta>` guard (`default-src 'none'`), and the guard-the-guard test (a deliberately-wide element MUST fail the fit check). A `DECK_REGISTRY` holds each deck as data (`{ sliceId, deck, sectionIds, mobileCapture }`) and `defineDeckSuite(entry)` generates the full per-deck suite; the two deck specs shrink to thin registrations that resolve the deck path and call `defineDeckSuite`. The inspect-run viewer (an interactive dashboard, not a fit-checked deck) registers via `test/playwright/harness/inspect-run-viewer-harness.mjs` (`startViewer`/`openTab`/`waitForMermaidGraph`/`captureViewerState`/`VIEWER_REGISTRY`), removing the duplicated server-setup + repeated capture blocks from its spec, and now runs the shared `assertSectionIdsAndNoHorizontalScroll` over its registered panel ids. The per-artifact `playwright.*.config.mjs` files and `test:playwright:*` scripts are unchanged (each config's `testMatch` still scopes which registration runs). All existing assertions still pass — `intro-deck` 3/3, `deep-dive-deck` 3/3, `inspect-run-viewer` 7/7 green.
+
 ## 0.5.0 - 2026-06-28
 
 ### Added
