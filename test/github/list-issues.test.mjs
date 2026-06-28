@@ -69,6 +69,17 @@ test("listIssues: returns normalized issues (state lowercased, labels flattened)
   ]);
 });
 
+test("listIssues: drops entries missing a required field so the shape stays well-typed", async () => {
+  const { run } = stubGh([
+    { number: 10, title: "ok", state: "OPEN", labels: [] },
+    { number: null, title: "no number", state: "OPEN", labels: [] },
+    { number: 12, title: 42, state: "OPEN", labels: [] },
+    { number: 13, title: "no state", labels: [] },
+  ]);
+  const result = await listIssues({ repo: "o/n", state: "open", labels: [], limit: 30 }, { run });
+  assert.deepEqual(result.issues, [{ number: 10, title: "ok", state: "open", labels: [] }]);
+});
+
 test("listIssues: throws when gh fails", async () => {
   const { run } = stubGh(null, { code: 1, stderr: "rate limited" });
   await assert.rejects(() => listIssues({ repo: "o/n", state: "open", labels: [], limit: 30 }, { run }), /gh issue list failed: rate limited/);

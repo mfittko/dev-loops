@@ -114,13 +114,19 @@ export function parseListIssuesCliArgs(argv) {
   return options;
 }
 
+// Returns a well-typed issue, or null if the gh entry is missing/invalid in any
+// required field. Callers filter the nulls so the emitted shape stays
+// well-typed (documented output) and --jq filters never hit null number/title/state.
 function normalizeIssue(raw) {
+  if (!Number.isInteger(raw?.number) || typeof raw?.title !== "string" || typeof raw?.state !== "string") {
+    return null;
+  }
   return {
-    number: Number.isInteger(raw?.number) ? raw.number : null,
-    title: typeof raw?.title === "string" ? raw.title : null,
+    number: raw.number,
+    title: raw.title,
     // gh reports issue state UPPERCASE (OPEN/CLOSED); normalize to lowercase to
     // match the --state flag vocabulary.
-    state: typeof raw?.state === "string" ? raw.state.toLowerCase() : null,
+    state: raw.state.toLowerCase(),
     labels: Array.isArray(raw?.labels)
       ? raw.labels.map((l) => (typeof l?.name === "string" ? l.name : null)).filter((n) => n !== null)
       : [],
@@ -152,7 +158,7 @@ export async function listIssues(options, { env = process.env, ghCommand = "gh",
   if (!Array.isArray(payload)) {
     throw new Error("gh issue list did not return a JSON array");
   }
-  return { ok: true, issues: payload.map(normalizeIssue) };
+  return { ok: true, issues: payload.map(normalizeIssue).filter((issue) => issue !== null) };
 }
 
 export async function runCli(

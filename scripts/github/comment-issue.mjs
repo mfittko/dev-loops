@@ -111,6 +111,9 @@ export function parseCommentIssueCliArgs(argv) {
 
 async function resolveBody(options) {
   if (options.bodyFile === undefined) {
+    if (options.body.trim().length === 0) {
+      throw new Error("--body must not be empty");
+    }
     return options.body;
   }
   const source = options.bodyFile === "-" ? 0 : options.bodyFile;

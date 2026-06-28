@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   parseCommentIssueCliArgs,
@@ -55,6 +58,37 @@ test("commentIssue: posts via gh issue comment and returns the URL", async () =>
   );
   assert.deepEqual(result, { ok: true, repo: "o/n", issue: 7, commentUrl: COMMENT_URL });
   assert.deepEqual(calls[0], ["issue", "comment", "7", "--repo", "o/n", "--body", "hello"]);
+});
+
+test("commentIssue: reads the body from --body-file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comment-issue-"));
+  try {
+    const file = join(dir, "body.md");
+    await writeFile(file, "from a file\n");
+    const { run, calls } = stubGh([{ stdout: `${COMMENT_URL}\n` }]);
+    const result = await commentIssue({ repo: "o/n", issue: 7, bodyFile: file }, { run });
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls[0], ["issue", "comment", "7", "--repo", "o/n", "--body", "from a file\n"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("commentIssue: rejects an empty --body-file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comment-issue-"));
+  try {
+    const file = join(dir, "empty.md");
+    await writeFile(file, "   \n");
+    const { run } = stubGh([{ stdout: `${COMMENT_URL}\n` }]);
+    await assert.rejects(() => commentIssue({ repo: "o/n", issue: 7, bodyFile: file }, { run }), /is empty/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("commentIssue: rejects an empty --body", async () => {
+  const { run } = stubGh([]);
+  await assert.rejects(() => commentIssue({ repo: "o/n", issue: 7, body: "   " }, { run }), /--body must not be empty/);
 });
 
 test("commentIssue: throws when gh fails", async () => {
