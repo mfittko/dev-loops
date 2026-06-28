@@ -11,6 +11,8 @@ tags:
 
 # Eliminating Coordination Delay in AI-Assisted Dev Workflows
 
+> New here? Start with [Introducing dev-loops](./introducing-dev-loops.md) for the overview; this article is a deep dive beneath it.
+
 An AI agent can write a working function in seconds. That part is solved. The hard part is everything that happens *around* the function: handing it to a reviewer, getting feedback back to the author, waiting for the build, deciding whether it is safe to merge. Each of those handoffs takes hours in real life, even when the diagram makes it look instant. An agent left to manage them on its own will guess at them. It assumes the build passed, assumes the review is done, and marks the work finished while those assumptions go unchecked.
 
 That gap has a name: coordination delay. It is the time work spends waiting between people and steps, plus the rework caused when someone, or something, guesses wrong about where the work actually is. Code is cheap to write now, and the cost has moved into getting it through the pipeline.

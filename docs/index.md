@@ -34,6 +34,12 @@ Start here for repository documentation.
 
 - [Phase 7 Plan](./phases/phase-7.md) — deferred second-repo pilot plan
 
+## Articles
+
+- [Introducing dev-loops](./articles/introducing-dev-loops.md) — start here: what dev-loops is, the proof from its own history, and how to adopt it
+- [Eliminating Coordination Delay in AI-Assisted Dev Workflows](./articles/eliminating-coordination-delay.md) — deep dive: why every handoff is an explicit decision on a state graph
+- [Make the Waiting Visible](./articles/make-the-waiting-visible.md) — deep dive: measuring the waiting between actions
+
 ## Presentations
 
 - [Applied Dev Loops Presentation](./presentations/applied-dev-loops-presentation.md)

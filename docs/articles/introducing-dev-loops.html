@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
+<title>Introducing dev-loops</title>
+<style>
+  :root {
+    --ground-1: #08101f;
+    --ground-2: #0b1220;
+    --ground-3: #0f172a;
+    --ink: #e5e7eb;
+    --heading: #f8fafc;
+    --copy: #cbd5e1;
+    --accent: #a78bfa;
+    --accent-soft: #ddd6fe;
+    --kicker: #93c5fd;
+    --card-border: rgba(148, 163, 184, 0.18);
+    --node-border: rgba(129, 140, 248, 0.4);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font);
+    color: var(--ink);
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+    background:
+      radial-gradient(circle at 85% 4%, rgba(139, 92, 246, 0.22), transparent 26%),
+      radial-gradient(circle at 12% 2%, rgba(59, 130, 246, 0.16), transparent 22%),
+      linear-gradient(180deg, var(--ground-1) 0%, var(--ground-2) 38%, var(--ground-3) 100%);
+    background-attachment: fixed;
+  }
+
+  .wrap {
+    max-width: 48rem;
+    margin: 0 auto;
+    padding: clamp(2rem, 6vw, 4rem) clamp(1.1rem, 5vw, 2rem) 5rem;
+  }
+
+  /* readable article measure (~65ch) inside the wrapper */
+  .article p,
+  .article ul,
+  .article ol,
+  .article .section-h,
+  .article .lede { max-width: 40rem; }
+
+  .kicker {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 0.72rem;
+    color: var(--kicker);
+    margin: 0 0 0.6rem;
+    font-weight: 600;
+  }
+
+  h1, h2, h3 { color: var(--heading); letter-spacing: -0.02em; margin-top: 0; }
+  h1 { font-weight: 760; font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.08; margin-bottom: 0.9rem; }
+  h2 { font-weight: 720; font-size: clamp(1.35rem, 3.4vw, 1.85rem); line-height: 1.15; margin: 2.6rem 0 0.9rem; }
+  h3 { font-weight: 680; font-size: clamp(1.08rem, 2.4vw, 1.28rem); line-height: 1.25; margin: 1.8rem 0 0.6rem; color: var(--accent-soft); }
+
+  .lede {
+    color: var(--copy);
+    font-size: clamp(1.08rem, 2.4vw, 1.28rem);
+    line-height: 1.5;
+    margin: 0 0 2rem;
+  }
+
+  p { line-height: 1.72; font-size: 1.05rem; color: var(--ink); margin: 0 0 1.15rem; }
+  strong { color: var(--accent-soft); }
+  em { color: #e2e8f0; font-style: italic; }
+  ul, ol { line-height: 1.7; padding-left: 1.3rem; margin: 0 0 1.15rem; }
+  li + li { margin-top: 0.5rem; }
+  a { color: var(--kicker); text-decoration: none; border-bottom: 1px solid rgba(147, 197, 253, 0.35); }
+  a:hover { border-bottom-color: var(--kicker); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 6px;
+    padding: 0.05em 0.4em;
+    color: #e2e8f0;
+    overflow-wrap: anywhere;
+  }
+
+  .hero-card {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.6));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.3);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-radius: 24px;
+    padding: 1.6rem 1.7rem;
+    margin-bottom: 2.6rem;
+  }
+  .hero-card .lede { margin-bottom: 0; }
+
+  /* metric row for the proof numbers */
+  .metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    margin: 1.8rem 0 2rem;
+    max-width: 40rem;
+  }
+  .metric {
+    flex: 1 1 8rem;
+    min-width: 0;
+    background: linear-gradient(180deg, rgba(24, 36, 61, 0.82), rgba(17, 24, 39, 0.72));
+    border: 1px solid var(--node-border);
+    border-radius: 16px;
+    padding: 1rem 1.1rem;
+  }
+  .metric .num { font-size: 1.6rem; font-weight: 720; color: var(--accent-soft); line-height: 1; }
+  .metric .lab { font-size: 0.82rem; color: var(--copy); margin-top: 0.4rem; line-height: 1.35; }
+
+  /* worked-example callout cards */
+  .example {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid var(--card-border);
+    border-left: 3px solid rgba(167, 139, 250, 0.6);
+    border-radius: 14px;
+    padding: 1.1rem 1.25rem;
+    margin: 0 0 1.1rem;
+    max-width: 40rem;
+  }
+  .example p { margin-bottom: 0; }
+  .example .ex-title { color: var(--accent-soft); font-weight: 650; }
+
+  .rule { border: 0; border-top: 1px solid rgba(148, 163, 184, 0.16); margin: 3rem 0; }
+
+  .deeper {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 1.2rem 1.35rem;
+    margin-top: 2rem;
+  }
+  .deeper h2 { margin-top: 0; font-size: 1.2rem; }
+  .deeper p { margin-bottom: 0; font-size: 0.98rem; color: var(--copy); }
+
+  .closer {
+    color: var(--accent-soft);
+    font-weight: 620;
+    font-size: clamp(1.12rem, 2.6vw, 1.4rem);
+    line-height: 1.4;
+    margin: 1.6rem 0 0;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<article class="article">
+
+  <header class="hero-card">
+    <p class="kicker">dev-loops</p>
+    <h1>Introducing dev-loops</h1>
+    <p class="lede">AI writes the code in seconds. The hours now go into the handoffs around the code, where work waits for a human to notice it, review it, and decide it is safe to merge.</p>
+  </header>
+
+  <p>AI writes the code in seconds. The hours now go somewhere else: into the handoffs around the code. A change waits for someone to notice it is ready, waits for a reviewer to rebuild enough context to have an opinion, waits in a queue for the one person who can say whether the next step is safe. That waiting between actions is coordination delay, and it is where the lead time of an AI-assisted workflow actually goes.</p>
+
+  <p>dev-loops is a coordination runtime that closes that gap. It walks a change from a plan or an issue through review and into a merged pull request, treating every handoff as an explicit decision a human can see, with a human merging by default. This article covers what it does, the evidence that it works, and how to put it in your own project.</p>
+
+  <p>It is also written through its own flow. This piece began as a plan file, was validated and refined in place, paused at a local human-review checkpoint, and was promoted to a single draft pull request that then ran the same gates as everything else. The loop that ships the loop also ships its articles.</p>
+
+  <h2>Act 1 &mdash; Why it exists, and the proof</h2>
+
+  <p>The deep mechanics live in two companion articles linked at the end. Here is the short version. Most lost hours in an AI-assisted workflow happen in the seams between steps, where the system has to answer <em>who acts next?</em> or <em>is this ready?</em> and an unattended agent answers with a hopeful assumption it never checks. It marks the build passed, marks the review done, and calls the work finished while those assumptions go untested. dev-loops refuses the assumption everywhere. Every transition becomes a decision the system makes deliberately and records where you can read it; when the situation is ambiguous, it stops and a human resolves it before the work moves on.</p>
+
+  <p>The proof is the repository itself. dev-loops develops dev-loops: the loop is the tool that ships its own changes, so its commit history is a continuous integration test of the claim. Over roughly fourteen days (2026-06-14 to 2026-06-28) the repository merged about 100 pull requests and closed about 96 issues, around 7 merged pull requests a day, with about 89% of merged pull requests closing a linked issue. Every one of those pull requests went through the same path: a draft gate that confirms checks are present, a Copilot review round, and a pre-approval gate that confirms CI is green, with a human performing the merge by default.</p>
+
+  <div class="metrics" role="list" aria-label="Verified throughput over roughly 14 days">
+    <div class="metric" role="listitem"><div class="num">~100</div><div class="lab">pull requests merged in ~14 days</div></div>
+    <div class="metric" role="listitem"><div class="num">~7/day</div><div class="lab">merged pull requests per day</div></div>
+    <div class="metric" role="listitem"><div class="num">~89%</div><div class="lab">of merged PRs close a linked issue</div></div>
+    <div class="metric" role="listitem"><div class="num">1 gate</div><div class="lab">draft &rarr; Copilot &rarr; pre-approval, human-merge by default</div></div>
+  </div>
+
+  <p>A handful of concrete runs show what that path catches.</p>
+
+  <div class="example">
+    <p><span class="ex-title">A waterfall that mints almost no tracker noise.</span> The local-first epic (#947) decomposed into six refined phase sub-issues, each promoted to its own gated pull request: #956, #957, #959, #960, #961, #962, plus the docs-grill formalization (#948 &rarr; #958). One phase, P4 (#960), is PR-first by design: it commits a plan document and opens a single draft pull request, minting no issue at all. The committed plan doc and the pull request are one artifact, so there is no second authority to keep in sync.</p>
+  </div>
+
+  <div class="example">
+    <p><span class="ex-title">A documentation check that runs inside the loop.</span> The docs-grill standard step (#948 &rarr; #958) is an autonomous in-loop check of a change against the repository's own contracts: claims versus contracts, code versus documentation drift, stale references. Its first live run, during P6 (#962), caught real drift before merge: a contract still claimed the shipped default was <code>github-first</code> via a settings file that no longer ships, and still described the repository's own mode as tracker-first when its config sets <code>local-first</code>. Both were fixed in place during refinement, before the pull request reached a human.</p>
+  </div>
+
+  <div class="example">
+    <p><span class="ex-title">Gates catching real defects.</span> The mobile-fit Playwright hardening (#937 &rarr; #938) failed on the pre-fix layout and passed only after the fix, with a guard-the-guard test confirming the check itself fails on a deliberately broken element. The round-cap Copilot deadlock (#848 &rarr; #854) is the loop catching its own state machine: when a post-cap fix left the Copilot gate waiting on a review that could never satisfy it, the loop detected the unsatisfiable wait at the cap and routed to a clean fallback.</p>
+  </div>
+
+  <div class="example">
+    <p><span class="ex-title">Dogfooding surfacing its own tooling gaps.</span> Running the loop turned up #963: the operator action scripts emit machine JSON only, so a human or an agent driving the gate cadence had to re-parse a raw blob just to read the result. The fix adds a concise summary output mode. The same A/B-contrast deslop step (#944 &rarr; #945/#946) that polices these articles' prose runs over the loop's own writing, removing binary-contrast phrasing from the articles and the decks.</p>
+  </div>
+
+  <h2>Act 2 &mdash; Adopt it in your project</h2>
+
+  <p>dev-loops runs under two harnesses, and the configuration forks at a few decision points. The keys below are the real shipped names.</p>
+
+  <h3>Pick your harness</h3>
+
+  <p>Under Claude Code the dev-loop runs as a single agent that performs the steps directly: it reads and writes files, runs git and the pull-request lifecycle, and posts gate verdicts under the operating session's identity (see <code>skills/docs/main-agent-contract.md</code>). Under Pi the main agent is read-only and every mutation flows through an async <code>dev-loop</code> subagent. The contract is the same; the harness decides who holds the pen.</p>
+
+  <h3>Pick where work originates</h3>
+
+  <p>Two config keys set the intake shape:</p>
+
+  <ul>
+    <li><code>strategy.default</code> is <code>local-first</code> (the shipped extension default) or <code>github-first</code> (the built-in fallback in <code>config.mjs</code>). Local-first starts work from a plan file you author in the repository; github-first starts from a tracker issue.</li>
+    <li><code>inputSource.default</code> is <code>tracker</code> (the issue body is the spec) or <code>phase-docs</code> (a phase document is the spec).</li>
+  </ul>
+
+  <p>These ship in <code>packages/core/src/config/extension-defaults.yaml</code>; the built-in <code>github-first</code> fallback lives in <code>packages/core/src/config/config.mjs</code>, and your repo's <code>.devloops</code> overrides both.</p>
+
+  <h3>The local-first flow</h3>
+
+  <p>When work starts from a plan file, four helper scripts run in order (see <code>skills/docs/local-planning-flow.md</code>):</p>
+
+  <ol>
+    <li><code>scripts/refine/validate-plan-file.mjs</code> checks the plan's base sections (Status, Objective, In scope, Explicit non-goals).</li>
+    <li><code>scripts/loop/resolve-dev-loop-startup.mjs --plan-file &lt;path&gt;</code> reads the plan and resolves an intake state.</li>
+    <li><code>scripts/refine/refine-plan-file.mjs</code> writes the acceptance criteria, definition of done, coverage matrix, and recorded docs-grill findings back into the plan in place, then stops at a <code>local_human_review</code> checkpoint so you approve before anything is promoted.</li>
+    <li><code>scripts/refine/promote-plan.mjs</code> commits the plan and opens exactly one draft pull request, recording a bidirectional plan-to-PR link and minting no issue.</li>
+  </ol>
+
+  <p>For a tracker-first epic, refinement is a waterfall instead: an epic issue decomposes into a sub-issue phase tree, and the refiner produces acceptance criteria and a definition of done for each phase. This article and the local-first epic above are both worked examples of that flow.</p>
+
+  <h3>Tune the gates</h3>
+
+  <p>A few more keys control how strict the loop is:</p>
+
+  <ul>
+    <li><code>refinement.maxCopilotRounds</code> (default 5) sets how many Copilot review rounds run before the loop converges; set it to <code>0</code> to disable Copilot review entirely.</li>
+    <li><code>autonomy.humanMergeOnly: true</code> makes the merge an enforced repo invariant: the loop runs the full pre-merge evidence check and reports merge-ready, and a named human performs the merge. Local-first ships with this on, so it never auto-merges.</li>
+    <li><code>workflow.requireDraftFirst: true</code> requires a pull request to open as a draft and pass the draft gate before it can be marked ready.</li>
+  </ul>
+
+  <p>That is the whole adoption path: choose a harness, set <code>strategy.default</code> and <code>inputSource.default</code> for how work arrives, run the flow, and dial the gate keys to the strictness your team wants. Start with the shipped local-first defaults and loosen from there.</p>
+
+  <p class="closer">The loop builds itself in the open, one visible handoff at a time. Point it at your project and it will do the same there.</p>
+
+  <hr class="rule" />
+
+  <div class="deeper">
+    <h2>Where to go deeper</h2>
+    <p>Two companion articles take these ideas apart in detail. <a href="./eliminating-coordination-delay.html">Eliminating Coordination Delay in AI-Assisted Dev Workflows</a> explains why every handoff becomes an explicit decision and why the loop runs on a state graph. <a href="./make-the-waiting-visible.html">Make the Waiting Visible</a> is about measuring the waiting between actions, which is where the lead time goes once the code itself is fast to write.</p>
+  </div>
+
+</article>
+</div>
+</body>
+</html>
