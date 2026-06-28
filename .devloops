@@ -76,7 +76,8 @@ workflow:
   # 0.5.0 CHANGELOG describe. Consumers default OFF.
   # TEMPORARY DIVERGENCE: set false here until #993 wraps the remaining agent-level gh
   # reads (CI-log, issue list/filter, issue comment). Until those wrappers exist,
-  # zero-raw-gh compliance isn't achievable, so enforcing would block every session.
+  # a fully clean tooling record (no agent-level raw gh / python / node -e — the full
+  # #982 discipline, not gh alone) isn't achievable, so enforcing would block every session.
   # The discipline is NOT enforced on this repo while this is false. Re-enable to true
   # as part of #993's DoD (which restores the documented posture).
   requireRetrospectiveInternalTooling: false
