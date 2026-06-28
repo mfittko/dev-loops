@@ -99,6 +99,22 @@ test("env-prefixed, wrapper-prefixed, and path-prefixed raw calls are violations
   }
 });
 
+test("quoted env value with spaces does not under-report the real command", () => {
+  // The space inside the quotes must not be mistaken for the env/command
+  // separator; the real `gh api` head must still be classified as a violation.
+  const cases = [
+    'FOO="a b" gh api repos/o/r',
+    "FOO='a b' gh api repos/o/r",
+    'A=1 B="x y" gh api repos/o/r',
+  ];
+  for (const line of cases) {
+    const { violations, internalToolingOnly } = analyzeTranscript(line);
+    assert.equal(internalToolingOnly, false, `expected violation for: ${line}`);
+    assert.equal(violations.length, 1, `expected one violation for: ${line}`);
+    assert.ok(violations[0].startsWith("gh:"), `expected gh for: ${line} (got ${violations[0]})`);
+  }
+});
+
 test("env prefix before an allowed node script stays clean", () => {
   const { violations, internalToolingOnly } = analyzeTranscript("env NODE_ENV=x node scripts/foo.mjs --pr 1");
   assert.deepEqual(violations, []);

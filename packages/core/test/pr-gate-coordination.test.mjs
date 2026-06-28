@@ -663,6 +663,21 @@ test("retrospective merge gate: recorded raw-gh/python/node-e violation fails th
   assert.match(falseFlag.reason, /internalToolingOnly/i);
 });
 
+test("retrospective merge gate: large/garbled rawCallViolations are sanitized + truncated in the reason (#982)", () => {
+  const many = Array.from({ length: 25 }, (_, i) => `gh: gh api repos/x/y/${i}\nwith newline\tand\ttabs`);
+  const result = evaluatePrGateCoordination(
+    retroGateInputs(approvedRetroBase({ internalToolingOnly: true, rawCallViolations: many })),
+  );
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  // still fails closed and reports the true count
+  assert.match(result.reason, /records 25 raw-call violation\(s\)/);
+  // newlines/tabs collapsed (no raw control whitespace leaks into the reason)
+  assert.ok(!/[\n\t]/.test(result.reason), "reason must not contain raw newlines/tabs");
+  // entry list is capped, not all 25 dumped
+  assert.match(result.reason, /\(\+\d+ more\)/);
+});
+
 test("retrospective merge gate: missing internalToolingOnly fails closed for old checkpoints (#982)", () => {
   const checkpoint = approvedRetroBase();
   delete checkpoint.behavioralReview.internalToolingOnly;

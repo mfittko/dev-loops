@@ -218,6 +218,22 @@ function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopi
   return `Copilot review rounds exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.`;
 }
 
+/**
+ * Render the (user-authored) rawCallViolations array into a bounded, single-line
+ * fragment for the gate failure reason. Collapses whitespace/newlines per entry,
+ * caps per-entry length, and caps the number of entries shown so a large or
+ * garbled checkpoint cannot bloat or break gate output. Still fails closed —
+ * this only formats the reason; the violation count above does the gating.
+ */
+function summarizeRawCallViolations(violations, { maxEntries = 10, maxEntryLen = 200 } = {}) {
+  const shown = violations.slice(0, maxEntries).map((v) => {
+    const flat = String(v).replace(/\s+/g, " ").trim();
+    return flat.length > maxEntryLen ? `${flat.slice(0, maxEntryLen)}…` : flat;
+  });
+  const more = violations.length - shown.length;
+  return more > 0 ? `${shown.join("; ")}; …(+${more} more)` : shown.join("; ");
+}
+
 function evaluateRetrospectiveMergeApproval(checkpoint) {
   if (!checkpoint || typeof checkpoint !== "object") {
     return { approved: false, reason: "No retrospective checkpoint was found." };
@@ -298,7 +314,7 @@ function evaluateRetrospectiveMergeApproval(checkpoint) {
   if (rawCallViolations.length > 0) {
     return {
       approved: false,
-      reason: `Retrospective records ${rawCallViolations.length} raw-call violation(s) (agent-level gh/python/node -e): ${rawCallViolations.join("; ")}.`,
+      reason: `Retrospective records ${rawCallViolations.length} raw-call violation(s) (agent-level gh/python/node -e): ${summarizeRawCallViolations(rawCallViolations)}.`,
     };
   }
 

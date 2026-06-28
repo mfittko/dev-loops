@@ -104,9 +104,13 @@ const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "comma
  */
 function normalizeSegmentHead(segment) {
   let s = segment.trim();
-  // (a) strip leading env-assignment tokens: NAME=value (value may be unquoted)
-  while (/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+\S/.test(s)) {
-    s = s.replace(/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, "");
+  // (a) strip leading env-assignment tokens: NAME=value. The value may be
+  //   unquoted (`X=1`) or a single/double-quoted string that itself contains
+  //   spaces (`X="a b"`); match the quoted form first so the space inside the
+  //   quotes is not mistaken for the token separator (would under-report).
+  const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+(?=\S)/;
+  while (ENV_ASSIGN.test(s)) {
+    s = s.replace(ENV_ASSIGN, "");
   }
   // (c) reduce a path-prefixed head to its basename so `.../gh` → `gh`
   s = s.replace(/^(\S*\/)([^/\s]+)/, "$2");
@@ -210,7 +214,7 @@ async function run(argv, { stdout, stderr }) {
   const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript(transcript);
 
   if (values.json) {
-    stdout.write(`${JSON.stringify({ ok: true, internalToolingOnly, rawCallViolations: violations, allowedWriteOps })}\n`);
+    stdout.write(`${JSON.stringify({ ok: internalToolingOnly, internalToolingOnly, rawCallViolations: violations, allowedWriteOps })}\n`);
   } else if (internalToolingOnly) {
     stdout.write(`internalToolingOnly: true — no agent-level raw gh/python/node -e calls found.\n`);
     if (allowedWriteOps.length > 0) {
