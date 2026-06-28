@@ -389,6 +389,7 @@ describe("BUILT_IN_DEFAULTS", () => {
       asyncStartMode: "required",
       requireRetrospective: false,
       requireRetrospectiveGate: false,
+      requireRetrospectiveInternalTooling: false,
       requireDraftFirst: false,
       devModeDefault: false,
     });
@@ -685,6 +686,7 @@ describe("loader — graceful degradation", () => {
         asyncStartMode: "required",
         requireRetrospective: true,
         requireRetrospectiveGate: false,
+        requireRetrospectiveInternalTooling: false,
         requireDraftFirst: true,
         devModeDefault: false,
       });
@@ -1178,6 +1180,7 @@ describe("loader — precedence", () => {
         asyncStartMode: "required",
         requireRetrospective: true,
         requireRetrospectiveGate: false,
+        requireRetrospectiveInternalTooling: false,
         requireDraftFirst: false,
         devModeDefault: true,
       });
@@ -2150,6 +2153,7 @@ describe("role resolution", () => {
       assert.equal(resolveWorkflowConfig({ version: 1 }, "asyncStartMode"), "required");
       assert.equal(resolveWorkflowConfig({ version: 1 }, "requireRetrospective"), false);
       assert.equal(resolveWorkflowConfig({ version: 1 }, "requireRetrospectiveGate"), false);
+      assert.equal(resolveWorkflowConfig({ version: 1 }, "requireRetrospectiveInternalTooling"), false);
       assert.equal(resolveWorkflowConfig({ version: 1 }, "requireDraftFirst"), false);
       assert.equal(resolveWorkflowConfig({ version: 1 }, "devModeDefault"), false);
     });
@@ -2161,6 +2165,7 @@ describe("role resolution", () => {
           asyncStartMode: "allowed",
           requireRetrospective: true,
           requireRetrospectiveGate: true,
+          requireRetrospectiveInternalTooling: true,
           requireDraftFirst: true,
           devModeDefault: false,
         },
@@ -2168,6 +2173,7 @@ describe("role resolution", () => {
       assert.equal(resolveWorkflowConfig(config, "asyncStartMode"), "allowed");
       assert.equal(resolveWorkflowConfig(config, "requireRetrospective"), true);
       assert.equal(resolveWorkflowConfig(config, "requireRetrospectiveGate"), true);
+      assert.equal(resolveWorkflowConfig(config, "requireRetrospectiveInternalTooling"), true);
       assert.equal(resolveWorkflowConfig(config, "requireDraftFirst"), true);
       assert.equal(resolveWorkflowConfig(config, "devModeDefault"), false);
     });

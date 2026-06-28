@@ -101,6 +101,11 @@ workflow:
   # repo-root .devloops, which takes precedence over these extension defaults.
   requireRetrospective: false
   requireRetrospectiveGate: false
+  # Internal-tooling-only retro check (#982) is a DEVELOPER-MODE step — the dev-loops
+  # maintainers' own dogfooding discipline. It must never block a consumer's state
+  # changes (consumers may legitimately use raw gh/python/node -e), so it ships OFF.
+  # The dev-loops repo opts in via its own repo-root .devloops (takes precedence here).
+  requireRetrospectiveInternalTooling: false
   requireDraftFirst: true
   # Dev mode is the dev-loop self-improvement mode — it edits the loop's own skill/agent prompts
   # after a phase, which is only meaningful in the dev-loops repo. Shipped defaults must not force
