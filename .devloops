@@ -70,9 +70,17 @@ gates:
 workflow:
   requireRetrospective: true
   requireRetrospectiveGate: true
-  # Developer mode: this repo dogfoods the dev-loops tooling, so it enforces the
-  # internal-tooling-only retro discipline on itself (#982). Consumers default OFF.
-  requireRetrospectiveInternalTooling: true
+  # Developer mode: this repo dogfoods the dev-loops tooling and its INTENDED posture
+  # is to enforce the internal-tooling-only retro discipline on itself (#982) — that
+  # intended-on state is what skills/docs/retrospective-checkpoint-contract.md and the
+  # 0.5.0 CHANGELOG describe. Consumers default OFF.
+  # TEMPORARY DIVERGENCE: set false here until #993 wraps the remaining agent-level gh
+  # reads (CI-log, issue list/filter, issue comment). Until those wrappers exist,
+  # a fully clean tooling record (no agent-level raw gh / python / node -e — the full
+  # #982 discipline, not gh alone) isn't achievable, so enforcing would block every session.
+  # The discipline is NOT enforced on this repo while this is false. Re-enable to true
+  # as part of #993's DoD (which restores the documented posture).
+  requireRetrospectiveInternalTooling: false
   requireDraftFirst: true
   devModeDefault: true
 
