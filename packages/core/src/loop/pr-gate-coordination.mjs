@@ -1,11 +1,13 @@
 import { DISPOSITION, STATE } from "./copilot-loop-state.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
+import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 
 export const PR_CHECKPOINT = Object.freeze({
   DRAFT_REVIEW: "draft_review",
   POST_DRAFT_EXTERNAL_REVIEW: "post_draft_external_review",
   FEEDBACK_RESOLUTION: "feedback_resolution",
   CONFLICT_RESOLUTION: "conflict_resolution",
+  UI_E2E_SCOPING: "ui_e2e_scoping",
   PRE_APPROVAL_GATE_WINDOW: "pre_approval_gate_window",
   FINAL_APPROVAL_READY: "final_approval_ready",
   PRE_APPROVAL_GATE_NEEDED: "pre_approval_gate_needed",
@@ -48,6 +50,7 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
   RECONCILE_DRAFT_GATE: "reconcile_draft_gate",
   REPORT_BLOCKED: "report_blocked",
   REPORT_DONE: "report_done",
+  RUN_UI_E2E_SUITE: "run_ui_e2e_suite",
 });
 
 function normalizeGateComment(summary = null) {
@@ -687,6 +690,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const requireRetrospectiveInternalTooling = input.requireRetrospectiveInternalTooling === true;
   const retrospectiveCheckpoint = input.retrospectiveCheckpoint;
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
+  // UI e2e auto-scoping (#976): the PR changed-file set + whether the shared UI
+  // e2e suite passed for this head. Inclusion is path-triggered, never annotated.
+  const changedFiles = Array.isArray(input.changedFiles) ? input.changedFiles : [];
+  const uiE2ePassed = input.uiE2ePassed === true ? true : (input.uiE2ePassed === false ? false : null);
   const refinementArtifact = input.refinementArtifact && typeof input.refinementArtifact === "object"
     ? input.refinementArtifact
     : null;
@@ -833,6 +840,45 @@ function evaluatePrGateCoordinationCore(input = {}) {
       conflictFiles,
         refinementArtifact,
     copilotReviewRoundCount,
+    });
+  }
+
+  // UI e2e auto-scoping precondition (#976). Path-triggered + fail-closed:
+  // if the PR's changed files touch a rendered artifact (a deck under
+  // docs/articles|presentations, or the inspect-run viewer source), it MUST be
+  // registered in the shared UI e2e suite AND that suite must have passed for
+  // this head. A rendered-artifact change with no registered/passing coverage
+  // blocks here with a reason naming the artifact. Distinct seam from the
+  // mergeability (#980) and retrospective (#982) preconditions to minimize
+  // merge-time conflict. Non-UI changes pass through untouched (required=false).
+  const uiE2eScoping = evaluateUiE2eScoping(changedFiles, { uiE2ePassed });
+  if (uiE2eScoping.required && !uiE2eScoping.satisfied) {
+    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE]);
+    pushUnique(forbiddenActions, [
+      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+      PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+    ]);
+    return buildResult({
+      repo: input.repo ?? null,
+      pr: Number.isInteger(input.pr) ? input.pr : null,
+      currentHeadSha,
+      lifecycleState: effectiveLifecycleState,
+      loopDisposition: DISPOSITION.ACTION_REQUIRED,
+      gateBoundary: PR_CHECKPOINT.UI_E2E_SCOPING,
+      draftGateAlreadySatisfied,
+      draftGate,
+      preApprovalGate,
+      allowedNextActions,
+      forbiddenActions,
+      nextAction: PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE,
+      reason: uiE2eScoping.reason,
+      mergeStateStatus,
+      conflictFiles,
+      refinementArtifact,
+      copilotReviewRoundCount,
     });
   }
 

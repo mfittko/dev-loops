@@ -32,11 +32,16 @@ export const CHECKPOINT_ACTION_TO_CONDUCTOR_ACTION = Object.freeze({
   [PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY]: "merge",
   [PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL]: "await_approval",
   [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]: "resolve_conflicts",
+  [PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE]: "run_ui_e2e",
   [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]: "blocked",
   [PR_CHECKPOINT_ACTION.REPORT_DONE]: "done",
 });
 export const ACTION_PRIORITY = Object.freeze({
   merge: 100,
+  // UI e2e auto-scoping fix work (#976): a path-triggered, fail-closed
+  // precondition — surface it ahead of feedback/draft work so the rendered
+  // artifact gets registered + covered before the gate proceeds.
+  run_ui_e2e: 95,
   fix_threads: 90,
   run_pre_approval: 80,
   draft_gate: 70,

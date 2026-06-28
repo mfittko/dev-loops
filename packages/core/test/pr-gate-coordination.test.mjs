@@ -2056,3 +2056,69 @@ test("draft PR with a WIP title is NOT blocked by the title guard (#842 AC2 — 
   assert.notEqual(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
   assert.equal(result.draftGate.cleanEvidenceExists, true);
 });
+
+// UI e2e auto-scoping precondition (#976) — path-triggered + fail-closed.
+test("UI e2e: rendered-artifact change with passing coverage does not block", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["docs/presentations/introducing-dev-loops.html"],
+    uiE2ePassed: true,
+    mergeable: "MERGEABLE",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+});
+
+test("UI e2e: non-UI change is not subject to the precondition", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["packages/core/src/loop/x.mjs", "README.md"],
+    mergeable: "MERGEABLE",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE);
+});
+
+test("UI e2e fail-closed: unregistered rendered artifact blocks the gate", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["docs/articles/brand-new-page.html"],
+    uiE2ePassed: true,
+    mergeable: "MERGEABLE",
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE);
+  assert.equal(result.loopDisposition, DISPOSITION.ACTION_REQUIRED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.match(result.reason, /brand-new-page\.html/);
+  assert.match(result.reason, /not registered/);
+});
+
+test("UI e2e fail-closed: registered artifact without passing coverage blocks", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["scripts/loop/inspect-run-viewer.mjs"],
+    uiE2ePassed: false,
+    mergeable: "MERGEABLE",
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE);
+  assert.match(result.reason, /not passed for this head/);
+});
