@@ -97,10 +97,21 @@ async function listUnmergedFiles({ cwd, env }) {
  * Decide whether a single conflicted file is the safe additive CHANGELOG case
  * and, if so, produce the merged content (keep BOTH sides, in order).
  *
- * Conservative: every conflict hunk in the file must be purely ADDITIVE — both
- * the "ours" and "theirs" blocks may only contain blank lines or list/section
- * entries. A hunk that mutates a shared line (one side empty while the other
- * rewrites context, or any non-list non-blank line) is NOT safe → fail closed.
+ * Requires diff3-style conflict markers so each hunk carries its merge BASE:
+ *
+ *   <<<<<<< ours
+ *   ...ours...
+ *   ||||||| base
+ *   ...base...
+ *   =======
+ *   ...theirs...
+ *   >>>>>>> theirs
+ *
+ * STRUCTURAL additivity (not lexical): a hunk is safe to keep-both ONLY when its
+ * BASE section is EMPTY — a true insertion on both sides at a spot where base had
+ * nothing. A non-empty base means a shared line was MODIFIED or DELETED on at
+ * least one side → fail closed (a lexical "looks like a list item" check cannot
+ * tell an add from a modify, which silently duplicates/resurrects entries).
  *
  * Keep-both order: ours block then theirs block, preserving each side's order.
  */
@@ -110,13 +121,6 @@ export function resolveAdditiveChangelog(content) {
   let i = 0;
   let resolvedAnyHunk = false;
 
-  const isAdditiveLine = (line) => {
-    const trimmed = line.trim();
-    // Blank lines and Markdown list items are additive; an existing prose/heading
-    // line being changed is not (we never rewrite shared context).
-    return trimmed.length === 0 || /^[-*+]\s/.test(trimmed);
-  };
-
   while (i < lines.length) {
     const line = lines[i];
     if (!line.startsWith("<<<<<<<")) {
@@ -124,12 +128,25 @@ export function resolveAdditiveChangelog(content) {
       i += 1;
       continue;
     }
-    // Conflict hunk: <<<<<<< ours ... ======= ... >>>>>>> theirs
+    // Conflict hunk: <<<<<<< ours ... ||||||| base ... ======= ... >>>>>>> theirs
     const ours = [];
+    const base = [];
     const theirs = [];
     i += 1; // skip <<<<<<<
-    while (i < lines.length && !lines[i].startsWith("=======")) {
+    while (i < lines.length && !lines[i].startsWith("|||||||") && !lines[i].startsWith("=======")) {
       ours.push(lines[i]);
+      i += 1;
+    }
+    if (i >= lines.length) {
+      return { safe: false, reason: "malformed conflict markers (no ======= separator)" };
+    }
+    if (!lines[i].startsWith("|||||||")) {
+      // No base section ⇒ not diff3 style; we cannot tell add from modify.
+      return { safe: false, reason: "missing diff3 base section (||||||| marker)" };
+    }
+    i += 1; // skip |||||||
+    while (i < lines.length && !lines[i].startsWith("=======")) {
+      base.push(lines[i]);
       i += 1;
     }
     if (i >= lines.length) {
@@ -145,10 +162,12 @@ export function resolveAdditiveChangelog(content) {
     }
     i += 1; // skip >>>>>>>
 
-    if (![...ours, ...theirs].every(isAdditiveLine)) {
-      return { safe: false, reason: "CHANGELOG conflict is not purely additive (touches non-list content)" };
+    // Additive ⇔ base had no line here (both sides inserted). Any non-empty base
+    // section is a modify/delete of a shared line → fail closed.
+    if (base.some((b) => b.trim().length > 0)) {
+      return { safe: false, reason: "CHANGELOG conflict modifies or deletes a shared line (non-empty merge base)" };
     }
-    // Keep both sides, in order. Drop a duplicate blank seam if both sides are blank-only.
+    // Keep both sides, in order.
     out.push(...ours, ...theirs);
     resolvedAnyHunk = true;
   }
@@ -190,7 +209,9 @@ export async function resolvePrConflicts(options, { env = process.env } = {}) {
     throw new Error(`git fetch origin ${base} failed: ${fetch.stderr.trim() || `exit ${fetch.code}`}`);
   }
 
-  const merge = await run("git", [...BOT_IDENTITY, "merge", "--no-edit", `origin/${base}`], { cwd, env });
+  // diff3 conflict style so conflict hunks carry the merge BASE — the additive
+  // CHANGELOG resolver needs it to tell a true insertion from a modify/delete.
+  const merge = await run("git", [...BOT_IDENTITY, "-c", "merge.conflictStyle=diff3", "merge", "--no-edit", `origin/${base}`], { cwd, env });
   if (merge.code === 0) {
     const result = { ok: true, action: "clean_merge", base, resolvedFiles: [], pushed: false };
     await afterResolve(result, options, { cwd, env });

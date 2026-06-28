@@ -10,13 +10,14 @@ import { resolveAdditiveChangelog, resolvePrConflicts } from "../../scripts/loop
 // ── pure unit: resolveAdditiveChangelog ──────────────────────────────
 
 describe("resolveAdditiveChangelog", () => {
-  test("keeps BOTH additive list entries, in order (ours then theirs)", () => {
+  test("keeps BOTH additive list entries (empty base, true insertion on both sides)", () => {
     const conflicted = [
       "## Unreleased",
       "",
       "### Added",
       "<<<<<<< HEAD",
       "- Entry from this branch (#100)",
+      "||||||| base",
       "=======",
       "- Entry from main (#101)",
       ">>>>>>> origin/main",
@@ -29,20 +30,67 @@ describe("resolveAdditiveChangelog", () => {
     // ours precedes theirs
     assert.ok(result.content.indexOf("#100") < result.content.indexOf("#101"));
     // no conflict markers remain
-    assert.doesNotMatch(result.content, /<<<<<<<|=======|>>>>>>>/);
+    assert.doesNotMatch(result.content, /<<<<<<<|\|\|\|\|\|\|\||=======|>>>>>>>/);
+  });
+
+  test("fails closed when both sides MODIFY the same existing list line (non-empty base)", () => {
+    // Adversarial: lexically both sides "look additive" (list items), but the
+    // base shows a shared line was edited — keep-both would duplicate it.
+    const conflicted = [
+      "<<<<<<< HEAD",
+      "- Fix the bug properly (#1)",
+      "||||||| base",
+      "- Fix the bug (#1)",
+      "=======",
+      "- Fix the bug correctly (#1)",
+      ">>>>>>> origin/main",
+    ].join("\n");
+    const result = resolveAdditiveChangelog(conflicted);
+    assert.equal(result.safe, false);
+    assert.match(result.reason, /modifies or deletes/);
+  });
+
+  test("fails closed when one side DELETES an existing list line (non-empty base)", () => {
+    const conflicted = [
+      "<<<<<<< HEAD",
+      "||||||| base",
+      "- Existing entry (#1)",
+      "=======",
+      "- Existing entry (#1)",
+      "- New entry (#2)",
+      ">>>>>>> origin/main",
+    ].join("\n");
+    const result = resolveAdditiveChangelog(conflicted);
+    assert.equal(result.safe, false);
+    assert.match(result.reason, /modifies or deletes/);
   });
 
   test("fails closed when a side rewrites a non-list (prose/heading) line", () => {
     const conflicted = [
       "<<<<<<< HEAD",
       "## Unreleased (this branch wording)",
+      "||||||| base",
+      "## Unreleased",
       "=======",
       "## Unreleased (main wording)",
       ">>>>>>> origin/main",
     ].join("\n");
     const result = resolveAdditiveChangelog(conflicted);
     assert.equal(result.safe, false);
-    assert.match(result.reason, /not purely additive/);
+    assert.match(result.reason, /modifies or deletes/);
+  });
+
+  test("fails closed on non-diff3 markers (no base section)", () => {
+    const conflicted = [
+      "<<<<<<< HEAD",
+      "- a",
+      "=======",
+      "- b",
+      ">>>>>>> origin/main",
+    ].join("\n");
+    const result = resolveAdditiveChangelog(conflicted);
+    assert.equal(result.safe, false);
+    assert.match(result.reason, /diff3 base section/);
   });
 
   test("fails closed on malformed markers", () => {
@@ -163,6 +211,54 @@ describe("resolvePrConflicts (real git)", () => {
       // merge was aborted — tree is clean, no unmerged paths
       const status = git(workDir, ["diff", "--name-only", "--diff-filter=U"]);
       assert.equal(status.trim(), "");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when both sides EDIT the same existing CHANGELOG line (real git)", async () => {
+    // Both sides look like list items, but it's a modify of a shared line —
+    // keep-both would silently duplicate/corrupt the entry. Must fail closed.
+    const ours = CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry properly (#1)");
+    const theirs = CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry correctly (#1)");
+    const { tempDir, workDir } = await setupDivergedRepo({
+      baseFile: "CHANGELOG.md",
+      baseContent: CHANGELOG_BASE,
+      oursContent: ours,
+      theirsContent: theirs,
+    });
+    try {
+      await assert.rejects(
+        () => resolvePrConflicts({ repoRoot: workDir, base: "main", verify: false, push: false }, { env: GIT_ENV }),
+        (err) => {
+          assert.match(err.message, /Unresolvable CHANGELOG\.md conflict/);
+          assert.deepEqual(err.conflictFiles, ["CHANGELOG.md"]);
+          return true;
+        },
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when one side DELETES an existing CHANGELOG line (real git)", async () => {
+    const ours = CHANGELOG_BASE.replace("- shared earlier entry (#1)\n", "");
+    const theirs = CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry (#1)\n- theirs added (#101)");
+    const { tempDir, workDir } = await setupDivergedRepo({
+      baseFile: "CHANGELOG.md",
+      baseContent: CHANGELOG_BASE,
+      oursContent: ours,
+      theirsContent: theirs,
+    });
+    try {
+      await assert.rejects(
+        () => resolvePrConflicts({ repoRoot: workDir, base: "main", verify: false, push: false }, { env: GIT_ENV }),
+        (err) => {
+          assert.match(err.message, /Unresolvable CHANGELOG\.md conflict/);
+          assert.deepEqual(err.conflictFiles, ["CHANGELOG.md"]);
+          return true;
+        },
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
