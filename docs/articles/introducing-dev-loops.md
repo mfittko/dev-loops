@@ -25,7 +25,7 @@ Three ideas carry most of the value:
 - **A person merges by default.** The loop does the preparation and reports that a change is ready; a human makes the final call. The autonomy is bounded on purpose, and you choose how much of it to grant.
 - **Work starts from a durable artifact.** A change begins from a short plan you write locally or from a tracked issue. That artifact is the spec, and the pull request carries it through review to merge, so there is always something to check the result against.
 
-None of this depends on a particular model or a particular editor. It is a runtime for the decisions around a change, and it runs inside the AI coding tools teams already use.
+None of this depends on a particular model or a particular editor, and the section [Model-agnostic by construction](#model-agnostic-by-construction) is where that claim earns its weight. It is a runtime for the decisions around a change, and it runs inside the AI coding tools teams already use.
 
 ## What it does to the work
 
@@ -38,6 +38,14 @@ dev-loops breaks the compounding by making each transition a decision the system
 That is what the project's own history shows. In a recent two-week stretch the repository merged about 100 pull requests — roughly seven a day — each one drafted, reviewed, gated on green tests, and merged by a person, with about seven in eight tied to a tracked item so the trail from intent to merge stayed legible. The cadence held as the change count rose because the extra work landed as machine transitions, with the human's part staying that one bounded decision at the merge.
 
 And it stays honest at that speed. The review step keeps catching what slips past a tired reviewer in a hurry: a layout that broke on small screens, documentation that had drifted from the code, a review cycle that had quietly deadlocked. The loop earns its keep at the moment a change is about to land, which is where unattended automation is usually weakest — so the cadence is fast and the merges are still ones a person stands behind.
+
+## Model-agnostic by construction
+
+The guardrails are what make the model choice cheap. Every handoff is an explicit decision the system records, so each step runs the same gate: a draft check, a review round, a green-CI confirmation, and a person at the merge. When a step is ambiguous, the loop fails closed and waits for a human. All that structure constrains how far any single step can stray, which means a strong open-source model can drive most or all of the work. Top-tier open-source models are enough here because the process does the constraining, so you can reserve a frontier model for the moments that genuinely call for one.
+
+That has practical consequences. A model you can self-host is cheaper to run and keeps the work clear of any one vendor's roadmap. The gate is what holds the quality bar: it catches the kind of slip a smaller model would let through, so the bar sits where the gate sets it and the model's job is to propose work the gate then checks.
+
+This is not hypothetical. The loop has driven real work end to end on top-tier open-source models — DeepSeek V4, Kimi K2.6, MiniMax M3, Qwen 3.6, and GLM 5.2 — with the same gate holding the bar throughout.
 
 ## Set it up
 
