@@ -13,7 +13,7 @@ tags:
 
 AI writes the code in seconds. The expensive part moved. It now sits in the coordination around the code: the wait for someone to notice a change is ready, to rebuild enough context to review it, to decide the next step is safe. That waiting between actions is where the lead time of an AI-assisted workflow goes once the typing is fast.
 
-dev-loops is a coordination runtime for that problem. It carries a change from an idea to a merged pull request and treats every handoff along the way as an explicit decision that gets written down, with a person merging by default. This article introduces the idea and shows how to run it on your own project. Two deeper pieces are linked at the end.
+dev-loops is a coordination runtime for that problem. It carries a change from an idea to a merged pull request and treats every handoff along the way as an explicit decision that gets written down, with a person merging by default. This article introduces the idea and shows how to run it on your own project. A deeper piece is linked at the end.
 
 ## The idea
 
@@ -90,4 +90,4 @@ Three choices shape the experience. Work can start **local-first** — you write
 
 ## Where to go deeper
 
-Two companion articles take these ideas apart in detail. [Eliminating Coordination Delay in AI-Assisted Dev Workflows](./eliminating-coordination-delay.md) explains why every handoff becomes an explicit decision and why the loop runs on a state graph. [Make the Waiting Visible](./make-the-waiting-visible.md) is about measuring the waiting between actions, which is where the lead time goes once the code itself is fast to write.
+The [dev-loops deep dive](./dev-loops-deep-dive.md) takes these ideas apart in detail, in two parts: why every handoff becomes an explicit decision and why the loop runs on a state graph, then how to measure the waiting between actions, which is where the lead time goes once the code itself is fast to write.

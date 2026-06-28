@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
-<title>Eliminating Coordination Delay in AI-Assisted Dev Workflows</title>
+<title>dev-loops: A Deep Dive</title>
 <style>
   :root {
     --ground-1: #08101f;
@@ -65,6 +65,15 @@
   h1, h2, h3 { color: var(--heading); letter-spacing: -0.02em; margin-top: 0; }
   h1 { font-weight: 760; font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.08; margin-bottom: 0.9rem; }
   h2 { font-weight: 720; font-size: clamp(1.35rem, 3.4vw, 1.85rem); line-height: 1.15; margin: 2.6rem 0 0.9rem; }
+
+  /* part divider: the two big movements of the deep dive */
+  .part {
+    margin: 3.4rem 0 1.4rem;
+    padding-top: 2.2rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+  }
+  .part .kicker { margin-bottom: 0.4rem; }
+  .part h2 { margin-top: 0; font-size: clamp(1.5rem, 3.8vw, 2.1rem); }
 
   .lede {
     color: var(--copy);
@@ -149,6 +158,7 @@
     min-width: 3rem;
   }
   .edge .arrow { font-size: 1.1rem; line-height: 1; }
+  .edge.dashed .arrow { color: rgba(167, 139, 250, 0.75); }
   .edge .edge-label {
     font-size: 0.64rem;
     color: var(--kicker);
@@ -162,6 +172,11 @@
   .diagram-scroll svg { display: block; height: auto; }
   .diagram-scroll svg text { font-family: var(--mono); fill: #e2e8f0; }
   .diagram-scroll svg .lab { fill: var(--kicker); font-family: var(--font); }
+
+  /* tree grounding diagram (figure 8) scales down on mobile */
+  .tree-svg { width: 100%; height: auto; display: block; }
+  .tree-svg text { font-family: var(--mono); fill: #e2e8f0; }
+  .tree-svg .lbl { fill: var(--kicker); font-family: var(--font); }
 
   .rule { border: 0; border-top: 1px solid rgba(148, 163, 184, 0.16); margin: 3rem 0; }
 
@@ -190,15 +205,20 @@
 
   <header class="hero-card">
     <p class="kicker">dev-loops</p>
-    <h1>Eliminating Coordination Delay in AI-Assisted Dev Workflows</h1>
-    <p class="lede">AI made writing code cheap. The hours now go into the handoffs around the code, author to reviewer, reviewer to CI, CI back to a human, where agents guess wrong.</p>
+    <h1>dev-loops: A Deep Dive</h1>
+    <p class="lede">AI made writing code cheap. The hours now go into the handoffs around the code, author to reviewer, reviewer to CI, CI back to a human, and into the waiting between actions that no tool measures.</p>
   </header>
 
   <p>An AI agent can write a working function in seconds. That part is solved. The hard part is everything that happens <em>around</em> the function: handing it to a reviewer, getting feedback back to the author, waiting for the build, deciding whether it is safe to merge. Each of those handoffs takes hours in real life, even when the diagram makes it look instant. An agent left to manage them on its own will guess at them. It assumes the build passed, assumes the review is done, and marks the work finished while those assumptions go unchecked.</p>
 
   <p>That gap has a name: coordination delay. It is the time work spends waiting between people and steps, plus the rework caused when someone, or something, guesses wrong about where the work actually is. Code is cheap to write now, and the cost has moved into getting it through the pipeline.</p>
 
-  <p>This article is about one idea for closing that gap, and why the shape of the solution matters as much as the idea itself.</p>
+  <p>This deep dive runs in two parts. The first part is about closing the gap: never guess a handoff, make every transition an explicit decision, and run that on a state graph so the guarantee holds. The second part is about the gap itself: the waiting between actions is where lead time goes now, and the reason it stays expensive is that nothing measures it.</p>
+
+  <div class="part">
+    <p class="kicker">Part 1</p>
+    <h2>Eliminating coordination delay</h2>
+  </div>
 
   <h2>The one idea: never guess a handoff</h2>
 
@@ -351,13 +371,180 @@
 
   <p>A state graph guarantees the behavior a prompt can only request. When the whole point is to stop guessing, the coordination layer itself should rest on something checkable.</p>
 
+  <div class="part">
+    <p class="kicker">Part 2</p>
+    <h2>Make the waiting visible</h2>
+  </div>
+
+  <p>Closing the handoffs is half the work. The other half is the gap itself. A change that used to take an afternoon now lands in seconds. The diff shows up before you&rsquo;ve finished reading the request. Generation, the part we spent decades trying to speed up, is now fast enough to drop off the timeline.</p>
+
+  <p>Then the work sits. It sits while someone notices it&rsquo;s ready. It sits while a reviewer rebuilds enough context to have an opinion. It sits in a queue, waiting for the one person who knows whether the next step is safe. The code is written in seconds, and the change ships hours later. Almost none of that gap shows up anywhere you&rsquo;d think to look.</p>
+
+  <p>The waiting between actions is where your lead time goes now, and it&rsquo;s the most expensive part of delivery precisely because nothing measures it. The fix starts with measurement, and there&rsquo;s a cheap, concrete way to begin.</p>
+
+  <h2>One interrupt costs five transitions</h2>
+
+  <p>Everyone underestimates the interruption.</p>
+
+  <p>A &ldquo;quick question&rdquo; costs far more than the minute it takes to answer. The real cost is the chain it sets off: you notice the request, switch away from what you were doing, rebuild the mental state for the new thing, act on it, and then recover by climbing back into the work you abandoned and reconstructing where you were. Each link in that chain has its own latency, and most of that latency is pure overhead.</p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <div class="flow" role="img" aria-label="Interrupt cost: one interruption forces five transitions — Notice, Switch, Rebuild state, Act, then Recover — before the original work resumes.">
+        <div class="node start">Need&nbsp;response</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Notice</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Switch</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Rebuild&nbsp;state</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Act</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Recover</div>
+      </div>
+    </div>
+    <figcaption><b>Figure 5 &mdash; The interrupt-cost chain.</b> A five-minute question triggers five transitions, and the answer itself (Act) is only one of them.</figcaption>
+  </figure>
+
+  <p>The five minutes of answering is the small box in the middle. The notice, switch, rebuild, and recover are the tax, and both sides of the exchange pay it. Across a queue of work, these costs multiply. Each handoff is an interrupt for whoever receives it, so a backlog of pending handoffs is a backlog of context switches waiting to happen.</p>
+
+  <h2>Every handoff restarts the same discovery from scratch</h2>
+
+  <p>The same pattern repeats one level up, at the handoff.</p>
+
+  <p>When work crosses from one actor to another, the receiver starts an investigation: what changed since they last looked, whether they have enough context to act with confidence, who owns this now, and what&rsquo;s blocking it. When any of that is unclear, they ask, and you&rsquo;ve paid for a round trip before any real work happens.</p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <div class="flow" role="img" aria-label="Handoff round trip: Receiver asks, Sender answers, Receiver confirms, work resumes — then the cycle repeats on the next ambiguity.">
+        <div class="node start">Receiver&nbsp;asks</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Sender&nbsp;answers</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Receiver&nbsp;confirms</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Work&nbsp;resumes</div>
+        <div class="edge dashed"><span class="arrow">&#8630;</span><span class="edge-label">next ambiguity</span></div>
+        <div class="node start">Receiver&nbsp;asks</div>
+      </div>
+    </div>
+    <figcaption><b>Figure 6 &mdash; One handoff round trip.</b> Every question the state can&rsquo;t answer becomes an ask &rarr; answer &rarr; confirm cycle, and the work waits until it closes &mdash; then the next ambiguity restarts it.</figcaption>
+  </figure>
+
+  <p>A mix of humans and AI agents makes it worse. Ambiguous ownership pauses a human until they ask. Missing context halts an agent, which either guesses and leaves you the cleanup or stops cold. Every human-to-agent and agent-to-human swap is one more place the state can drop on the floor. &ldquo;More hands make it faster&rdquo; holds only when the state survives each handoff intact, and any boundary it can fall through quietly cancels the gain you were counting on.</p>
+
+  <h2>Your git history hides exactly where the time went</h2>
+
+  <p>This is the hard part: none of the tools you already trust can see the waiting.</p>
+
+  <p>Commits record output. They mark that a change happened and stay silent on the six hours it sat idle before anyone touched it. Review threads bury the cost of re-reading and re-explaining inside ordinary back-and-forth, so the conversation reads like progress. CI timestamps end at green, leaving the gap between &ldquo;checks passed&rdquo; and &ldquo;a human noticed and acted&rdquo; unrecorded. Every instrument points at the work itself, while the waiting accumulates in the gaps.</p>
+
+  <p>The biggest drag on lead time is the one thing none of your dashboards can see. You can optimize generation forever and the chart of &ldquo;time from request to shipped&rdquo; will barely move, because the slow part lies elsewhere.</p>
+
+  <h2>Four fields get the next actor moving</h2>
+
+  <p>More meetings and status pings are themselves interrupts. The fix is making the state of the work explicit, so picking it up becomes a continuation of work already in motion.</p>
+
+  <p>Four fields carry most of that state:</p>
+
+  <ul>
+    <li><strong>Who owns it now</strong>, so nobody guesses whose move it is.</li>
+    <li><strong>What&rsquo;s blocking it</strong>, and what would unblock it.</li>
+    <li><strong>The latest decision</strong>, so nobody re-litigates settled ground.</li>
+    <li><strong>The safe next step</strong>, the one move known to be safe to take.</li>
+  </ul>
+
+  <p>Keep these four current and the next actor, human or agent, starts right away. The reconstruction is already written down, ready to read. The investigation that every handoff used to trigger collapses into a glance.</p>
+
+  <h2>Measure the wait first</h2>
+
+  <p>Explicit state does more than speed up the next pickup. It turns the waiting into something you can measure, and measurement is what lets you shorten it.</p>
+
+  <p>Once you capture state at each transition, the waits between actors turn into numbers you can point at, in place of anecdotes like &ldquo;review felt slow this sprint.&rdquo; From there you can run a real loop: find the transition that stalls the most, change the process at exactly that point, and check whether the wait dropped. Then confirm the change held quality steady, which is the step people skip once a wait finally drops.</p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <div class="flow" role="img" aria-label="Measurement loop: Capture state, Measure waits, Change the process, Verify outcomes — then loop back to capture.">
+        <div class="node start">Capture&nbsp;state</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Measure&nbsp;waits</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Change&nbsp;the&nbsp;process</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Verify&nbsp;outcomes</div>
+        <div class="edge"><span class="arrow">&#8635;</span><span class="edge-label">back to capture</span></div>
+        <div class="node start">Capture&nbsp;state</div>
+      </div>
+    </div>
+    <figcaption><b>Figure 7 &mdash; The measurement loop.</b> Capture, measure, change, verify &mdash; then back to capture. It repeats as a cycle, because the slowest transition moves as you fix things.</figcaption>
+  </figure>
+
+  <p>This is ordinary improvement discipline, applied to the part of delivery that has stayed invisible. Shortening a wait depends on measuring it, and measuring it depends on capturing its state.</p>
+
+  <h2>Those four fields already live in the work</h2>
+
+  <p>&ldquo;Make the state explicit&rdquo; is more concrete than &ldquo;write better tickets&rdquo;: each of the four fields maps onto a mechanism that already does the work when you let it.</p>
+
+  <p><strong>Owner and safe next step are a board.</strong> Work moves through visible columns: waiting, in progress, done. The column carries the current owner and the safe next step, so a glance at it tells you both. A deterministic resolver picks the next action from the board&rsquo;s state, so &ldquo;whose move is it?&rdquo; has one settled answer.</p>
+
+  <p><strong>The latest decision leaves a trail.</strong> Each review gate records its verdict in the open, with the findings that justified it attached. The decision lives written down, where it survives past the moment someone logs off. Pick the work up tomorrow and the reasoning is still there, right where the verdict was.</p>
+
+  <p><strong>Automation runs only where the state proves it&rsquo;s safe.</strong> Handle the wait at CI by waiting on the real result, the actual check status from whatever provider runs it. After a merge, finished workspaces get reclaimed and long-done items get archived. Each of those automations is gated on state that says continuing is safe. The judgment stays human while the waiting in between gets handled automatically.</p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <svg class="tree-svg" viewBox="0 0 640 360" role="img" aria-label="Observable state feeds the board, gate trail, and resolver, which let the next actor start and let safe automation run.">
+        <defs>
+          <marker id="ah2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L7,3 L0,6 Z" fill="rgba(148,163,184,0.85)" />
+          </marker>
+        </defs>
+        <!-- root -->
+        <rect x="230" y="14" width="180" height="46" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(167,139,250,0.7)"/>
+        <text x="320" y="42" text-anchor="middle" font-size="15" style="fill:#ddd6fe">Observable state</text>
+        <!-- three mechanisms -->
+        <rect x="22" y="118" width="180" height="58" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(129,140,248,0.4)"/>
+        <text x="112" y="143" text-anchor="middle" font-size="13">Board lifecycle</text>
+        <text x="112" y="162" text-anchor="middle" font-size="11" class="lbl">owner + safe next step</text>
+
+        <rect x="230" y="118" width="180" height="58" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(129,140,248,0.4)"/>
+        <text x="320" y="143" text-anchor="middle" font-size="13">Gate evidence trail</text>
+        <text x="320" y="162" text-anchor="middle" font-size="11" class="lbl">latest decision + findings</text>
+
+        <rect x="438" y="118" width="180" height="58" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(129,140,248,0.4)"/>
+        <text x="528" y="143" text-anchor="middle" font-size="13">Next-action resolver</text>
+        <text x="528" y="162" text-anchor="middle" font-size="11" class="lbl">whose move it is</text>
+        <!-- outcome -->
+        <rect x="150" y="232" width="340" height="50" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(147,197,253,0.6)"/>
+        <text x="320" y="262" text-anchor="middle" font-size="14" style="fill:#93c5fd">Next actor starts immediately</text>
+        <!-- automation -->
+        <rect x="120" y="316" width="400" height="40" rx="13" fill="rgba(17,24,39,0.82)" stroke="rgba(167,139,250,0.55)"/>
+        <text x="320" y="341" text-anchor="middle" font-size="12.5" style="fill:#ddd6fe">CI wait + post-merge reclaim run only where state says safe</text>
+        <!-- edges root -> mechanisms -->
+        <path d="M285,60 L130,116" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M320,60 L320,116" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M355,60 L510,116" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <!-- edges mechanisms -> outcome -->
+        <path d="M120,176 L240,230" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M320,176 L320,230" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M520,176 L400,230" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <!-- outcome -> automation -->
+        <path d="M320,282 L320,314" stroke="rgba(167,139,250,0.7)" fill="none" marker-end="url(#ah2)"/>
+      </svg>
+    </div>
+    <figcaption><b>Figure 8 &mdash; Grounding &ldquo;observable state&rdquo; in real mechanisms.</b> The board carries owner and next step, the gate trail carries the latest decision, the resolver answers whose move it is, and safe automation runs on that confirmed state.</figcaption>
+  </figure>
+
+  <p>These are the same mechanisms from Part 1, read from the other side. The board, the gates, and the resolver carry the four fields latent in the work, ready to surface. Making them explicit stops them from leaking.</p>
+
   <h2>The close</h2>
 
-  <p>AI made the code cheap, and the coordination around it is now the expensive part. Most of that cost is paid in bad handoffs: wrong routing, stalls nobody noticed, and a "done" that was only assumed.</p>
+  <p>AI made the code cheap, and the coordination around it is now the expensive part. Most of that cost is paid in bad handoffs: wrong routing, stalls nobody noticed, and a "done" that was only assumed. The rest is paid in the waiting between actions, which stays expensive because nothing measures it.</p>
 
-  <p>So stop guessing handoffs. Make every one of them a decision you can see: who acts next, whether it is safe to pause, what a mid-flight instruction means, and above all whether the work has actually merged. Build that on a state graph so the guarantee holds even when the model underneath you changes.</p>
+  <p>So stop guessing handoffs and start measuring the waits. Make every handoff a decision you can see: who acts next, whether it is safe to pause, what a mid-flight instruction means, and above all whether the work has actually merged. Build that on a state graph so the guarantee holds even when the model underneath you changes. Then capture state at each transition so the biggest stall shows up in plain numbers, and automate only where the state proves it&rsquo;s safe.</p>
 
-  <p class="closer">Make every handoff a decision you can see, and the work keeps moving in the open.</p>
+  <p class="closer">The next agent will write your code in seconds. The lever you control is the coordination around it: make every handoff a decision you can see, and measure how long the work waits.</p>
 
   <hr class="rule" />
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
-<title>dev-loops: Process Observability</title>
+<title>dev-loops: A Deep Dive</title>
 <style>
   :root {
     --ground-1: #08101f;
@@ -116,6 +116,20 @@
     font-weight: 600;
   }
 
+  /* part marker on the first slide of each movement */
+  .part-tag {
+    display: inline-block;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: var(--accent-soft);
+    border: 1px solid rgba(167, 139, 250, 0.4);
+    border-radius: 9999px;
+    padding: 0.2rem 0.7rem;
+    margin: 0 0 0.9rem;
+  }
+
   .glass-card,
   .hero-card,
   .metric-card {
@@ -195,6 +209,8 @@
 
   .soft-note { color: var(--copy); margin-top: 0.85rem; font-size: 0.95rem; }
   .section-lead { color: var(--copy); font-size: clamp(1rem, 2.2vw, 1.1rem); margin: 0 0 0.4rem; }
+  .note-top-md { margin-top: 0.75rem; }
+  .note-top-sm { margin-top: 0.5rem; }
   .card-label { color: var(--accent-soft); font-weight: 650; margin: 0 0 0.7rem; }
 
   /* inline flow diagrams */
@@ -279,19 +295,178 @@
   <div class="slide-inner">
     <div class="hero-card">
       <p class="kicker">dev-loops</p>
-      <h1>AI Writes the Code in Seconds. Then the Work Sits for Hours.</h1>
-      <p class="hero-copy">Generating a change is the fast part now. The slow part is everything between actions &mdash; the wait for someone to pick the work up, rebuild the context, and decide what happens next. That waiting is invisible, unmeasured, and where your real lead time goes.</p>
+      <h1>A Deep Dive: Coordination Delay and the Waiting Between Actions</h1>
+      <p class="hero-copy">AI agents made writing code cheap. The cost moved to the handoffs around it &mdash; author to reviewer, reviewer to CI, CI back to a human &mdash; where the hours leak and agents guess wrong. dev-loops makes every handoff an explicit, visible decision, and turns the waiting between actions into something you can measure.</p>
       <div class="chip-row">
+        <span class="pill">explicit handoffs</span>
         <span class="pill">wait states</span>
-        <span class="pill">handoff cost</span>
         <span class="pill">coordination delay</span>
       </div>
     </div>
   </div>
 </section>
 
+<section class="slide" id="core-idea">
+  <div class="slide-inner">
+    <span class="part-tag">Part 1 &middot; Eliminating coordination delay</span>
+    <p class="kicker">The core idea</p>
+    <h2>Loops Inside Loops</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li><strong>Who acts next?</strong> An outer loop decides each cycle which role takes the work, making one move at a time.</li>
+          <li><strong>The PR's life.</strong> An inner loop walks each pull request from first draft to merged, one explicit step at a time.</li>
+          <li><strong>The feedback.</strong> A second inner loop tracks every review comment from raised to resolved, so nothing gets lost.</li>
+          <li>When the situation is ambiguous, it stops and asks before acting.</li>
+        </ul>
+      </div>
+      <div class="glass-card flow-card">
+        <p class="card-label">One move per cycle</p>
+        <div class="flow-scroll">
+          <div class="flow">
+            <div class="node start">Start</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node accent">Who&nbsp;acts&nbsp;next?</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="flow-col">
+              <div class="node">Write&nbsp;the&nbsp;code</div>
+              <div class="node">Resolve&nbsp;feedback</div>
+              <div class="node">Ask&nbsp;a&nbsp;human</div>
+            </div>
+            <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">back to: who acts next</span></div>
+            <div class="node accent">Who&nbsp;acts&nbsp;next?</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="safe-pauses">
+  <div class="slide-inner">
+    <p class="kicker">Safe pauses</p>
+    <h2>Pauses Only at Safe Boundaries</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li><strong>Pause now</strong> &mdash; it's safe to hand control to a human this instant.</li>
+          <li><strong>Pause at the next clean boundary</strong> &mdash; finish the step in flight first, then stop.</li>
+          <li><strong>Blocked</strong> &mdash; a required check is missing, so the work holds.</li>
+          <li>A pull request advances only after its review actually runs. The gate fails closed.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Example</p>
+        <p class="soft-note">You ask it to stop. If it's mid-edit, it doesn't drop the file &mdash; it tags the request <code>stop_at_next_safe_gate</code> and pauses the moment the current step lands clean. You get a tidy stopping point at a clean boundary.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="steering">
+  <div class="slide-inner">
+    <p class="kicker">Mid-flight steering</p>
+    <h2>Change the Rules Mid-Run</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li><strong>A hard rule</strong> &mdash; a constraint the next steps must obey.</li>
+          <li><strong>A preference</strong> &mdash; a nudge it tries to honor when it can.</li>
+          <li><strong>A question</strong> &mdash; a clarification it folds into its next move.</li>
+          <li><strong>Stop when safe</strong> &mdash; wind down at the next clean boundary.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Example</p>
+        <p class="soft-note">Halfway through, you say <em>"don't touch the auth module."</em> It lands as a <code>hard_constraint</code> the remaining steps must honor; the rule takes effect from the next move on, with progress preserved.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="parallel-review">
+  <div class="slide-inner">
+    <p class="kicker">Parallel review</p>
+    <h2>Many Reviewers, One Verdict</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li>Every reviewer reads the <strong>same evidence bundle</strong> &mdash; the same diff, the same context &mdash; so their verdicts are directly comparable.</li>
+          <li>Each looks from a different angle (scope, test coverage, security) at the same time.</li>
+          <li>The findings merge into <strong>one verdict</strong>.</li>
+          <li>A single serious finding <em>blocks the merge</em>.</li>
+        </ul>
+      </div>
+      <div class="glass-card flow-card">
+        <p class="card-label">Same evidence in, one verdict out</p>
+        <div class="flow-scroll">
+          <div class="flow">
+            <div class="node start">Evidence&nbsp;bundle</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="flow-col">
+              <div class="node">Scope</div>
+              <div class="node">Coverage</div>
+              <div class="node">Security</div>
+            </div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node accent">One&nbsp;verdict</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="trust">
+  <div class="slide-inner">
+    <p class="kicker">It never lies about being done</p>
+    <h2>"Done" Means Merged</h2>
+    <div class="grid grid-3">
+      <div class="glass-card">
+        <p class="card-label">A human merges</p>
+        <ul class="mini-list">
+          <li>Merging is reserved for a human.</li>
+          <li>At the final gate it hands the PR to a named person.</li>
+          <li>A human always owns the last yes.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">"Done" is real</p>
+        <ul class="mini-list">
+          <li>The board shows <em>done</em> only when a PR actually merged.</li>
+          <li>It reads the real merge signal from the source of truth.</li>
+          <li>Each task runs in its own isolated workspace.</li>
+        </ul>
+      </div>
+      <div class="glass-card">
+        <p class="card-label">Green is checked</p>
+        <ul class="mini-list">
+          <li>CI-green is verified against the real result.</li>
+          <li>Works with any CI provider.</li>
+          <li>It waits for the real result before reporting.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="why-graphs">
+  <div class="slide-inner">
+    <p class="kicker">Why a state graph</p>
+    <h2>State Graphs Pin Behavior</h2>
+    <div class="glass-card card-narrow">
+      <ul class="tight-list">
+        <li>Steer a workflow with prose alone and its behavior shifts with every model update, longer context, or change in temperature, with no warning.</li>
+        <li>dev-loops runs the workflow on a <strong>state graph</strong> instead: the moves are a closed, listable set, so every possible next step is known up front.</li>
+        <li>A known set of moves is testable, so a wrong transition is caught in CI.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
 <section class="slide" id="interrupt-cost">
   <div class="slide-inner">
+    <span class="part-tag">Part 2 &middot; Make the waiting visible</span>
     <p class="kicker">The delay pattern</p>
     <h2>One Interrupt, Five Transitions</h2>
     <div class="grid grid-2">
@@ -489,17 +664,18 @@
 <section class="slide" id="close">
   <div class="slide-inner">
     <p class="kicker">The takeaway</p>
-    <h2>Make the Waiting Visible</h2>
+    <h2>See Every Handoff, Measure Every Wait</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
+          <li><strong>Make every handoff a decision you can see,</strong> so wrong routing and silent stalls surface the moment they happen.</li>
           <li><strong>Make the state explicit,</strong> and pickup becomes a continuation of work already under way.</li>
           <li><strong>Measure the waits,</strong> and the biggest stall stops hiding behind your commit history.</li>
-          <li><strong>Automate only where state proves it's safe,</strong> and you remove the stall while keeping the judgment.</li>
+          <li><strong>Automate only where state proves it's safe,</strong> and you remove the stall while keeping the judgment human.</li>
         </ul>
       </div>
       <div class="metric-card closer">
-        <p class="hero-copy">Measure how long the work waits.</p>
+        <p class="hero-copy">Make every handoff a decision you can see, and measure how long the work waits.</p>
       </div>
     </div>
   </div>
