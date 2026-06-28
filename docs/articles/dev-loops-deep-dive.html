@@ -404,7 +404,7 @@
         <div class="node">Recover</div>
       </div>
     </div>
-    <figcaption><b>Figure 5 &mdash; The interrupt-cost chain.</b> A five-minute question triggers five transitions, and the answer itself (Act) is only one of them.</figcaption>
+    <figcaption><b>Diagram 5 &mdash; The interrupt-cost chain.</b> A five-minute question triggers five transitions, and the answer itself (Act) is only one of them.</figcaption>
   </figure>
 
   <p>The five minutes of answering is the small box in the middle. The notice, switch, rebuild, and recover are the tax, and both sides of the exchange pay it. Across a queue of work, these costs multiply. Each handoff is an interrupt for whoever receives it, so a backlog of pending handoffs is a backlog of context switches waiting to happen.</p>
@@ -429,7 +429,7 @@
         <div class="node start">Receiver&nbsp;asks</div>
       </div>
     </div>
-    <figcaption><b>Figure 6 &mdash; One handoff round trip.</b> Every question the state can&rsquo;t answer becomes an ask &rarr; answer &rarr; confirm cycle, and the work waits until it closes &mdash; then the next ambiguity restarts it.</figcaption>
+    <figcaption><b>Diagram 6 &mdash; One handoff round trip.</b> Every question the state can&rsquo;t answer becomes an ask &rarr; answer &rarr; confirm cycle, and the work waits until it closes &mdash; then the next ambiguity restarts it.</figcaption>
   </figure>
 
   <p>A mix of humans and AI agents makes it worse. Ambiguous ownership pauses a human until they ask. Missing context halts an agent, which either guesses and leaves you the cleanup or stops cold. Every human-to-agent and agent-to-human swap is one more place the state can drop on the floor. &ldquo;More hands make it faster&rdquo; holds only when the state survives each handoff intact, and any boundary it can fall through quietly cancels the gain you were counting on.</p>
@@ -477,7 +477,7 @@
         <div class="node start">Capture&nbsp;state</div>
       </div>
     </div>
-    <figcaption><b>Figure 7 &mdash; The measurement loop.</b> Capture, measure, change, verify &mdash; then back to capture. It repeats as a cycle, because the slowest transition moves as you fix things.</figcaption>
+    <figcaption><b>Diagram 7 &mdash; The measurement loop.</b> Capture, measure, change, verify &mdash; then back to capture. It repeats as a cycle, because the slowest transition moves as you fix things.</figcaption>
   </figure>
 
   <p>This is ordinary improvement discipline, applied to the part of delivery that has stayed invisible. Shortening a wait depends on measuring it, and measuring it depends on capturing its state.</p>
@@ -533,7 +533,7 @@
         <path d="M320,282 L320,314" stroke="rgba(167,139,250,0.7)" fill="none" marker-end="url(#ah2)"/>
       </svg>
     </div>
-    <figcaption><b>Figure 8 &mdash; Grounding &ldquo;observable state&rdquo; in real mechanisms.</b> The board carries owner and next step, the gate trail carries the latest decision, the resolver answers whose move it is, and safe automation runs on that confirmed state.</figcaption>
+    <figcaption><b>Diagram 8 &mdash; Grounding &ldquo;observable state&rdquo; in real mechanisms.</b> The board carries owner and next step, the gate trail carries the latest decision, the resolver answers whose move it is, and safe automation runs on that confirmed state.</figcaption>
   </figure>
 
   <p>These are the same mechanisms from Part 1, read from the other side. The board, the gates, and the resolver carry the four fields latent in the work, ready to surface. Making them explicit stops them from leaking.</p>
