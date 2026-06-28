@@ -288,12 +288,12 @@ function evaluateRetrospectiveMergeApproval(checkpoint) {
   if (internalToolingOnly !== true) {
     return {
       approved: false,
-      reason: "Retrospective does not attest internal-tooling-only execution (`internalToolingOnly: true` is required; agent-level raw gh/python/node -e is a violation).",
+      reason: "Retrospective does not attest internal-tooling-only execution (`internalToolingOnly: true` is required; agent-level raw gh/python/node -e is a violation). — re-record the retrospective with internalToolingOnly + rawCallViolations.",
     };
   }
   const rawCallViolations = br !== null ? br.rawCallViolations : checkpoint.rawCallViolations;
   if (!Array.isArray(rawCallViolations)) {
-    return { approved: false, reason: "Retrospective is missing `rawCallViolations` (array; empty when clean)." };
+    return { approved: false, reason: "Retrospective is missing `rawCallViolations` (array; empty when clean). — re-record the retrospective with internalToolingOnly + rawCallViolations." };
   }
   if (rawCallViolations.length > 0) {
     return {

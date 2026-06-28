@@ -82,6 +82,29 @@ test("representative mixed transcript classifies correctly", () => {
   assert.equal(allowedWriteOps.length, 1); // gh pr merge
 });
 
+test("env-prefixed, wrapper-prefixed, and path-prefixed raw calls are violations", () => {
+  const cases = [
+    ["GH_TOKEN=x gh api repos/o/r", "gh"],
+    ["sudo gh api foo", "gh"],
+    ["xargs gh api foo", "gh"],
+    ["NODE_OPTIONS=x node -e 'x'", "node -e"],
+    ["./node_modules/.bin/gh pr view 1", "gh"],
+    ["/usr/bin/python3 -c 'x'", "python3"],
+  ];
+  for (const [line, tool] of cases) {
+    const { violations, internalToolingOnly } = analyzeTranscript(line);
+    assert.equal(internalToolingOnly, false, `expected violation for: ${line}`);
+    assert.equal(violations.length, 1, `expected one violation for: ${line}`);
+    assert.ok(violations[0].startsWith(`${tool}:`), `expected ${tool} for: ${line} (got ${violations[0]})`);
+  }
+});
+
+test("env prefix before an allowed node script stays clean", () => {
+  const { violations, internalToolingOnly } = analyzeTranscript("env NODE_ENV=x node scripts/foo.mjs --pr 1");
+  assert.deepEqual(violations, []);
+  assert.equal(internalToolingOnly, true);
+});
+
 test("comments and blank lines are ignored", () => {
   const { violations } = analyzeTranscript("# this mentions gh api but is a comment\n\n   \n");
   assert.deepEqual(violations, []);

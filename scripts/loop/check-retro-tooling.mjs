@@ -35,15 +35,20 @@
  *   - `python` / `python3` at the start of a command segment.
  *   - `node -e` / `node --eval` (inline eval) at the start of a command segment.
  *
+ * Head normalization (before classifying a segment, fail-closed):
+ *   - strips leading `NAME=value ` env-assignment prefixes (`GH_TOKEN=x gh api`)
+ *   - strips a leading wrapper binary from {sudo, env, xargs, time, nice, command}
+ *     and re-classifies the remainder (`sudo gh api`, `xargs gh api`, `env gh api`)
+ *   - reduces a path-prefixed binary to its basename (`./node_modules/.bin/gh`,
+ *     `/usr/bin/python3`) so the real tool is matched.
+ *
  * Known limitations (honest):
- *   - Segment splitting is a simple top-level split on `&&`, `||`, `|`, `;`. It
- *     does NOT parse quoting, so a `;`/`|` INSIDE a quoted argument splits the
- *     line. In practice this only ever over-reports (flags a harmless inner
- *     token), never under-reports a real top-level raw call, which is the
- *     fail-closed direction we want.
- *   - `gh`/`python` appearing purely as a substring inside a quoted argument to an
- *     allowed command may be flagged if it follows a `|`/`;`/`&&` separator inside
- *     that quote. Prefer single-line, single-purpose commands in transcripts.
+ *   - Segment splitting is a simple top-level split on `&&`, `||`, `|`, `;` and
+ *     does NOT fully parse shell quoting/substitution. A `;`/`|` inside a quoted
+ *     argument can over-report (flags a harmless inner token). It catches the
+ *     common raw-call forms (incl. the env/wrapper/path-prefixed ones above), but
+ *     deeply obfuscated calls — command substitution `$(...)`, aliases, `eval` —
+ *     may evade it. Prefer single-line, single-purpose commands in transcripts.
  */
 import { readFileSync } from "node:fs";
 import process from "node:process";
@@ -86,11 +91,40 @@ function splitSegments(line) {
     .filter((s) => s.length > 0);
 }
 
+/** Wrapper binaries whose first argument is the real command to classify. */
+const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command"]);
+
+/**
+ * Strip prefixes that hide the real command head, fail-closed (over-report is
+ * fine, under-report is the bug):
+ *   - leading `NAME=value ` env-assignment tokens (any number)
+ *   - leading wrapper binaries (`sudo`, `env`, `xargs`, ...) — recurse on the rest
+ *   - a path-prefixed binary (`./x/gh`, `/usr/bin/python3`) → reduce head to its basename
+ * Returns the segment with a bare, classifiable command head.
+ */
+function normalizeSegmentHead(segment) {
+  let s = segment.trim();
+  // (a) strip leading env-assignment tokens: NAME=value (value may be unquoted)
+  while (/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+\S/.test(s)) {
+    s = s.replace(/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, "");
+  }
+  // (c) reduce a path-prefixed head to its basename so `.../gh` → `gh`
+  s = s.replace(/^(\S*\/)([^/\s]+)/, "$2");
+  // (b) strip a leading wrapper binary, then re-normalize the remainder
+  const head = s.split(/\s+/, 1)[0];
+  if (WRAPPER_BINARIES.has(head)) {
+    const rest = s.slice(head.length).trim();
+    if (rest.length > 0) return normalizeSegmentHead(rest);
+  }
+  return s;
+}
+
 /**
  * Classify a single command segment.
  * @returns {{ kind: "violation"|"allowedWriteOp"|"clean", tool?: string }}
  */
-function classifySegment(segment) {
+function classifySegment(rawSegment) {
+  const segment = normalizeSegmentHead(rawSegment);
   // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
   // eval forms are violations. Check node first so script invocations pass.
   if (/^node\b/.test(segment)) {
