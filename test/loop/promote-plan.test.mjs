@@ -5,6 +5,7 @@ import path from "node:path";
 import test, { describe } from "node:test";
 
 import { runNode, writeGhStub } from "../_helpers.mjs";
+import { runCli } from "../../scripts/refine/promote-plan.mjs";
 
 const cliPath = path.resolve("scripts/refine/promote-plan.mjs");
 
@@ -137,7 +138,12 @@ describe("promote-plan CLI", () => {
       // fresh branch needs no manual push — the remote now has the branch ref.
       assert.match(parsed.branch, /promote-plan\/phase-x/u);
       const remoteRefs = spawnSync("git", ["ls-remote", "--heads", "origin"], { cwd: repoDir, env: ghStub.env, encoding: "utf8" }).stdout;
-      assert.match(remoteRefs, new RegExp(`refs/heads/${parsed.branch}$`, "mu"));
+      // String-based check (no RegExp built from the branch slug, which can carry
+      // a `.` from defaultBranchName and would otherwise act as a regex metachar).
+      assert.ok(
+        remoteRefs.split("\n").some((line) => line.endsWith(`refs/heads/${parsed.branch}`)),
+        `remote missing refs/heads/${parsed.branch}: ${remoteRefs}`,
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -174,7 +180,11 @@ describe("promote-plan CLI", () => {
 
       // It recovered: pushed the branch, opened the PR, wrote the link.
       const remoteRefs = spawnSync("git", ["ls-remote", "--heads", "origin"], { cwd: repoDir, env: ghStub.env, encoding: "utf8" }).stdout;
-      assert.match(remoteRefs, new RegExp(`refs/heads/${branch}$`, "mu"));
+      // String-based check (no RegExp built from the interpolated branch name).
+      assert.ok(
+        remoteRefs.split("\n").some((line) => line.endsWith(`refs/heads/${branch}`)),
+        `remote missing refs/heads/${branch}: ${remoteRefs}`,
+      );
       const written = await readFile(planPath, "utf8");
       assert.match(written, /^---\nprNumber: 321\n---\n/u);
       const ghLog = (await readFile(ghStub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
@@ -342,6 +352,45 @@ describe("promote-plan CLI", () => {
       assert.equal(ghLog.length, 1, `expected one gh call, got: ${ghLog.join(" | ")}`);
       const written = await readFile(planPath, "utf8");
       assert.match(written, /^---\nprNumber: 321\n---\n/u);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fail closed: a git diff error (exit >1) surfaces git_diff_failed and opens no PR", async () => {
+    const { tempDir, repoDir, planPath } = await setup();
+    try {
+      // Inject a runChildFn that returns success for every git step EXCEPT
+      // `git diff --cached --quiet`, which exits 128 (a real git error, not the
+      // 0/1 nothing-staged/staged signal). The explicit-code handling must
+      // fail-closed with git_diff_failed rather than misread 128 as "staged"
+      // and attempt a misleading commit.
+      let chunks = [];
+      const stdout = { write: (s) => chunks.push(s) };
+      const fakeRunChild = async (cmd, args) => {
+        if (cmd === "git" && args[0] === "diff" && args.includes("--cached") && args.includes("--quiet")) {
+          return { code: 128, stdout: "", stderr: "fatal: not a git repository (diff boom)" };
+        }
+        if (cmd === "git" && args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+          return { code: 0, stdout: `${repoDir}\n`, stderr: "" };
+        }
+        // checkout, branch verify, add, etc. all succeed up to the diff step.
+        return { code: 0, stdout: "", stderr: "" };
+      };
+      const summary = await runCli(["--plan-file", planPath, "--json"], {
+        stdout,
+        runChildFn: fakeRunChild,
+        env: process.env,
+      });
+      assert.equal(summary.ok, false);
+      assert.equal(summary.reason, "git_diff_failed");
+      assert.match(summary.detail, /exited 128/u);
+      assert.match(summary.detail, /diff boom/u);
+      // No PR-create child ran: the JSON summary carries no prNumber.
+      assert.equal(summary.prNumber, undefined);
+      // runCli sets process.exitCode on fail-closed; reset it so the in-process
+      // test does not mark the whole test process as failed.
+      process.exitCode = 0;
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

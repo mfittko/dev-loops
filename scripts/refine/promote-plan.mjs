@@ -236,8 +236,15 @@ export async function runCli(argv = process.argv.slice(2), {
     return fail("git_add_failed", add.stderr.trim());
   }
   // `git diff --cached --quiet` exits 0 when the index matches HEAD (nothing to
-  // commit), 1 when there are staged changes. Only commit when there is a diff.
-  const hasStaged = (await runChildFn("git", ["diff", "--cached", "--quiet"], env)).code !== 0;
+  // commit), 1 when there are staged changes, and >1 (e.g. 128) on a real git
+  // error. Treat the codes explicitly: only 1 means "commit"; an error code must
+  // fail closed rather than be misread as staged (which would attempt a commit
+  // and surface a misleading git_commit_failed).
+  const diff = await runChildFn("git", ["diff", "--cached", "--quiet"], env);
+  if (diff.code !== 0 && diff.code !== 1) {
+    return fail("git_diff_failed", `git diff --cached --quiet exited ${diff.code}${diff.stderr.trim() ? `: ${diff.stderr.trim()}` : ""}`);
+  }
+  const hasStaged = diff.code === 1;
   if (hasStaged) {
     const commit = await runChildFn(
       "git",
@@ -285,11 +292,11 @@ export async function runCli(argv = process.argv.slice(2), {
       detail: detail || null,
       planFile: planPath,
       branch,
-      recovery: `gh pr create failed, so no PR was opened, but the plan is committed and branch ${branch} is pushed. Re-run promote-plan to recover: the commit step is idempotent (skips when nothing is staged) and the push is idempotent, so a clean re-run will open the PR.`,
+      recovery: `gh pr create failed, so no PR was opened, but the plan is committed and branch ${branch} is pushed. Re-run promote-plan to recover: the commit step is idempotent (skips when nothing is staged) and the push is idempotent, so a clean re-run will retry opening the PR.`,
     };
     emit(stdout, options.json, summary, [
       `promote-plan: FAIL (pr_create_failed)${detail ? `: ${detail}` : ""}`,
-      `  branch: ${branch} (committed and pushed; no PR opened — re-run promote-plan to recover, it is idempotent and will open the PR)`,
+      `  branch: ${branch} (committed and pushed; no PR opened — re-run promote-plan to recover, it is idempotent and will retry opening the PR)`,
     ]);
     process.exitCode = 1;
     return summary;
