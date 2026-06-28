@@ -4,25 +4,45 @@ import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSite, DECKS } from '../../scripts/pages/build-site.mjs';
+import { buildSite, injectNav, ARTICLES, DECKS, NAV_LINKS } from '../../scripts/pages/build-site.mjs';
 
-test('build-site assembles index + both deck files, index links both decks', async () => {
+test('build-site: index is the intro article, all resources published, nav links the others', async () => {
   const out = await mkdtemp(join(tmpdir(), 'pages-site-'));
   try {
     const result = await buildSite({ outDir: out });
 
-    for (const deck of DECKS) {
-      await stat(join(out, deck.file)); // throws if missing
+    // Every deep-dive article and deck is published alongside the index.
+    for (const r of [...ARTICLES, ...DECKS]) {
+      await stat(join(out, r.file)); // throws if missing
     }
+
     const index = await readFile(join(out, 'index.html'), 'utf8');
-    for (const deck of DECKS) {
-      assert.ok(index.includes(`href="${deck.file}"`), `index links ${deck.file}`);
-      assert.ok(index.includes(deck.title), `index shows ${deck.title}`);
+    // The landing page is the intro article (its content), not the old deck index.
+    assert.ok(index.includes('Introducing dev-loops'), 'index is the intro article');
+    assert.ok(!index.includes('<h1>Presentation Decks</h1>'), 'old deck-index landing is gone');
+    // The nav links every other resource.
+    for (const l of NAV_LINKS) {
+      assert.ok(index.includes(`href="${l.file}"`), `nav links ${l.file}`);
+      assert.ok(index.includes(`>${l.label}</a>`), `nav shows ${l.label}`);
     }
-    assert.deepEqual(result.files.sort(), ['index.html', ...DECKS.map((d) => d.file)].sort());
+    assert.ok(index.includes('class="site-nav"'), 'index carries the nav bar');
+
+    // Deep-dive articles also carry the nav so the set is navigable.
+    const deep = await readFile(join(out, ARTICLES[0].file), 'utf8');
+    assert.ok(deep.includes('class="site-nav"'), 'deep-dive article carries the nav bar');
+
+    assert.deepEqual(
+      result.files.sort(),
+      ['index.html', ...ARTICLES.map((a) => a.file), ...DECKS.map((d) => d.file)].sort(),
+    );
   } finally {
     await rm(out, { recursive: true, force: true });
   }
+});
+
+test('injectNav fails closed when a page lacks the expected structure', () => {
+  assert.throws(() => injectNav('<html><body>no style block</body></html>'), /missing a <style> block or <body>/);
+  assert.throws(() => injectNav('<style>x</style> no body'), /missing a <style> block or <body>/);
 });
 
 test('build-site refuses to wipe filesystem root', async () => {
