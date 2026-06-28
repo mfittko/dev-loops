@@ -171,6 +171,11 @@
           "type": "boolean",
           "default": false
         },
+        "requireRetrospectiveInternalTooling": {
+          "type": "boolean",
+          "default": false,
+          "description": "Developer-mode retro step (#982): enforce internal-tooling-only execution (no agent-level raw gh/python/node -e) in the retrospective gate. Opt-in dogfooding discipline for dev-loops maintainers; default OFF so consumers are never blocked."
+        },
         "requireDraftFirst": {
           "type": "boolean"
         },

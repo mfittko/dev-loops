@@ -218,7 +218,23 @@ function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopi
   return `Copilot review rounds exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.`;
 }
 
-function evaluateRetrospectiveMergeApproval(checkpoint) {
+/**
+ * Render the (user-authored) rawCallViolations array into a bounded, single-line
+ * fragment for the gate failure reason. Collapses whitespace/newlines per entry,
+ * caps per-entry length, and caps the number of entries shown so a large or
+ * garbled checkpoint cannot bloat or break gate output. Still fails closed —
+ * this only formats the reason; the violation count above does the gating.
+ */
+function summarizeRawCallViolations(violations, { maxEntries = 10, maxEntryLen = 200 } = {}) {
+  const shown = violations.slice(0, maxEntries).map((v) => {
+    const flat = String(v).replace(/\s+/g, " ").trim();
+    return flat.length > maxEntryLen ? `${flat.slice(0, maxEntryLen)}…` : flat;
+  });
+  const more = violations.length - shown.length;
+  return more > 0 ? `${shown.join("; ")}; …(+${more} more)` : shown.join("; ");
+}
+
+function evaluateRetrospectiveMergeApproval(checkpoint, { developerMode = false } = {}) {
   if (!checkpoint || typeof checkpoint !== "object") {
     return { approved: false, reason: "No retrospective checkpoint was found." };
   }
@@ -276,6 +292,37 @@ function evaluateRetrospectiveMergeApproval(checkpoint) {
     : null;
   if (!mergeRecommendation) {
     return { approved: false, reason: "Retrospective is missing explicit `mergeRecommendation`." };
+  }
+
+  // internalToolingOnly: the loop's own execution must have used internal dev-loops
+  // tooling only — no agent-level raw `gh`/`python`/`python3`/`node -e` (issue #982).
+  // This is a DEVELOPER-MODE retro step: it enforces the dev-loops maintainers'
+  // own dogfooding discipline and is opt-in via `workflow.requireRetrospectiveInternalTooling`
+  // (default OFF). CONSUMERS of the extension are never blocked by it — they may
+  // legitimately use raw gh/python/node -e in their own workflow — so when the flag
+  // is OFF these fields are neither required nor enforced (a complete checkpoint
+  // without them passes exactly as it did before #982). When ON it fails closed:
+  // a complete checkpoint must explicitly attest a clean tooling record, and an OLD
+  // checkpoint missing `internalToolingOnly` fails (not a silent pass). Re-record the
+  // retrospective with the new fields to clear it.
+  if (developerMode) {
+    const internalToolingOnly = br !== null ? br.internalToolingOnly : checkpoint.internalToolingOnly;
+    if (internalToolingOnly !== true) {
+      return {
+        approved: false,
+        reason: "Retrospective does not attest internal-tooling-only execution (`internalToolingOnly: true` is required in developer mode; agent-level raw gh/python/node -e is a violation). — re-record the retrospective with internalToolingOnly + rawCallViolations.",
+      };
+    }
+    const rawCallViolations = br !== null ? br.rawCallViolations : checkpoint.rawCallViolations;
+    if (!Array.isArray(rawCallViolations)) {
+      return { approved: false, reason: "Retrospective is missing `rawCallViolations` (array; empty when clean). — re-record the retrospective with internalToolingOnly + rawCallViolations." };
+    }
+    if (rawCallViolations.length > 0) {
+      return {
+        approved: false,
+        reason: `Retrospective records ${rawCallViolations.length} raw-call violation(s) (agent-level gh/python/node -e): ${summarizeRawCallViolations(rawCallViolations)}.`,
+      };
+    }
   }
 
   return { approved: true, reason: null };
@@ -617,6 +664,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const maxCopilotRounds = normalizePositiveInteger(input.maxCopilotRounds);
   const roundCapReached = maxCopilotRounds !== null && copilotReviewRoundCount >= maxCopilotRounds;
   const requireRetrospectiveGate = input.requireRetrospectiveGate === true;
+  // Developer-mode flag (#982): only the dev-loops repo dogfooding itself enforces the
+  // internal-tooling-only retro discipline. Default OFF so consumer state changes pass.
+  const requireRetrospectiveInternalTooling = input.requireRetrospectiveInternalTooling === true;
   const retrospectiveCheckpoint = input.retrospectiveCheckpoint;
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
   const refinementArtifact = input.refinementArtifact && typeof input.refinementArtifact === "object"
@@ -911,7 +961,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           });
         }
         if (requireRetrospectiveGate) {
-          const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint);
+          const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint, { developerMode: requireRetrospectiveInternalTooling });
           if (!retrospectiveGate.approved) {
             return buildRetrospectiveGatePendingResult({
               input,
@@ -1183,7 +1233,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         });
       }
       if (requireRetrospectiveGate) {
-        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint);
+        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint, { developerMode: requireRetrospectiveInternalTooling });
         if (!retrospectiveGate.approved) {
           return buildRetrospectiveGatePendingResult({
             input,
@@ -1349,7 +1399,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         });
       }
       if (requireRetrospectiveGate) {
-        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint);
+        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint, { developerMode: requireRetrospectiveInternalTooling });
         if (!retrospectiveGate.approved) {
           return buildRetrospectiveGatePendingResult({
             input,
@@ -1509,7 +1559,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         });
       }
       if (requireRetrospectiveGate) {
-        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint);
+        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint, { developerMode: requireRetrospectiveInternalTooling });
         if (!retrospectiveGate.approved) {
           return buildRetrospectiveGatePendingResult({
             input,

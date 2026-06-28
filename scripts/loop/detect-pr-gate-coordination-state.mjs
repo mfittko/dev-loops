@@ -396,6 +396,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const draftGateConfig = resolveGateConfig(config, "draft");
   const maxCopilotRounds = resolveRefinementConfig(config, "maxCopilotRounds");
   const requireRetrospectiveGate = resolveWorkflowConfig(config, "requireRetrospectiveGate");
+  const requireRetrospectiveInternalTooling = resolveWorkflowConfig(config, "requireRetrospectiveInternalTooling");
   const retrospectiveCheckpoint = await loadRetrospectiveCheckpoint(repoRoot);
   const result = evaluatePrGateCoordination({
     repo: context.repo,
@@ -415,6 +416,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
     draftGateRequireCi: draftGateConfig.requireCi,
     requireRetrospectiveGate,
+    requireRetrospectiveInternalTooling,
     retrospectiveCheckpoint,
     draftGate: context.gateEvidence.draftGate,
     draftGateMarker: context.gateEvidence.draftGateMarker,

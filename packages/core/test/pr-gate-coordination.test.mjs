@@ -526,6 +526,8 @@ test("retrospective merge gate allows final approval when retrospective explicit
         gateQualityAcceptable: true,
         notes: "Real gates with concrete findings and follow-through.",
         drifts: ["No unexpected findings."],
+        internalToolingOnly: true,
+        rawCallViolations: [],
       },
     },
     draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
@@ -558,6 +560,8 @@ test("retrospective merge gate: empty drifts array is valid (no unexpected findi
         gateQualityAcceptable: true,
         notes: "All gates clean.",
         drifts: [],
+        internalToolingOnly: true,
+        rawCallViolations: [],
       },
     },
     draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
@@ -599,6 +603,126 @@ test("retrospective merge gate: missing gateQualityAcceptable blocks merge", () 
   assert.equal(result.lifecycleState, "retrospective_gate_pending");
   assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
   assert.match(result.reason, /gateQuality/);
+});
+
+function approvedRetroBase(overrides = {}) {
+  return {
+    state: "complete",
+    gateQuality: "All gates clean.",
+    mergeRecommendation: "Proceed with merge.",
+    behavioralReview: {
+      mergeApproved: true,
+      followedWorkingAgreement: true,
+      gateQualityAcceptable: true,
+      notes: "All gates clean.",
+      drifts: [],
+      internalToolingOnly: true,
+      rawCallViolations: [],
+      ...overrides,
+    },
+  };
+}
+
+function retroGateInputs(retrospectiveCheckpoint, { developerMode = true } = {}) {
+  return {
+    pr: 982,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "success",
+    requireRetrospectiveGate: true,
+    // The internal-tooling-only check is a developer-mode step (#982): default the
+    // helper to ON so existing blocking assertions hold; the consumer (OFF) path is
+    // covered by its own test below.
+    requireRetrospectiveInternalTooling: developerMode,
+    retrospectiveCheckpoint,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+  };
+}
+
+test("retrospective merge gate: recorded raw-gh/python/node-e violation fails the gate (#982)", () => {
+  const result = evaluatePrGateCoordination(
+    retroGateInputs(
+      approvedRetroBase({
+        internalToolingOnly: true,
+        rawCallViolations: ["gh: gh api repos/x/y/pulls/1/comments", "python3: python3 -c 'json.load(...)'"],
+      }),
+    ),
+  );
+
+  assert.equal(result.lifecycleState, "retrospective_gate_pending");
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.match(result.reason, /raw-call violation/i);
+
+  // internalToolingOnly: false also blocks (the OR branch).
+  const falseFlag = evaluatePrGateCoordination(
+    retroGateInputs(approvedRetroBase({ internalToolingOnly: false })),
+  );
+  assert.equal(falseFlag.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.match(falseFlag.reason, /internalToolingOnly/i);
+});
+
+test("retrospective merge gate: large/garbled rawCallViolations are sanitized + truncated in the reason (#982)", () => {
+  const many = Array.from({ length: 25 }, (_, i) => `gh: gh api repos/x/y/${i}\nwith newline\tand\ttabs`);
+  const result = evaluatePrGateCoordination(
+    retroGateInputs(approvedRetroBase({ internalToolingOnly: true, rawCallViolations: many })),
+  );
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  // still fails closed and reports the true count
+  assert.match(result.reason, /records 25 raw-call violation\(s\)/);
+  // newlines/tabs collapsed (no raw control whitespace leaks into the reason)
+  assert.ok(!/[\n\t]/.test(result.reason), "reason must not contain raw newlines/tabs");
+  // entry list is capped, not all 25 dumped
+  assert.match(result.reason, /\(\+\d+ more\)/);
+});
+
+test("retrospective merge gate: missing internalToolingOnly fails closed for old checkpoints (#982)", () => {
+  const checkpoint = approvedRetroBase();
+  delete checkpoint.behavioralReview.internalToolingOnly;
+  delete checkpoint.behavioralReview.rawCallViolations;
+
+  const result = evaluatePrGateCoordination(retroGateInputs(checkpoint));
+
+  assert.equal(result.lifecycleState, "retrospective_gate_pending");
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.match(result.reason, /internalToolingOnly/i);
+});
+
+test("retrospective merge gate: clean internal-tooling-only record allows final approval (#982)", () => {
+  const result = evaluatePrGateCoordination(retroGateInputs(approvedRetroBase()));
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+});
+
+test("retrospective merge gate: consumer (developer mode OFF) is NOT blocked by the internal-tooling check (#982)", () => {
+  // Consumer default: requireRetrospectiveInternalTooling is OFF. A complete,
+  // merge-approved checkpoint must reach final approval even when it lacks the
+  // internalToolingOnly/rawCallViolations fields entirely (back-compat) AND even
+  // when it records a raw-call "violation" — the check is inert for consumers.
+  const missingFields = approvedRetroBase();
+  delete missingFields.behavioralReview.internalToolingOnly;
+  delete missingFields.behavioralReview.rawCallViolations;
+  const missing = evaluatePrGateCoordination(
+    retroGateInputs(missingFields, { developerMode: false }),
+  );
+  assert.equal(missing.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(missing.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+
+  const withViolation = evaluatePrGateCoordination(
+    retroGateInputs(
+      approvedRetroBase({ internalToolingOnly: false, rawCallViolations: ["gh: gh api repos/x/y"] }),
+      { developerMode: false },
+    ),
+  );
+  assert.equal(withViolation.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(withViolation.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
 });
 
 test("non-draft PR with clean draft_gate on a different head still allows post-draft flow (one-time boundary)", () => {
@@ -994,6 +1118,8 @@ test("internal-only PR with retrospective gate allows when approved", () => {
         gateQualityAcceptable: true,
         notes: "All gates clean.",
         drifts: ["No unexpected findings."],
+        internalToolingOnly: true,
+        rawCallViolations: [],
       },
       gateQuality: "All gates clean.",
       mergeRecommendation: "Proceed with merge.",
