@@ -1,59 +1,85 @@
 # UI validation contract under `dev-loop`
 
-This document defines the first bounded UI validation contract for issue #97 follow-up slices.
+This document defines the UI validation contract under `dev-loop`: when UI
+end-to-end (e2e) coverage is required, what it asserts, and how the gate enforces
+it. The original slice (issue #97 follow-up) made UI validation an opt-in,
+annotation-driven convention. That convention is **superseded**: inclusion is now
+**path-triggered, registry-backed, and fail-closed** (UI-e2e epic — UE1 #975
+shipped the shared harness, UE2 #976 made it required).
 
-## Public entrypoint and opt-in boundary
+## When UI e2e is required (auto-scoping, not opt-in)
 
-- `dev-loop` remains the single public entrypoint for this UI validation work.
-- UI validation is opt-in and bounded in this slice.
-- Opt-in is a doc-only convention in this slice: the phase doc or PR description must explicitly annotate when UI validation is requested.
-- If no opt-in annotation exists, UI validation is not a default requirement.
+UI e2e coverage is **not** opted into by annotating a phase doc or PR description.
+A PR is required to carry passing UI e2e coverage when its **changed-file set**
+touches a registered rendered artifact, matched against explicit globs:
 
-## First-slice bounded validation modes
+- a presentation deck — `docs/presentations/*.html`
+- an article page — `docs/articles/*.html`
+- the inspect-run viewer source — `scripts/loop/inspect-run-viewer.mjs`
 
-Only these three categories are in-bounds for this slice:
+This is deterministic and conservative: single-segment `*.html` globs (no
+recursion) plus the viewer source path. A PR that touches none of these is not a
+UI change and the gate passes through.
 
-| Category | In-bounds for this slice | Out of bounds for this slice |
-|---|---|---|
-| Manual review artifacts | Manual screenshots or demo captures used for review communication | Treating manual artifacts as deterministic test evidence |
-| Deterministic UI smoke validation | Small screenshot-backed UI smoke validation, with optional DOM/assertion checks when needed by the slice | Expanding into always-on screenshot testing or a browser-heavy default workflow |
-| Broader visual regression coverage | Explicitly deferred boundary reference only | Full visual regression suite, baseline-management productization, or broad CI enforcement |
+The canonical owner of this criterion — globs, registries, fail-closed semantics,
+and the satisfiable CI jobs — is the standard step doc
+[UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md). The deterministic
+membership list lives in `packages/core/src/loop/ui-e2e-scoping.mjs`, and the gate
+precondition `ui_e2e_scoping` in `packages/core/src/loop/pr-gate-coordination.mjs`
+enforces it.
 
-## Mode details
+## What the shared harness asserts
 
-### 1) Screenshot-backed UI smoke validation
+Required coverage runs the **shared** Playwright harness
+(`test/playwright/harness/deck-fit-harness.mjs` for decks and articles,
+`test/playwright/harness/inspect-run-viewer-harness.mjs` for the viewer), not a
+per-slice spec. For decks and articles the shared assertions are:
 
-- Keep smoke checks deterministic, small, and scoped to the explicitly requested UI states.
-- Screenshot capture is allowed as smoke evidence for the opted-in slice.
-- This is not an always-on screenshot testing requirement for all work.
+- every registered section renders and is visible (decks only);
+- a Content-Security-Policy `<meta>` is present and locks `default-src` to `'none'`;
+- the **mobile (390×844) layout fits** — no element overflows the viewport, page
+  `scrollWidth` does not exceed it, and no section clips content vertically;
+- a negative control: a deliberately-wide element must fail the mobile fit check.
 
-### 2) Optional DOM/assertion checks
+These are the responsive-fit assertions that subsume the standalone slide
+responsive-fit goal tracked in issue #939.
 
-- DOM/assertion checks are optional and only used when the opted-in UI slice needs them.
-- They supplement smoke checks; they do not redefine the loop as browser-first.
+## Worked example: the intro deck
 
-### 3) Fixture-backed rendering when practical
+End to end for one real artifact — `docs/presentations/introducing-dev-loops.html`:
 
-- When practical, prefer fixture-backed rendering to keep smoke checks deterministic.
-- Reference example: `test/playwright/inspect-run-viewer.spec.mjs`.
-- This slice does not introduce a generalized fixture template or reusable toolkit abstraction.
+1. **Registered.** It is `DECK_REGISTRY["intro-deck"]` in
+   `test/playwright/harness/deck-fit-harness.mjs` (`deck:
+   "introducing-dev-loops.html"`, section ids `hero`…`close`, mobile capture
+   `compounding`). A thin spec — `test/playwright/intro-deck.spec.mjs` — calls
+   `defineDeckSuite(DECK_REGISTRY["intro-deck"])`, and its full repo-relative path
+   appears in `REGISTERED_ARTIFACT_PATHS` (a sync test keeps that list aligned with
+   the registry).
+2. **Assertions it runs.** `defineDeckSuite` runs the shared assertions above over
+   the deck: section visibility, CSP-meta lock, mobile fit, and the wide-element
+   negative control.
+3. **Gate requirement.** A PR that edits `docs/presentations/introducing-dev-loops.html`
+   is auto-scoped: the `ui_e2e_scoping` precondition requires passing UI e2e
+   coverage for the PR head. If the deck were not registered, the gate **fails
+   closed** with `nextAction: run_ui_e2e_suite`; because it is registered, the gate
+   requires the UI e2e check to be `SUCCESS`.
+4. **Satisfiable CI signal.** The `deck-smoke` CI job in `.github/workflows/ci.yml`
+   runs both deck fit specs (path-conditioned on `docs/presentations/**` and the
+   deck specs/harness/configs) and is named to match `UI_E2E_CHECK_NAMES`. Its
+   `SUCCESS` is the signal the gate reads. Locally the same suite runs via
+   `npm run test:playwright:intro-deck`.
 
-## Guardrails and non-goals for this slice
+The article path is identical with `ARTICLE_REGISTRY["intro-article"]`
+(`docs/articles/introducing-dev-loops.html`), `defineArticleSuite`, and the
+`article-smoke` job. The same-named deck and article are **distinct** registrations
+keyed on full path and never alias onto each other.
 
-This slice will not:
+## Non-goals
 
-- introduce any new public workflow entrypoint besides `dev-loop`
-- require mandatory multi-browser support
-- make browser validation mandatory for non-UI work
-- decide the WebKit-vs-Chromium default browser question
-- build a full shared Playwright helper toolkit
-- promote screen recording/video automation as a first-class helper
-
-## Deferred follow-up work
-
-The following are intentionally deferred:
-
-- whether first reusable toolkit helpers should be doc/skill-only or include deterministic helper scripts
-- WebKit-vs-Chromium default decision
-- whether screen recording remains manual or becomes first-class helper tooling
-- later workflow consumers beyond the artifact/CI contract already settled in [UI Artifact Contract](./ui-artifact-contract.md)
+UI validation is still not always-on screenshot testing and does not mandate
+multi-browser coverage. The criterion is only the conservative path-glob +
+registry-membership + passing-coverage check. The reusable named-state artifact
+shape and the WebKit config the shared harness builds on are documented in
+[UI Smoke Harness](./ui-smoke-harness.md) and [UI Artifact Contract](./ui-artifact-contract.md);
+the optional designer/vision review loop that consumes those artifacts is in
+[UI Designer Review Loop](./ui-designer-review-loop.md).

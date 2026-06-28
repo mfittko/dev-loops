@@ -124,12 +124,12 @@ test("consolidated PR lifecycle contract freezes the family-local lifecycle boun
   assert.match(conductorRouting, /skills\/docs\/pr-lifecycle-contract\.md/i);
 });
 
-test("dev-loop skill documents opt-in Playwright smoke harnesses for UI slices", async () => {
+test("dev-loop skill documents the auto-scoped rendered-artifact UI e2e requirement", async () => {
   const localImplementationSkill = await readRepo("skills/local-implementation/SKILL.md");
 
-  assert.match(localImplementationSkill, /user-facing HTML\/UI\/component slices when the user opts in/i);
+  assert.match(localImplementationSkill, /required and auto-scoped/i);
   assert.match(localImplementationSkill, /Playwright WebKit plus screenshot capture/i);
-  assert.match(localImplementationSkill, /wire it into CI once it becomes required validation for that slice/i);
+  assert.match(localImplementationSkill, /ui-e2e-scoping-step\.md/i);
 });
 
 

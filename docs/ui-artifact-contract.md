@@ -5,8 +5,12 @@ This document defines the bounded screenshot/state artifact contract introduced 
 ## Public entrypoint and scope boundary
 
 - `dev-loop` remains the single public entrypoint for UI validation work.
-- This contract documents the internal artifact shape behind `dev-loop`; it does not introduce a second public workflow name.
-- The contract is intentionally small and reusable for opted-in UI slices that use the local Playwright/WebKit smoke harness from [UI Smoke Harness](./ui-smoke-harness.md).
+- This contract documents the internal **named-state artifact shape** the shared
+  harness emits; it does not introduce a second public workflow name.
+- The shared deck/article/viewer suites emit these artifacts via the WebKit seam
+  from [UI Smoke Harness](./ui-smoke-harness.md). *When* a PR is required to run
+  those suites is path-triggered and fail-closed, not opt-in — see
+  [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md).
 
 ## What a named UI state means here
 
@@ -46,11 +50,15 @@ Why both are required:
 - the screenshot shows what rendered
 - `state.json` explains which named state it is, which slice produced it, and the minimum metadata needed for review or follow-up automation
 
-### 3. CI-promoted required artifacts
+### 3. CI-required artifacts
 
-These use the same deterministic artifact shape as smoke-validation artifacts, but the slice is now required to produce them in CI for the relevant PR/branch changes.
+These use the same deterministic artifact shape as smoke-validation artifacts, but
+the artifact belongs to a registered rendered artifact (deck, article, or the
+viewer) whose suite is **auto-scoped into CI** whenever a PR touches its source —
+see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md).
 
-If a slice is CI-promoted and the expected artifacts are missing or malformed, validation must fail closed.
+If a required suite's expected artifacts are missing or malformed, validation fails
+closed.
 
 ## Deterministic path contract
 
@@ -103,27 +111,22 @@ The `screenshot.png` + `state.json` pair is required when:
 - the artifact is part of the reusable deterministic smoke harness
 - the slice is handing named UI states to a later reviewer loop
 - the artifact needs to map back to a deterministic local run without guesswork
-- the slice has been promoted into CI-required UI validation
+- the artifact belongs to a registered rendered artifact whose suite is auto-scoped into CI
 
-## CI promotion rules
+## CI enforcement is auto-scoped, not promoted
 
-A UI slice may remain local-only when all of the following are true. In other words, local-only validation is still acceptable when:
-- the slice is still proving the first honest local smoke path
-- the UI surface is new, exploratory, or not yet stable enough for durable CI expectations
-- the artifacts are useful for local review but not yet required to protect an established regression boundary
+CI enforcement is no longer a per-slice promotion decision. A registered rendered
+artifact (deck, article, or the viewer) is required to carry passing UI e2e
+coverage whenever a PR touches its source — the trigger is the changed-file set
+matched against explicit globs, and the gate fails closed otherwise. The criterion,
+the registries, and the satisfiable CI jobs (`deck-smoke`, `article-smoke`,
+`viewer-smoke`, matching `UI_E2E_CHECK_NAMES`) are owned by
+[UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md). These three
+path/diff-conditioned jobs live in `.github/workflows/ci.yml`.
 
-CI promotion is warranted when one or more of the following become true:
-- the UI state is directly part of the slice acceptance criteria for a user-facing surface
-- the local harness path is already deterministic and cheap enough to run in CI
-- reviewers repeatedly depend on the named-state artifacts to approve the slice
-- a regression-prone UI surface has a stable fixture-backed smoke path
-- the repo already has a bounded changed-files gate that can keep CI promotion narrow
+## Failure policy for required suites
 
-In this repository, the current proving example is the conditional `viewer-smoke` job in `.github/workflows/ci.yml`, which promotes the inspect-run viewer smoke suite only when the bounded viewer surface or its smoke-path dependencies change.
-
-## Failure policy for CI-promoted slices
-
-When a slice is CI-promoted:
+When a registered artifact's suite is required:
 - missing or malformed `state.json` is a validation failure
 - missing `screenshot.png` is a validation failure
 - mismatched state naming/path conventions are a validation failure
