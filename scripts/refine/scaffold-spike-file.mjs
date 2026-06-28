@@ -66,6 +66,17 @@ function parseCliArgs(argv) {
     }
     return v;
   };
+  // The question is free text embedded in the artifact body, never forwarded as
+  // a CLI option — so unlike --out/--jq it may legitimately begin with `-`
+  // (e.g. "- should we ...?"). Only require a non-empty value, matching the
+  // core free-text parser; leave the leading-`-` guard to the path/filter flags.
+  const requireQuestion = (token, message) => {
+    const v = token.value;
+    if (typeof v !== "string" || v.length === 0) {
+      throw parseError(message);
+    }
+    return v;
+  };
 
   const args = {};
   const { tokens } = parseArgs({
@@ -97,7 +108,7 @@ function parseCliArgs(argv) {
         // Output is JSON by default; accepted as a no-op for callers that pass it.
         break;
       case "question":
-        args.question = requireValue(token, "--question requires a value");
+        args.question = requireQuestion(token, "--question requires a value");
         break;
       case "out":
         args.out = requireValue(token, "--out requires a value (path)");

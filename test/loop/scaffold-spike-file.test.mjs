@@ -76,6 +76,19 @@ describe("scaffold-spike-file (#988 P2)", () => {
     }
   });
 
+  test("CLI accepts a free-text question that begins with '-'", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "spike-scaffold-dash-"));
+    try {
+      const out = path.join(dir, "dash.md");
+      const question = "- should we shard the table?";
+      const { code } = await runNode(cliPath, ["--question", question, "--out", out, "--json"]);
+      assert.equal(code, 0);
+      assert.match(await readFile(out, "utf8"), /## Question\n\n- should we shard the table\?/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("CLI requires --question and --out", async () => {
     const missingOut = await runNode(cliPath, ["--question", "x"]);
     assert.equal(missingOut.code, 1);
