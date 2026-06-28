@@ -11,6 +11,7 @@ Start here for repository documentation.
 - [Artifact Authority Contract](../skills/docs/artifact-authority-contract.md) — canonical artifact-selection model (tracker-first and local-planning) and the local-first plan-file flow
 - [Local-Planning Flow](../skills/docs/local-planning-flow.md) — operator sequence for the local-first plan-file flow
 - [Local-Planning Worked Example](../skills/docs/local-planning-worked-example.md) — one plan file through every stage of the flow
+- [Spike-mode Contract](../skills/docs/spike-mode-contract.md) — operator sequence for time-boxed exploratory runs: start from a question, reach findings, then discard or graduate into a plan file
 - [Tracker Story PR Contract](./tracker-story-pr-contract.md) — canonical tracker-first story/PR contract
 - [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) — deterministic pattern for epic decomposition with GitHub sub-issue trees
 - [Copilot Loop State Graph](./copilot-loop-state-graph.md)
