@@ -150,9 +150,12 @@ test("direct slash commands are generated and map to the public dev-loop entrypo
   assert.match(byTarget.get(".claude/commands/continue.md"), /continue dev loop on PR \$ARGUMENTS/);
   assert.match(byTarget.get(".claude/commands/info.md"), /loop info --issue \$ARGUMENTS/);
   // Commands are thin wrappers: they must not name internal strategies or invent routing.
+  // Guard every canonical strategy id, in both underscore (strategy id) and hyphenated
+  // (skill-dir) form, so an accidental `copilot-pr-followup` reference also fails.
+  const internalStrategy = /copilot[_-]pr[_-]followup|issue[_-]intake|local[_-]implementation|reviewer[_-]fixer|final[_-]approval/;
   for (const name of ["start", "auto", "continue", "info"]) {
     assert.equal(
-      /copilot_pr_followup|issue_intake|local_implementation|reviewer_fixer/.test(byTarget.get(`.claude/commands/${name}.md`)),
+      internalStrategy.test(byTarget.get(`.claude/commands/${name}.md`)),
       false,
       `${name}.md must not reference internal strategy names`,
     );

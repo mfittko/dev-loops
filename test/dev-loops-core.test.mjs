@@ -289,6 +289,7 @@ test("direct entrypoints parse to the canonical public intent (#972)", () => {
     [["start", "112"], "start dev loop on issue 112"],
     [["auto", "112"], "auto dev loop on issue 112"],
     [["continue", "88"], "continue dev loop on PR 88"],
+    [["info", "88"], "inspect dev loop state on 88"],
     [["start", "#112"], "start dev loop on issue 112"], // tolerate a leading #
   ]) {
     const parsed = parseDevLoopsCommand(input, { surface: "extension" });
