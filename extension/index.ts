@@ -73,7 +73,7 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   });
 
   adapter.registerCommand('dev-loops', {
-    description: 'Run a dev-loop entrypoint or manage readiness: /dev-loops [start <issue>|auto <issue>|continue <pr>|info <issue|pr>|status|doctor|gates|hide|inspect ...]',
+    description: 'Run a dev-loop entrypoint or manage readiness: /dev-loops [start <issue>|auto <issue>|continue [issue|pr]|start-spike <question>|info <issue|pr>|status|doctor|gates|hide|inspect ...]',
     handler: async (args, ctx) => {
       const result = await executeDevLoopsCommand({
         input: args,
@@ -93,6 +93,10 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
         case 'entrypoint':
           ctx.ui.setWidget(WIDGET_KEY, buildEntrypointLines(result.action, result.intent), { placement: 'belowEditor' });
           ctx.ui.notify(`dev-loops ${result.action}: ${result.intent}`, 'info');
+          return;
+        case 'start_spike':
+          ctx.ui.setWidget(WIDGET_KEY, buildEntrypointLines('start-spike', result.intent), { placement: 'belowEditor' });
+          ctx.ui.notify(`dev-loops start-spike: ${result.intent}`, 'info');
           return;
         case 'checks':
           ctx.ui.setWidget(WIDGET_KEY, buildWidgetLines(result.action as Extract<DevLoopsAction, 'doctor' | 'status'>, result.checks), {
