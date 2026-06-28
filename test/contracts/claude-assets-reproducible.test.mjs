@@ -147,7 +147,10 @@ test("direct slash commands are generated and map to the public dev-loop entrypo
   // Each wraps the matching public intent / read-only shortcut — no internal strategy names.
   assert.match(byTarget.get(".claude/commands/start.md"), /start dev loop on issue \$ARGUMENTS/);
   assert.match(byTarget.get(".claude/commands/auto.md"), /auto dev loop on issue \$ARGUMENTS/);
-  assert.match(byTarget.get(".claude/commands/continue.md"), /continue dev loop on PR \$ARGUMENTS/);
+  // #988: /continue is dual-routed — explicit issue/PR target, or bare (resolve the
+  // single in-progress board item). Both forms still hand off to the dev-loop skill.
+  assert.match(byTarget.get(".claude/commands/continue.md"), /continue dev loop on \$ARGUMENTS/);
+  assert.match(byTarget.get(".claude/commands/continue.md"), /resolve-active-board-item\.mjs/);
   assert.match(byTarget.get(".claude/commands/info.md"), /loop info --issue \$ARGUMENTS/);
   // Commands are thin wrappers: they must not name internal strategies or invent routing.
   // Guard every canonical strategy id, in both underscore (strategy id) and hyphenated

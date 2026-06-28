@@ -52,7 +52,7 @@ export function buildHelpLines(): string[] {
     'Direct entrypoints:',
     '- /dev-loops start <issue>',
     '- /dev-loops auto <issue>',
-    '- /dev-loops continue <pr>',
+    '- /dev-loops continue [issue|pr]',
     '- /dev-loops info <issue|pr>',
     'Commands:',
     '- /dev-loops status',
