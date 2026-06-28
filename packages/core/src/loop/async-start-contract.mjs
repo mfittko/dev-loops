@@ -160,14 +160,20 @@ export function validateAsyncStartContext({
     };
   }
 
-  // No marker found — fail closed
+  // No marker found — fail closed.
+  // Derive the marker hint from ASYNC_CONTEXT_MARKERS (primary first, aliases after)
+  // so the message never drifts from the recognized-marker list.
+  const [primaryMarker, ...aliasMarkers] = ASYNC_CONTEXT_MARKERS;
+  const markerHint = aliasMarkers.length
+    ? `Set ${primaryMarker} (or the ${aliasMarkers.join("/")} alias) to proceed. `
+    : `Set ${primaryMarker} to proceed. `;
   return {
     status: ASYNC_START_STATUS.REJECTED,
     reason:
       "No async context detected. " +
       "The dev-loop must run within a visible async subagent session, " +
       "not as a detached local process. " +
-      "Set DEVLOOPS_RUN_ID (or the PI_SUBAGENT_RUN_ID alias) to proceed. " +
+      markerHint +
       "Repository-maintained workflow policy controls any exceptions.",
     detectedMarker: null,
   };

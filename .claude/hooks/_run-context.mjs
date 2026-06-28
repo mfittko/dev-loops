@@ -5,13 +5,14 @@
  * The dev-loop async path keys off the harness-neutral `DEVLOOPS_RUN_ID` env var to
  * identify an inspectable per-subagent run (runner ownership, async-start enforcement,
  * human-comment gating), and provides a mint-and-propagate path for harnesses (e.g. Claude
- * Code) that inject no native per-subagent run id. The harness sets `DEVLOOPS_RUN_ID` when
- * dispatching an async subagent.
+ * Code) that inject no native per-subagent run id. For those harnesses dev-loops itself mints
+ * and sets `DEVLOOPS_RUN_ID` when dispatching an async subagent.
  *
- * The Pi runtime injects `PI_SUBAGENT_RUN_ID` (not `DEVLOOPS_RUN_ID`) into each async
- * subagent's child env, so that name is honored as a recognized run-id alias (precedence
- * after the neutral primary). It is an externally-injected Pi-runtime contract var, not a
- * dev-loops-owned var — dev-loops still mints/propagates only the neutral `DEVLOOPS_RUN_ID`.
+ * Other harnesses may already inject their own run-id var: the Pi runtime injects
+ * `PI_SUBAGENT_RUN_ID` (not `DEVLOOPS_RUN_ID`) into each async subagent's child env, so that
+ * name is honored as a recognized run-id alias (precedence after the neutral primary). It is
+ * an externally-injected Pi-runtime contract var, not a dev-loops-owned var — dev-loops still
+ * mints/propagates only the neutral `DEVLOOPS_RUN_ID`.
  *
  * This module is pure except for the explicit file/IO helpers (writeRunContext/readRunContext),
  * which take an injectable `fs` and `root` for testability.
