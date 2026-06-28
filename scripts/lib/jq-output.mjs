@@ -96,7 +96,9 @@ function evaluatePredicate(value, predicate) {
     return resolved !== undefined && resolved !== null && resolved !== false;
   }
   const [, leftRaw, op, rightRaw] = m;
-  const left = resolvePath(value, leftRaw);
+  // jq maps a missing path to null; resolvePath yields undefined -> normalize.
+  const resolvedLeft = resolvePath(value, leftRaw);
+  const left = resolvedLeft === undefined ? null : resolvedLeft;
   const lit = parseLiteral(rightRaw);
   if (!lit.ok) {
     throw new JqFilterError(`Unsupported predicate operand: ${rightRaw.trim()}`);
@@ -108,13 +110,19 @@ function evaluatePredicate(value, predicate) {
     case "!=":
       return left !== right;
     case "<":
-      return left < right;
     case "<=":
-      return left <= right;
     case ">":
-      return left > right;
-    case ">=":
+    case ">=": {
+      // jq never coerces across types (number < string always); JS would. Fail
+      // closed when operand types differ so numeric-string fields don't misfire.
+      if (typeof left !== typeof right) {
+        throw new JqFilterError(`Cannot order-compare ${typeof left} and ${typeof right}`);
+      }
+      if (op === "<") return left < right;
+      if (op === "<=") return left <= right;
+      if (op === ">") return left > right;
       return left >= right;
+    }
     default:
       throw new JqFilterError(`Unsupported operator: ${op}`);
   }

@@ -36,6 +36,25 @@ test("evaluateJqFilter: comparison and select", () => {
   assert.deepEqual(evaluateJqFilter(sample, ".items[] | select(.n>1) | .n"), [2, 3]);
 });
 
+test("evaluateJqFilter: ordered comparison is jq-faithful (no JS coercion)", () => {
+  // Numeric STRING vs number literal: jq never coerces; fail closed instead.
+  assert.throws(() => evaluateJqFilter({ s: "5" }, "select(.s > 3)"), JqFilterError);
+  assert.throws(() => evaluateJqFilter({ s: "5" }, ".s > 3"), JqFilterError);
+  // number-number and string-string ordered comparisons still work.
+  assert.deepEqual(evaluateJqFilter({ n: 5 }, ".n > 3"), [true]);
+  assert.deepEqual(evaluateJqFilter({ n: 2 }, ".n > 3"), [false]);
+  assert.deepEqual(evaluateJqFilter({ s: "b" }, '.s > "a"'), [true]);
+  assert.deepEqual(evaluateJqFilter(sample, ".items[] | select(.n > 1) | .n"), [2, 3]);
+});
+
+test("evaluateJqFilter: missing path equals null (jq-faithful)", () => {
+  assert.deepEqual(evaluateJqFilter(sample, ".missing == null"), [true]);
+  assert.deepEqual(evaluateJqFilter(sample, ".ciStatus == null"), [false]);
+  assert.deepEqual(evaluateJqFilter(sample, ".missing != null"), [false]);
+  // Chain over a missing path resolves to null, doesn't crash.
+  assert.deepEqual(evaluateJqFilter(sample, ".missing.a.b == null"), [true]);
+});
+
 test("evaluateJqFilter: fails closed on unsupported syntax", () => {
   assert.throws(() => evaluateJqFilter(sample, "ciStatus"), JqFilterError);
   assert.throws(() => evaluateJqFilter(sample, ".items | bogusfn"), JqFilterError);
