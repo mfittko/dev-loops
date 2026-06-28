@@ -64,7 +64,7 @@ dev-loops runs inside Claude Code or Pi and drives an ordinary GitHub pull-reque
 pi install npm:dev-loops
 ```
 
-**Start a loop.** Reach the same entrypoints through direct named commands; you never pick internal modes:
+**Run a loop.** Reach the same entrypoints through direct named commands; you never pick internal modes:
 
 ```text
 /dev-loops:start 112      # begin work from a tracked issue
