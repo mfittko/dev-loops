@@ -25,9 +25,11 @@ Publish a top-of-funnel public article that introduces dev-loops to a general en
 ## Acceptance criteria
 
 - The article ships as `docs/articles/introducing-dev-loops.md` plus a CSP-safe self-contained HTML rendering under `docs/articles/`, and is published as a Claude artifact.
-- Act 1 (why + proof) cites verified numbers — ~100 merged PRs in ~14 days, every PR through the same draft → Copilot → pre-approval gate — and at least three concrete repo examples, each naming its PR/issue numbers.
-- Act 2 (hands-on adoption) covers, each naming the real shipped config key: start-local (`strategy.default: local-first`) vs issue-intake (`github-first`); `inputSource.default` tracker vs phase-docs; the waterfall refinement (epic → phase tree); Copilot reviews on/off (`refinement.maxCopilotRounds`, `0` disables); human-merge-only (`autonomy.humanMergeOnly`).
-- Every cited number, config key, flag, and script is verified against shipped code/history, not prose.
+- It is a generic public introduction to the underlying concepts (per the operator steering): no internal PR/issue numbers, script paths, contract names, or phase labels in the prose.
+- The proof section cites verified aggregate numbers (~100 merged PRs in ~14 days, ~7/day, ~7-in-8 tracked, every PR gated and human-merged) and uses them to show the straightforward, repeatable process the loop produces, including the manual-coordination-compounding argument; concrete examples of what the gate catches are described for a general audience without numbers.
+- The adoption section gives concrete setup instructions naming the real shipped surfaces: the Claude Code plugin slash commands and `pi install`, the plain-language `start/auto/continue dev loop` entrypoint, and the config forks — `strategy.default` local-first vs github-first, `inputSource.default` tracker vs phase-docs, Copilot reviews on/off (`refinement.maxCopilotRounds`, `0` disables), human-merge-only (`autonomy.humanMergeOnly`).
+- The intro article is the GitHub Pages landing page: `scripts/pages/build-site.mjs` publishes it as `site/index.html`, with the two deep-dive articles and two decks reachable through a shared navigation bar.
+- Every cited number, config key, flag, and command is verified against shipped code/history.
 - The A/B-contrast deslop step is applied; the piece reads as human-written and stays neutral.
 
 ## Definition of done
@@ -41,13 +43,15 @@ Publish a top-of-funnel public article that introduces dev-loops to a general en
 
 | Item | Type | Status | Evidence |
 |---|---|---|---|
-| MD + HTML under docs/articles/ + artifact published | AC | Planned | files added in the promoted PR |
-| Act 1 verified numbers + 3 concrete examples | AC | Planned | research report (100 PRs/14d; epic #947, docs-grill #948/#958, gate catches #938/#854, bug #963) |
-| Act 2 config forks each name the real key | AC | Planned | extension-defaults.yaml + config.mjs key names |
-| Every citation verified against code/history | AC | Planned | grep-verified surface list from research |
-| A/B-contrast deslop applied | AC | Planned | docs/ab-contrast-deslop-step.md sweep |
-| Cross-linked + test:docs + verify green | DoD | Planned | docs/index.md + CI |
-| CHANGELOG entry | DoD | Planned | CHANGELOG Added section |
+| MD + HTML under docs/articles/ + artifact published | AC | Met | files added; artifact link handed to operator |
+| Generic public intro — no PR numbers / script paths / phase labels | AC | Met | prose reviewed; gh-verified aggregate figures only |
+| Proof section uses aggregate data to show the repeatable process + compounding argument | AC | Met | ~100 PRs/14d, ~7/day, ~7-in-8 tracked, human-merged |
+| Concrete setup instructions naming real surfaces | AC | Met | plugin/pi install + entrypoint + config forks, vs README/config.mjs |
+| Intro is the Pages landing page (build-site → index.html) + nav | AC | Met | scripts/pages/build-site.mjs + test/pages/build-site.test.mjs |
+| Every citation verified against code/history | AC | Met | grep/gh-verified surfaces |
+| A/B-contrast deslop applied | AC | Met | docs/ab-contrast-deslop-step.md sweep, zero tells |
+| Cross-linked + test:docs + verify green | DoD | Met | docs/index.md + CI |
+| CHANGELOG entry (article + Pages change) | DoD | Met | CHANGELOG Added section |
 
 ## Docs-grill findings
 
