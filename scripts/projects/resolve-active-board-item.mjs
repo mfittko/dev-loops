@@ -37,11 +37,15 @@ Output (stdout):
 
 ${JQ_OUTPUT_USAGE}
 
-Exit codes:
+Exit codes (default / unfiltered output):
   0 — exactly one in-progress item resolved
   1 — usage or argument error
   2 — GitHub API error / invalid --jq filter
   3 — fail closed: zero or multiple in-progress items (pass an explicit issue/PR)
+
+With --jq/--silent the result is filtered to a value/predicate, so the exit code
+follows the shared jq-output contract (0 = truthy/ok, 1 = falsy/non-ok, 2 =
+invalid filter) — fail closed surfaces as a falsy \`.ok\`, i.e. exit 1, not 3.
 `.trim();
 
 function parseCliArgs(argv) {
@@ -141,7 +145,7 @@ function classifyExitCode(err) {
   return 2;
 }
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, runChild } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);
@@ -155,7 +159,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     return;
   }
   try {
-    const result = await main(args, { env });
+    const result = await main(args, { env, runChild });
     // Fail closed (zero/multiple) is a clean, expected outcome — distinct exit code 3,
     // not a crash; --jq/--silent still apply so callers can probe `.ok`.
     process.exitCode = emitResult(result, {
@@ -181,4 +185,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main, collapseToTarget };
+export { main, collapseToTarget, runCli };
