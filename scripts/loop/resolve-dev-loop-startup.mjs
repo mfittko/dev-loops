@@ -24,27 +24,36 @@ import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
 import { loadDevLoopConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { validatePlanFile } from "../refine/validate-plan-file.mjs";
+import {
+  validateSpikeExplorationSections,
+  SPIKE_FILE_EXIT_MARKER_SECTION,
+} from "../refine/validate-spike-file.mjs";
 import { extractSection } from "../refine/_refine-helpers.mjs";
 import {
   evaluatePlanFileIntakeState,
   PLAN_FILE_REFINEMENT_SECTIONS,
 } from "@dev-loops/core/loop/plan-file-intake-contract";
+import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-contract";
 import { parseArgs } from "node:util";
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
   resolve-dev-loop-startup.mjs --pr <number>
   resolve-dev-loop-startup.mjs --input <path>
   resolve-dev-loop-startup.mjs --plan-file <path>
+  resolve-dev-loop-startup.mjs --spike <path>
 Resolve the authoritative public dev-loop startup/resume bundle.
 Auto-resolves state from GitHub API, git remote, and settings when
 --issue or --pr is used. Use --input for non-standard states.
 Use --plan-file to start local planning from a phase-doc-format plan
 (read-only: no tracker mutation, no issue/PR number).
+Use --spike to start a time-boxed exploratory loop from a local spike
+artifact (read-only: no tracker mutation, no issue/PR number).
 Required (exactly one):
   --issue <n>    Target an issue by number (auto-resolves all state)
   --pr <n>       Target a PR by number (auto-resolves all state)
   --input <path>  Path to a JSON file with canonical-state payload
   --plan-file <path>  Path to a phase-doc-format plan to start locally
+  --spike <path>  Path to a spike artifact to start a spike loop locally
 Exit codes:
   0  Success
   1  Argument error, runtime failure, or async-start contract rejection`.trim();
@@ -113,6 +122,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     issue: undefined,
     pr: undefined,
     planFile: undefined,
+    spike: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -122,6 +132,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       issue: { type: "string" },
       pr: { type: "string" },
       "plan-file": { type: "string" },
+      spike: { type: "string" },
     },
     allowPositionals: true,
     strict: false,
@@ -154,14 +165,18 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       options.planFile = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "spike") {
+      options.spike = requireTokenValue(token, parseError);
+      continue;
+    }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  const modeCount = [options.inputPath, options.issue, options.pr, options.planFile].filter(v => v !== undefined).length;
+  const modeCount = [options.inputPath, options.issue, options.pr, options.planFile, options.spike].filter(v => v !== undefined).length;
   if (modeCount > 1) {
-    throw parseError("--issue, --pr, --input, and --plan-file are mutually exclusive; provide exactly one");
+    throw parseError("--issue, --pr, --input, --plan-file, and --spike are mutually exclusive; provide exactly one");
   }
   if (modeCount === 0) {
-    throw parseError("--input <path>, --issue <n>, --pr <n>, or --plan-file <path> is required");
+    throw parseError("--input <path>, --issue <n>, --pr <n>, --plan-file <path>, or --spike <path> is required");
   }
   return options;
 }
@@ -440,6 +455,62 @@ export function buildPlanFileInput({ planFilePath }) {
     },
   };
 }
+/**
+ * Read + validate a `--spike` path and build a local_phase startup input for a
+ * time-boxed exploratory loop.
+ *
+ * Read-only: no tracker mutation, no GitHub calls, no issue/PR number — a spike
+ * is startable from a local question with no GitHub issue and no production-gate
+ * ceremony at entry. A missing/unreadable file, or one missing the exploration
+ * scaffold (Question/Approach/Findings), throws so the CLI fails closed (exit 1,
+ * no readiness bundle). The Recommendation section is filled in during the spike;
+ * its presence flips the intake state to spike_ready_for_exit (the seam phase 2's
+ * discard/graduate exits consume). The spike path is carried as the target
+ * `phase` and is exempt from the worktree-isolation guard because there is no
+ * issue to key a worktree on.
+ *
+ * @returns {object} startup input with a `spikeIntakeState` field threaded onto output
+ */
+export function buildSpikeInput({ spikeFilePath }) {
+  const resolvedPath = path.resolve(spikeFilePath);
+  let markdownText;
+  try {
+    markdownText = readFileSync(resolvedPath, "utf8");
+  } catch (err) {
+    throw new Error(`Spike file is missing or unreadable: ${resolvedPath} (${err instanceof Error ? err.message : String(err)})`);
+  }
+  // Entry gate: the exploration scaffold must be present and non-empty. A
+  // malformed spike artifact fails closed before any intake classification.
+  const validation = validateSpikeExplorationSections(markdownText);
+  if (!validation.ok) {
+    const codes = validation.errors.map(e => e.code).join(", ");
+    throw new Error(`Spike file failed validation (${resolvedPath}): ${codes}`);
+  }
+  const hasRecommendation = extractSection(markdownText, SPIKE_FILE_EXIT_MARKER_SECTION) ? true : false;
+  const { state: spikeIntakeState } = evaluateSpikeIntakeState({
+    baseSectionsValid: true,
+    hasRecommendation,
+  });
+  return {
+    intent: "start_issue_locally",
+    mode: "bounded_handoff",
+    targetPreference: "prefer_local",
+    artifactState: "not_applicable",
+    issueLinkageResolution: "not_applicable",
+    issueReadiness: "not_applicable",
+    issueAssignmentState: "not_applicable",
+    loopState: "implementation_pending",
+    spikeIntakeState,
+    planFileExempt: true,
+    currentState: {
+      target: { kind: "local_phase", issue: null, pr: null, linkedPr: null, branch: null, phase: resolvedPath },
+      ownership: "local",
+      nextActor: "local",
+      status: "active",
+      authorization: "authorized",
+    },
+  };
+}
 export function summarizeCanonicalState(bundle) {
   return {
     target: bundle.canonicalState?.target ?? null,
@@ -470,7 +541,7 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
   // evaluator does not model. Strip them before evaluation and re-apply them to
   // the result; `planFileExempt` waives the worktree-isolation guard because a
   // pre-promotion plan has no issue to key a worktree on.
-  const { planFileExempt = false, planFileIntakeState = null, ...routingInput } = input;
+  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, ...routingInput } = input;
   input = routingInput;
   try {
     const checkpointText = readFileSync(
@@ -580,6 +651,7 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
     nextAction: bundle.nextAction,
     canonicalStateSummary: summarizeCanonicalState(bundle),
     ...(planFileIntakeState !== null ? { planFileIntakeState } : {}),
+    ...(spikeIntakeState !== null ? { spikeIntakeState } : {}),
     bundle,
   };
 }
@@ -605,7 +677,9 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     ? normalizeConfigInputSource(devLoopConfig?.inputSource?.default)
     : "tracker";
   let input;
-  if (options.planFile !== undefined) {
+  if (options.spike !== undefined) {
+    input = buildSpikeInput({ spikeFilePath: options.spike });
+  } else if (options.planFile !== undefined) {
     input = buildPlanFileInput({ planFilePath: options.planFile });
   } else if (options.inputPath !== undefined) {
     const text = await readFile(path.resolve(options.inputPath), "utf8");
@@ -618,6 +692,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     if (parsed && typeof parsed === "object") {
       delete parsed.planFileExempt;
       delete parsed.planFileIntakeState;
+      delete parsed.spikeIntakeState;
     }
     input = parsed;
   } else if (options.issue !== undefined) {

@@ -233,6 +233,26 @@ export function extractSection(body, headingText) {
   return body.slice(start, end).trim();
 }
 
+/**
+ * Shared base-section checker for the phase-doc-format validators (plan + spike).
+ * For each heading, reports its distinct missing_* code when the section is
+ * absent or has an empty body. Pure; no side effects.
+ *
+ * @param {string} markdownText
+ * @param {string} checker  checker name echoed back in the result
+ * @param {Record<string,string>} sectionCodes  heading → missing_* code (key order = section order)
+ * @returns {{ checker: string, ok: boolean, errors: { code: string, message: string }[] }}
+ */
+export function checkBaseSections(markdownText, checker, sectionCodes) {
+  const errors = [];
+  for (const [heading, code] of Object.entries(sectionCodes)) {
+    if (!extractSection(markdownText, heading)) {
+      errors.push({ code, message: `Missing or empty ## ${heading} section.` });
+    }
+  }
+  return { checker, ok: errors.length === 0, errors };
+}
+
 export function normalizeScopeToken(value) {
   return String(value ?? "")
     .trim()

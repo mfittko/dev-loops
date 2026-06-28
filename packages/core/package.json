@@ -51,6 +51,7 @@
     "./loop/reviewer-loop-state": "./src/loop/reviewer-loop-state.mjs",
     "./loop/run-context": "./src/loop/run-context.mjs",
     "./loop/run-inspection": "./src/loop/run-inspection.mjs",
+    "./loop/spike-intake-contract": "./src/loop/spike-intake-contract.mjs",
     "./loop/steering": "./src/loop/steering.mjs",
     "./loop/timeout-policy": "./src/loop/timeout-policy.mjs",
     "./loop/tracker-pr-state": "./src/loop/tracker-pr-state.mjs",

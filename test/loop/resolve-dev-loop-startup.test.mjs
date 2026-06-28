@@ -36,6 +36,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     issue: undefined,
     pr: undefined,
     planFile: undefined,
+    spike: undefined,
   });
   assert.deepEqual(parseResolveDevLoopStartupCliArgs(["--help"]), {
     help: true,
@@ -43,6 +44,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     issue: undefined,
     pr: undefined,
     planFile: undefined,
+    spike: undefined,
   });
 });
 
@@ -99,6 +101,27 @@ test("parseResolveDevLoopStartupCliArgs rejects --plan-file combined with --pr a
   );
   assert.throws(
     () => parseResolveDevLoopStartupCliArgs(["--plan-file", "p.md", "--input", "s.json"]),
+    /mutually exclusive/i,
+  );
+});
+
+test("parseResolveDevLoopStartupCliArgs parses --spike", () => {
+  const opts = parseResolveDevLoopStartupCliArgs(["--spike", "docs/spikes/foo.md"]);
+  assert.equal(opts.help, false);
+  assert.equal(opts.spike, "docs/spikes/foo.md");
+  assert.equal(opts.issue, undefined);
+  assert.equal(opts.pr, undefined);
+  assert.equal(opts.inputPath, undefined);
+  assert.equal(opts.planFile, undefined);
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --spike combined with --issue or --plan-file", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--spike", "s.md", "--issue", "511"]),
+    /mutually exclusive/i,
+  );
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--spike", "s.md", "--plan-file", "p.md"]),
     /mutually exclusive/i,
   );
 });
