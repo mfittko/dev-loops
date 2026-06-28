@@ -38,7 +38,7 @@ The same entrypoints are also available as direct named commands — thin wrappe
 | --- | --- |
 | `/dev-loops:start <issue>` | start dev loop on issue `<issue>` |
 | `/dev-loops:auto <issue>` | auto dev loop on issue `<issue>` (autonomous until human approval) |
-| `/dev-loops:continue <pr>` | continue dev loop on PR `<pr>` |
+| `/dev-loops:continue [issue\|pr]` | continue dev loop on `<issue\|pr>`; bare resumes the single in-progress board item |
 | `/dev-loops:info <issue|pr>` | read-only state summary (`loop info`) |
 | `/dev-loops:status` | dev-loop readiness (gh auth, git repo, subagent) |
 
@@ -250,7 +250,7 @@ The `/dev-loops` command surface covers the direct dev-loop entrypoints plus rea
 ```bash
 /dev-loops start <issue>     # dispatch: start dev loop on issue <issue>
 /dev-loops auto <issue>      # dispatch: auto dev loop on issue <issue>
-/dev-loops continue <pr>     # dispatch: continue dev loop on PR <pr>
+/dev-loops continue [issue|pr] # dispatch: continue dev loop on <issue|pr>; bare = current in-progress board item
 /dev-loops info <issue|pr>   # read-only state summary
 /dev-loops status
 /dev-loops doctor
