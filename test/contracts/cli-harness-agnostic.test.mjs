@@ -92,14 +92,30 @@ const PI_ADAPTER = path.join("packages", "core", "src", "harness", "pi-adapter.m
 const PI_ADAPTER_TEST = path.join("packages", "core", "test", "harness.test.mjs");
 const CONDUCTOR = path.join("scripts", "loop", "conductor-monitor.mjs");
 const CONDUCTOR_TEST = path.join("test", "loop", "conductor-monitor.test.mjs");
+const RUN_CONTEXT = path.join("packages", "core", "src", "loop", "run-context.mjs");
+const RUN_CONTEXT_TEST = path.join("packages", "core", "test", "run-context.test.mjs");
+const ASYNC_START = path.join("packages", "core", "src", "loop", "async-start-contract.mjs");
+const ASYNC_START_TEST = path.join("packages", "core", "test", "async-start-contract.test.mjs");
+const RUN_CONTEXT_GENERATED = path.join(".claude", "hooks", "_run-context.mjs");
 
 /**
- * `PI_*` vars the Pi runtime injects, mapped to the adapter-boundary files
- * allowed to read them. dev-loops does not own/define these; renaming them
- * would break Pi integration since the Pi runtime sets the `PI_*` names. A read
- * outside the listed files couples core to a specific harness and is rejected.
+ * `PI_*` vars the Pi runtime injects, mapped to the files allowed to read them.
+ * dev-loops does not own/define these; renaming them would break Pi integration
+ * since the Pi runtime sets the `PI_*` names. Most are confined to the
+ * harness-adapter boundary; the one exception is the run-id marker
+ * `PI_SUBAGENT_RUN_ID`, honored as an externally-injected alias inside the core
+ * run-context / async-start contract modules (see per-entry note below). A read
+ * outside a var's listed files couples core to a specific harness and is rejected.
  */
 const HARNESS_RUNTIME_ENV = new Map([
+  // PI_SUBAGENT_RUN_ID is the run-id marker the Pi runtime injects into async-subagent
+  // child envs (#1008): the only async-context marker present under Pi. dev-loops reads it
+  // as an externally-injected alias of the neutral DEVLOOPS_RUN_ID (it does not own/mint it),
+  // so it is honored in the run-context/async-start contract modules + their tests.
+  [
+    "PI_SUBAGENT_RUN_ID",
+    [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED],
+  ],
   ["PI_SESSION", [PI_ADAPTER, PI_ADAPTER_TEST]], // inside-Pi detection
   ["PI_INTERACTIVE", [PI_ADAPTER, PI_ADAPTER_TEST]], // interactivity override
   ["PI_AGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi session dir
