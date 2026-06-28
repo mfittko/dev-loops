@@ -380,8 +380,8 @@ const BASE_SPIKE = [
   "",
 ].join("\n");
 
-// A spike whose Recommendation section is present but empty: a valid artifact
-// that is still in progress (no recommendation reached yet).
+// A spike carrying the exploration scaffold (Question/Approach/Findings) with no
+// Recommendation section yet: a valid artifact that is still in progress.
 const SPIKE_IN_PROGRESS = [
   "# my spike",
   "",

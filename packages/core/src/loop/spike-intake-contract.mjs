@@ -34,8 +34,8 @@ export const SPIKE_INTAKE_STATE = Object.freeze({
  * Pure intake-state classifier.
  *
  * @param {object} facts
- * @param {boolean} facts.baseSectionsValid  whether the spike passes the base-section validator (Question/Approach/Findings/Recommendation present and non-empty)
- * @param {boolean} facts.hasRecommendation  whether a non-empty Recommendation section is present
+ * @param {boolean} facts.baseSectionsValid  whether the spike's exploration scaffold (Question/Approach/Findings) is present and non-empty. Recommendation is NOT part of this fact — it is the separate exit-marker carried by `hasRecommendation`, so that a scaffold-valid spike without a Recommendation classifies as in-progress rather than failing closed.
+ * @param {boolean} facts.hasRecommendation  whether a non-empty Recommendation section is present (the exit-marker that flips in-progress → ready-for-exit)
  * @returns {{ state: string }} one of SPIKE_INTAKE_STATE values
  */
 export function evaluateSpikeIntakeState({ baseSectionsValid, hasRecommendation } = {}) {
