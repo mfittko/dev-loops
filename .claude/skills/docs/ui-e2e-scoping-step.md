@@ -59,8 +59,10 @@ onto each other — editing the article never counts as deck coverage and vice v
 
 The deterministic membership list the gate checks against lives in
 `packages/core/src/loop/ui-e2e-scoping.mjs` (`REGISTERED_ARTIFACT_PATHS`, keyed by
-full repo-relative path; `VIEWER_ARTIFACT_ID`); a sync test keeps it from drifting
-from `DECK_REGISTRY` + `ARTICLE_REGISTRY`.
+full repo-relative path; `VIEWER_ARTIFACT_ID`). A sync test keeps
+`REGISTERED_ARTIFACT_PATHS` from drifting from `DECK_REGISTRY` + `ARTICLE_REGISTRY`;
+the single-valued `VIEWER_ARTIFACT_ID` is not import-checked against `VIEWER_REGISTRY`
+(that harness pulls `@playwright/test` into core), so keep the two in sync by hand.
 
 ## Fail-closed semantics
 

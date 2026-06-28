@@ -31,7 +31,7 @@ export const VIEWER_SOURCE_PATHS = Object.freeze([
 // other. Mirrors the registries' actual on-disk locations:
 //   decks   → DECK_REGISTRY served from docs/presentations/<deck>
 //   articles→ ARTICLE_REGISTRY served from docs/articles/<file>
-// ponytail: kept as an explicit list here rather than importing the harness
+// Note: kept as an explicit list here rather than importing the harness
 // (which pulls @playwright/test into core); the ui-e2e-scoping.test.mjs sync
 // test fails if a registry entry is added without updating this list, so it
 // can't silently drift.
@@ -45,7 +45,7 @@ export const REGISTERED_ARTIFACT_PATHS = Object.freeze([
 export const VIEWER_ARTIFACT_ID = "inspect-run-viewer";
 
 // CI check names that constitute the shared UI e2e coverage. The detect layer
-// reads these from the statusCheckRollup to set uiE2ePassed. ponytail: a plain
+// reads these from the statusCheckRollup to set uiE2ePassed. Note: a plain
 // name match against the rollup is enough; the gate only needs to know whether
 // the suite passed for this head. Each rendered-artifact family has a stable CI
 // job whose name appears here; an absent check is unknown → fails closed.
