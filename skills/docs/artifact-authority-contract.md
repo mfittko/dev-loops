@@ -29,7 +29,7 @@ Key contract:
 
 ### Local-planning
 
-**Persisted markdown plan files are the authoritative artifact store.** Work originates from a local markdown plan file in the repo working tree, and no GitHub issue is required. The plan file is authored, refined, and reviewed locally; it is committed during promotion (the helper sequence commits it as part of opening the PR), not before. GitHub PRs carry review and merge while the plan file stays the canonical spec.
+**Persisted markdown plan files are the authoritative artifact store.** Work originates from a local markdown plan file in the repo working tree, and no GitHub issue is required. The plan file stays uncommitted through authoring, refinement, and local review; promotion is the step that commits it (the helper sequence commits it as part of opening the PR). GitHub PRs carry review and merge while the plan file stays the canonical spec.
 
 Artifacts:
 - **Planning artifact:** Persisted markdown plan file (e.g., `docs/phases/phase-<n>.md`); its format and required base sections are defined in the [Plan-file Contract](plan-file-contract.md)
