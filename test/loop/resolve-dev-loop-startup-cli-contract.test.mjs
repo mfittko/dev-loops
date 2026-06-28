@@ -67,6 +67,7 @@ test("resolve-dev-loop-startup help documents accepted flags and JSON contracts"
   assert.match(result.stdout, /--pr <n>\s+Target a PR/);
   assert.match(result.stdout, /--input <path>\s+Path to a JSON file/);
   assert.match(result.stdout, /--plan-file <path>\s+Path to a phase-doc-format plan/);
+  assert.match(result.stdout, /--spike <path>\s+Path to a spike artifact/);
   assert.match(result.stdout, /Exit codes:\n  0  Success\n  1  Argument error, runtime failure, or async-start contract rejection/);
 });
 
@@ -280,6 +281,7 @@ test("--input cannot inject planFileExempt to bypass the worktree-isolation guar
   await withInputFile({
     planFileExempt: true,
     planFileIntakeState: "plan_refined_ready_for_promotion",
+    spikeIntakeState: "spike_ready_for_exit",
     currentState: {
       target: { kind: "local_branch", branch: "feature/inject" },
       ownership: "local",
@@ -301,6 +303,9 @@ test("--input cannot inject planFileExempt to bypass the worktree-isolation guar
     assert.notEqual(parsed.bundleKind, "resolved");
     assert.match(parsed.nextAction || "", /worktree/i);
     assert.equal(parsed.planFileIntakeState, undefined);
+    // The spike intake field is a resolver-only output too: untrusted --input
+    // must not be able to inject it.
+    assert.equal(parsed.spikeIntakeState, undefined);
   });
 });
 
