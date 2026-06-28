@@ -1,10 +1,17 @@
 # Local Playwright/WebKit smoke harness for UI slices
 
-This document defines the minimal reusable local smoke harness/template introduced for issue #124 under umbrella issue #97.
+This document defines the minimal reusable local WebKit config/server/capture seam
+introduced for issue #124 under umbrella issue #97. It is the **lower layer**
+the shared UI-e2e harness builds on: `test/playwright/harness/deck-fit-harness.mjs`
+and `test/playwright/harness/inspect-run-viewer-harness.mjs` import this module's
+config, fixture-server, and named-state capture helpers.
+
+When UI e2e coverage is **required** is no longer an opt-in convention — it is
+path-triggered and fail-closed (see
+[UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)). This document covers
+the reusable WebKit/config/capture mechanics those required suites reuse.
 
 ## Purpose
-
-Use this harness when a `dev-loop` slice is explicitly opting into deterministic UI smoke validation for a user-facing HTML/UI/component surface.
 
 The harness is intentionally small:
 - Playwright
@@ -18,9 +25,13 @@ It is not a general E2E framework and it does not make browser validation mandat
 ## Reusable baseline
 
 The reusable baseline lives in:
-- `test/playwright/harness/webkit-smoke-harness.mjs`
-- `playwright.inspect-run-viewer.config.mjs` as the proving reference adoption
-- `test/playwright/inspect-run-viewer.spec.mjs` as the bounded fixture-backed example
+- `test/playwright/harness/webkit-smoke-harness.mjs` (this module)
+- the deck/article/viewer Playwright configs — e.g. `playwright.intro-deck.config.mjs`,
+  `playwright.intro-article.config.mjs`, `playwright.inspect-run-viewer.config.mjs` —
+  each a thin `createWebkitSmokeConfig(...)` adoption
+- the shared suites that consume it: `test/playwright/harness/deck-fit-harness.mjs`
+  (`defineDeckSuite`/`defineArticleSuite`) and
+  `test/playwright/harness/inspect-run-viewer-harness.mjs`
 
 The harness exposes three main seams:
 - `createWebkitSmokeConfig(...)` — create the minimal WebKit-only Playwright config with deterministic output/report locations
@@ -29,7 +40,11 @@ The harness exposes three main seams:
 
 ## Adoption path
 
-A new UI slice should:
+For a **rendered artifact** (deck, article, or the viewer) registration is the
+path — add a registry entry plus a thin spec calling `defineDeckSuite` /
+`defineArticleSuite`; the config is created via `createWebkitSmokeConfig(...)`
+(see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)). For a bespoke
+local UI surface that uses this WebKit seam directly:
 
 1. add a small fixture-backed Playwright spec under `test/playwright/`
 2. create a thin config via `createWebkitSmokeConfig({ sliceId, testMatch })`
@@ -64,12 +79,15 @@ The example intentionally covers a small explicit set of viewer states rather th
 
 ## Limitations and non-goals
 
-This harness does not attempt to provide:
+This harness (the WebKit seam) does not attempt to provide:
 - multi-browser coverage
 - generalized E2E orchestration
 - large fixture catalogs
 - visual-diff baseline management
-- mandatory CI enforcement for every UI slice
 - a second public workflow entrypoint beside `dev-loop`
 
-CI promotion policy is now defined in [UI Artifact Contract](ui-artifact-contract.md): keep the local harness honest first, then promote only the bounded UI slices whose settled contract warrants CI enforcement.
+CI enforcement for the shared rendered-artifact suites is **required and
+auto-scoped**, not promoted per slice — see
+[UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md). The named-state
+artifact shape these suites emit is documented in
+[UI Artifact Contract](./ui-artifact-contract.md).
