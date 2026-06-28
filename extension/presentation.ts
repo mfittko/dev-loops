@@ -53,6 +53,7 @@ export function buildHelpLines(): string[] {
     '- /dev-loops start <issue>',
     '- /dev-loops auto <issue>',
     '- /dev-loops continue [issue|pr]',
+    '- /dev-loops start-spike <question>',
     '- /dev-loops info <issue|pr>',
     'Commands:',
     '- /dev-loops status',
