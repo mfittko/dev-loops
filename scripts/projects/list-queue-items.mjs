@@ -2,6 +2,7 @@
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: dev-loops queue list --repo <owner/name> --project <number|id> [--column <name>] [--limit <n>]
        (dev-loops project list … is a back-compat alias)
@@ -19,10 +20,12 @@ Options:
 Output (stdout):
   JSON: { ok: true, items: [{ issueNumber, prNumber, title, url, itemId, contentId, status }, ...] }
 
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0 — success
   1 — usage or argument error
-  2 — GitHub API error
+  2 — GitHub API error / invalid --jq filter
   3 — project, field, or column not found
 `.trim();
 
@@ -45,6 +48,7 @@ function parseCliArgs(argv) {
       column: { type: "string" },
       limit: { type: "string" },
       help: { type: "boolean", short: "h" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -83,6 +87,12 @@ function parseCliArgs(argv) {
         args.limit = val;
         break;
       }
+      case "jq":
+        args.jq = requireValue(token, "--jq requires a filter");
+        break;
+      case "silent":
+        args.silent = true;
+        break;
       default:
         throw parseError(`Unknown flag: ${token.rawName}`);
     }
@@ -474,7 +484,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
   }
   try {
     const result = await main(args, { env });
-    stdout.write(JSON.stringify(result) + "\n");
+    process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
   } catch (err) {
     stderr.write(JSON.stringify({ ok: false, error: err.message, code: err.code ?? "UNKNOWN" }) + "\n");
     process.exitCode = classifyExitCode(err);

@@ -17,6 +17,7 @@ import {
   enforceExternalHealthyWaitTimeout,
 } from "@dev-loops/core/loop/timeout-policy";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_REVIEW_WAIT_TIMEOUT_MS,
@@ -69,9 +70,11 @@ Error output (stderr, JSON):
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
     { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or gh failure`.trim();
+  1  Argument error or gh failure
+  2  Invalid --jq filter`.trim();
 const WATCH_STATES = new Set([
   STATE.WAITING_FOR_COPILOT_REVIEW,
 ]);
@@ -134,6 +137,8 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
     repo: undefined,
     pr: undefined,
     watchStatus: undefined,
+    jq: undefined,
+    silent: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -142,6 +147,7 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
       repo: { type: "string" },
       pr: { type: "string" },
       "watch-status": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -175,6 +181,14 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
         throw parseError(`--watch-status must be one of: ${[...VALID_WATCH_STATUSES].join(", ")}`);
       }
       options.watchStatus = watchStatus;
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -519,10 +533,14 @@ export async function runCli(
     return;
   }
   const result = await runHandoff(options, { env, ghCommand });
-  stdout.write(`${JSON.stringify(result)}\n`);
+  return emitResult(result, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
-  runCli().catch((error) => {
+  runCli().then((code) => {
+    if (typeof code === "number") {
+      process.exitCode = code;
+    }
+  }).catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   });

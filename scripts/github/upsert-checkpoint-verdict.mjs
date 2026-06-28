@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { truncateText } from "@dev-loops/core/bash-exit-one";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -105,9 +106,11 @@ exists on a different head SHA (the old comment is stale for the current head).
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error, gh failure, or contradictory gate evidence`.trim();
+  1  Argument error, gh failure, or contradictory gate evidence
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 function rejectRemovedFlag(token) {
   throw parseError(
@@ -258,6 +261,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "findings-severity-counts": { type: "string" },
       "execution-mode": { type: "string" },
       "inline-reason": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -277,6 +281,8 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     findingsSeverityCounts: undefined,
     executionMode: undefined,
     inlineReason: undefined,
+    jq: undefined,
+    silent: false,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -383,6 +389,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
         throw parseError("--inline-reason must be a non-empty string");
       }
       options.inlineReason = smartTruncate(reason, MAX_GATE_COMMENT_EXCERPT_LENGTH);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -1289,7 +1303,7 @@ async function main() {
     if (inlineWarning) {
       process.stderr.write(`${inlineWarning}\n`);
     }
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
     process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
     process.exitCode = 1;

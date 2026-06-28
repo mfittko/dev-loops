@@ -104,6 +104,16 @@ Info/handoff requests can be served directly via `npx dev-loops@0.4.0 loop info`
 - `npx dev-loops@0.4.0 loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
 - `npx dev-loops@0.4.0 loop info --issue <n> --json` — machine-readable JSON output
 
+## Reading tool output (token-economical convention)
+
+When you need a fact from a dev-loops JSON-emitting script, climb this ladder and stop at the first rung that answers the question — never read more output than you need:
+
+1. **Prefer the dev-loops subcommand / concise mode.** Use `loop info` or a script's `--concise`/`--summary` mode (e.g. `run-watch-cycle.mjs --concise`, `probe-copilot-review.mjs --concise`) for a human-readable digest. The concise modes surface loop state, Copilot round count, unresolved/actionable thread counts, round-cap-clean eligibility, CI status, next action, and the current round's new Copilot comment bodies.
+2. **`--silent` / `-s` for a yes/no check.** Reads ZERO output: `… --jq '<predicate>' --silent; echo $?` exits `0` for true / `1` for false. Without `--jq`, `--silent` maps the script's success (`ok:true`) to exit `0`, failure to `1`. Example: `probe-ci-status.mjs --repo o/r --pr N --jq '.ciStatus=="success"' -s`.
+3. **`--jq <filter>` to extract a single field.** Every JSON-emitting read/action script accepts a gh-style `--jq` filter (jq subset: field access, `.[]`/`.[N]`, `|`, `select(...)`, `==`/`!=`/`<`/`<=`/`>`/`>=`, `length`, `keys`). It prints only the filtered value. An invalid filter fails closed (stderr + exit `2`), distinct from a clean predicate-false (silent exit `1`).
+4. **`gh … --jq` on a raw `gh` call** when no dev-loops script covers it.
+5. **NEVER `| python3` or `node -e`** to parse tool JSON. If a field you need is missing from a script's output, add it to the script (or its concise mode), not an inline parser.
+
 ## Guard rules
 
 **Handoff envelope precedence:** The dev-loop builds the envelope immediately after authoritative-state resolution and treats it as the first handoff artifact. Read it first, load only `requiredReads`, execute `nextAction`. See [Resolve authoritative state](#resolve-authoritative-state). Derivation contract: [Workflow Handoff Contract](../docs/workflow-handoff-contract.md).
@@ -114,7 +124,7 @@ Info/handoff requests can be served directly via `npx dev-loops@0.4.0 loop info`
 
 **Bounded async task contract:** Break work into discrete tasks with clear inputs, explicit outputs, bounded scope. No shell polling — use `run-watch-cycle.mjs` or `gh run watch`.
 
-**Round-cap budget check (enforced):** After every watch cycle, fix pass, or reply-resolve, check whether completed Copilot review rounds have reached the maximum (default: 5). Stop re-requesting Copilot review when the limit is reached — never re-request after the cap.
+**Round-cap budget check (enforced):** After every watch cycle, fix pass, or reply-resolve, check whether completed Copilot review rounds have reached the maximum (default: 5). Stop re-requesting Copilot review when the limit is reached — never re-request after the cap. Read these gate-cadence facts via the token-economical convention above (`run-watch-cycle.mjs --concise`, or `--jq`/`--silent` for a single field/predicate) — never `| python3` or `node -e`.
 
 ## Shorthand issue-based auto trigger contract
 
