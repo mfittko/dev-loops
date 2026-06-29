@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
 <title>dev-loops: A Deep Dive</title>
 <style>
   :root {
@@ -641,23 +641,29 @@
 <script>
 (function () {
   const slides = Array.from(document.querySelectorAll('.slide'));
+  const indexMap = new Map(slides.map((s, i) => [s, i]));
   let cur = 0;
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   const observer = new IntersectionObserver(entries => {
     entries.forEach(e => {
       if (e.isIntersecting && e.intersectionRatio >= 0.5)
-        cur = slides.indexOf(e.target);
+        cur = indexMap.get(e.target) ?? cur;
     });
   }, { threshold: 0.5 });
   slides.forEach(s => observer.observe(s));
 
   document.addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const tag = document.activeElement ? document.activeElement.tagName : '';
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.activeElement.isContentEditable) return;
+    const behavior = reducedMotion.matches ? 'instant' : 'smooth';
     if (['ArrowDown', 'ArrowRight', 'PageDown', ' '].includes(e.key)) {
       e.preventDefault();
-      if (cur < slides.length - 1) slides[++cur].scrollIntoView({ behavior: 'smooth' });
+      if (cur < slides.length - 1) slides[++cur].scrollIntoView({ behavior });
     } else if (['ArrowUp', 'ArrowLeft', 'PageUp'].includes(e.key)) {
       e.preventDefault();
-      if (cur > 0) slides[--cur].scrollIntoView({ behavior: 'smooth' });
+      if (cur > 0) slides[--cur].scrollIntoView({ behavior });
     }
   });
 })();
