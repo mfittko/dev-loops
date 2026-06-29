@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **`release.yml` auto-Release never ran — the CHANGELOG extractor pulled in `@dev-loops/core` (#1016, regression in #996's first run).** `scripts/release/extract-changelog-section.mjs` imported `isDirectCliRun` from `scripts/_core-helpers.mjs`, which re-exports from the `@dev-loops/core` workspace package. `release.yml` runs the extractor with **no `npm ci`** (a text parser needs no install), so on a `v*` tag push the import `ERR_MODULE_NOT_FOUND`ed before any notes were extracted and the GitHub Release was never created (the same hands-off-publish gap #996 set out to close). The extractor now imports **only `node:` builtins** — `isDirectCliRun` is inlined (`node:fs` `realpathSync` + `node:url` `fileURLToPath`), all behavior unchanged (`--version`/`--changelog`, leading-`v` strip, heading lookahead so `0.5.1` ≠ `0.5.10`, stop-at-next-`## `, no Unreleased bleed, exit 1 absent/empty, exit 2 arg/file error, the `extractChangelogSection()` export). A new guard test parses the script's `import` statements and asserts every specifier is `node:`-prefixed, so a future workspace import can't silently reintroduce the deps-free break. `release.yml` is unchanged — the standalone script is the fix.
+
 ## 0.6.0 - 2026-06-29
 
 ### Added
