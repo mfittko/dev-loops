@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- **Docs: refresh intro article + deck to the 0.6.0 command surface (#1015).** `/dev-loops:continue` now shows both forms — `continue 112` (issue or PR) and bare `continue` (resumes the single in-progress board item, fail-closed on 0/multiple). Adds `/dev-loops:start-spike "…"` to the command list in both the intro article (`docs/articles/introducing-dev-loops.{md,html}`) and the intro deck (`docs/presentations/introducing-dev-loops.html`). The Pi command set in the catch-all router note now lists `start-spike`. No content beyond the command-surface entries was changed.
+- **Docs: refresh intro article + deck to the 0.6.0 command surface (#1015).** `/dev-loops:continue` now shows both forms — `/dev-loops:continue 112` (issue or PR) and bare `/dev-loops:continue` (resumes the single in-progress board item, fail-closed on 0/multiple). Adds `/dev-loops:start-spike "…"` to the command list in both the intro article (`docs/articles/introducing-dev-loops.{md,html}`) and the intro deck (`docs/presentations/introducing-dev-loops.html`). The Pi command set in the catch-all router note now lists `start-spike`. No content beyond the command-surface entries was changed.
 
 ### Fixed
 
