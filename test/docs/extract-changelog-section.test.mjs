@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -119,4 +120,20 @@ test("CLI exits 2 when a flag is missing its value", () => {
   );
   assert.equal(result.status, 2);
   assert.match(result.stderr, /--changelog requires a value/);
+});
+
+test("imports only node: builtins (must run dependency-free in release.yml — #1016)", async () => {
+  // release.yml runs this script with no `npm ci`, so any workspace/3rd-party
+  // import (e.g. @dev-loops/core via _core-helpers.mjs) ERR_MODULE_NOT_FOUNDs
+  // and the GitHub Release is never created. Guard against reintroduction.
+  const source = await readFile(scriptPath, "utf8");
+  const importRe = /^\s*import\b[^"']*["']([^"']+)["']/gm;
+  const specifiers = [...source.matchAll(importRe)].map((m) => m[1]);
+  assert.notEqual(specifiers.length, 0, "expected at least one import");
+  for (const spec of specifiers) {
+    assert.ok(
+      spec.startsWith("node:"),
+      `non-node: import "${spec}" would break the deps-free release.yml runner`,
+    );
+  }
 });
