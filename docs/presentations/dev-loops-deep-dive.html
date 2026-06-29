@@ -657,7 +657,7 @@
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     const tag = document.activeElement ? document.activeElement.tagName : '';
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.activeElement.isContentEditable) return;
-    const behavior = reducedMotion.matches ? 'instant' : 'smooth';
+    const behavior = reducedMotion.matches ? 'auto' : 'smooth';
     if (['ArrowDown', 'ArrowRight', 'PageDown', ' '].includes(e.key)) {
       e.preventDefault();
       if (cur < slides.length - 1) slides[++cur].scrollIntoView({ behavior });
