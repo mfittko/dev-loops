@@ -69,7 +69,7 @@ pi install npm:dev-loops
 ```text
 /dev-loops:start 112      # begin work from a tracked issue
 /dev-loops:auto 112       # run autonomously up to the human-merge checkpoint
-/dev-loops:continue 112   # issue or PR — pick up an in-progress artifact
+/dev-loops:continue 112   # issue or PR — continue work on that artifact
 /dev-loops:continue       # bare: resumes the single in-progress board item
 /dev-loops:start-spike "why does checkout stall?"  # time-boxed exploration
 /dev-loops:info 112       # read-only state summary for an issue or PR
