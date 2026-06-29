@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Docs: refresh intro article + deck to the 0.6.0 command surface + current velocity snapshot (#1015).** `/dev-loops:continue` now shows both forms — `/dev-loops:continue 112` (issue or PR) and bare `/dev-loops:continue` (resumes the single in-progress board item, fail-closed on 0/multiple). Adds `/dev-loops:start-spike "…"` to the command list in both the intro article (`docs/articles/introducing-dev-loops.{md,html}`) and the intro deck (`docs/presentations/introducing-dev-loops.html`). The Pi command set in the catch-all router note now lists `start-spike`. The velocity snapshot paragraph is updated from the previous "two-week, ~100 PR" estimate to a verified four-day snapshot (87 PRs, ~22/day, v0.4.0 + v0.5.0).
+
 ### Fixed
 
 - **`release.yml` auto-Release never ran — the CHANGELOG extractor pulled in `@dev-loops/core` (#1016, regression in #996's first run).** `scripts/release/extract-changelog-section.mjs` imported `isDirectCliRun` from `scripts/_core-helpers.mjs`, which re-exports from the `@dev-loops/core` workspace package. `release.yml` runs the extractor with **no `npm ci`** (a text parser needs no install), so on a `v*` tag push the import `ERR_MODULE_NOT_FOUND`ed before any notes were extracted and the GitHub Release was never created (the same hands-off-publish gap #996 set out to close). The extractor now imports **only `node:` builtins** — `isDirectCliRun` is inlined (`node:fs` `realpathSync` + `node:url` `fileURLToPath`), all behavior unchanged (`--version`/`--changelog`, leading-`v` strip, heading lookahead so `0.5.1` ≠ `0.5.10`, stop-at-next-`## `, no Unreleased bleed, exit 1 absent/empty, exit 2 arg/file error, the `extractChangelogSection()` export). A new guard test parses the script's `import` statements and asserts every specifier is `node:`-prefixed, so a future workspace import can't silently reintroduce the deps-free break. `release.yml` is unchanged — the standalone script is the fix.

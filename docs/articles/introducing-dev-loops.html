@@ -201,7 +201,7 @@
     <div class="metric" role="listitem"><div class="num">every one</div><div class="lab">merged by a person</div></div>
   </div>
 
-  <p>That is what the project's own history shows. In a recent two-week stretch the repository merged about 100 pull requests &mdash; roughly seven a day &mdash; each one drafted, reviewed, gated on green tests, and merged by a person, with about seven in eight tied to a tracked item so the trail from intent to merge stayed legible. The cadence held as the change count rose because the extra work landed as machine transitions, with the human's part staying that one bounded decision at the merge.</p>
+  <p>That is what the project's own history shows. In a recent four-day stretch the repository merged 87 pull requests &mdash; roughly 22 a day &mdash; closing 36 tracked issues and shipping two full releases (v0.4.0 and v0.5.0 to npm), each one drafted, reviewed, gated on green tests, and merged by a person. Every PR ran the full gate: a fan-out draft review, at least one Copilot round, a pre-approval gate on the current head, then a squash-merge. The cadence held because the extra work landed as machine transitions, with the human's part staying that one bounded decision at the merge.</p>
 
   <p>And it stays honest at that speed. The review step keeps catching what slips past a tired reviewer in a hurry: a layout that broke on small screens, documentation that had drifted from the code, a review cycle that had quietly deadlocked. The loop earns its keep at the moment a change is about to land, which is where unattended automation is usually weakest &mdash; so the cadence is fast and the merges are still ones a person stands behind.</p>
 
@@ -227,10 +227,12 @@
   <p><strong>Run a loop.</strong> Reach the same entrypoints through direct named commands; you never pick internal modes:</p>
   <pre><code>/dev-loops:start 112      <span class="cm"># begin work from a tracked issue</span>
 /dev-loops:auto 112       <span class="cm"># run autonomously up to the human-merge checkpoint</span>
-/dev-loops:continue 88    <span class="cm"># pick up an open pull request (PR number)</span>
+/dev-loops:continue 112   <span class="cm"># issue or PR — continue work on that artifact</span>
+/dev-loops:continue       <span class="cm"># bare: resumes the single in-progress board item (fail-closed on 0 or multiple)</span>
+/dev-loops:start-spike "why does checkout stall?"  <span class="cm"># time-boxed exploration</span>
 /dev-loops:info 112       <span class="cm"># read-only state summary for an issue or PR</span>
 /dev-loops:status         <span class="cm"># check readiness: gh auth, git repo, subagent</span></code></pre>
-  <p><code>/dev-loops:dev-loop</code> stays the catch-all router for plain-language intent (<code>start dev loop on issue 112</code>, <code>continue dev loop on PR 88</code>). It resolves authoritative state and routes deterministically, so the named commands above are thin shortcuts over the same contract. Inside Pi the set is reachable as <code>/dev-loops start|auto|continue|info|status …</code>.</p>
+  <p><code>/dev-loops:dev-loop</code> stays the catch-all router for plain-language intent (<code>start dev loop on issue 112</code>, <code>continue dev loop on PR 88</code>). It resolves authoritative state and routes deterministically, so the named commands above are thin shortcuts over the same contract. Inside Pi the set is reachable as <code>/dev-loops start|auto|continue|start-spike|info|status …</code>.</p>
 
   <p><strong>Tune the posture (optional).</strong> A <code>.devloops</code> file at the repo root controls how work arrives and how strict the loop is. The shipped defaults are a low-noise starting point; loosen from there.</p>
   <pre><code># .devloops

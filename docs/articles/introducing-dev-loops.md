@@ -35,7 +35,7 @@ Coordination is the cost that grows. Every change carries a handful of transitio
 
 dev-loops breaks the compounding by making each transition a decision the system takes and records. Every change follows the same path — draft, review, green-CI gate, human merge — so there is no bespoke ceremony to design and no question about what happens next. A person is pulled in only where one is genuinely needed: the merge, and anything the loop flags as ambiguous. What is left for the human is roughly one bounded decision per change; the transitions in between are the loop's to run and to log.
 
-That is what the project's own history shows. In a recent two-week stretch the repository merged about 100 pull requests — roughly seven a day — each one drafted, reviewed, gated on green tests, and merged by a person, with about seven in eight tied to a tracked item so the trail from intent to merge stayed legible. The cadence held as the change count rose because the extra work landed as machine transitions, with the human's part staying that one bounded decision at the merge.
+That is what the project's own history shows. In a recent four-day stretch the repository merged 87 pull requests — roughly 22 a day — closing 36 tracked issues and shipping two full releases (v0.4.0 and v0.5.0 to npm), each one drafted, reviewed, gated on green tests, and merged by a person. Every PR ran the full gate: a fan-out draft review, at least one Copilot round, a pre-approval gate on the current head, then a squash-merge. The cadence held because the extra work landed as machine transitions, with the human's part staying that one bounded decision at the merge.
 
 And it stays honest at that speed. The review step keeps catching what slips past a tired reviewer in a hurry: a layout that broke on small screens, documentation that had drifted from the code, a review cycle that had quietly deadlocked. The loop earns its keep at the moment a change is about to land, which is where unattended automation is usually weakest — so the cadence is fast and the merges are still ones a person stands behind.
 
@@ -69,12 +69,14 @@ pi install npm:dev-loops
 ```text
 /dev-loops:start 112      # begin work from a tracked issue
 /dev-loops:auto 112       # run autonomously up to the human-merge checkpoint
-/dev-loops:continue 88    # pick up an open pull request (PR number)
+/dev-loops:continue 112   # issue or PR — continue work on that artifact
+/dev-loops:continue       # bare: resumes the single in-progress board item (fail-closed on 0 or multiple)
+/dev-loops:start-spike "why does checkout stall?"  # time-boxed exploration
 /dev-loops:info 112       # read-only state summary for an issue or PR
 /dev-loops:status         # check readiness: gh auth, git repo, subagent
 ```
 
-`/dev-loops:dev-loop` stays the catch-all router for plain-language intent (`start dev loop on issue 112`, `continue dev loop on PR 88`). It resolves authoritative state and routes deterministically, so the named commands above are thin shortcuts over the same contract. Inside Pi the set is reachable as `/dev-loops start|auto|continue|info|status …`.
+`/dev-loops:dev-loop` stays the catch-all router for plain-language intent (`start dev loop on issue 112`, `continue dev loop on PR 88`). It resolves authoritative state and routes deterministically, so the named commands above are thin shortcuts over the same contract. Inside Pi the set is reachable as `/dev-loops start|auto|continue|start-spike|info|status …`.
 
 **Tune the posture (optional).** A `.devloops` file at the repo root controls how work arrives and how strict the loop is. The shipped defaults are a low-noise starting point; loosen from there.
 
