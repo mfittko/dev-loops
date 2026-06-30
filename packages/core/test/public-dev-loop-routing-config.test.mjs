@@ -44,15 +44,14 @@ async function loadRoutingModuleForRepo(repoRoot) {
   }
 }
 
-test("built-in default is always github-first regardless of repo config", async () => {
+test("built-in default is local-first and routes to local_implementation", async () => {
   await withTempRepo(async (repoRoot) => {
-    await writeDefaultsConfig(repoRoot, { version: 1, strategy: { default: "local-first" } });
     const { routing } = await loadRoutingModuleForRepo(repoRoot);
     const result = routing.evaluatePublicDevLoopRouting({
       intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE,
       target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 },
     });
-    assert.equal(result.selectedStrategy, "issue_intake");
+    assert.equal(result.selectedStrategy, "local_implementation");
   });
 });
 

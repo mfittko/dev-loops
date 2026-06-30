@@ -347,8 +347,8 @@ describe("BUILT_IN_DEFAULTS", () => {
     assert.equal(BUILT_IN_DEFAULTS.version, 1);
   });
 
-  test("strategy.default is github-first", () => {
-    assert.equal(BUILT_IN_DEFAULTS.strategy.default, "github-first");
+  test("strategy.default is local-first", () => {
+    assert.equal(BUILT_IN_DEFAULTS.strategy.default, "local-first");
   });
 
   test("inputSource.default is tracker", () => {

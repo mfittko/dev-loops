@@ -16,6 +16,7 @@ import {
   DEV_LOOP_ROUTE_KIND,
   DEV_LOOP_STATUS,
   DEV_LOOP_TARGET_KIND,
+  DEV_LOOP_TARGET_PREFERENCE,
   INTERNAL_DEV_LOOP_STRATEGY,
   evaluatePublicDevLoopRouting,
 } from "../src/loop/public-dev-loop-routing.mjs";
@@ -74,6 +75,7 @@ test("isQualifyingAsyncCompletion: routed GitHub-first copilot_pr_followup compl
       status: DEV_LOOP_STATUS.ACTIVE,
       authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
@@ -90,6 +92,7 @@ test("isQualifyingAsyncCompletion: routed GitHub-first issue_intake completion q
   const result = evaluatePublicDevLoopRouting({
     intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE,
     target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 112 },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.ISSUE_INTAKE);
@@ -120,6 +123,7 @@ test("isQualifyingAsyncCompletion: wait/watch route does not qualify (not a comp
       status: DEV_LOOP_STATUS.WAITING,
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.WAIT);
@@ -152,6 +156,7 @@ test("isQualifyingAsyncCompletion: stop result does not qualify", () => {
       status: DEV_LOOP_STATUS.BLOCKED,
       authorization: DEV_LOOP_AUTHORIZATION.NOT_AUTHORIZED,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.STOP);
@@ -192,6 +197,7 @@ function makeCopilotPrFollowupResult() {
       status: DEV_LOOP_STATUS.ACTIVE,
       authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 }
 
@@ -258,6 +264,7 @@ test("evaluateRetrospectiveGate: MISSING checkpoint blocks an issue_intake start
   const proposed = evaluatePublicDevLoopRouting({
     intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE,
     target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 112 },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
   assert.equal(proposed.selectedGate, DEV_LOOP_GATE.ISSUE_INTAKE);
 
@@ -283,6 +290,7 @@ test("evaluateRetrospectiveGate: stop result passes through regardless of MISSIN
       status: DEV_LOOP_STATUS.DONE,
       authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
   assert.equal(proposed.routeKind, DEV_LOOP_ROUTE_KIND.STOP);
 

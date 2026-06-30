@@ -1304,9 +1304,9 @@ export function resolveAuthoritativeStartupResumeBundle(input = {}) {
 }
 
 
-const BUILT_IN_DEFAULT_TARGET_PREFERENCE = DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST;
+const BUILT_IN_DEFAULT_TARGET_PREFERENCE = DEV_LOOP_TARGET_PREFERENCE.PREFER_LOCAL;
 
-// DEFAULT_TARGET_PREFERENCE uses the built-in default (github-first).
+// DEFAULT_TARGET_PREFERENCE uses the built-in default (local-first).
 // Config-based target preference is resolved by the startup resolver
 // (resolveTargetPreference in scripts/loop/resolve-dev-loop-startup.mjs)
 // and passed explicitly via input.targetPreference.

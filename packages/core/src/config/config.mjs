@@ -221,7 +221,7 @@ export const DevLoopConfigSchema = z.strictObject({
 
 export const BUILT_IN_DEFAULTS = Object.freeze({
   version: 1,
-  strategy: Object.freeze({ default: "github-first" }),
+  strategy: Object.freeze({ default: "local-first" }),
   inputSource: Object.freeze({ default: "tracker" }),
   models: Object.freeze({}),
   refinement: Object.freeze({ fanOut: 3, mode: "parallel", maxCopilotRounds: 5, stopOnLowSignal: false, lowSignalRoundThreshold: 3, lowSignalMaxComments: 2 }),
