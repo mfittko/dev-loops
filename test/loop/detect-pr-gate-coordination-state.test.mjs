@@ -1369,4 +1369,10 @@ test("deriveUiE2ePassed reads UI e2e checks from statusCheckRollup", () => {
     deriveUiE2ePassed({ statusCheckRollup: [{ context: "viewer-smoke", state: "SUCCESS" }] }),
     true,
   );
+  // SKIPPED = not applicable to this run (e.g. viewer-smoke when no viewer files changed) — passes.
+  assert.equal(
+    deriveUiE2ePassed({ statusCheckRollup: [{ name: "viewer-smoke", conclusion: "SKIPPED" }, { name: "deck-smoke", conclusion: "SUCCESS" }] }),
+    true,
+    "SKIPPED check should not block the gate",
+  );
 });
