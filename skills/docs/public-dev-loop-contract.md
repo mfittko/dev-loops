@@ -437,7 +437,7 @@ Any conflict that would materially change artifact identity, ownership truth, or
 | `mode` | `bounded_handoff` (default) \| `durable_auto` | Steers execution mode; `durable_auto` uses the same durable-auto execution-mode semantics as `auto_continue_current`, without replacing the selected intent |
 | `watch` | boolean | Explicitly request wait/watch semantics; fails closed for otherwise-successful non-wait routed results, while preserving authoritative `stop` and `needs_reconcile` outcomes |
 | `intent` | any existing public `dev-loop` intent | Disambiguates the supported public intent; maps to existing contract values |
-| `targetPreference` | `prefer_github_first` (default) \| `prefer_local` | Steers routing preference; must not override authoritative linked-PR or active-artifact truth |
+| `targetPreference` | `prefer_local` (default) \| `prefer_github_first` | Steers routing preference; must not override authoritative linked-PR or active-artifact truth |
 
 The bounded allow-list is exported from `packages/core/src/loop/public-dev-loop-routing.mjs` as `DEV_LOOP_VARIATION_PARAMETER_CONTRACT`.
 

@@ -10,7 +10,7 @@ Other repo docs may summarize or link this contract, but they should not redefin
 
 dev-loops supports two mutually exclusive artifact authority modes. Every work item originates from exactly one authoritative artifact: a GitHub issue or a persisted markdown plan file. Work originates from a PR or a direct local change only when explicitly requested.
 
-The shipped extension default selects local-planning; see [Shipped default posture](#shipped-default-posture) below. The mode names that follow describe the two tiers; "default" in their headings refers to the github-first code-level fallback in `BUILT_IN_DEFAULTS`, which the shipped extension layer overrides to local-first.
+The shipped extension default selects local-planning; see [Shipped default posture](#shipped-default-posture) below. The mode names that follow describe the two tiers; "default" in their headings refers to the local-first code-level default in `BUILT_IN_DEFAULTS`.
 
 ### Tracker-first
 
@@ -81,7 +81,7 @@ The `inputSource.default` key disambiguates local-first startup:
 
 The effective default for a consumer comes from the config-merge layering in `packages/core/src/config/config.mjs`. Precedence, low to high:
 
-1. `BUILT_IN_DEFAULTS` (frozen in `config.mjs`) — `strategy.default: github-first`. This is the code-level fallback when no other layer sets the key.
+1. `BUILT_IN_DEFAULTS` (frozen in `config.mjs`) — `strategy.default: local-first`. This is the code-level fallback when no other layer sets the key.
 2. Extension-packaged defaults (`packages/core/src/config/extension-defaults.yaml`, loaded as the `extensionDefaults` layer) — `strategy.default: local-first`. This is the opinion the package ships and the layer that wins over the built-in fallback.
 3. Repo-local `.pi/dev-loop/defaults.*` (legacy) — applied when present.
 4. Repo `.devloops` at repo root — the per-repo override, highest precedence. When `.devloops` is absent, the legacy `.pi/dev-loop/settings.*` / `overrides.*` apply at this position instead.
@@ -95,7 +95,7 @@ Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no lo
 These are not valid artifact authority mode selectors:
 - `strategy.default: copilot` — not a valid mode; the enum accepts only `github-first` or `local-first` (`packages/core/src/config/config.mjs`)
 - Free-form string values — fail closed
-- Omitting `strategy.default` from every layer — resolves to `github-first` from `BUILT_IN_DEFAULTS`; with the shipped extension layer present it resolves to `local-first`
+- Omitting `strategy.default` from every layer — resolves to `local-first` from `BUILT_IN_DEFAULTS`
 
 ## Local-first plan-file flow end to end
 

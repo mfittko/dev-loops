@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **`strategy.default: local-first` now respected as the built-in code default (#1033).** `BUILT_IN_DEFAULT_TARGET_PREFERENCE` and `BUILT_IN_DEFAULTS.strategy.default` were changed from `github-first` to `local-first` in `packages/core/src/loop/public-dev-loop-routing.mjs` and `packages/core/src/config/config.mjs`. The 32 tests that previously relied on the implicit github-first default were updated to pin `PREFER_GITHUB_FIRST` explicitly; one config test assertion and one routing-config test were updated to match the new built-in default. Docs updated: `targetPreference` table in `skills/docs/public-dev-loop-contract.md` now shows `prefer_local (default)`; `BUILT_IN_DEFAULTS` description in `skills/docs/artifact-authority-contract.md` updated to `local-first`.
+
 ## 0.6.2 - 2026-06-30
 
 ### Changed
