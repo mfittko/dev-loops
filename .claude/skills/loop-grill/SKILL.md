@@ -36,6 +36,14 @@ Before doing anything else:
 - **Tracker-first:** fetch the issue body (title + description + any existing `## Grill findings` section).
 - **Local-planning:** read the plan file from disk.
 
+## Step 1b — Surface external resources
+
+Before detecting gaps, scan the loaded content for external resource references: links, other repo URLs, API endpoints, doc URLs, screenshots, or Playwright navigation descriptors.
+
+- **Interactive mode:** if external resources are present, ask the operator to confirm they are accessible or to provide them before the Q&A starts.
+- **`--auto` mode:** attempt to fetch each resource using bounded wrapper commands (e.g. `gh`, API wrapper scripts under `scripts/`). Do not fetch resources inline with raw `curl` or token-heavy calls. Flag any inaccessible resource as `unresolved` in the findings rather than silently skipping it.
+- When no external resources are present, skip this step silently.
+
 ## Step 2 — Detect gaps
 
 Scan the loaded content and identify each gap. The minimum required gap detectors are:
@@ -91,13 +99,13 @@ Write a `## Grill findings` section back to the source artifact using **replace-
 - This makes re-runs idempotent — no accumulated noise, no duplicate sections.
 - If parsing the section boundary fails, **abort with an error** rather than silently truncating.
 
-**Tracker-first write-back:** update the GitHub issue body via the bounded GitHub helper:
+**Tracker-first write-back:** update the GitHub issue body using:
 
 ```
-node scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-path>
+gh issue edit <n> --repo <owner/repo> --body-file <tmp-path>
 ```
 
-Or, if the issue body itself must be updated (not a comment), use the appropriate GitHub API. The issue body is the canonical location for the `## Grill findings` section, not a comment.
+The `## Grill findings` section lives in the issue body, not as a comment. Do not use `comment-issue.mjs` here — that creates a comment, not a body update.
 
 **GitHub body size guard:** issue bodies are capped at 65,536 characters. Before writing back, check whether the updated body would exceed this limit. If so, warn: `Warning: updated body would exceed GitHub's 65,536-character limit — write-back skipped. Truncate the findings or the issue body manually.` Do not silently truncate.
 
