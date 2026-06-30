@@ -6,7 +6,7 @@ Invoke the `loop-grill` skill with `$ARGUMENTS`. Parse the argument list before 
 
 1. **Argument parsing (fail-closed):**
    - If `$ARGUMENTS` is empty, print `Error: missing argument — provide an issue number or a path to a plan file.` and stop without mutating anything.
-   - Split `$ARGUMENTS` into tokens. The first token is the target (`<issue-number>` or `<path/to/plan.md>`). Remaining tokens may include `--auto`. Any other flag produces `Error: unrecognised flag '<flag>' — only --auto is supported.` and stops.
+   - Split `$ARGUMENTS` into tokens. The first token is the target (`<issue-number>` or `<path/to/plan.md>`). Remaining tokens may include `--auto`. Any other flag produces `Error: unrecognized flag '<flag>' — only --auto is supported.` and stops.
    - If the first token looks like an integer, treat it as a tracker-first issue number. Verify the issue exists via `gh issue view <n> --repo <owner/repo> --json number` (exit non-zero = not found); if not found, print `Error: issue #<n> not found.` and stop.
    - If the first token is a path, resolve it relative to the repo root (or as absolute). If the file does not exist, print `Error: plan file not found: <path>` and stop.
 
