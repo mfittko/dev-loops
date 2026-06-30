@@ -264,7 +264,7 @@ function resolveTargetPreference(cwd) {
     } catch {
     }
   }
-  return "prefer_github_first";
+  return "prefer_local";
 }
 function normalizeConfigInputSource(value) {
   if (value === "phase-docs") return "phase-docs";
@@ -672,7 +672,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     ? devLoopConfig?.strategy?.default === "local-first"
       ? "prefer_local"
       : "prefer_github_first"
-    : "prefer_github_first";
+    : "prefer_local";
   const inputSource = configErrors.length === 0
     ? normalizeConfigInputSource(devLoopConfig?.inputSource?.default)
     : "tracker";
