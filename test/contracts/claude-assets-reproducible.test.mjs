@@ -141,21 +141,23 @@ test("direct slash commands are generated and map to the public dev-loop entrypo
   const assets = collectGeneratedAssets({ repoRoot });
   const byTarget = new Map(assets.map((a) => [a.target, a.content]));
   // Each public entrypoint has a generated `.claude/commands/<name>.md`.
-  for (const name of ["start", "auto", "continue", "start-spike", "info", "status"]) {
+  // Namespaced with a `loop-` prefix so the bare names do not collide with Claude Code
+  // built-ins (`/status`, etc.) when loaded as project commands.
+  for (const name of ["loop-start", "loop-auto", "loop-continue", "loop-start-spike", "loop-info", "loop-status"]) {
     assert.ok(byTarget.has(`.claude/commands/${name}.md`), `expected generated command ${name}.md`);
   }
   // Each wraps the matching public intent / read-only shortcut — no internal strategy names.
-  assert.match(byTarget.get(".claude/commands/start.md"), /start dev loop on issue \$ARGUMENTS/);
-  assert.match(byTarget.get(".claude/commands/auto.md"), /auto dev loop on issue \$ARGUMENTS/);
-  // #988: /continue is dual-routed — explicit issue/PR target, or bare (resolve the
+  assert.match(byTarget.get(".claude/commands/loop-start.md"), /start dev loop on issue \$ARGUMENTS/);
+  assert.match(byTarget.get(".claude/commands/loop-auto.md"), /auto dev loop on issue \$ARGUMENTS/);
+  // #988: /loop-continue is dual-routed — explicit issue/PR target, or bare (resolve the
   // single in-progress board item). Both forms still hand off to the dev-loop skill.
-  assert.match(byTarget.get(".claude/commands/continue.md"), /continue dev loop on \$ARGUMENTS/);
-  assert.match(byTarget.get(".claude/commands/continue.md"), /resolve-active-board-item\.mjs/);
-  assert.match(byTarget.get(".claude/commands/info.md"), /loop info --issue \$ARGUMENTS/);
-  // #988 P2: /start-spike wraps the shipped --spike intake — scaffold the inline
+  assert.match(byTarget.get(".claude/commands/loop-continue.md"), /continue dev loop on \$ARGUMENTS/);
+  assert.match(byTarget.get(".claude/commands/loop-continue.md"), /resolve-active-board-item\.mjs/);
+  assert.match(byTarget.get(".claude/commands/loop-info.md"), /loop info --issue \$ARGUMENTS/);
+  // #988 P2: /loop-start-spike wraps the shipped --spike intake — scaffold the inline
   // question, then hand off to `loop startup --spike <path>`; no new spike behavior.
-  assert.match(byTarget.get(".claude/commands/start-spike.md"), /scaffold-spike-file\.mjs/);
-  assert.match(byTarget.get(".claude/commands/start-spike.md"), /resolve-dev-loop-startup\.mjs --spike/);
+  assert.match(byTarget.get(".claude/commands/loop-start-spike.md"), /scaffold-spike-file\.mjs/);
+  assert.match(byTarget.get(".claude/commands/loop-start-spike.md"), /resolve-dev-loop-startup\.mjs --spike/);
   // Commands are thin wrappers: they must not name internal strategies or invent routing.
   // Guard every canonical strategy id, in both underscore (strategy id) and hyphenated
   // (skill-dir) form, so an accidental `copilot-pr-followup` reference also fails.
