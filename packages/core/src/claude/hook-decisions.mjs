@@ -59,14 +59,15 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     return ALLOW;
   }
   const isReady = isGhPrReadyCommand(command);
-  const isMerge = !isReady && isGhPrMergeCommand(command);
+  const isMerge = isGhPrMergeCommand(command);
   if (!isReady && !isMerge) {
     return ALLOW;
   }
-
-  const verb = isReady ? "gh pr ready" : "gh pr merge";
+  // When both verbs appear in a compound command, apply the stricter merge gate — if it passes,
+  // the draft_gate (a subset of the pre-merge evidence check) is also satisfied.
+  const verb = isMerge ? "gh pr merge" : "gh pr ready";
   // An explicit `--repo other/repo` that is not the target → not our concern, pass through.
-  const explicitRepo = isReady ? extractRepoFlagFromGhPrReady(command) : extractRepoFlagFromGhPrMerge(command);
+  const explicitRepo = isMerge ? extractRepoFlagFromGhPrMerge(command) : extractRepoFlagFromGhPrReady(command);
   if (explicitRepo && explicitRepo.toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
     return ALLOW;
   }
@@ -75,7 +76,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     return ALLOW;
   }
 
-  const prNumber = isReady ? extractPrNumberFromGhPrReady(command) : extractPrNumberFromGhPrMerge(command);
+  const prNumber = isMerge ? extractPrNumberFromGhPrMerge(command) : extractPrNumberFromGhPrReady(command);
   if (prNumber === null) {
     return {
       decision: "deny",
@@ -84,7 +85,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   }
 
   if (gateError) {
-    const which = isReady ? "draft-gate" : "pre-merge gate";
+    const which = isMerge ? "pre-merge gate" : "draft-gate";
     return {
       decision: "deny",
       reason: `${verb} blocked: ${which} evidence check failed (${gateError}).`,
@@ -94,9 +95,9 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   if (!gatePassed) {
     return {
       decision: "deny",
-      reason: isReady
-        ? `gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #${prNumber}.`
-        : `gh pr merge blocked: missing pre-merge gate evidence for PR #${prNumber} (need clean current-head draft_gate + pre_approval_gate; inline verdicts are not accepted). Run the dev-loop gates instead of merging directly.`,
+      reason: isMerge
+        ? `gh pr merge blocked: missing pre-merge gate evidence for PR #${prNumber} (need clean current-head draft_gate + pre_approval_gate; inline verdicts are not accepted). Run the dev-loop gates instead of merging directly.`
+        : `gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #${prNumber}.`,
     };
   }
 

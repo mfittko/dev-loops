@@ -91,33 +91,42 @@ export function firstShellSegment(command) {
   return command.trim().split(/\s*(?:&&|\|\||;|\|)\s*/)[0]?.trim() ?? "";
 }
 
+/** Split a compound shell command into its individual segments. */
+function shellSegments(command) {
+  return command.trim().split(/\s*(?:&&|\|\||;|\|)\s*/).map((s) => s.trim()).filter(Boolean);
+}
+
 /** Build the `^gh pr <verb>` prefix matcher for a `gh pr <verb>` subcommand. */
 function ghPrVerbRegex(verb) {
   return new RegExp(`^gh\\s+pr\\s+${verb}(?:\\s|$)`, "i");
 }
 
-/** Generic `gh pr <verb>` (first-segment) detector, ignoring `--help`/`-h`. */
-function isGhPrVerbCommand(command, verb) {
-  const segment = firstShellSegment(command);
+/**
+ * Return the first segment in the command that is a `gh pr <verb>` call (ignoring --help/-h),
+ * or null. Scans ALL segments so compound commands (`echo ok && gh pr merge 1`) are caught.
+ */
+function findGhPrVerbSegment(command, verb) {
   const re = ghPrVerbRegex(verb);
-  if (!segment || !re.test(segment)) {
-    return false;
+  for (const segment of shellSegments(command)) {
+    if (!re.test(segment)) continue;
+    const remainder = segment.replace(re, "").trim();
+    if (!remainder) return segment;
+    const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
+    if (!args.includes("--help") && !args.includes("-h")) return segment;
   }
-  const remainder = segment.replace(re, "").trim();
-  if (!remainder) {
-    return true;
-  }
-  const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
-  return !args.includes("--help") && !args.includes("-h");
+  return null;
 }
 
-/** Generic positional PR-number extractor for `gh pr <verb>`. */
+/** Generic `gh pr <verb>` detector that scans ALL shell segments. */
+function isGhPrVerbCommand(command, verb) {
+  return findGhPrVerbSegment(command, verb) !== null;
+}
+
+/** Generic positional PR-number extractor for `gh pr <verb>` — finds the verb segment first. */
 function extractPrNumberFromGhPrVerb(command, verb) {
-  const segment = firstShellSegment(command);
+  const segment = findGhPrVerbSegment(command, verb);
+  if (!segment) return null;
   const re = ghPrVerbRegex(verb);
-  if (!re.test(segment)) {
-    return null;
-  }
   const remainder = segment.replace(re, "").trim();
   if (!remainder) {
     return null;
@@ -143,13 +152,11 @@ function extractPrNumberFromGhPrVerb(command, verb) {
   return null;
 }
 
-/** Generic `--repo`/`-R` extractor for `gh pr <verb>`. */
+/** Generic `--repo`/`-R` extractor for `gh pr <verb>` — finds the verb segment first. */
 function extractRepoFlagFromGhPrVerb(command, verb) {
-  const segment = firstShellSegment(command);
+  const segment = findGhPrVerbSegment(command, verb);
+  if (!segment) return null;
   const re = ghPrVerbRegex(verb);
-  if (!re.test(segment)) {
-    return null;
-  }
   const remainder = segment.replace(re, "").trim();
   if (!remainder) {
     return null;

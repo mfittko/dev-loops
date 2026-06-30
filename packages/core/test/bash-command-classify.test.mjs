@@ -46,11 +46,19 @@ test("extractRepoFlagFromGhPrReady reads -r/--repo and --repo=value", () => {
   assert.equal(extractRepoFlagFromGhPrReady("gh pr ready 1"), null);
 });
 
-test("isGhPrMergeCommand recognizes gh pr merge (first segment) and ignores --help", () => {
+test("isGhPrMergeCommand recognizes gh pr merge in any segment and ignores --help", () => {
   assert.equal(isGhPrMergeCommand("gh pr merge 1023 --squash"), true);
   assert.equal(isGhPrMergeCommand("gh pr merge"), true);
   assert.equal(isGhPrMergeCommand("gh pr merge --help"), false);
   assert.equal(isGhPrMergeCommand("gh pr ready 17"), false);
+  // Compound command — merge in later segment must be detected.
+  assert.equal(isGhPrMergeCommand("echo ok && gh pr merge 1 --squash"), true);
+  assert.equal(isGhPrMergeCommand("gh pr ready 1 && gh pr merge 1"), true);
+});
+
+test("isGhPrReadyCommand recognizes gh pr ready in any segment", () => {
+  assert.equal(isGhPrReadyCommand("echo ok && gh pr ready 17"), true);
+  assert.equal(isGhPrReadyCommand("gh pr ready 17 && echo done"), true);
 });
 
 test("extractPrNumber/RepoFlag FromGhPrMerge mirror the ready extractors", () => {

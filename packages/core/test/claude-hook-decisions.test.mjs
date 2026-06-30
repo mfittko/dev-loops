@@ -52,6 +52,21 @@ test("decideBashGate passes through gh pr merge outside the target repo", () => 
   );
 });
 
+// Copilot review findings: compound command bypasses must be blocked.
+test("decideBashGate denies gh pr merge in a later compound segment", () => {
+  const d = decideBashGate({ command: "echo ok && gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr merge blocked/);
+});
+
+test("decideBashGate applies the stricter merge gate when both ready and merge appear", () => {
+  // gh pr ready && gh pr merge — merge gate (stricter) must be applied, not just draft_gate.
+  const d = decideBashGate({ command: "gh pr ready 1 && gh pr merge 1", repoSlug: TARGET, gatePassed: false });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr merge blocked/);
+  assert.match(d.reason, /pre_approval_gate/);
+});
+
 test("decideBashGate denies gh pr merge when PR number cannot be determined", () => {
   const d = decideBashGate({ command: "gh pr merge --squash", repoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
