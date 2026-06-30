@@ -132,7 +132,7 @@ stateDiagram-v2
 <p class="card-label">A human merges</p>
 <ul class="mini-list">
   <li>The agent never merges its own work.</li>
-  <li>At the final gate it hands the PR to a named person.</li>
+  <li>At the final gate it hands the PR to a contributor.</li>
   <li>A human always owns the last yes.</li>
 </ul>
 </div>

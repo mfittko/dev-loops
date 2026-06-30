@@ -1,6 +1,6 @@
 ---
 title: "dev-loops: A Deep Dive"
-subtitle: "AI made writing code cheap. The hours now go into the handoffs around the code, and into the waiting between actions that no tool measures."
+subtitle: "AI made writing code cheap. The hours now go into the handoffs around the code, and into the waiting between actions."
 tags:
   - AI
   - Software Engineering
@@ -27,7 +27,7 @@ Here is the whole thing in a sentence: the next step is always known, like the n
 
 That sounds modest, yet it dissolves most of the lost hours in an AI-assisted workflow. Those hours live in the seams between steps, where someone usually has to package up context and hand it to the next actor, who then waits for that handoff to arrive. When the next action is already computed and on the board, the next actor reads it and pulls the work. The waiting-for-handoff disappears, because there is nothing left to wait to be handed.
 
-The handoff turns optional, at most additive. When one happens it adds a note or extra context, and it stays a decision the system records where you can see it. It is no longer the load-bearing step the work blocks on. When the next action is genuinely ambiguous, the system stops and asks, and a human resolves it before the work moves on.
+The handoff turns optional, at most additive. When one happens it adds a note or extra context, and it stays a decision the system records where you can see it. It is no longer the load-bearing step the work blocks on. When the next action is ambiguous, the system stops and asks, and a human resolves it before the work moves on.
 
 The work falls into loops nested inside loops. An outer loop asks, every cycle, *what is the next action here?*, then makes exactly one move before asking again. Inside it, one loop walks a single pull request from first draft to merged. Another tracks every review comment from raised to resolved, so nothing falls through. Every layer works the same way: read the next action, make one deliberate move, then ask again.
 
@@ -55,7 +55,7 @@ The second is mid-flight steering. You can change the rules while the machine ke
 
 The third is parallel review that consolidates into a single verdict. Several reviewers examine a pull request at once, each on a different angle (scope, test coverage, security), and all of them read the *same evidence bundle*: the same diff, the same context. Because the inputs are identical, the verdicts are directly comparable, and they merge into a single answer. One serious finding blocks the merge.
 
-The fourth is the most important: "done" means merged. The board shows done only when a pull request has actually merged, read from the platform's own merge signal that the agent cannot fabricate. CI-green comes from the real check result, so the system waits for it before proceeding. And the merge itself always belongs to a named human.
+The fourth is the most important: "done" means merged. The board shows done only when a pull request has actually merged, read from the platform's own merge signal that the agent cannot fabricate. CI-green comes from the real check result, so the system waits for it before proceeding. And the merge itself always belongs to a contributor.
 
 ```mermaid
 flowchart TD
@@ -66,7 +66,7 @@ flowchart TD
   D -- yes --> E[Author resolves] --> C
   D -- no --> F{Pre-approval gate:<br/>CI verified green?}
   F -- not yet --> C
-  F -- yes --> G[Hand to a named human]
+  F -- yes --> G[Hand to a contributor]
   G --> H[Human merges]
   H --> I([Done = merged])
 ```
@@ -129,8 +129,6 @@ The waiting between actions is where your lead time goes now, and it's the most 
 
 ## One interrupt costs five transitions
 
-Everyone underestimates the interruption.
-
 A "quick question" costs far more than the minute it takes to answer. The real cost is the chain it sets off: you notice the request, switch away from what you were doing, rebuild the mental state for the new thing, act on it, and then recover by climbing back into the work you abandoned and reconstructing where you were. Each link in that chain has its own latency, and most of that latency is pure overhead.
 
 ```mermaid
@@ -162,13 +160,13 @@ flowchart LR
 
 A mix of humans and AI agents makes it worse. Ambiguous ownership pauses a human until they ask. Missing context halts an agent, which either guesses and leaves you the cleanup or stops cold. Every human-to-agent and agent-to-human swap is one more place the state can drop on the floor. "More hands make it faster" holds only when the state survives each handoff intact, and any boundary it can fall through quietly cancels the gain you were counting on.
 
-## Your git history hides exactly where the time went
+## The bottleneck is where human attention goes
 
-This is the hard part: none of the tools you already trust can see the waiting.
+The tools can show the wait. GitHub timestamps every transition; a pull request's timeline reveals exactly how long it sat between "CI passed" and "someone acted." The waiting is visible, when you choose to look.
 
-Commits record output. They mark that a change happened and stay silent on the six hours it sat idle before anyone touched it. Review threads bury the cost of re-reading and re-explaining inside ordinary back-and-forth, so the conversation reads like progress. CI timestamps end at green, leaving the gap between "checks passed" and "a human noticed and acted" unrecorded. Every instrument points at the work itself, while the waiting accumulates in the gaps.
+The cost is not concealment — it is the routing. Getting work from "ready" to "shipped" runs through human attention, and attention has two failure modes. It is often not immediately available: the person who can act is in a meeting, context-switched onto something else, or on the other side of a timezone. That unavailability is where the stall lives. And when attention is available, spending it on mechanical coordination — noticing a status update, confirming a CI result, deciding a branch is safe to merge — crowds out the work only a person can do: shaping the product, setting the right review bar, staying accountable for what ships.
 
-The biggest drag on lead time is the one thing none of your dashboards can see. You can optimize generation forever and the chart of "time from request to shipped" will barely move, because the slow part lies elsewhere.
+The drag on lead time is not that the tooling cannot see the wait. It is that routing routine transitions through human attention makes those transitions dependent on attention's availability — and pulls that attention away from the judgment-heavy decisions where it is genuinely irreplaceable.
 
 ## Four fields get the next actor moving
 

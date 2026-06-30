@@ -206,7 +206,7 @@
   <header class="hero-card">
     <p class="kicker">dev-loops</p>
     <h1>dev-loops: A Deep Dive</h1>
-    <p class="lede">AI made writing code cheap. The hours now go into the handoffs around the code, author to reviewer, reviewer to CI, CI back to a human, and into the waiting between actions that no tool measures.</p>
+    <p class="lede">AI made writing code cheap. The hours now go into the handoffs around the code, author to reviewer, reviewer to CI, CI back to a human, and into the waiting between actions.</p>
   </header>
 
   <p>An AI agent can write a working function in seconds. That part is solved. The hard part is everything that happens <em>around</em> the function: handing it to a reviewer, getting feedback back to the author, waiting for the build, deciding whether it is safe to merge. Each of those handoffs takes hours in real life, even when the diagram makes it look instant. An agent left to manage them on its own will guess at them. It assumes the build passed, assumes the review is done, and marks the work finished while those assumptions go unchecked.</p>
@@ -226,7 +226,7 @@
 
   <p>That sounds modest, yet it dissolves most of the lost hours in an AI-assisted workflow. Those hours live in the seams between steps, where someone usually has to package up context and hand it to the next actor, who then waits for that handoff to arrive. When the next action is already computed and on the board, the next actor reads it and pulls the work. The waiting-for-handoff disappears, because there is nothing left to wait to be handed.</p>
 
-  <p>The handoff turns optional, at most additive. When one happens it adds a note or extra context, and it stays a decision the system records where you can see it. It is no longer the load-bearing step the work blocks on. When the next action is genuinely ambiguous, the system stops and asks, and a human resolves it before the work moves on.</p>
+  <p>The handoff turns optional, at most additive. When one happens it adds a note or extra context, and it stays a decision the system records where you can see it. It is no longer the load-bearing step the work blocks on. When the next action is ambiguous, the system stops and asks, and a human resolves it before the work moves on.</p>
 
   <p>The work falls into loops nested inside loops. An outer loop asks, every cycle, <em>what is the next action here?</em>, then makes exactly one move before asking again. Inside it, one loop walks a single pull request from first draft to merged. Another tracks every review comment from raised to resolved, so nothing falls through. Every layer works the same way: read the next action, make one deliberate move, then ask again.</p>
 
@@ -259,7 +259,7 @@
 
   <p>The third is parallel review that consolidates into a single verdict. Several reviewers examine a pull request at once, each on a different angle (scope, test coverage, security), and all of them read the <em>same evidence bundle</em>: the same diff, the same context. Because the inputs are identical, the verdicts are directly comparable, and they merge into a single answer. One serious finding blocks the merge.</p>
 
-  <p>The fourth is the most important: "done" means merged. The board shows done only when a pull request has actually merged, read from the platform's own merge signal the agent cannot fabricate. CI-green comes from the real check result, so the system waits for it before proceeding. And the merge itself always belongs to a named human.</p>
+  <p>The fourth is the most important: "done" means merged. The board shows done only when a pull request has actually merged, read from the platform's own merge signal the agent cannot fabricate. CI-green comes from the real check result, so the system waits for it before proceeding. And the merge itself always belongs to a contributor.</p>
 
   <figure>
     <div class="diagram-scroll">
@@ -376,15 +376,13 @@
     <h2>Make the waiting visible</h2>
   </div>
 
-  <p>Closing the handoffs is half the work. The other half is the gap itself. A change that used to take an afternoon now lands in seconds. The diff shows up before you&rsquo;ve finished reading the request. Generation, the part we spent decades trying to speed up, is now fast enough to drop off the timeline.</p>
+  <p>Closing the handoffs is half the work. The other half is the gap itself. A change that used to take an afternoon now lands in seconds. The diff shows up before you&rsquo;ve finished reading the request. Generation, the part we spent decades trying to speed up, is now fast enough to be routine.</p>
 
   <p>Then the work sits. It sits while someone notices it&rsquo;s ready. It sits while a reviewer rebuilds enough context to have an opinion. It sits in a queue, waiting for the one person who knows whether the next step is safe. The code is written in seconds, and the change ships hours later. Almost none of that gap shows up anywhere you&rsquo;d think to look.</p>
 
   <p>The waiting between actions is where your lead time goes now, and it&rsquo;s the most expensive part of delivery precisely because nothing measures it. The fix starts with measurement, and there&rsquo;s a cheap, concrete way to begin.</p>
 
   <h2>One interrupt costs five transitions</h2>
-
-  <p>Everyone underestimates the interruption.</p>
 
   <p>A &ldquo;quick question&rdquo; costs far more than the minute it takes to answer. The real cost is the chain it sets off: you notice the request, switch away from what you were doing, rebuild the mental state for the new thing, act on it, and then recover by climbing back into the work you abandoned and reconstructing where you were. Each link in that chain has its own latency, and most of that latency is pure overhead.</p>
 
@@ -434,13 +432,13 @@
 
   <p>A mix of humans and AI agents makes it worse. Ambiguous ownership pauses a human until they ask. Missing context halts an agent, which either guesses and leaves you the cleanup or stops cold. Every human-to-agent and agent-to-human swap is one more place the state can drop on the floor. &ldquo;More hands make it faster&rdquo; holds only when the state survives each handoff intact, and any boundary it can fall through quietly cancels the gain you were counting on.</p>
 
-  <h2>Your git history hides exactly where the time went</h2>
+  <h2>The bottleneck is where human attention goes</h2>
 
-  <p>This is the hard part: none of the tools you already trust can see the waiting.</p>
+  <p>The tools can show the wait. GitHub timestamps every transition; a pull request&rsquo;s timeline reveals exactly how long it sat between &ldquo;CI passed&rdquo; and &ldquo;someone acted.&rdquo; The waiting is visible, when you choose to look.</p>
 
-  <p>Commits record output. They mark that a change happened and stay silent on the six hours it sat idle before anyone touched it. Review threads bury the cost of re-reading and re-explaining inside ordinary back-and-forth, so the conversation reads like progress. CI timestamps end at green, leaving the gap between &ldquo;checks passed&rdquo; and &ldquo;a human noticed and acted&rdquo; unrecorded. Every instrument points at the work itself, while the waiting accumulates in the gaps.</p>
+  <p>The cost is not concealment &mdash; it is the routing. Getting work from &ldquo;ready&rdquo; to &ldquo;shipped&rdquo; runs through human attention, and attention has two failure modes. It is often not immediately available: the person who can act is in a meeting, context-switched onto something else, or on the other side of a timezone. That unavailability is where the stall lives. And when attention is available, spending it on mechanical coordination &mdash; noticing a status update, confirming a CI result, deciding a branch is safe to merge &mdash; crowds out the work only a person can do: shaping the product, setting the right review bar, staying accountable for what ships.</p>
 
-  <p>The biggest drag on lead time is the one thing none of your dashboards can see. You can optimize generation forever and the chart of &ldquo;time from request to shipped&rdquo; will barely move, because the slow part lies elsewhere.</p>
+  <p>The drag on lead time is not that the tooling cannot see the wait. It is that routing routine transitions through human attention makes those transitions dependent on attention&rsquo;s availability &mdash; and pulls that attention away from the judgment-heavy decisions where it is irreplaceable.</p>
 
   <h2>Four fields get the next actor moving</h2>
 
