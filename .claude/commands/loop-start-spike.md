@@ -2,7 +2,7 @@
 description: "Start a time-boxed dev-loop spike from a question (or a pre-authored findings file)."
 argument-hint: "<question> | --file <path>"
 ---
-<!-- GENERATED from commands/start-spike.command.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
+<!-- GENERATED from commands/loop-start-spike.command.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 
 Start a spike — a time-boxed exploration whose deliverable is a findings document. Two forms; both end in `loop startup --spike <path>` and hand the bundle to the `dev-loop` skill. Do NOT pick an internal strategy yourself, and do NOT invent new spike behavior — this wraps the shipped `--spike` intake (see `skills/docs/spike-mode-contract.md`).
 
