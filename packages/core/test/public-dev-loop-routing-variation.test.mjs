@@ -70,6 +70,7 @@ test("mode=durable_auto steers execution mode for continue_current without chang
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     mode: DEV_LOOP_EXECUTION_MODE.DURABLE_AUTO,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
@@ -152,6 +153,7 @@ test("mode=durable_auto for waiting states sets auto_healthy_wait semantics", ()
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     mode: DEV_LOOP_EXECUTION_MODE.DURABLE_AUTO,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.WAIT_WATCH);
@@ -286,6 +288,7 @@ test("watch=true succeeds on a wait-capable route", () => {
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     watch: true,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.WAIT_WATCH);
@@ -325,6 +328,7 @@ test("watch=true on a non-wait route fails closed", () => {
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     watch: true,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
@@ -344,6 +348,7 @@ test("watch=true on a non-wait PR continue_on_pr route fails closed", () => {
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     watch: true,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
@@ -363,6 +368,7 @@ test("watch=true on a waiting PR succeeds through continue_on_pr", () => {
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     watch: true,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.WAIT_WATCH);
@@ -461,21 +467,21 @@ test("targetPreference=prefer_local conflicts with active PR in continue_on_pr a
   assert.match(result.reason, /prefer_local.*conflicts with authoritative PR\/linked-PR/i);
 });
 
-test("targetPreference=prefer_github_first is the default and does not change routing", () => {
+test("targetPreference=prefer_local is the default and does not change routing", () => {
   const withDefault = evaluatePublicDevLoopRouting({
     intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE,
     target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 42 },
   });
 
-  const withExplicitGithubFirst = evaluatePublicDevLoopRouting({
+  const withExplicitLocal = evaluatePublicDevLoopRouting({
     intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE,
     target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 42 },
-    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_LOCAL,
   });
 
-  assert.equal(withDefault.selectedGate, withExplicitGithubFirst.selectedGate);
-  assert.equal(withDefault.selectedStrategy, withExplicitGithubFirst.selectedStrategy);
-  assert.equal(withDefault.routeKind, withExplicitGithubFirst.routeKind);
+  assert.equal(withDefault.selectedGate, withExplicitLocal.selectedGate);
+  assert.equal(withDefault.selectedStrategy, withExplicitLocal.selectedStrategy);
+  assert.equal(withDefault.routeKind, withExplicitLocal.routeKind);
 });
 
 test("unrecognized targetPreference value fails closed", () => {
@@ -520,6 +526,7 @@ test("representative translation: 'auto dev loop' → mode=durable_auto with con
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     mode: DEV_LOOP_EXECUTION_MODE.DURABLE_AUTO,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.publicEntrypoint, PUBLIC_DEV_LOOP_ENTRYPOINT);
@@ -538,6 +545,7 @@ test("representative translation: 'auto dev loop on issue 112' → auto_continue
       status: DEV_LOOP_STATUS.ACTIVE,
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.publicEntrypoint, PUBLIC_DEV_LOOP_ENTRYPOINT);
@@ -575,6 +583,7 @@ test("approval-ready states fail closed when clean current-head pre-approval gat
       status: DEV_LOOP_STATUS.APPROVAL_READY,
       authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
@@ -604,6 +613,7 @@ test("approval-ready with stale pre-approval gate evidence (older head SHA) fail
         verdict: "clean",
       },
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
@@ -631,6 +641,7 @@ test("merge-ready with stale pre-approval gate evidence (older head SHA) fails c
         verdict: "clean",
       },
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
@@ -652,6 +663,7 @@ test("representative translation: 'run dev loop on PR 88 and stay on it' → con
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     watch: true,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.publicEntrypoint, PUBLIC_DEV_LOOP_ENTRYPOINT);
@@ -686,6 +698,7 @@ test("retrospective checkpoint gating blocks routed start/resume when checkpoint
       authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
     },
     retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);

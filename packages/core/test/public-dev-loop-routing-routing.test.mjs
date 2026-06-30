@@ -39,6 +39,7 @@ test("start_on_issue routes to issue_intake through the public dev-loop façade"
   const result = evaluatePublicDevLoopRouting({
     intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE,
     target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.publicEntrypoint, PUBLIC_DEV_LOOP_ENTRYPOINT);
@@ -59,6 +60,7 @@ test("copilot-first unassigned issue stops for clarification when readiness is m
     target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 },
     issueReadiness: DEV_LOOP_ISSUE_READINESS.NEEDS_CLARIFICATION,
     issueAssignmentState: DEV_LOOP_ISSUE_ASSIGNMENT_STATE.UNASSIGNED,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.ISSUE_INTAKE);
@@ -74,6 +76,7 @@ test("clarification stops emit blocked contract trace classification", () => {
     target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 },
     issueReadiness: DEV_LOOP_ISSUE_READINESS.NEEDS_CLARIFICATION,
     issueAssignmentState: DEV_LOOP_ISSUE_ASSIGNMENT_STATE.UNASSIGNED,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.STOP);
@@ -91,6 +94,7 @@ test("start_on_issue with a linked PR routes directly to PR follow-up", () => {
       status: DEV_LOOP_STATUS.ACTIVE,
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.publicEntrypoint, PUBLIC_DEV_LOOP_ENTRYPOINT);
@@ -112,6 +116,7 @@ test("start_on_issue with a linked PR keeps that PR canonical instead of opening
       status: DEV_LOOP_STATUS.ACTIVE,
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
@@ -134,6 +139,7 @@ test("start_on_issue with valid canonical PR state for the same issue routes fro
       status: DEV_LOOP_STATUS.ACTIVE,
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
@@ -300,6 +306,7 @@ test("continue_on_pr routes Copilot-owned PR follow-up to the compatibility copi
       status: DEV_LOOP_STATUS.ACTIVE,
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
@@ -333,6 +340,7 @@ test("continue_current routes external-human PR ownership to the external PR fol
       status: DEV_LOOP_STATUS.ACTIVE,
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.EXTERNAL_PR_FOLLOWUP);
@@ -367,6 +375,7 @@ test("blocked and not-authorized states stop instead of routing", () => {
     const result = evaluatePublicDevLoopRouting({
       intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT,
       currentState,
+      targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
     });
 
     assert.equal(result.selectedGate, DEV_LOOP_GATE.STOP_BLOCKED_OR_NOT_AUTHORIZED);
@@ -385,6 +394,7 @@ test("done states stop as terminal states", () => {
       status: DEV_LOOP_STATUS.DONE,
       authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.STOP_DONE_TERMINAL);
@@ -403,6 +413,7 @@ test("approval-ready states route to final approval and keep merge authorization
       authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
     },
     gateReviewEvidence: buildCleanPreApprovalGateEvidence(),
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.FINAL_APPROVAL);
@@ -423,6 +434,7 @@ test("merge-ready states without merge authorization stop in waiting_for_merge_a
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     gateReviewEvidence: buildCleanPreApprovalGateEvidence(),
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.WAITING_FOR_MERGE_AUTHORIZATION);
@@ -444,6 +456,7 @@ test("authorization-gated stops emit contract trace classification", () => {
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     gateReviewEvidence: buildCleanPreApprovalGateEvidence(),
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.contractTrace.stopReason.classification, DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.AUTHORIZATION_GATED);
@@ -462,6 +475,7 @@ test("merge-ready states with explicit merge authorization may proceed to final 
       authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
     },
     gateReviewEvidence: buildCleanPreApprovalGateEvidence(),
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.FINAL_APPROVAL);
@@ -480,6 +494,7 @@ test("waiting states remain deterministic wait/watch states", () => {
       status: DEV_LOOP_STATUS.WAITING,
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.WAIT_WATCH);
@@ -501,6 +516,7 @@ test("wait/watch routing emits deterministic contract trace instrumentation", ()
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     watch: true,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.contractTrace.decision.selectedGate, DEV_LOOP_GATE.WAIT_WATCH);
@@ -523,6 +539,7 @@ test("waiting linked issue states route as the authoritative linked PR artifact"
       status: DEV_LOOP_STATUS.WAITING,
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.WAIT_WATCH);
@@ -668,6 +685,7 @@ test("watch validation preserves existing reconcile reasons", () => {
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     watch: true,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
@@ -687,6 +705,7 @@ test("watch validation preserves existing stop results", () => {
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     watch: true,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   const doneResult = evaluatePublicDevLoopRouting({
@@ -699,6 +718,7 @@ test("watch validation preserves existing stop results", () => {
       authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
     },
     watch: true,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
   assert.equal(blockedResult.selectedGate, DEV_LOOP_GATE.STOP_BLOCKED_OR_NOT_AUTHORIZED);
