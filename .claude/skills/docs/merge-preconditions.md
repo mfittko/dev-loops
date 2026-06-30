@@ -89,7 +89,7 @@ explicit instruction can unlock.
 When a repo sets `approval.humanHandoff.enabled: true` in `.devloops`, the loop
 does not just park silently at the human-merge stop — at the
 `pre_approval_gate` / `waiting_for_merge_authorization` boundary it **offers**
-to route the PR to a named human (pairs with `autonomy.humanMergeOnly`: when
+to route the PR to a contributor (pairs with `autonomy.humanMergeOnly`: when
 human-merge is enforced, the handoff names who should take it). Disabled by
 default; no candidate sourcing when disabled.
 
