@@ -48,12 +48,11 @@ export function buildHelpLines(): string[] {
   return [
     'dev-loops help',
     '/skill:dev-loop <intent> starts the public loop',
-    'Direct: /dev-loops start <issue> | auto <issue>',
-    'Continue/info: /dev-loops continue [issue|pr] | info <issue|pr>',
-    'Spike: /dev-loops start-spike <question>',
-    'Inspect viewer: /dev-loops inspect open|resume|status|stop|restart',
-    'Checks: /dev-loops status | doctor',
-    'Clear this widget: /dev-loops hide',
+    '/dev-loops start <issue> | /dev-loops auto <issue>',
+    '/dev-loops continue [issue|pr] | /dev-loops info <issue|pr>',
+    '/dev-loops start-spike <question>',
+    '/dev-loops inspect open|resume|status|stop|restart',
+    '/dev-loops status | /dev-loops doctor | /dev-loops hide',
   ];
 }
 
