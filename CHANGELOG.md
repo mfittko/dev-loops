@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.6.2 - 2026-06-30
+
+### Changed
+
+- **Terminology pass: 'named human/person' → 'contributor' across all doc surfaces (#1026).** Articles (`docs/articles/dev-loops-deep-dive.{md,html}`, `introducing-dev-loops.html`), decks (`docs/presentations/dev-loops-deep-dive.html`, `introducing-dev-loops.html`, `applied-dev-loops-presentation.md`), `skills/docs/merge-preconditions.md`, `schemas/dev-loop-config.schema.json`, and `packages/core/src/config/config.mjs` docstring. Deep-dive article subtitle tightened; attention-bottleneck section rewritten for clarity. `.md`/`.html` pair synced (`fast enough to be routine`).
+
+### Fixed
+
+- **`deriveUiE2ePassed` blocked the gate on SKIPPED UI e2e checks (#1026).** `viewer-smoke` is `SKIPPED` (not `FAILURE`) on PRs that don't touch viewer files — it means "not applicable to this run." The function now treats `SKIPPED` the same as `SUCCESS` so a skipped check no longer incorrectly blocks `run_pre_approval_gate`. Test coverage added.
+
+- **`plugin.json` was missing from the v0.6.1 version bump (#1026).** `.claude/.claude-plugin/plugin.json` was still at `0.6.0`; bumped to `0.6.1` (now `0.6.2` in this release). Stale generated `.claude/` assets regenerated.
+
 ## 0.6.1 - 2026-06-30
 
 ### Changed

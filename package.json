@@ -82,7 +82,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "files": [
     "cli/",
     "lib/",

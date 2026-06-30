@@ -1,6 +1,6 @@
 {
   "name": "dev-loops",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Agent-harness-agnostic dev-loop: agents, skills, and hooks for GitHub/Copilot-driven development loops.",
   "author": {
     "name": "Manuel Fittko",
