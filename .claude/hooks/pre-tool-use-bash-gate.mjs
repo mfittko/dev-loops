@@ -2,10 +2,12 @@
 /**
  * PreToolUse Bash gate hook (#773).
  *
- * Reproduces the Pi extension's `onUserBash` draft-gate guard for Claude Code: blocks
- * `gh pr ready` for the target repo unless a clean draft_gate checkpoint verdict exists for the
- * PR (via scripts/loop/pre-pr-ready-gate.mjs). Merges are NOT blocked here (they trigger the
- * post-merge hook). All other commands pass through.
+ * Blocks two commands on the target repo unless their gate evidence exists; everything else
+ * passes through:
+ *   - `gh pr ready` — needs a clean draft_gate verdict (via scripts/loop/pre-pr-ready-gate.mjs).
+ *   - `gh pr merge` — needs full pre-merge evidence (clean current-head draft_gate +
+ *     pre_approval_gate, via scripts/github/detect-checkpoint-evidence.mjs). This closes the hole
+ *     where a hand-run merge skips the loop's pre-merge gate check (and thus the pre-approval gate).
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -13,7 +15,9 @@ import path from "node:path";
 import { decideBashGate } from "./_hook-decisions.mjs";
 import {
   isGhPrReadyCommand,
+  isGhPrMergeCommand,
   extractPrNumberFromGhPrReady,
+  extractPrNumberFromGhPrMerge,
   normalizeGitHubRepoSlug,
   TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
@@ -22,7 +26,9 @@ import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
 const input = readHookInput();
 const command = input?.tool_input?.command;
-if (typeof command !== "string" || !isGhPrReadyCommand(command)) {
+const isReady = typeof command === "string" && isGhPrReadyCommand(command);
+const isMerge = typeof command === "string" && !isReady && isGhPrMergeCommand(command);
+if (!isReady && !isMerge) {
   emitAllow();
 }
 
@@ -44,12 +50,15 @@ try {
 let gatePassed = false;
 let gateError = null;
 if (repoSlug === TARGET_REPO_SLUG) {
-  const pr = extractPrNumberFromGhPrReady(command);
+  const pr = isReady ? extractPrNumberFromGhPrReady(command) : extractPrNumberFromGhPrMerge(command);
   if (pr !== null && repoRoot) {
-    // The gate guard script is overridable for deterministic testing (stub instead of the
-    // network-touching real guard); defaults to the bundled pre-pr-ready-gate.
-    const gateScript =
-      process.env.DEVLOOPS_PRE_PR_READY_GATE_SCRIPT || path.join(repoRoot, "scripts/loop/pre-pr-ready-gate.mjs");
+    // Each gate script is overridable for deterministic testing (stub instead of the
+    // network-touching real guard). `gh pr ready` → draft-gate only; `gh pr merge` → the full
+    // pre-merge evidence check (draft_gate + pre_approval_gate).
+    const gateScript = isReady
+      ? process.env.DEVLOOPS_PRE_PR_READY_GATE_SCRIPT || path.join(repoRoot, "scripts/loop/pre-pr-ready-gate.mjs")
+      : process.env.DEVLOOPS_PRE_MERGE_GATE_SCRIPT ||
+        path.join(repoRoot, "scripts/github/detect-checkpoint-evidence.mjs");
     try {
       execFileSync("node", [gateScript, "--repo", repoSlug, "--pr", String(pr)], {
         cwd: repoRoot,
@@ -57,10 +66,10 @@ if (repoSlug === TARGET_REPO_SLUG) {
       });
       gatePassed = true;
     } catch (error) {
-      // Exit 1 from the guard = no clean draft_gate evidence (gatePassed stays false).
+      // Exit 1 from the guard = gate evidence missing/insufficient (gatePassed stays false).
       // A missing/unspawnable guard (no numeric status) = could-not-run → gateError.
       if (typeof error?.status !== "number") {
-        gateError = "could not run the draft-gate guard script";
+        gateError = "could not run the gate guard script";
       }
     }
   }

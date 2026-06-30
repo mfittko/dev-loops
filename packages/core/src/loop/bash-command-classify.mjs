@@ -50,7 +50,7 @@ export function normalizeGitHubRepoSlug(remoteUrl) {
   return null;
 }
 
-function isGhPrMergeCommand(segment) {
+function segmentIsGhPrMerge(segment) {
   if (!/^gh\s+pr\s+merge(?:\s|$)/i.test(segment)) {
     return false;
   }
@@ -82,7 +82,7 @@ export function isMergeCapableCommand(command) {
   }
   return normalized
     .split(/\s*(?:&&|\|\||;|\|)\s*/)
-    .some((segment) => isGhPrMergeCommand(segment) || isGitMergeCompletionCommand(segment));
+    .some((segment) => segmentIsGhPrMerge(segment) || isGitMergeCompletionCommand(segment));
 }
 
 /** @param {string} command @returns {string} */
@@ -90,13 +90,19 @@ export function firstShellSegment(command) {
   return command.trim().split(/\s*(?:&&|\|\||;|\|)\s*/)[0]?.trim() ?? "";
 }
 
-/** @param {string} command @returns {boolean} */
-export function isGhPrReadyCommand(command) {
+/** Build the `^gh pr <verb>` prefix matcher for a `gh pr <verb>` subcommand. */
+function ghPrVerbRegex(verb) {
+  return new RegExp(`^gh\\s+pr\\s+${verb}(?:\\s|$)`, "i");
+}
+
+/** Generic `gh pr <verb>` (first-segment) detector, ignoring `--help`/`-h`. */
+function isGhPrVerbCommand(command, verb) {
   const segment = firstShellSegment(command);
-  if (!segment || !/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
+  const re = ghPrVerbRegex(verb);
+  if (!segment || !re.test(segment)) {
     return false;
   }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, "").trim();
+  const remainder = segment.replace(re, "").trim();
   if (!remainder) {
     return true;
   }
@@ -104,13 +110,14 @@ export function isGhPrReadyCommand(command) {
   return !args.includes("--help") && !args.includes("-h");
 }
 
-/** @param {string} command @returns {number|null} */
-export function extractPrNumberFromGhPrReady(command) {
+/** Generic positional PR-number extractor for `gh pr <verb>`. */
+function extractPrNumberFromGhPrVerb(command, verb) {
   const segment = firstShellSegment(command);
-  if (!/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
+  const re = ghPrVerbRegex(verb);
+  if (!re.test(segment)) {
     return null;
   }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, "").trim();
+  const remainder = segment.replace(re, "").trim();
   if (!remainder) {
     return null;
   }
@@ -135,13 +142,14 @@ export function extractPrNumberFromGhPrReady(command) {
   return null;
 }
 
-/** @param {string} command @returns {string|null} */
-export function extractRepoFlagFromGhPrReady(command) {
+/** Generic `--repo`/`-R` extractor for `gh pr <verb>`. */
+function extractRepoFlagFromGhPrVerb(command, verb) {
   const segment = firstShellSegment(command);
-  if (!/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
+  const re = ghPrVerbRegex(verb);
+  if (!re.test(segment)) {
     return null;
   }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, "").trim();
+  const remainder = segment.replace(re, "").trim();
   if (!remainder) {
     return null;
   }
@@ -160,4 +168,40 @@ export function extractRepoFlagFromGhPrReady(command) {
     }
   }
   return null;
+}
+
+/** @param {string} command @returns {boolean} */
+export function isGhPrReadyCommand(command) {
+  return isGhPrVerbCommand(command, "ready");
+}
+
+/** @param {string} command @returns {number|null} */
+export function extractPrNumberFromGhPrReady(command) {
+  return extractPrNumberFromGhPrVerb(command, "ready");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrReady(command) {
+  return extractRepoFlagFromGhPrVerb(command, "ready");
+}
+
+/**
+ * Whether `command` is a `gh pr merge` invocation (first segment), ignoring `--help`/`-h`.
+ * Used by the PreToolUse gate to block a direct merge that bypasses the dev-loop's pre-merge
+ * gate-evidence check — the loop normally runs `detect-checkpoint-evidence` before merging, but
+ * a hand-run `gh pr merge` would otherwise skip it.
+ * @param {string} command @returns {boolean}
+ */
+export function isGhPrMergeCommand(command) {
+  return isGhPrVerbCommand(command, "merge");
+}
+
+/** @param {string} command @returns {number|null} */
+export function extractPrNumberFromGhPrMerge(command) {
+  return extractPrNumberFromGhPrVerb(command, "merge");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrMerge(command) {
+  return extractRepoFlagFromGhPrVerb(command, "merge");
 }

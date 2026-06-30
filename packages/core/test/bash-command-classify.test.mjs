@@ -8,6 +8,9 @@ import {
   isGhPrReadyCommand,
   extractPrNumberFromGhPrReady,
   extractRepoFlagFromGhPrReady,
+  isGhPrMergeCommand,
+  extractPrNumberFromGhPrMerge,
+  extractRepoFlagFromGhPrMerge,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -41,6 +44,22 @@ test("extractRepoFlagFromGhPrReady reads -r/--repo and --repo=value", () => {
   assert.equal(extractRepoFlagFromGhPrReady("gh pr ready --repo other/repo 1"), "other/repo");
   assert.equal(extractRepoFlagFromGhPrReady("gh pr ready --repo=other/repo 1"), "other/repo");
   assert.equal(extractRepoFlagFromGhPrReady("gh pr ready 1"), null);
+});
+
+test("isGhPrMergeCommand recognizes gh pr merge (first segment) and ignores --help", () => {
+  assert.equal(isGhPrMergeCommand("gh pr merge 1023 --squash"), true);
+  assert.equal(isGhPrMergeCommand("gh pr merge"), true);
+  assert.equal(isGhPrMergeCommand("gh pr merge --help"), false);
+  assert.equal(isGhPrMergeCommand("gh pr ready 17"), false);
+});
+
+test("extractPrNumber/RepoFlag FromGhPrMerge mirror the ready extractors", () => {
+  assert.equal(extractPrNumberFromGhPrMerge("gh pr merge 1023 --squash"), 1023);
+  assert.equal(extractPrNumberFromGhPrMerge("gh pr merge --repo mfittko/dev-loops 42"), 42);
+  assert.equal(extractPrNumberFromGhPrMerge("gh pr merge --squash"), null);
+  assert.equal(extractRepoFlagFromGhPrMerge("gh pr merge --repo other/repo 1"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrMerge("gh pr merge --repo=other/repo 1"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrMerge("gh pr merge 1"), null);
 });
 
 test("isMergeCapableCommand detects gh pr merge / git merge, ignores aborts and help", () => {

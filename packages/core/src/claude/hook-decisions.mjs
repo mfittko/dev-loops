@@ -14,6 +14,9 @@ import {
   isGhPrReadyCommand,
   extractPrNumberFromGhPrReady,
   extractRepoFlagFromGhPrReady,
+  isGhPrMergeCommand,
+  extractPrNumberFromGhPrMerge,
+  extractRepoFlagFromGhPrMerge,
   TARGET_REPO_SLUG,
 } from "../loop/bash-command-classify.mjs";
 
@@ -33,26 +36,37 @@ const ALLOW = Object.freeze({ decision: "allow" });
 export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 
 /**
- * Decide whether a PreToolUse Bash command must be blocked by the draft-gate boundary.
+ * Decide whether a PreToolUse Bash command must be blocked by a dev-loop gate boundary.
  *
- * Mirrors the Pi extension's `onUserBash`: the only blocked case is `gh pr ready` for the
- * target repo without clean draft_gate evidence. Everything else (including merges, which
- * trigger the post-merge step, not a block) is allowed through.
+ * Two gated commands on the target repo:
+ *   - `gh pr ready` — blocked without clean draft_gate evidence (`pre-pr-ready-gate`).
+ *   - `gh pr merge` — blocked without the full pre-merge gate evidence (`detect-checkpoint-evidence`:
+ *     clean current-head draft_gate + pre_approval_gate). The loop runs this check before merging;
+ *     gating it here closes the hole where a hand-run `gh pr merge` skips the pre-approval gate
+ *     entirely. Everything else passes through.
+ *
+ * The hook computes `gatePassed`/`gateError` from the gate script appropriate to the command kind.
  *
  * @param {Object} params
  * @param {string} params.command - The Bash command string.
  * @param {string|null} [params.repoSlug] - Resolved owner/name of the cwd repo (null if unknown).
- * @param {boolean} [params.gatePassed] - Whether `pre-pr-ready-gate` evidence exists for the PR.
+ * @param {boolean} [params.gatePassed] - Whether the relevant gate evidence exists for the PR.
  * @param {string|null} [params.gateError] - Error detail when the gate guard could not run.
  * @returns {HookDecision}
  */
 export function decideBashGate({ command, repoSlug = null, gatePassed = false, gateError = null }) {
-  if (typeof command !== "string" || !isGhPrReadyCommand(command)) {
+  if (typeof command !== "string") {
+    return ALLOW;
+  }
+  const isReady = isGhPrReadyCommand(command);
+  const isMerge = !isReady && isGhPrMergeCommand(command);
+  if (!isReady && !isMerge) {
     return ALLOW;
   }
 
+  const verb = isReady ? "gh pr ready" : "gh pr merge";
   // An explicit `--repo other/repo` that is not the target → not our concern, pass through.
-  const explicitRepo = extractRepoFlagFromGhPrReady(command);
+  const explicitRepo = isReady ? extractRepoFlagFromGhPrReady(command) : extractRepoFlagFromGhPrMerge(command);
   if (explicitRepo && explicitRepo.toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
     return ALLOW;
   }
@@ -61,26 +75,28 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     return ALLOW;
   }
 
-  const prNumber = extractPrNumberFromGhPrReady(command);
+  const prNumber = isReady ? extractPrNumberFromGhPrReady(command) : extractPrNumberFromGhPrMerge(command);
   if (prNumber === null) {
     return {
       decision: "deny",
-      reason:
-        "gh pr ready blocked: could not determine the PR number from the command. Include the PR number explicitly.",
+      reason: `${verb} blocked: could not determine the PR number from the command. Include the PR number explicitly.`,
     };
   }
 
   if (gateError) {
+    const which = isReady ? "draft-gate" : "pre-merge gate";
     return {
       decision: "deny",
-      reason: `gh pr ready blocked: draft-gate evidence check failed (${gateError}).`,
+      reason: `${verb} blocked: ${which} evidence check failed (${gateError}).`,
     };
   }
 
   if (!gatePassed) {
     return {
       decision: "deny",
-      reason: `gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #${prNumber}.`,
+      reason: isReady
+        ? `gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #${prNumber}.`
+        : `gh pr merge blocked: missing pre-merge gate evidence for PR #${prNumber} (need clean current-head draft_gate + pre_approval_gate; inline verdicts are not accepted). Run the dev-loop gates instead of merging directly.`,
     };
   }
 

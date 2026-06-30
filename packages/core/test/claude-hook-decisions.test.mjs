@@ -9,9 +9,9 @@ const TARGET = "mfittko/dev-loops";
 // decideBashGate
 // ---------------------------------------------------------------------------
 
-test("decideBashGate allows non-gh-pr-ready commands", () => {
+test("decideBashGate allows non-gated commands", () => {
   assert.equal(decideBashGate({ command: "npm test", repoSlug: TARGET }).decision, "allow");
-  assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr view 1", repoSlug: TARGET }).decision, "allow");
 });
 
 test("decideBashGate denies ungated gh pr ready in the target repo", () => {
@@ -19,6 +19,37 @@ test("decideBashGate denies ungated gh pr ready in the target repo", () => {
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /no visible clean draft_gate/);
   assert.match(d.reason, /#17/);
+});
+
+// gh pr merge is gated on the full pre-merge evidence (draft_gate + pre_approval_gate); a direct
+// merge must not bypass the pre-approval gate the way a hand-run `gh pr merge` previously could.
+test("decideBashGate denies ungated gh pr merge in the target repo", () => {
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr merge blocked/);
+  assert.match(d.reason, /pre_approval_gate/);
+  assert.match(d.reason, /#1/);
+});
+
+test("decideBashGate allows gh pr merge when pre-merge evidence passed", () => {
+  assert.equal(
+    decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: true }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate passes through gh pr merge for a non-target --repo", () => {
+  assert.equal(
+    decideBashGate({ command: "gh pr merge --repo other/repo 1", repoSlug: TARGET, gatePassed: false }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate passes through gh pr merge outside the target repo", () => {
+  assert.equal(
+    decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: "someone/else", gatePassed: false }).decision,
+    "allow",
+  );
 });
 
 test("decideBashGate allows gh pr ready when the draft gate passed", () => {
