@@ -255,7 +255,6 @@ export const DECK_REGISTRY = {
       { id: "model-agnostic", stateName: "Model agnostic" },
       { id: "proof", stateName: "Proof (data)" },
       { id: "setup", stateName: "Setup" },
-      { id: "close", stateName: "Close" },
     ],
   },
   "deep-dive-deck": {
