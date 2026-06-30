@@ -47,6 +47,10 @@
     padding: clamp(2rem, 6vw, 4rem) clamp(1.1rem, 5vw, 2rem) 5rem;
   }
 
+  @media (min-width: 900px) {
+    .wrap { max-width: 72rem; }
+  }
+
   /* readable article measure (~65ch) inside the wrapper */
   .article p,
   .article ul,
@@ -544,12 +548,14 @@
 
   <p class="closer">The next agent will write your code in seconds. The lever you control is the coordination around it: keep the next step known so the next actor pulls it, and measure how long the work waits.</p>
 
+<!--
   <hr class="rule" />
 
   <div class="render-note">
     <h2>Rendering the diagrams on Medium</h2>
     <p>Medium does not natively render Mermaid. In the Markdown version of this article each diagram is a fenced <code>mermaid</code> block so it stays editable, and each carries a caption so the article reads cleanly with each diagram shown as a static image. To publish on Medium, either paste each block into a Mermaid-enabled editor and embed the rendered image, or export each diagram as SVG/PNG and drop it in where the block sits. Because every diagram is captioned, the prose carries the argument on its own.</p>
   </div>
+-->
 
 </article>
 </div>
