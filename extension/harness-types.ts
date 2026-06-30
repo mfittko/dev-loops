@@ -29,6 +29,7 @@ export type HarnessContext = {
   cwd: string;
   hasUI: boolean;
   ui: HarnessUi;
+  sendUserMessage?: (message: string, options?: Record<string, unknown>) => unknown;
 };
 
 export type HarnessLifecycleEvent = 'session_start' | 'tool_result' | 'user_bash' | 'agent_end';

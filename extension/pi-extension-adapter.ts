@@ -26,6 +26,7 @@ import type {
 
 export function toHarnessContext(ctx: Partial<ExtensionContext> | undefined): HarnessContext {
   const ui = ctx?.ui;
+  const sender = (ctx as { sendUserMessage?: (message: string, options?: Record<string, unknown>) => unknown } | undefined)?.sendUserMessage;
   return {
     cwd: (ctx?.cwd as string) ?? process.cwd(),
     hasUI: Boolean(ctx?.hasUI),
@@ -34,6 +35,7 @@ export function toHarnessContext(ctx: Partial<ExtensionContext> | undefined): Ha
       setWidget: (key, lines, options) => ui?.setWidget?.(key, lines as never, options as never),
       setStatus: (key, text) => ui?.setStatus?.(key, text as never),
     },
+    sendUserMessage: sender ? (message, options) => sender.call(ctx, message, options) : undefined,
   };
 }
 

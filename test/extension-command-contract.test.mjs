@@ -43,6 +43,7 @@ function createCommandContext() {
     widgets: [],
     notifications: [],
     statuses: [],
+    userMessages: [],
   };
 
   return {
@@ -57,6 +58,9 @@ function createCommandContext() {
         setStatus(key, text) {
           calls.statuses.push({ key, text });
         },
+      },
+      sendUserMessage(message, options) {
+        calls.userMessages.push({ message, options });
       },
     },
     calls,
@@ -173,14 +177,24 @@ test("direct entrypoints surface the public intent for dispatch (#972)", async (
   const pi = readyPi();
   registerExtension(pi);
 
-  const { ctx, calls } = createCommandContext();
-  await pi.registeredCommands.get("dev-loops").handler("continue 88", ctx);
+  for (const { input, action, intent } of [
+    { input: "start 88", action: "start", intent: "start dev loop on issue 88" },
+    { input: "auto 88", action: "auto", intent: "auto dev loop on issue 88" },
+    { input: "continue 88", action: "continue", intent: "continue dev loop on 88" },
+    { input: "info 88", action: "info", intent: "inspect dev loop state on 88" },
+  ]) {
+    const { ctx, calls } = createCommandContext();
+    await pi.registeredCommands.get("dev-loops").handler(input, ctx);
 
-  const widget = calls.widgets.at(-1);
-  assert.equal(widget.key, "dev-loops.setup");
-  assert(widget.lines.some((line) => /\/skill:dev-loop continue dev loop on 88/.test(line)));
-  assert.equal(calls.notifications.at(-1).message, "dev-loops continue: continue dev loop on 88");
-  assert.equal(calls.notifications.at(-1).level, "info");
+    const widget = calls.widgets.at(-1);
+    assert.equal(widget.key, "dev-loops.setup");
+    assert(widget.lines.some((line) => line === `/skill:dev-loop ${intent}`));
+    assert.deepEqual(calls.userMessages, [
+      { message: `/skill:dev-loop ${intent}`, options: undefined },
+    ]);
+    assert.equal(calls.notifications.at(-1).message, `dev-loops ${action}: ${intent}`);
+    assert.equal(calls.notifications.at(-1).level, "info");
+  }
 
   // Help lists the direct entrypoints so they are discoverable.
   const helpContext = createCommandContext();
@@ -201,6 +215,9 @@ test("start-spike surfaces the spike intent through the Pi handler (#988 P2)", a
   const widget = calls.widgets.at(-1);
   assert.equal(widget.key, "dev-loops.setup");
   assert(widget.lines.some((line) => /dev-loops start-spike/.test(line)));
+  assert.deepEqual(calls.userMessages, [
+    { message: "/skill:dev-loop start a dev-loop spike on the question: Would an LRU cache help?", options: undefined },
+  ]);
   assert.match(calls.notifications.at(-1).message, /start a dev-loop spike on the question: Would an LRU cache help\?/);
   assert.equal(calls.notifications.at(-1).level, "info");
 });
