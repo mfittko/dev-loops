@@ -30,6 +30,7 @@
  * @property {string} cwd - Working directory for the current invocation.
  * @property {boolean} hasUI - Whether an interactive UI surface is attached.
  * @property {HarnessUi} ui - UI operations for this invocation.
+ * @property {((message: string, options?: Record<string, unknown>) => unknown) | undefined} sendUserMessage - Optional: send a user-turn message into the harness (Pi extension only; absent in other harnesses).
  *
  * @typedef {'session_start'|'tool_result'|'user_bash'|'agent_end'} HarnessLifecycleEvent
  *

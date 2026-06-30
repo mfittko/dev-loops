@@ -26,6 +26,10 @@ const STATUS_KEY = 'dev-loops';
 const WIDGET_KEY = 'dev-loops.setup';
 const PACKAGED_AGENTS_ROOT = new URL('../agents/', import.meta.url);
 
+async function dispatchDevLoopIntent(ctx: { sendUserMessage?: (message: string) => unknown }, intent: string) {
+  await ctx.sendUserMessage?.(`/skill:dev-loop ${intent}`);
+}
+
 export function syncPackagedAgents({
   sourceRoot = fileURLToPath(PACKAGED_AGENTS_ROOT),
   targetRoot = path.join(os.homedir(), '.agents'),
@@ -92,10 +96,12 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
           return;
         case 'entrypoint':
           ctx.ui.setWidget(WIDGET_KEY, buildEntrypointLines(result.action, result.intent), { placement: 'belowEditor' });
+          await dispatchDevLoopIntent(ctx, result.intent);
           ctx.ui.notify(`dev-loops ${result.action}: ${result.intent}`, 'info');
           return;
         case 'start_spike':
           ctx.ui.setWidget(WIDGET_KEY, buildEntrypointLines('start-spike', result.intent), { placement: 'belowEditor' });
+          await dispatchDevLoopIntent(ctx, result.intent);
           ctx.ui.notify(`dev-loops start-spike: ${result.intent}`, 'info');
           return;
         case 'checks':
