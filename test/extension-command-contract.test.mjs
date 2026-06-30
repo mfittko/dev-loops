@@ -201,7 +201,7 @@ test("direct entrypoints surface the public intent for dispatch (#972)", async (
   const helpContext = createCommandContext();
   await pi.registeredCommands.get("dev-loops").handler("", helpContext.ctx);
   const helpLines = helpContext.calls.widgets.at(-1).lines;
-  for (const re of [/\/dev-loops start <issue>/, /auto <issue>/, /\/dev-loops continue \[issue\|pr\]/, /\/dev-loops start-spike <question>/, /info <issue\|pr>/, /\/dev-loops inspect open\|resume\|status\|stop\|restart/]) {
+  for (const re of [/\/dev-loops start <issue>/, /\/dev-loops auto <issue>/, /\/dev-loops continue \[issue\|pr\]/, /\/dev-loops start-spike <question>/, /\/dev-loops info <issue\|pr>/, /\/dev-loops inspect open\|resume\|status\|stop\|restart/]) {
     assert(helpLines.some((line) => re.test(line)), `help should list ${re}`);
   }
 });
