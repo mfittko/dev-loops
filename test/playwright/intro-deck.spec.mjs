@@ -55,18 +55,29 @@ test("webkit intro deck keyboard navigation advances, backs up, and ignores guar
     expect(await scrollTop(page)).toBeLessThan(height * 0.5);
     await resetScroll(page);
 
-    await page.evaluate(() => {
+    const focusBody = () => page.evaluate(() => {
       document.getElementById("keyboard-test-input")?.remove();
       document.body.tabIndex = -1;
       document.body.focus();
     });
-    await page.keyboard.press("ArrowDown");
-    await page.waitForFunction(() => Math.max(document.documentElement.scrollTop, document.body.scrollTop) > window.innerHeight * 0.5);
-    await expect(page.locator("#coordination-cost")).toBeVisible();
 
-    await page.keyboard.press("ArrowUp");
-    await page.waitForFunction(() => Math.max(document.documentElement.scrollTop, document.body.scrollTop) < window.innerHeight * 0.5);
-    await expect(page.locator("#hero")).toBeVisible();
+    for (const key of ["ArrowDown", "ArrowRight", "PageDown", "Space"]) {
+      await resetScroll(page);
+      await focusBody();
+      await page.keyboard.press(key);
+      await page.waitForFunction(() => Math.max(document.documentElement.scrollTop, document.body.scrollTop) > window.innerHeight * 0.5);
+      await expect(page.locator("#coordination-cost")).toBeVisible();
+    }
+
+    for (const key of ["ArrowUp", "ArrowLeft", "PageUp"]) {
+      await resetScroll(page);
+      await focusBody();
+      await page.keyboard.press("ArrowDown");
+      await page.waitForFunction(() => Math.max(document.documentElement.scrollTop, document.body.scrollTop) > window.innerHeight * 0.5);
+      await page.keyboard.press(key);
+      await page.waitForFunction(() => Math.max(document.documentElement.scrollTop, document.body.scrollTop) < window.innerHeight * 0.5);
+      await expect(page.locator("#hero")).toBeVisible();
+    }
   } finally {
     await stopFixtureServer(server);
   }

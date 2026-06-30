@@ -485,6 +485,19 @@
   let cur = 0;
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
+  const currentSlideIndex = () => {
+    let best = cur;
+    let bestDistance = Infinity;
+    slides.forEach((slide, i) => {
+      const distance = Math.abs(slide.getBoundingClientRect().top);
+      if (distance < bestDistance) {
+        best = i;
+        bestDistance = distance;
+      }
+    });
+    return best;
+  };
+
   const observer = new IntersectionObserver(entries => {
     entries.forEach(e => {
       if (e.isIntersecting && e.intersectionRatio >= 0.5)
@@ -497,6 +510,7 @@
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     const tag = document.activeElement ? document.activeElement.tagName : '';
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.activeElement.isContentEditable) return;
+    cur = currentSlideIndex();
     const behavior = reducedMotion.matches ? 'auto' : 'smooth';
     if (['ArrowDown', 'ArrowRight', 'PageDown', ' '].includes(e.key)) {
       e.preventDefault();
