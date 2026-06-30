@@ -52,6 +52,18 @@ test("decideBashGate passes through gh pr merge outside the target repo", () => 
   );
 });
 
+test("decideBashGate denies gh pr merge when PR number cannot be determined", () => {
+  const d = decideBashGate({ command: "gh pr merge --squash", repoSlug: TARGET, gatePassed: false });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /could not determine the PR number/);
+});
+
+test("decideBashGate denies with a pre-merge gate error reason for gh pr merge", () => {
+  const d = decideBashGate({ command: "gh pr merge 42", repoSlug: TARGET, gateError: "could not run the gate guard script" });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /pre-merge gate evidence check failed/);
+});
+
 test("decideBashGate allows gh pr ready when the draft gate passed", () => {
   assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: TARGET, gatePassed: true }).decision, "allow");
 });
