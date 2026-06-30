@@ -193,7 +193,7 @@ export function extractRepoFlagFromGhPrReady(command) {
 }
 
 /**
- * Whether `command` is a `gh pr merge` invocation (first segment), ignoring `--help`/`-h`.
+ * Whether `command` contains a `gh pr merge` invocation in any shell segment, ignoring `--help`/`-h`.
  * Used by the PreToolUse gate to block a direct merge that bypasses the dev-loop's pre-merge
  * gate-evidence check — the loop normally runs `detect-checkpoint-evidence` before merging, but
  * a hand-run `gh pr merge` would otherwise skip it.
