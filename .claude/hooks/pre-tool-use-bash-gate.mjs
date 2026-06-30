@@ -14,10 +14,10 @@ import path from "node:path";
 
 import { decideBashGate } from "./_hook-decisions.mjs";
 import {
-  isGhPrReadyCommand,
-  isGhPrMergeCommand,
-  extractPrNumberFromGhPrReady,
-  extractPrNumberFromGhPrMerge,
+  commandContainsGhPrReady,
+  commandContainsGhPrMerge,
+  extractPrNumberFromGhPrReadyAnywhere,
+  extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
   TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
@@ -26,8 +26,8 @@ import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
 const input = readHookInput();
 const command = input?.tool_input?.command;
-const isReady = typeof command === "string" && isGhPrReadyCommand(command);
-const isMerge = typeof command === "string" && isGhPrMergeCommand(command);
+const isReady = typeof command === "string" && commandContainsGhPrReady(command);
+const isMerge = typeof command === "string" && commandContainsGhPrMerge(command);
 if (!isReady && !isMerge) {
   emitAllow();
 }
@@ -51,7 +51,7 @@ let gatePassed = false;
 let gateError = null;
 if (repoSlug === TARGET_REPO_SLUG) {
   // When both verbs appear (compound command), apply the stricter merge gate.
-  const pr = isMerge ? extractPrNumberFromGhPrMerge(command) : extractPrNumberFromGhPrReady(command);
+  const pr = isMerge ? extractPrNumberFromGhPrMergeAnywhere(command) : extractPrNumberFromGhPrReadyAnywhere(command);
   if (pr !== null && repoRoot) {
     // Each gate script is overridable for deterministic testing (stub instead of the
     // network-touching real guard). `gh pr ready` → draft-gate only; `gh pr merge` → the full

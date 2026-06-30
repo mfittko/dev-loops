@@ -12,12 +12,12 @@
 
 import { resolveRunId } from "./_run-context.mjs";
 import {
-  isGhPrReadyCommand,
-  extractPrNumberFromGhPrReady,
-  extractRepoFlagFromGhPrReady,
-  isGhPrMergeCommand,
-  extractPrNumberFromGhPrMerge,
-  extractRepoFlagFromGhPrMerge,
+  commandContainsGhPrReady,
+  commandContainsGhPrMerge,
+  extractPrNumberFromGhPrReadyAnywhere,
+  extractRepoFlagFromGhPrReadyAnywhere,
+  extractPrNumberFromGhPrMergeAnywhere,
+  extractRepoFlagFromGhPrMergeAnywhere,
   TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
 
@@ -59,8 +59,12 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   if (typeof command !== "string") {
     return ALLOW;
   }
-  const isReady = isGhPrReadyCommand(command);
-  const isMerge = isGhPrMergeCommand(command);
+  // Scan ALL shell segments — the PreToolUse gate blocks pre-emptively, so a gated verb in any
+  // segment (even after `&&` or `;`) must be caught. This differs from the Pi extension's
+  // post-execute `isGhPrReadyCommand`/`isGhPrMergeCommand` which scan only the first segment
+  // (correct there: `false && gh pr ready 42` short-circuits so ready never ran).
+  const isReady = commandContainsGhPrReady(command);
+  const isMerge = commandContainsGhPrMerge(command);
   if (!isReady && !isMerge) {
     return ALLOW;
   }
@@ -68,7 +72,9 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // the draft_gate (a subset of the pre-merge evidence check) is also satisfied.
   const verb = isMerge ? "gh pr merge" : "gh pr ready";
   // An explicit `--repo other/repo` that is not the target → not our concern, pass through.
-  const explicitRepo = isMerge ? extractRepoFlagFromGhPrMerge(command) : extractRepoFlagFromGhPrReady(command);
+  const explicitRepo = isMerge
+    ? extractRepoFlagFromGhPrMergeAnywhere(command)
+    : extractRepoFlagFromGhPrReadyAnywhere(command);
   if (explicitRepo && explicitRepo.toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
     return ALLOW;
   }
@@ -77,7 +83,9 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     return ALLOW;
   }
 
-  const prNumber = isMerge ? extractPrNumberFromGhPrMerge(command) : extractPrNumberFromGhPrReady(command);
+  const prNumber = isMerge
+    ? extractPrNumberFromGhPrMergeAnywhere(command)
+    : extractPrNumberFromGhPrReadyAnywhere(command);
   if (prNumber === null) {
     return {
       decision: "deny",
