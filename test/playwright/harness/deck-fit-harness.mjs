@@ -433,13 +433,19 @@ export async function assertDesktopProseCentered(page) {
     const selectors = [".article p", ".article ul", ".article .section-h", ".article .lede"];
     const offenders = [];
     for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (!el) continue; // selector may be absent in some articles
-      const ml = parseFloat(getComputedStyle(el).marginLeft);
-      // margin-left must be > 0 to be centered — flush-left (≤1px) means the
-      // auto rule is missing or was overridden.
-      if (ml <= 1) {
-        offenders.push(`${sel}: margin-left=${ml}px (expected > 1px — auto centering)`);
+      const els = document.querySelectorAll(sel);
+      if (els.length === 0) continue; // selector may be absent in some articles
+      // Check all matching elements — a partial override on a subset would be missed
+      // by querySelector which only checks the first.
+      for (const el of els) {
+        const ml = parseFloat(getComputedStyle(el).marginLeft);
+        // margin-left must be > 0 to be centered — flush-left (≤1px) means the
+        // auto rule is missing or was overridden.
+        if (ml <= 1) {
+          const text = (el.textContent || "").trim().slice(0, 32);
+          offenders.push(`${sel}: margin-left=${ml}px (expected > 1px — auto centering) "${text}"`);
+          break; // one offender per selector is enough to flag the issue
+        }
       }
     }
     return offenders;
