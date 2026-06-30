@@ -90,7 +90,7 @@ const AutonomyConfig = z.strictObject({
 
 /**
  * Human-handoff config (#920, Request B of #910): at the pre-approval /
- * merge-handoff boundary, OFFER to assign the PR to a named human
+ * merge-handoff boundary, OFFER to assign the PR to a contributor
  * reviewer/assignee. Opt-in (default off). Pairs with autonomy.humanMergeOnly.
  * `candidatesFrom` selects which sources the resolver queries; `assignees` is a
  * static highest-priority candidate list. Absent/empty = disabled no-op.

@@ -126,7 +126,7 @@
     "approval": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Approval / merge-handoff behavior. `humanHandoff` (opt-in) offers to assign the PR to a named human reviewer/assignee at the pre-approval gate. Pairs with autonomy.humanMergeOnly.",
+      "description": "Approval / merge-handoff behavior. `humanHandoff` (opt-in) offers to assign the PR to a contributor at the pre-approval gate. Pairs with autonomy.humanMergeOnly.",
       "properties": {
         "humanHandoff": {
           "type": "object",

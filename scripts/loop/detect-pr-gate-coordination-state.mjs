@@ -221,7 +221,8 @@ export function deriveUiE2ePassed(prData, checkNames = UI_E2E_CHECK_NAMES) {
   return present.every((entry) => {
     const conclusion = String(entry?.conclusion ?? "").toUpperCase();
     const state = String(entry?.state ?? "").toUpperCase();
-    return conclusion === "SUCCESS" || state === "SUCCESS";
+    // SKIPPED = "not applicable to this run" (e.g. viewer-smoke when no viewer files changed) — not a failure.
+    return conclusion === "SUCCESS" || conclusion === "SKIPPED" || state === "SUCCESS" || state === "SKIPPED";
   });
 }
 

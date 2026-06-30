@@ -383,7 +383,7 @@
         <p class="card-label">A human merges</p>
         <ul class="mini-list">
           <li>Merging is reserved for a human.</li>
-          <li>At the final gate it hands the PR to a named person.</li>
+          <li>At the final gate it hands the PR to a contributor.</li>
           <li>A human always owns the last yes.</li>
         </ul>
       </div>
@@ -485,14 +485,14 @@
 
 <section class="slide" id="blind-spot">
   <div class="slide-inner">
-    <p class="kicker">The blind spot</p>
-    <h2>Git History Hides the Wait</h2>
+    <p class="kicker">The attention bottleneck</p>
+    <h2>Human Attention Routes Every Transition</h2>
     <div class="glass-card card-narrow">
       <ul class="tight-list">
-        <li>Commits record the <strong>output</strong> &mdash; leaving unrecorded the hours the work sat idle before someone touched it.</li>
-        <li>Review threads bury the cost of re-reading and re-explaining inside ordinary back-and-forth.</li>
-        <li>CI timestamps end at green. They miss the gap before a human notices and acts on the result.</li>
-        <li>So the single biggest drag on lead time &mdash; <em>coordination waiting</em> &mdash; is invisible to every tool you already trust.</li>
+        <li>The tools show the wait: GitHub timestamps every transition; a PR timeline reveals exactly how long each gap lasted.</li>
+        <li>The cost is the routing &mdash; getting from &ldquo;ready&rdquo; to &ldquo;shipped&rdquo; runs through human attention.</li>
+        <li>The person who can act is busy, context-switched, or in another timezone &mdash; so the wait is structural, not a tooling gap.</li>
+        <li>When it is available, spending it on mechanical decisions &mdash; noticing a status, confirming a CI result &mdash; crowds out the judgment-heavy work only a person should do.</li>
       </ul>
     </div>
   </div>
@@ -561,7 +561,7 @@
         <p class="card-label">Owner &amp; next step are a board</p>
         <ul class="mini-list">
           <li>Work moves through visible columns: waiting, in progress, done.</li>
-          <li>The column <em>is</em> the current owner and the safe next step.</li>
+          <li>The column carries the current owner and the safe next step.</li>
           <li>A deterministic resolver picks the next action and names whose move it is.</li>
         </ul>
       </div>
@@ -628,7 +628,7 @@
           <li><strong>Keep the next step always known,</strong> so whoever is free pulls it and a handoff, when it happens, is a recorded decision you can see.</li>
           <li><strong>Make the state explicit,</strong> and pickup becomes a continuation of work already under way.</li>
           <li><strong>Measure the waits,</strong> and the biggest stall stops hiding behind your commit history.</li>
-          <li><strong>Automate only where state proves it's safe,</strong> and you remove the stall while keeping the judgment human.</li>
+          <li><strong>Automate only where state proves it's safe</strong> &mdash; judgment stays human.</li>
         </ul>
       </div>
       <div class="metric-card closer">
