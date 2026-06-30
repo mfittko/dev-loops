@@ -35,6 +35,11 @@ test("webkit intro deck keyboard navigation advances, backs up, and ignores guar
     expect(await scrollTop(page)).toBeLessThan(height * 0.9);
     await resetScroll(page);
 
+    await page.keyboard.press("Shift+ArrowDown");
+    await page.waitForTimeout(50);
+    expect(await scrollTop(page)).toBeLessThan(height * 0.9);
+    await resetScroll(page);
+
     await page.evaluate(() => {
       const input = document.createElement("input");
       input.id = "keyboard-test-input";

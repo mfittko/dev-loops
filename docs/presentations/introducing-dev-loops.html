@@ -508,7 +508,7 @@
   slides.forEach(s => observer.observe(s));
 
   document.addEventListener('keydown', e => {
-    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     const tag = document.activeElement ? document.activeElement.tagName : '';
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.activeElement.isContentEditable) return;
     const behavior = reducedMotion.matches ? 'auto' : 'smooth';
