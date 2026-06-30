@@ -139,10 +139,11 @@ test("help is the default action and removed install/update commands fall back t
   const widget = calls.widgets.at(-1);
   assert.equal(widget.key, "dev-loops.setup");
   assert.match(widget.lines[0], /dev-loops help/);
+  assert(widget.lines.length <= 8, "help should stay compact enough for the Pi widget");
   assert(widget.lines.some((line) => /\/dev-loops status/i.test(line)));
-  assert(widget.lines.some((line) => /pi install git:github.com\/mfittko\/dev-loops/i.test(line)));
+  assert(widget.lines.some((line) => /\/dev-loops hide/i.test(line)), "help should make the clear action visible");
   assert(widget.lines.some((line) => /\/skill:dev-loop/i.test(line)), "help should mention /skill:dev-loop as workflow entry");
-  assert(widget.lines.some((line) => /single public entry/i.test(line)), "help should describe dev-loop as single public entry");
+  assert(widget.lines.some((line) => /public loop/i.test(line)), "help should describe dev-loop as the public loop entry");
   assert.equal(widget.lines.some((line) => /copilot-dev-loop|copilot-autopilot/i.test(line)), false, "help should not surface internal seam names");
   assert.doesNotMatch(widget.lines.join("\n"), /\/dev-loops (?:install|update)/i);
   assert.equal(calls.notifications.at(-1).message, "dev-loops help");
@@ -200,7 +201,7 @@ test("direct entrypoints surface the public intent for dispatch (#972)", async (
   const helpContext = createCommandContext();
   await pi.registeredCommands.get("dev-loops").handler("", helpContext.ctx);
   const helpLines = helpContext.calls.widgets.at(-1).lines;
-  for (const re of [/\/dev-loops start <issue>/, /\/dev-loops auto <issue>/, /\/dev-loops continue \[issue\|pr\]/, /\/dev-loops start-spike <question>/, /\/dev-loops info <issue\|pr>/]) {
+  for (const re of [/\/dev-loops start <issue>/, /auto <issue>/, /\/dev-loops continue \[issue\|pr\]/, /\/dev-loops start-spike <question>/, /info <issue\|pr>/, /\/dev-loops inspect open\|resume\|status\|stop\|restart/]) {
     assert(helpLines.some((line) => re.test(line)), `help should list ${re}`);
   }
 });

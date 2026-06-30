@@ -47,24 +47,13 @@ export function buildEntrypointLines(action: string, intent: string): string[] {
 export function buildHelpLines(): string[] {
   return [
     'dev-loops help',
-    'Workflow entry:',
-    '- /skill:dev-loop — single public entrypoint; routing handles the rest',
-    'Direct entrypoints:',
-    '- /dev-loops start <issue>',
-    '- /dev-loops auto <issue>',
-    '- /dev-loops continue [issue|pr]',
-    '- /dev-loops start-spike <question>',
-    '- /dev-loops info <issue|pr>',
-    'Commands:',
-    '- /dev-loops status',
-    '- /dev-loops doctor',
-    '- /dev-loops hide',
-    '- /dev-loops inspect open [--repo <owner/name>]',
-    '- /dev-loops inspect resume [--repo <owner/name>]',
-    '- /dev-loops inspect status [--repo <owner/name>]',
-    '- /dev-loops inspect stop [--repo <owner/name>]',
-    '- /dev-loops inspect restart [--repo <owner/name>]',
-    'Use `pi install git:github.com/mfittko/dev-loops` to install skills and agents; packaged agents sync into `~/.agents/` on session start.',
+    '/skill:dev-loop <intent> starts the public loop',
+    'Direct: /dev-loops start <issue> | auto <issue>',
+    'Continue/info: /dev-loops continue [issue|pr] | info <issue|pr>',
+    'Spike: /dev-loops start-spike <question>',
+    'Inspect viewer: /dev-loops inspect open|resume|status|stop|restart',
+    'Checks: /dev-loops status | doctor',
+    'Clear this widget: /dev-loops hide',
   ];
 }
 
