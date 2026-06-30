@@ -8,6 +8,13 @@ import {
   isGhPrReadyCommand,
   extractPrNumberFromGhPrReady,
   extractRepoFlagFromGhPrReady,
+  isGhPrMergeCommand,
+  extractPrNumberFromGhPrMerge,
+  extractRepoFlagFromGhPrMerge,
+  commandContainsGhPrReady,
+  commandContainsGhPrMerge,
+  extractPrNumberFromGhPrMergeAnywhere,
+  extractRepoFlagFromGhPrMergeAnywhere,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -41,6 +48,43 @@ test("extractRepoFlagFromGhPrReady reads -r/--repo and --repo=value", () => {
   assert.equal(extractRepoFlagFromGhPrReady("gh pr ready --repo other/repo 1"), "other/repo");
   assert.equal(extractRepoFlagFromGhPrReady("gh pr ready --repo=other/repo 1"), "other/repo");
   assert.equal(extractRepoFlagFromGhPrReady("gh pr ready 1"), null);
+});
+
+test("isGhPrMergeCommand (first-segment, Pi extension) recognizes gh pr merge and ignores --help", () => {
+  assert.equal(isGhPrMergeCommand("gh pr merge 1023 --squash"), true);
+  assert.equal(isGhPrMergeCommand("gh pr merge"), true);
+  assert.equal(isGhPrMergeCommand("gh pr merge --help"), false);
+  assert.equal(isGhPrMergeCommand("gh pr ready 17"), false);
+  // First-segment-only: merge in later segment is NOT detected (correct for post-execute use).
+  assert.equal(isGhPrMergeCommand("echo ok && gh pr merge 1 --squash"), false);
+});
+
+test("commandContainsGhPrReady (all-segments, PreToolUse gate) detects ready in any segment", () => {
+  assert.equal(commandContainsGhPrReady("gh pr ready 17"), true);
+  assert.equal(commandContainsGhPrReady("echo ok && gh pr ready 17"), true);
+  assert.equal(commandContainsGhPrReady("false && gh pr ready 42"), true);
+  assert.equal(commandContainsGhPrReady("gh pr merge 1"), false);
+});
+
+test("commandContainsGhPrMerge (all-segments, PreToolUse gate) detects merge in any segment", () => {
+  assert.equal(commandContainsGhPrMerge("gh pr merge 1 --squash"), true);
+  assert.equal(commandContainsGhPrMerge("echo ok && gh pr merge 1 --squash"), true);
+  assert.equal(commandContainsGhPrMerge("gh pr ready 1 && gh pr merge 1"), true);
+  assert.equal(commandContainsGhPrMerge("gh pr ready 17"), false);
+});
+
+test("extractPrNumberFromGhPrMergeAnywhere finds merge PR number in any segment", () => {
+  assert.equal(extractPrNumberFromGhPrMergeAnywhere("echo ok && gh pr merge 42 --squash"), 42);
+  assert.equal(extractRepoFlagFromGhPrMergeAnywhere("echo ok && gh pr merge --repo other/repo 1"), "other/repo");
+});
+
+test("extractPrNumber/RepoFlag FromGhPrMerge mirror the ready extractors", () => {
+  assert.equal(extractPrNumberFromGhPrMerge("gh pr merge 1023 --squash"), 1023);
+  assert.equal(extractPrNumberFromGhPrMerge("gh pr merge --repo mfittko/dev-loops 42"), 42);
+  assert.equal(extractPrNumberFromGhPrMerge("gh pr merge --squash"), null);
+  assert.equal(extractRepoFlagFromGhPrMerge("gh pr merge --repo other/repo 1"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrMerge("gh pr merge --repo=other/repo 1"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrMerge("gh pr merge 1"), null);
 });
 
 test("isMergeCapableCommand detects gh pr merge / git merge, ignores aborts and help", () => {

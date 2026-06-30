@@ -333,6 +333,9 @@ test("isGhPrReadyCommand matches gh pr ready variants", () => {
   assert.equal(isGhPrReadyCommand("gh pr merge 42"), false);
   assert.equal(isGhPrReadyCommand("git merge origin/main"), false);
   assert.equal(isGhPrReadyCommand("echo gh pr ready"), false);
+  // Pi extension: first-segment-only (correct for post-execute detection — if false short-
+  // circuits &&, gh pr ready never ran). The Claude Code PreToolUse gate uses
+  // commandContainsGhPrReady which scans all segments for pre-emptive blocking.
   assert.equal(isGhPrReadyCommand("false && gh pr ready 42"), false);
   assert.equal(isGhPrReadyCommand("echo ok; gh pr ready 42"), false);
   assert.equal(isGhPrReadyCommand("gh pr ready 42 && echo ok"), true);
@@ -350,7 +353,7 @@ test("extractPrNumberFromGhPrReady extracts the PR number", () => {
   assert.equal(extractPrNumberFromGhPrReady("gh pr ready"), null);
   assert.equal(extractPrNumberFromGhPrReady("gh pr ready --help"), null);
   assert.equal(extractPrNumberFromGhPrReady("gh pr merge 42"), null);
-  assert.equal(extractPrNumberFromGhPrReady("false && gh pr ready 42"), null);
+  assert.equal(extractPrNumberFromGhPrReady("false && gh pr ready 42"), null); // first-segment only
 });
 
 test("extractRepoFlagFromGhPrReady extracts -R/--repo", () => {

@@ -50,7 +50,7 @@ export function normalizeGitHubRepoSlug(remoteUrl) {
   return null;
 }
 
-function isGhPrMergeCommand(segment) {
+function segmentIsGhPrMerge(segment) {
   if (!/^gh\s+pr\s+merge(?:\s|$)/i.test(segment)) {
     return false;
   }
@@ -82,7 +82,7 @@ export function isMergeCapableCommand(command) {
   }
   return normalized
     .split(/\s*(?:&&|\|\||;|\|)\s*/)
-    .some((segment) => isGhPrMergeCommand(segment) || isGitMergeCompletionCommand(segment));
+    .some((segment) => segmentIsGhPrMerge(segment) || isGitMergeCompletionCommand(segment));
 }
 
 /** @param {string} command @returns {string} */
@@ -90,27 +90,57 @@ export function firstShellSegment(command) {
   return command.trim().split(/\s*(?:&&|\|\||;|\|)\s*/)[0]?.trim() ?? "";
 }
 
-/** @param {string} command @returns {boolean} */
-export function isGhPrReadyCommand(command) {
+/** Split a compound shell command into its individual segments. */
+function shellSegments(command) {
+  return command.trim().split(/\s*(?:&&|\|\||;|\|)\s*/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** Build the `^gh pr <verb>` prefix matcher for a `gh pr <verb>` subcommand. */
+function ghPrVerbRegex(verb) {
+  return new RegExp(`^gh\\s+pr\\s+${verb}(?:\\s|$)`, "i");
+}
+
+/**
+ * Return the first segment in the command that is a `gh pr <verb>` call (ignoring --help/-h),
+ * or null. Scans ALL segments so compound commands (`echo ok && gh pr merge 1`) are caught.
+ */
+function findGhPrVerbSegment(command, verb) {
+  const re = ghPrVerbRegex(verb);
+  for (const segment of shellSegments(command)) {
+    if (!re.test(segment)) continue;
+    const remainder = segment.replace(re, "").trim();
+    if (!remainder) return segment;
+    const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
+    if (!args.includes("--help") && !args.includes("-h")) return segment;
+  }
+  return null;
+}
+
+/**
+ * Generic `gh pr <verb>` detector — checks the FIRST shell segment only.
+ *
+ * Used by the Pi extension's post-execute handler (`onUserBash`) to record that `gh pr ready`
+ * actually ran. First-segment-only is correct for that use: `false && gh pr ready 42` short-
+ * circuits so ready never executes, and the extension should not record a spurious invocation.
+ *
+ * For the Claude Code PreToolUse gate (block before execution), use
+ * `commandContainsGhPrReady`/`commandContainsGhPrMerge` instead — those scan ALL segments.
+ */
+function isGhPrVerbCommand(command, verb) {
+  const re = ghPrVerbRegex(verb);
   const segment = firstShellSegment(command);
-  if (!segment || !/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
-    return false;
-  }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, "").trim();
-  if (!remainder) {
-    return true;
-  }
+  if (!segment || !re.test(segment)) return false;
+  const remainder = segment.replace(re, "").trim();
+  if (!remainder) return true;
   const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
   return !args.includes("--help") && !args.includes("-h");
 }
 
-/** @param {string} command @returns {number|null} */
-export function extractPrNumberFromGhPrReady(command) {
-  const segment = firstShellSegment(command);
-  if (!/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
-    return null;
-  }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, "").trim();
+/** Extract PR number from a single already-isolated segment (shared by both first- and all-segment paths). */
+function extractPrNumberFromSegment(segment, verb) {
+  const re = ghPrVerbRegex(verb);
+  if (!segment || !re.test(segment)) return null;
+  const remainder = segment.replace(re, "").trim();
   if (!remainder) {
     return null;
   }
@@ -135,13 +165,11 @@ export function extractPrNumberFromGhPrReady(command) {
   return null;
 }
 
-/** @param {string} command @returns {string|null} */
-export function extractRepoFlagFromGhPrReady(command) {
-  const segment = firstShellSegment(command);
-  if (!/^gh\s+pr\s+ready(?:\s|$)/i.test(segment)) {
-    return null;
-  }
-  const remainder = segment.replace(/^gh\s+pr\s+ready(?:\s|$)/i, "").trim();
+/** Extract repo flag from a single already-isolated segment. */
+function extractRepoFlagFromSegment(segment, verb) {
+  const re = ghPrVerbRegex(verb);
+  if (!segment || !re.test(segment)) return null;
+  const remainder = segment.replace(re, "").trim();
   if (!remainder) {
     return null;
   }
@@ -160,4 +188,88 @@ export function extractRepoFlagFromGhPrReady(command) {
     }
   }
   return null;
+}
+
+/** First-segment extractor for `gh pr <verb>` PR number — Pi extension public API. */
+function extractPrNumberFromGhPrVerb(command, verb) {
+  return extractPrNumberFromSegment(firstShellSegment(command), verb);
+}
+
+/** First-segment extractor for `gh pr <verb>` --repo flag — Pi extension public API. */
+function extractRepoFlagFromGhPrVerb(command, verb) {
+  return extractRepoFlagFromSegment(firstShellSegment(command), verb);
+}
+
+/** @param {string} command @returns {boolean} */
+export function isGhPrReadyCommand(command) {
+  return isGhPrVerbCommand(command, "ready");
+}
+
+/** @param {string} command @returns {number|null} */
+export function extractPrNumberFromGhPrReady(command) {
+  return extractPrNumberFromGhPrVerb(command, "ready");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrReady(command) {
+  return extractRepoFlagFromGhPrVerb(command, "ready");
+}
+
+/**
+ * Whether `command` contains a `gh pr merge` invocation in the FIRST shell segment,
+ * ignoring `--help`/`-h`. Used by the Pi extension's post-execute handler.
+ * For the Claude Code PreToolUse gate, use `commandContainsGhPrMerge` instead.
+ * @param {string} command @returns {boolean}
+ */
+export function isGhPrMergeCommand(command) {
+  return isGhPrVerbCommand(command, "merge");
+}
+
+/**
+ * Whether `command` contains a `gh pr ready` invocation in ANY shell segment.
+ * For use in the Claude Code PreToolUse gate only — blocks the whole command pre-emptively
+ * regardless of shell short-circuit semantics (`false && gh pr ready 42` is still blocked).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGhPrReady(command) {
+  return findGhPrVerbSegment(command, "ready") !== null;
+}
+
+/**
+ * Whether `command` contains a `gh pr merge` invocation in ANY shell segment.
+ * For use in the Claude Code PreToolUse gate only — blocks the whole command pre-emptively.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGhPrMerge(command) {
+  return findGhPrVerbSegment(command, "merge") !== null;
+}
+
+/** Extract PR number from `gh pr ready` in any shell segment — PreToolUse gate use only. */
+export function extractPrNumberFromGhPrReadyAnywhere(command) {
+  return extractPrNumberFromSegment(findGhPrVerbSegment(command, "ready"), "ready");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrReadyAnywhere(command) {
+  return extractRepoFlagFromSegment(findGhPrVerbSegment(command, "ready"), "ready");
+}
+
+/** Extract PR number from `gh pr merge` in any shell segment — PreToolUse gate use only. */
+export function extractPrNumberFromGhPrMergeAnywhere(command) {
+  return extractPrNumberFromSegment(findGhPrVerbSegment(command, "merge"), "merge");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrMergeAnywhere(command) {
+  return extractRepoFlagFromSegment(findGhPrVerbSegment(command, "merge"), "merge");
+}
+
+/** @param {string} command @returns {number|null} */
+export function extractPrNumberFromGhPrMerge(command) {
+  return extractPrNumberFromGhPrVerb(command, "merge");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrMerge(command) {
+  return extractRepoFlagFromGhPrVerb(command, "merge");
 }
