@@ -19,6 +19,9 @@ const resetScroll = (page) => page.evaluate(() => {
   document.body.scrollTop = 0;
 });
 const viewportHeight = (page) => page.evaluate(() => window.innerHeight);
+const waitForAnimationFrames = (page, count = 2) => page.evaluate(async (frames) => {
+  for (let i = 0; i < frames; i += 1) await new Promise(requestAnimationFrame);
+}, count);
 
 test("webkit intro deck keyboard navigation advances, backs up, and ignores guarded keys", async ({ page }) => {
   const { server, url } = await startFixtureServer(() => makeDeckServer(deckPath));
@@ -31,12 +34,12 @@ test("webkit intro deck keyboard navigation advances, backs up, and ignores guar
 
     const height = await viewportHeight(page);
     await page.keyboard.press("Control+ArrowDown");
-    await page.waitForTimeout(50);
+    await waitForAnimationFrames(page);
     expect(await scrollTop(page)).toBeLessThan(height * 0.9);
     await resetScroll(page);
 
     await page.keyboard.press("Shift+ArrowDown");
-    await page.waitForTimeout(50);
+    await waitForAnimationFrames(page);
     expect(await scrollTop(page)).toBeLessThan(height * 0.9);
     await resetScroll(page);
 
@@ -48,7 +51,7 @@ test("webkit intro deck keyboard navigation advances, backs up, and ignores guar
       input.focus();
     });
     await page.keyboard.press("ArrowDown");
-    await page.waitForTimeout(50);
+    await waitForAnimationFrames(page);
     expect(await scrollTop(page)).toBeLessThan(height * 0.5);
     await resetScroll(page);
 
