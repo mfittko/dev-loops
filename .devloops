@@ -90,6 +90,10 @@ localImplementation:
     maxLines: 100
 
 queue:
+  # projectNumber pins the GitHub Projects V2 board by number so queue commands
+  # skip the boardTitle -> number lookup (a gh project list call). boardTitle is
+  # kept as a human-readable fallback / for board bootstrap.
+  projectNumber: 3
   boardTitle: "dev-loops Queue"
   maxParallel: 3
   maxAutoFiledIssues: 10
