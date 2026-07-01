@@ -70,10 +70,18 @@ const NAV_CSS = `
 // copy. Resolved inside buildSite from its repoRoot param (not at module load)
 // so --repo-root / buildSite({ repoRoot }) reads the right package.json and no
 // I/O runs merely on import. The '.git' suffix is stripped for the web URL.
-async function resolveRepoUrl(repoRoot) {
-  return JSON.parse(
-    await readFile(join(repoRoot, 'package.json'), 'utf8'),
-  ).repository.url.replace(/\.git$/, '');
+// npm's `repository` field may be a string ("github:owner/repo" or a full URL)
+// or an object { type, url }. Accept both; fail with an explicit, actionable
+// message when neither yields a URL, rather than an implicit TypeError.
+export async function resolveRepoUrl(repoRoot) {
+  const { repository } = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
+  const raw = typeof repository === 'string' ? repository : repository?.url;
+  if (!raw) {
+    throw new Error(`cannot resolve repo URL: package.json at ${repoRoot} has no repository.url`);
+  }
+  return raw
+    .replace(/^github:/, 'https://github.com/')
+    .replace(/\.git$/, '');
 }
 // Inline SVG (GitHub octicon mark) so it renders under the page's strict CSP
 // (img-src is data:-only; no external icon).

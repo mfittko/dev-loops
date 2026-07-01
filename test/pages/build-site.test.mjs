@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSite, injectNav, ARTICLES, DECKS, NAV_LINKS } from '../../scripts/pages/build-site.mjs';
+import { buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, NAV_LINKS } from '../../scripts/pages/build-site.mjs';
 
 // A deck publishes under its outFile when set (the deep-dive article and deck
 // share the source basename), else its source file name.
@@ -71,6 +71,24 @@ test('injectNav fails closed when a page lacks the expected structure', () => {
 
 test('build-site refuses to wipe filesystem root', async () => {
   await assert.rejects(() => buildSite({ outDir: '/' }), /refusing to wipe unsafe output dir/);
+});
+
+test('resolveRepoUrl accepts string/object forms and throws a clear error when missing', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'pages-repo-url-'));
+  const write = (repository) =>
+    writeFile(join(dir, 'package.json'), JSON.stringify(repository === undefined ? {} : { repository }), 'utf8');
+  try {
+    await write({ type: 'git', url: 'https://github.com/mfittko/dev-loops.git' });
+    assert.equal(await resolveRepoUrl(dir), REPO_URL, 'object form: strips .git');
+
+    await write('github:mfittko/dev-loops');
+    assert.equal(await resolveRepoUrl(dir), REPO_URL, 'string shorthand normalizes to https URL');
+
+    await write(undefined);
+    await assert.rejects(() => resolveRepoUrl(dir), /has no repository\.url/, 'missing repository throws explicit error');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('build-site refuses to wipe repoRoot itself', async () => {
