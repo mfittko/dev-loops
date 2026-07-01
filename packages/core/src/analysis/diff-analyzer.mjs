@@ -288,9 +288,12 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
     };
   }
 
-  // Ambiguous is reserved for genuinely unclassifiable diffs (analysis produced
-  // no categories). LOGIC_CHANGE is a classified category (resolves to its core
-  // review subset), so it no longer forces fallback-to-all.
+  // Ambiguous means only: a diff T0 could not classify (mixed file categories, so
+  // t0Ambiguous) AND whose hunk analysis produced no category either. Both
+  // conditions are required — a single-category diff is already classified by T0
+  // inference (so it is never ambiguous), and a mixed diff that yields a category
+  // (e.g. LOGIC_CHANGE) is classified too. LOGIC_CHANGE is a real category that
+  // resolves to its core review subset, so it never forces fallback-to-all.
   const ambiguous = t0Ambiguous && t1.changeCategories.length === 0;
 
   return { t0, t1, ambiguous };

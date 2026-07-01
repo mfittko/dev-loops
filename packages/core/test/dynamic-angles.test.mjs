@@ -97,7 +97,7 @@ test("resolveDynamicAngles: LOGIC_CHANGE resolves to core subset, not all angles
     assert.ok(result.skippedAngles.includes(a), `expected ${a} skipped`);
     assert.ok(typeof result.reasons[a] === "string");
   }
-  // NOT all 15 — meaningfully narrower than the configured pool.
+  // Meaningfully narrower than the full configured pool (not a fallback-to-all).
   assert.ok(result.recommendedAngles.length < DRAFT_ANGLES.length);
 });
 
