@@ -370,7 +370,8 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
   }
   // Mixed branch: not allFailed, so at least one body fetched but none is
   // refined. Report against the first successfully-fetched (non-null) issue —
-  // `evaluated[0]` may be a failed fetch (null artifact) and has no fields.
+  // `evaluated[0]` may be a failed fetch: it still retains its `issue` field but
+  // has `artifact: null` (body fetch / artifact detection failed for that issue).
   const firstFetched = evaluated.find((e) => e.artifact !== null);
   const first = firstFetched.artifact;
   return {
