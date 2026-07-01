@@ -32,10 +32,19 @@ test("resolveRepoRoot returns git-toplevel when cwd is a subdir of a repo", asyn
   }
 });
 
-test("resolveRepoRoot falls back to cwd when not a git repo", async () => {
-  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-nogit-")));
+test("resolveRepoRoot falls back to cwd when cwd is not inside a git repo", async () => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-notrepo-")));
   try {
     assert.equal(resolveRepoRoot(dir), dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveRepoRoot falls back to cwd when git is unavailable (exec failure)", async () => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-nogit-")));
+  try {
+    assert.equal(resolveRepoRoot(dir, { gitCommand: `definitely-not-git-${Date.now()}` }), dir);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -67,10 +76,20 @@ test("resolveLedgerCheckouts includes main checkout and worktree, de-duped, cwd-
   }
 });
 
-test("resolveLedgerCheckouts falls back to cwd when git is unavailable", async () => {
-  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-nogit-ledger-")));
+test("resolveLedgerCheckouts falls back to cwd when cwd is not inside a git repo", async () => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-notrepo-ledger-")));
   try {
     const roots = resolveLedgerCheckouts(dir);
+    assert.deepEqual(roots, [dir]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveLedgerCheckouts returns [dir] when git is unavailable (exec failure)", async () => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-nogit-ledger-")));
+  try {
+    const roots = resolveLedgerCheckouts(dir, { gitCommand: `definitely-not-git-${Date.now()}` });
     assert.deepEqual(roots, [dir]);
   } finally {
     await rm(dir, { recursive: true, force: true });

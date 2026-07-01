@@ -26,6 +26,7 @@ export function resolveRepoRoot(cwd, { gitCommand = "git" } = {}) {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
     }).trim() || cwd;
   } catch {
+    // git failed or cwd is not inside a git repo (or git is unavailable) -> fall back to cwd.
     return cwd;
   }
 }
@@ -40,7 +41,7 @@ export function resolveLedgerCheckouts(cwd, { gitCommand = "git" } = {}) {
     });
     add(parseMainWorktreePath(listing));
     for (const p of parseAllWorktreePaths(listing)) add(p);
-  } catch { /* git unavailable: cwd-toplevel is all we have */ }
+  } catch { /* git failed, not inside a git repo, or git unavailable: cwd-toplevel is all we have */ }
   if (roots.length === 0) add(cwd);
   return roots;
 }

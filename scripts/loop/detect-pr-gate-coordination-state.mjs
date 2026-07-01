@@ -284,7 +284,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
         status: "missing",
         linkedIssue: null,
         linkedIssues: [],
-        reason: "Draft PR has no deterministically resolvable linked issue (no closingIssuesReferences, no unique Closes/Fixes/Resolves pattern in body); draft gate cannot verify a refinement artifact.",
+        reason: "Draft PR has no deterministically resolvable linked issue (no closingIssuesReferences and no Closes/Fixes/Resolves #n reference in body); draft gate cannot verify a refinement artifact.",
         finding: "missing_refinement_artifact",
       };
     }
@@ -292,7 +292,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       status: "unknown",
       linkedIssue: null,
       linkedIssues: [],
-      reason: "No deterministically resolvable linked issue (no closingIssuesReferences, no unique Closes/Fixes/Resolves pattern in body).",
+      reason: "No deterministically resolvable linked issue (no closingIssuesReferences and no Closes/Fixes/Resolves #n reference in body).",
     };
   }
   const scopeLabel = linkedIssues.map((n) => `#${n}`).join(", ");
