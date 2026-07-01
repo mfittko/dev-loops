@@ -226,25 +226,38 @@ export function deriveUiE2ePassed(prData, checkNames = UI_E2E_CHECK_NAMES) {
   });
 }
 
-export function resolveLinkedIssueFromPr(prData) {
-  if (!prData || typeof prData !== "object") return null;
+// Ordered, de-duplicated list of ALL closing-referenced issue numbers for a PR.
+// Umbrella PRs legitimately close multiple issues (#1052), so the refinement
+// guard resolves against every one of them, not just a unique single ref.
+export function resolveLinkedIssuesFromPr(prData) {
+  if (!prData || typeof prData !== "object") return [];
+  const dedupe = (nums) => {
+    const seen = new Set();
+    const out = [];
+    for (const n of nums) {
+      if (Number.isInteger(n) && n > 0 && !seen.has(n)) {
+        seen.add(n);
+        out.push(n);
+      }
+    }
+    return out;
+  };
   const closing = Array.isArray(prData.closingIssuesReferences) ? prData.closingIssuesReferences : [];
-  const closingNumbers = closing
-    .map((entry) => Number(entry?.number))
-    .filter((n) => Number.isInteger(n) && n > 0);
-  if (closingNumbers.length === 1) {
-    return closingNumbers[0];
+  const closingNumbers = dedupe(closing.map((entry) => Number(entry?.number)));
+  if (closingNumbers.length > 0) {
+    return closingNumbers;
   }
   const body = typeof prData.body === "string" ? prData.body : "";
-  if (body.length === 0) return null;
+  if (body.length === 0) return [];
   const matches = body.match(/(?:closes|fixes|resolves)\s+#(\d+)/gi) || [];
-  const bodyNumbers = matches
-    .map((m) => Number((/(\d+)/.exec(m) || [])[1]))
-    .filter((n) => Number.isInteger(n) && n > 0);
-  if (bodyNumbers.length === 1) {
-    return bodyNumbers[0];
-  }
-  return null;
+  return dedupe(matches.map((m) => Number((/(\d+)/.exec(m) || [])[1])));
+}
+
+// Backward-compatible single-value resolver: preserves the "exactly one linked
+// issue" contract for external consumers.
+export function resolveLinkedIssueFromPr(prData) {
+  const arr = resolveLinkedIssuesFromPr(prData);
+  return arr.length === 1 ? arr[0] : null;
 }
 async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = "gh" } = {}) {
   const result = await runChild(
@@ -262,13 +275,14 @@ async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = 
     return null;
   }
 }
-async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged }, { env = process.env, ghCommand = "gh" } = {}) {
-  const linkedIssue = resolveLinkedIssueFromPr(prData);
-  if (linkedIssue === null) {
+export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged }, { env = process.env, ghCommand = "gh" } = {}) {
+  const linkedIssues = resolveLinkedIssuesFromPr(prData);
+  if (linkedIssues.length === 0) {
     if (prDraft) {
       return {
         status: "missing",
         linkedIssue: null,
+        linkedIssues: [],
         reason: "Draft PR has no deterministically resolvable linked issue (no closingIssuesReferences, no unique Closes/Fixes/Resolves pattern in body); draft gate cannot verify a refinement artifact.",
         finding: "missing_refinement_artifact",
       };
@@ -276,44 +290,98 @@ async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerge
     return {
       status: "unknown",
       linkedIssue: null,
+      linkedIssues: [],
       reason: "No deterministically resolvable linked issue (no closingIssuesReferences, no unique Closes/Fixes/Resolves pattern in body).",
     };
   }
+  const scopeLabel = linkedIssues.map((n) => `#${n}`).join(", ");
   if (!prDraft && !prClosed && !prMerged) {
     return {
       status: "unknown",
-      linkedIssue,
-      reason: `Linked issue #${linkedIssue} detected; refinement check is a draft-gate boundary and the PR is not draft, so the check is informational only and does not fetch the issue body.`,
+      linkedIssue: linkedIssues.length === 1 ? linkedIssues[0] : null,
+      linkedIssues,
+      reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement check is a draft-gate boundary and the PR is not draft, so the check is informational only and does not fetch issue bodies.`,
     };
   }
-  const body = await fetchIssueBody({ repo, issue: linkedIssue }, { env, ghCommand });
-  if (body === null) {
+  const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+  // Fetch and evaluate every closing-referenced issue. An umbrella PR's scope
+  // is refined if AT LEAST ONE linked issue carries a refinement artifact.
+  const evaluated = [];
+  for (const issue of linkedIssues) {
+    const body = await fetchIssueBody({ repo, issue }, { env, ghCommand });
+    if (body === null) {
+      evaluated.push({ issue, artifact: null });
+      continue;
+    }
+    evaluated.push({ issue, artifact: detectIssueRefinementArtifact({ body, issueNumber: issue }) });
+  }
+  const refinedIssues = evaluated
+    .filter((e) => e.artifact && e.artifact.hasACs === true)
+    .map((e) => e.issue);
+  const firstPresent = evaluated.find((e) => e.artifact && e.artifact.hasACs === true);
+  const isUmbrella = linkedIssues.length > 1;
+
+  if (firstPresent) {
+    const a = firstPresent.artifact;
+    return {
+      status: "present",
+      linkedIssue: firstPresent.issue,
+      linkedIssues,
+      refinedIssues,
+      source: a.source,
+      acItems: a.acItems,
+      dodItems: a.dodItems,
+      sections: a.sections,
+      linkedDoc: a.linkedDoc,
+      reason: isUmbrella
+        ? `Refinement artifact present via linked issue #${firstPresent.issue} (umbrella PR closes ${scopeLabel}).`
+        : a.reason,
+      finding: a.finding,
+      _onlyEnforcedWhenDraft: prDraft === true,
+    };
+  }
+
+  // None of the linked issues carry a refinement artifact (or all bodies failed
+  // to fetch). Report against the first linked issue for single-value consumers.
+  // Note: `finding`/`missing` here is only enforced by the gate when the PR is
+  // draft (`_onlyEnforcedWhenDraft`); closed/merged PRs surface it informationally.
+  const firstEvaluated = evaluated[0];
+  const first = firstEvaluated.artifact;
+  const allFailed = evaluated.every((e) => e.artifact === null);
+  if (allFailed) {
+    // Preserve prior single-issue semantics: draft → missing, else unknown.
     if (prDraft) {
       return {
         status: "missing",
-        linkedIssue,
-        reason: `Failed to fetch body for linked issue #${linkedIssue}; draft gate cannot verify a refinement artifact, treating as missing.`,
+        linkedIssue: firstEvaluated.issue,
+        linkedIssues,
+        refinedIssues,
+        reason: `Failed to fetch body for linked issue(s) ${scopeLabel}; draft gate cannot verify a refinement artifact, treating as missing.`,
         finding: "missing_refinement_artifact",
       };
     }
     return {
       status: "unknown",
-      linkedIssue,
-      reason: `Failed to fetch body for linked issue #${linkedIssue}; refinement status is unknown.`,
+      linkedIssue: linkedIssues.length === 1 ? linkedIssues[0] : firstEvaluated.issue,
+      linkedIssues,
+      refinedIssues,
+      reason: `Failed to fetch body for linked issue(s) ${scopeLabel}; refinement status is unknown.`,
     };
   }
-  const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
-  const artifact = detectIssueRefinementArtifact({ body, issueNumber: linkedIssue });
   return {
-    status: artifact.hasACs ? "present" : "missing",
-    linkedIssue,
-    source: artifact.source,
-    acItems: artifact.acItems,
-    dodItems: artifact.dodItems,
-    sections: artifact.sections,
-    linkedDoc: artifact.linkedDoc,
-    reason: artifact.reason,
-    finding: artifact.finding,
+    status: "missing",
+    linkedIssue: firstEvaluated.issue,
+    linkedIssues,
+    refinedIssues,
+    source: first.source,
+    acItems: first.acItems,
+    dodItems: first.dodItems,
+    sections: first.sections,
+    linkedDoc: first.linkedDoc,
+    reason: isUmbrella
+      ? `No linked issue (${scopeLabel}) carries a refinement artifact (ACs/DoD); draft gate cannot verify a refinement artifact.`
+      : first.reason,
+    finding: "missing_refinement_artifact",
     _onlyEnforcedWhenDraft: prDraft === true,
   };
 }
