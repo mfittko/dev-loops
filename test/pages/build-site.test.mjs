@@ -33,10 +33,14 @@ test('build-site: index is the intro article, all resources published, nav links
       assert.ok(index.includes(`>${l.label}</a>`), `nav shows ${l.label}`);
     }
     assert.ok(index.includes('class="site-nav"'), 'index carries the nav bar');
+    // Nav carries a GitHub repo link with an inline (CSP-safe) icon.
+    assert.ok(index.includes('href="https://github.com/mfittko/dev-loops"'), 'nav links the GitHub repo');
+    assert.ok(index.includes('class="site-nav-gh"') && index.includes('<svg'), 'nav GitHub link uses an inline SVG icon');
 
     // Deep-dive articles also carry the nav so the set is navigable.
     const deep = await readFile(join(out, ARTICLES[0].file), 'utf8');
     assert.ok(deep.includes('class="site-nav"'), 'deep-dive article carries the nav bar');
+    assert.ok(deep.includes('class="site-nav-gh"'), 'deep-dive article carries the GitHub nav link');
 
     assert.deepEqual(
       result.files.sort(),
