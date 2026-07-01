@@ -96,6 +96,38 @@ to match `UI_E2E_CHECK_NAMES` so the gate can read a real signal:
 So a deck- or article-only PR has a CI check that can actually satisfy the gate;
 without these jobs such a PR would fail closed with no satisfiable signal.
 
+## Verifying a UI change: render and look, but don't persist ad-hoc checks
+
+When you change a rendered artifact's layout, **verify it visually before merging** —
+render the built page and inspect real geometry (`getBoundingClientRect` for
+edges/widths, a full-page screenshot to actually look at it) at desktop and mobile
+widths. This intermediary e2e pass is a required *verification strategy*: a layout
+claim ("the columns align now") is only credible once measured against the rendered
+page, not the source CSS.
+
+It is **not** something to persist into the codebase. The registered, always-on
+coverage is the shared fit/CSP suite (`defineArticleSuite`/`defineDeckSuite`); do
+not grow it with one-off pixel/alignment assertions written to confirm a single
+fix. Use a throwaway script to render, measure, and screenshot while iterating,
+then drop it. Adding a bespoke geometry assertion per fix bloats the suite and
+couples it to incidental layout numbers.
+
+## An assertion must be able to fail on the defect
+
+A UI assertion that is **true for the broken state validates the bug**. Real
+example (the layout regression this rule comes from): a check asserted
+`margin-left > 1px` on the prose to prove it was "centered" — but the visible bug
+*was* the prose floating in a narrow centered measure, misaligned from the
+full-width boxes beside it. `margin-left` was large in exactly the broken state, so
+the check passed green on every gate while the page rendered visibly broken.
+
+Before trusting any UI assertion, confirm it **fails on the defect**: run it against
+the broken layout, or inject the defect (e.g. shove one block's left edge) and check
+that the assertion goes red. An assertion that cannot fail on the bug it names is
+not coverage — it is false confidence. Prefer asserting the invariant that actually
+defines "correct" (e.g. all content blocks share one left edge within tolerance)
+over a proxy that happens to correlate with it.
+
 ## Non-goals
 
 Not always-on screenshot testing; not mandatory multi-browser. The criterion is
