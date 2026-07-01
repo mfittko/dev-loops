@@ -62,26 +62,30 @@ const NAV_CSS = `
   .site-nav a { color: var(--kicker); text-decoration: none; font-size: 0.9rem; border: 0; }
   .site-nav a:hover { color: var(--accent-soft); }
   .site-nav-gh { display: inline-flex; align-items: center; }
-  .site-nav-gh svg { width: 1.15rem; height: 1.15rem; fill: currentColor; display: block; }`;
+  .site-nav-gh svg { width: 1.125rem; height: 1.125rem; fill: currentColor; display: block; }`;
 
-// The repository the site links to from its nav. Derived from package.json's
-// repository.url (single source of truth) so a repo rename/move updates the nav
-// link too, rather than drifting from a hardcoded copy. The '.git' suffix is
-// stripped to yield the browsable web URL.
-const REPO_URL = JSON.parse(
-  await readFile(join(REPO_ROOT_DEFAULT, 'package.json'), 'utf8'),
-).repository.url.replace(/\.git$/, '');
+// The repository the site links to from its nav. Derived from the effective
+// repoRoot's package.json repository.url (single source of truth) so a repo
+// rename/move updates the nav link too, rather than drifting from a hardcoded
+// copy. Resolved inside buildSite from its repoRoot param (not at module load)
+// so --repo-root / buildSite({ repoRoot }) reads the right package.json and no
+// I/O runs merely on import. The '.git' suffix is stripped for the web URL.
+async function resolveRepoUrl(repoRoot) {
+  return JSON.parse(
+    await readFile(join(repoRoot, 'package.json'), 'utf8'),
+  ).repository.url.replace(/\.git$/, '');
+}
 // Inline SVG (GitHub octicon mark) so it renders under the page's strict CSP
 // (img-src is data:-only; no external icon).
 const GITHUB_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>';
 
-function navMarkup() {
+function navMarkup(repoUrl) {
   const links = NAV_LINKS.map((l) => `        <a href="${l.file}">${l.label}</a>`).join('\n');
   return `<nav class="site-nav" aria-label="dev-loops resources">
       <a class="site-nav-brand" href="index.html">dev-loops</a>
       <div class="site-nav-links">
 ${links}
-        <a class="site-nav-gh" href="${REPO_URL}" aria-label="dev-loops on GitHub">${GITHUB_ICON}</a>
+        <a class="site-nav-gh" href="${repoUrl}" aria-label="dev-loops on GitHub">${GITHUB_ICON}</a>
       </div>
     </nav>`;
 }
@@ -90,13 +94,13 @@ ${links}
 // markup right after <body>. Idempotent enough for assembly (each source file
 // is read once). Throws if the page lacks the expected anchors so a structural
 // drift fails the build rather than publishing an un-navigable page.
-export function injectNav(html) {
+export function injectNav(html, repoUrl) {
   if (!html.includes('</style>') || !/<body[^>]*>/.test(html)) {
     throw new Error('cannot inject nav: page is missing a <style> block or <body> tag');
   }
   return html
     .replace('</style>', `${NAV_CSS}\n</style>`)
-    .replace(/<body([^>]*)>/, `<body$1>\n    ${navMarkup()}`);
+    .replace(/<body([^>]*)>/, `<body$1>\n    ${navMarkup(repoUrl)}`);
 }
 
 export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
@@ -115,14 +119,16 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
 
+  const repoUrl = await resolveRepoUrl(repoRoot);
+
   // Landing page: the intro article, navigable, published as index.html.
   const landingHtml = await readFile(join(articlesDir, LANDING.file), 'utf8');
-  await writeFile(join(out, 'index.html'), injectNav(landingHtml), 'utf8');
+  await writeFile(join(out, 'index.html'), injectNav(landingHtml, repoUrl), 'utf8');
 
   // Deep-dive article: published with the same nav so the set is navigable.
   for (const article of ARTICLES) {
     const html = await readFile(join(articlesDir, article.file), 'utf8');
-    await writeFile(join(out, article.file), injectNav(html), 'utf8');
+    await writeFile(join(out, article.file), injectNav(html, repoUrl), 'utf8');
   }
 
   // Decks: self-contained slide renders, copied as-is (no nav injection).
