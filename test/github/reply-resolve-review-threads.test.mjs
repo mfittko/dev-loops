@@ -745,3 +745,135 @@ test("reply-resolve-review-threads skips resolved human threads by default", asy
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("reply-resolve-review-threads terminates on an idle open stdin pipe with no data (no hang)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-no-hang-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          { id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] } },
+          { id: "THREAD_2", isResolved: false, comments: { nodes: [{ id: "PRRC_node_201", databaseId: 201, body: "note", author: { login: "Copilot", __typename: "Bot" } }] } },
+        ]),
+      },
+      { assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"], stdout: '{"id":1401,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1401"}\n' },
+      { assertArgs: ["repos/owner/repo/pulls/17/comments/201/replies"], stdout: '{"id":1402,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1402"}\n' },
+    ]);
+
+    // Regression for #1012: with --message set, stdin was probed to detect a
+    // conflicting source. A detached/idle pipe never sends EOF nor any data, so
+    // the old unbounded read hung forever. With no data, the probe times out,
+    // the tool proceeds with --message, and it must terminate cleanly.
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        scriptPath,
+        "--repo", "owner/repo", "--pr", "17",
+        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
+      ], { env: gh.env, stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error("reply-resolve-review-threads did not terminate (hang regression #1012)"));
+      }, 5000);
+      child.on("error", reject);
+      child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+      // Intentionally do NOT write or end stdin: an idle, never-EOF pipe.
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.matchedThreadCount, 2);
+    assert.equal(parsed.repliedThreadCount, 2);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads detects a conflicting stdin source promptly over an open (never-EOF) pipe and terminates", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-open-pipe-conflict-"));
+
+  try {
+    // No gh calls expected: the conflict is detected before any capture.
+    const gh = await writeGhStub(tempDir, []);
+
+    // Regression for #1012: with --message set AND real data on stdin, the
+    // conflict must be detected as soon as bytes arrive — without waiting for
+    // EOF — and the tool must terminate (fail closed) rather than hang. Here the
+    // pipe is never ended, so only prompt (chunk-triggered) detection can pass.
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        scriptPath,
+        "--repo", "owner/repo", "--pr", "17",
+        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
+      ], { env: gh.env, stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error("reply-resolve-review-threads did not terminate on open-pipe conflict (regression #1012)"));
+      }, 5000);
+      child.on("error", reject);
+      child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+      // Write conflicting body but never end the pipe; the conflict must be
+      // detected on the first data chunk, before any EOF.
+      child.stdin.write("Also from stdin\n");
+    });
+
+    assert.equal(result.code, 1, result.stdout);
+    assert.equal(result.stdout, "");
+    const parsed = JSON.parse(result.stderr);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error, "Choose exactly one message source: --message <text> or stdin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads detects a conflict when a whitespace-only chunk precedes real stdin content over an open pipe", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-ws-then-data-"));
+
+  try {
+    // No gh calls expected: the conflict must be detected before any capture.
+    const gh = await writeGhStub(tempDir, []);
+
+    // Regression for Copilot round 2: the conflict probe must not settle on a
+    // leading whitespace-only chunk (which would falsely proceed with --message).
+    // It must keep buffering until non-whitespace arrives, detect the conflict,
+    // and terminate — all without waiting for EOF (pipe never ends).
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        scriptPath,
+        "--repo", "owner/repo", "--pr", "17",
+        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
+      ], { env: gh.env, stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error("reply-resolve-review-threads did not terminate on whitespace-then-data conflict"));
+      }, 5000);
+      child.on("error", reject);
+      child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+      // First a whitespace-only chunk, then real content — never end the pipe.
+      child.stdin.write("   \n");
+      setTimeout(() => child.stdin.write("real conflicting body\n"), 50);
+    });
+
+    assert.equal(result.code, 1, result.stdout);
+    assert.equal(result.stdout, "");
+    const parsed = JSON.parse(result.stderr);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error, "Choose exactly one message source: --message <text> or stdin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

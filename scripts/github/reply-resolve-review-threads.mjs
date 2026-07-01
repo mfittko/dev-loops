@@ -111,6 +111,62 @@ async function readStdinText(stdin) {
   }
   return text;
 }
+// When --message is set, stdin is read only to detect a conflicting second
+// message source. A detached/idle pipe never sends EOF, so an unbounded read
+// hangs forever and the process never exits (issue #1012). Resolve as soon as
+// any NON-WHITESPACE byte arrives (a conflicting body is detected the instant
+// real content appears — no need to wait for EOF); keep buffering while only
+// whitespace has arrived (a leading newline is not yet a conflict and more may
+// follow); resolve on natural EOF; and time out on a silent/idle pipe. Either
+// way the stdin handle is released so the event loop can drain and the tool
+// always terminates.
+const CONFLICT_STDIN_TIMEOUT_MS = 500;
+function readStdinConflictProbe(stdin, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      stdin.off?.("data", onData);
+      stdin.off?.("end", onEnd);
+      stdin.off?.("error", onEnd);
+      // Release the handle: an abandoned reader on a still-open pipe would
+      // otherwise keep the event loop alive and re-introduce the hang.
+      stdin.pause?.();
+      if (typeof stdin.unref === "function") {
+        stdin.unref();
+      } else {
+        stdin.destroy?.();
+      }
+    };
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    // Resolve early only once non-whitespace content is seen (a real conflict);
+    // '' or whitespace-only on clean EOF is not a conflict; undefined only on
+    // timeout (idle pipe) so the caller proceeds with --message.
+    let text = "";
+    const onData = (chunk) => {
+      text += String(chunk);
+      if (text.trim().length > 0) {
+        finish(text);
+      }
+    };
+    const onEnd = () => finish(text);
+    timer = setTimeout(() => finish(undefined), timeoutMs);
+    timer.unref?.();
+    stdin.setEncoding?.("utf8");
+    stdin.on?.("data", onData);
+    stdin.on?.("end", onEnd);
+    stdin.on?.("error", onEnd);
+  });
+}
+
 async function resolveMessageInput(options, { stdin = process.stdin } = {}) {
   if (typeof options.message === "string") {
     if (stdin.isTTY) {
@@ -119,8 +175,8 @@ async function resolveMessageInput(options, { stdin = process.stdin } = {}) {
       }
       return options.message;
     }
-    const stdinText = await readStdinText(stdin);
-    if (stdinText.trim().length > 0) {
+    const stdinText = await readStdinConflictProbe(stdin, CONFLICT_STDIN_TIMEOUT_MS);
+    if (typeof stdinText === "string" && stdinText.trim().length > 0) {
       throw parseError("Choose exactly one message source: --message <text> or stdin");
     }
     if (options.message.trim().length === 0) {
