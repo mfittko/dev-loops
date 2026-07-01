@@ -308,6 +308,29 @@ export function extractRepoFlagFromGhPrCreateAnywhere(command) {
   return extractRepoFlagFromSegment(findGhPrVerbSegment(command, "create"), "create");
 }
 
+/**
+ * Return one `{ segment, explicitRepo }` entry for EVERY `gh pr create` segment (ignoring
+ * --help/-h), not just the first. PreToolUse gate use only: the create-scope decision must
+ * consider every create segment, so a leading out-of-scope create can't shield a later
+ * in-scope raw create (`gh pr create --repo other/repo && gh pr create --fill`).
+ * `explicitRepo` is the segment's `--repo`/`-R` value or null when none is present.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromGhPrCreateSegments(command) {
+  const re = ghPrVerbRegex("create");
+  const out = [];
+  for (const segment of shellSegments(command)) {
+    if (!re.test(segment)) continue;
+    const remainder = segment.replace(re, "").trim();
+    if (remainder) {
+      const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
+      if (args.includes("--help") || args.includes("-h")) continue;
+    }
+    out.push({ segment, explicitRepo: extractRepoFlagFromSegment(segment, "create") });
+  }
+  return out;
+}
+
 /** @param {string} command @returns {number|null} */
 export function extractPrNumberFromGhPrMerge(command) {
   return extractPrNumberFromGhPrVerb(command, "merge");

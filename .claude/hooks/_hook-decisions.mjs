@@ -19,7 +19,7 @@ import {
   extractRepoFlagFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrMergeAnywhere,
-  extractRepoFlagFromGhPrCreateAnywhere,
+  extractRepoFlagsFromGhPrCreateSegments,
   TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
 
@@ -79,17 +79,18 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // exists yet): PR creation must flow through the canonical wrapper, which always drafts and
   // self-assigns. This closes the draft-first hole where raw `gh pr create` opens a ready PR.
   if (isCreate) {
-    const explicitRepo = extractRepoFlagFromGhPrCreateAnywhere(command);
-    const explicitTargets =
-      explicitRepo != null && explicitRepo.toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
-    const explicitOther = explicitRepo != null && !explicitTargets;
     const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
-    // The create is in scope when it explicitly targets the repo, or (with no explicit other-repo
-    // target) the cwd is the repo. An explicit `--repo <target>` is denied regardless of cwd:
-    // raw `gh pr create --repo <target>` from outside still opens a ready PR, bypassing the
-    // draft-first wrapper (#1047).
-    const createInScope = explicitTargets || (!explicitOther && cwdTargets);
-    if (createInScope) {
+    // Evaluate scope PER create segment, not just the first: a create is in scope when it
+    // explicitly targets the repo, or (with no explicit --repo) the cwd is the repo. An explicit
+    // `--repo <target>` is denied regardless of cwd (#1047). DENY if ANY create segment is in
+    // scope — otherwise a leading out-of-scope create (`gh pr create --repo other/repo`) would
+    // short-circuit and shield a later in-scope raw create (`&& gh pr create --fill`).
+    const anyCreateInScope = extractRepoFlagsFromGhPrCreateSegments(command).some((seg) =>
+      seg.explicitRepo == null
+        ? cwdTargets
+        : seg.explicitRepo.toLowerCase() === TARGET_REPO_SLUG.toLowerCase(),
+    );
+    if (anyCreateInScope) {
       return {
         decision: "deny",
         reason:

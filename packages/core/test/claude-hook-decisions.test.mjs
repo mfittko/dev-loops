@@ -164,6 +164,24 @@ test("decideBashGate denies gh pr create --repo targeting the repo regardless of
   );
 });
 
+test("decideBashGate evaluates each gh pr create segment's scope (multi-create bypass)", () => {
+  // The bypass: a leading out-of-scope create must not shield a later in-scope raw create.
+  const bypass = decideBashGate({ command: "gh pr create --repo other/repo && gh pr create --fill", repoSlug: TARGET });
+  assert.equal(bypass.decision, "deny");
+  assert.match(bypass.reason, /gh pr create blocked/);
+  // Reverse order — the in-scope create leads — also denies.
+  assert.equal(
+    decideBashGate({ command: "gh pr create --fill && gh pr create --repo other/repo", repoSlug: TARGET }).decision,
+    "deny",
+  );
+  // Every create segment carries an explicit non-target --repo → none in scope even when
+  // cwd is the target, so this passes through (locks the per-segment semantics).
+  assert.equal(
+    decideBashGate({ command: "gh pr create --repo other/repo && gh pr create --repo another/repo", repoSlug: TARGET }).decision,
+    "allow",
+  );
+});
+
 test("decideBashGate does not let an out-of-scope gh pr create short-circuit ready/merge gating", () => {
   // An out-of-scope `--repo other/repo` create must not own the decision when a gated
   // ready/merge segment rides along in the same compound command — the merge/ready segment

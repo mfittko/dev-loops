@@ -17,6 +17,7 @@ import {
   extractPrNumberFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrCreateAnywhere,
+  extractRepoFlagsFromGhPrCreateSegments,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -113,6 +114,22 @@ test("extractRepoFlagFromGhPrCreateAnywhere reads --repo across segments", () =>
   assert.equal(extractRepoFlagFromGhPrCreateAnywhere("gh pr create --repo other/repo --fill"), "other/repo");
   assert.equal(extractRepoFlagFromGhPrCreateAnywhere("git push && gh pr create --repo=other/repo"), "other/repo");
   assert.equal(extractRepoFlagFromGhPrCreateAnywhere("gh pr create --fill"), null);
+});
+
+test("extractRepoFlagsFromGhPrCreateSegments returns every create segment's --repo", () => {
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrCreateSegments("gh pr create --repo other/repo && gh pr create --fill"),
+    [
+      { segment: "gh pr create --repo other/repo", explicitRepo: "other/repo" },
+      { segment: "gh pr create --fill", explicitRepo: null },
+    ],
+  );
+  // --help segments are excluded; non-create segments ignored.
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrCreateSegments("git push && gh pr create --help && gh pr create --repo=a/b"),
+    [{ segment: "gh pr create --repo=a/b", explicitRepo: "a/b" }],
+  );
+  assert.deepEqual(extractRepoFlagsFromGhPrCreateSegments("echo hi"), []);
 });
 
 test("gate detects gh pr create behind a newline separator", () => {
