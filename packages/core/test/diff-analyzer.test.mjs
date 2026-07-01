@@ -232,3 +232,69 @@ test("analyzeDiff: rename-only code file does NOT get LOGIC_CHANGE", () => {
   const result = analyzeDiff({ nameStatusOutput: "R100\tsrc/old.mjs\tsrc/new.mjs" });
   assert.deepEqual(result.t1.changeCategories, ["RENAME_ONLY"]);
 });
+
+// ---------------------------------------------------------------------------
+// Mixed-diff category unions (AC line 30: mixed logic+CI → core ∪ ci-guard)
+// ---------------------------------------------------------------------------
+
+test("analyzeDiff: mixed code+workflow diff unions CI_ONLY (presence, not exclusivity)", () => {
+  // The exclusive _ONLY checks never fire on a mixed diff (some files are code),
+  // so a code+workflow diff must still union the CI surface by presence.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs\nM\t.github/workflows/verify.yml",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  assert.ok(result.t1.changeCategories.includes("LOGIC_CHANGE"));
+  assert.ok(result.t1.changeCategories.includes("CI_ONLY"));
+  assert.equal(result.ambiguous, false);
+});
+
+test("analyzeDiff → resolveDynamicAngles: mixed logic+CI resolves to core ∪ ci-guard (AC line 30)", () => {
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs\nM\t.github/workflows/verify.yml",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: result.t1.changeCategories,
+    ambiguous: result.ambiguous,
+  });
+  assert.equal(dyn.fallbackToAll, false);
+  // core subset present …
+  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface"]) {
+    assert.ok(dyn.recommendedAngles.includes(a), `expected ${a} in core subset`);
+  }
+  // … unioned with the CI-specific lens.
+  assert.ok(dyn.recommendedAngles.includes("ci-guard"), "workflow file must pull ci-guard");
+  // still narrower than the full pool (peripheral non-CI lenses stay dropped).
+  assert.ok(dyn.recommendedAngles.includes("link-check") === false, "no docs → no link-check");
+  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length);
+});
+
+test("analyzeDiff → resolveDynamicAngles: mixed code+docs unions link-check, not ci-guard", () => {
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs\nM\tdocs/guide.md",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  assert.ok(result.t1.changeCategories.includes("DOCS_ONLY"));
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: result.t1.changeCategories,
+    ambiguous: result.ambiguous,
+  });
+  assert.ok(dyn.recommendedAngles.includes("link-check"), "docs file must pull link-check");
+  assert.ok(dyn.recommendedAngles.includes("ci-guard") === false, "no workflow → no ci-guard");
+});
+
+test("analyzeDiff: pure single-surface diffs keep exclusive semantics (no over-union)", () => {
+  // Presence-unioning must only apply to mixed (hunk-level) diffs; a pure CI or
+  // pure docs diff still resolves to just its exclusive category.
+  assert.deepEqual(
+    analyzeDiff({ nameStatusOutput: "M\t.github/workflows/verify.yml" }).t1.changeCategories,
+    ["CI_ONLY"],
+  );
+  assert.deepEqual(
+    analyzeDiff({ nameStatusOutput: "M\tdocs/guide.md" }).t1.changeCategories,
+    ["DOCS_ONLY"],
+  );
+});

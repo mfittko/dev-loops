@@ -202,6 +202,13 @@ export function analyzeT1(diffOutput, t0) {
   // Build categories from T0 (shared with inferCategoriesFromT0) + hunk analysis.
   for (const c of t0FileCategories(t0)) categories.add(c);
   if (hasLogicChange) categories.add("LOGIC_CHANGE");
+  // Mixed diffs never satisfy the exclusive `_ONLY` checks above (some files are
+  // code), so their peripheral surfaces would be dropped. In this hunk-level path
+  // (only reached for genuinely mixed diffs), also union each surface by PRESENCE
+  // so e.g. a code+workflow diff pulls ci-guard alongside the LOGIC_CHANGE core
+  // (AC: mixed logic+CI -> core union ci-guard). The pure single-surface path
+  // (inferCategoriesFromT0) keeps exclusive semantics.
+  for (const c of t0PresentSurfaceCategories(t0)) categories.add(c);
 
   // COMMENT_ONLY: hunkCount > 0 (real diff), has changed lines, all are non-logic,
   // and not a rename-only change
@@ -244,6 +251,26 @@ function t0FileCategories(t0) {
   if (t0.files.every((f) => classifyFile(f) === "config")) categories.push("CONFIG_ONLY");
   if (t0.files.every((f) => classifyFile(f) === "test")) categories.push("TEST_ONLY");
   if (t0.files.every((f) => classifyFile(f) === "ci")) categories.push("CI_ONLY");
+  return categories;
+}
+
+/**
+ * Surface categories present in a MIXED diff (at least one file of the surface),
+ * used only by the hunk-level path to union a mixed diff's peripheral lenses on
+ * top of LOGIC_CHANGE. Reuses the same category names / angle mappings as the
+ * exclusive path; presence (not exclusivity) is the correct trigger for a mixed
+ * diff. Renames are handled by the exclusive path, so they are excluded here.
+ *
+ * @param {T0Result} t0
+ * @returns {string[]}
+ */
+function t0PresentSurfaceCategories(t0) {
+  const categories = [];
+  const cats = new Set(t0.files.map(classifyFile));
+  if (cats.has("docs")) categories.push("DOCS_ONLY");
+  if (cats.has("config")) categories.push("CONFIG_ONLY");
+  if (cats.has("test")) categories.push("TEST_ONLY");
+  if (cats.has("ci")) categories.push("CI_ONLY");
   return categories;
 }
 
