@@ -835,3 +835,45 @@ test("reply-resolve-review-threads detects a conflicting stdin source promptly o
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("reply-resolve-review-threads detects a conflict when a whitespace-only chunk precedes real stdin content over an open pipe", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-ws-then-data-"));
+
+  try {
+    // No gh calls expected: the conflict must be detected before any capture.
+    const gh = await writeGhStub(tempDir, []);
+
+    // Regression for Copilot round 2: the conflict probe must not settle on a
+    // leading whitespace-only chunk (which would falsely proceed with --message).
+    // It must keep buffering until non-whitespace arrives, detect the conflict,
+    // and terminate — all without waiting for EOF (pipe never ends).
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        scriptPath,
+        "--repo", "owner/repo", "--pr", "17",
+        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
+      ], { env: gh.env, stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error("reply-resolve-review-threads did not terminate on whitespace-then-data conflict"));
+      }, 5000);
+      child.on("error", reject);
+      child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+      // First a whitespace-only chunk, then real content — never end the pipe.
+      child.stdin.write("   \n");
+      setTimeout(() => child.stdin.write("real conflicting body\n"), 50);
+    });
+
+    assert.equal(result.code, 1, result.stdout);
+    assert.equal(result.stdout, "");
+    const parsed = JSON.parse(result.stderr);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error, "Choose exactly one message source: --message <text> or stdin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

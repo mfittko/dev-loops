@@ -114,10 +114,12 @@ async function readStdinText(stdin) {
 // When --message is set, stdin is read only to detect a conflicting second
 // message source. A detached/idle pipe never sends EOF, so an unbounded read
 // hangs forever and the process never exits (issue #1012). Resolve as soon as
-// ANY data chunk arrives (a conflicting body is detected the instant bytes
-// appear — no need to wait for EOF), resolve on natural EOF, and time out on a
-// silent/idle pipe. Either way the stdin handle is released so the event loop
-// can drain and the tool always terminates.
+// any NON-WHITESPACE byte arrives (a conflicting body is detected the instant
+// real content appears — no need to wait for EOF); keep buffering while only
+// whitespace has arrived (a leading newline is not yet a conflict and more may
+// follow); resolve on natural EOF; and time out on a silent/idle pipe. Either
+// way the stdin handle is released so the event loop can drain and the tool
+// always terminates.
 const CONFLICT_STDIN_TIMEOUT_MS = 500;
 function readStdinConflictProbe(stdin, timeoutMs) {
   return new Promise((resolve) => {
@@ -145,12 +147,15 @@ function readStdinConflictProbe(stdin, timeoutMs) {
       cleanup();
       resolve(value);
     };
-    // 'text' seen on any data chunk (a conflict); '' on clean EOF with no data;
-    // undefined only on timeout (idle pipe) so the caller proceeds with --message.
+    // Resolve early only once non-whitespace content is seen (a real conflict);
+    // '' or whitespace-only on clean EOF is not a conflict; undefined only on
+    // timeout (idle pipe) so the caller proceeds with --message.
     let text = "";
     const onData = (chunk) => {
       text += String(chunk);
-      finish(text);
+      if (text.trim().length > 0) {
+        finish(text);
+      }
     };
     const onEnd = () => finish(text);
     timer = setTimeout(() => finish(undefined), timeoutMs);
