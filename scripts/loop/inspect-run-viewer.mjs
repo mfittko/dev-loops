@@ -38,7 +38,7 @@ export {
   resetMermaidBrowserScriptCache,
   restartExistingPortListener,
 };
-// ponytail: lifetime timeout defaults to 8h; long-running viewer sessions can raise it via --lifetime-ms.
+// ponytail: lifetime timeout defaults to 8h so a forgotten direct-run viewer cannot leak indefinitely; callers pass lifetimeMs to override.
 export const DEFAULT_SERVER_LIFETIME_MS = 8 * 60 * 60 * 1000;
 
 // Wires signal handlers + a lifetime timeout so a directly-run viewer server is
