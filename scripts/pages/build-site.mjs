@@ -55,7 +55,7 @@ export const NAV_LINKS = [
 // Nav styling, appended to each article page's own <style> block so it reuses
 // the article design-system variables (--heading/--kicker/--accent-soft).
 const NAV_CSS = `
-  .site-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.1rem; max-width: 64rem; margin: 0 auto; padding: 0.9rem clamp(1.1rem, 5vw, 2rem); border-bottom: 1px solid rgba(148, 163, 184, 0.16); }
+  .site-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.1rem; max-width: 72rem; margin: 0 auto; padding: 0.9rem clamp(1.1rem, 5vw, 2rem); border-bottom: 1px solid rgba(148, 163, 184, 0.16); }
   .site-nav-brand { font-weight: 700; letter-spacing: -0.01em; color: var(--heading); text-decoration: none; border: 0; margin-right: auto; }
   .site-nav-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.1rem; }
   .site-nav a { color: var(--kicker); text-decoration: none; font-size: 0.9rem; border: 0; }

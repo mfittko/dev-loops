@@ -38,6 +38,13 @@ test('build-site: index is the intro article, all resources published, nav links
     const deep = await readFile(join(out, ARTICLES[0].file), 'utf8');
     assert.ok(deep.includes('class="site-nav"'), 'deep-dive article carries the nav bar');
 
+    // Nav max-width must match the .wrap desktop width (72rem) so they align on desktop.
+    // Regression guard for the issue-1040 fix: was incorrectly 64rem before.
+    // Check the .site-nav rule specifically — the page also has .wrap { max-width: 72rem }
+    // so a bare 72rem substring match would pass even if .site-nav regressed.
+    assert.ok(index.match(/\.site-nav\s*\{[^}]*max-width:\s*72rem/), 'site-nav rule uses max-width 72rem (aligned with .wrap)');
+    assert.ok(!index.match(/\.site-nav\s*\{[^}]*max-width:\s*64rem/), 'site-nav must not use the old 64rem max-width');
+
     assert.deepEqual(
       result.files.sort(),
       ['index.html', ...ARTICLES.map((a) => a.file), ...DECKS.map((d) => deckOut(d))].sort(),
