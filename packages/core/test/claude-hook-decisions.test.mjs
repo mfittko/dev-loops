@@ -145,6 +145,23 @@ test("decideBashGate passes through gh pr create with an explicit non-target --r
     decideBashGate({ command: "gh pr create --repo other/repo --fill", repoSlug: TARGET }).decision,
     "allow",
   );
+  // From any cwd, an explicit non-target repo stays out of our concern.
+  assert.equal(
+    decideBashGate({ command: "gh pr create --repo other/repo --fill", repoSlug: null }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate denies gh pr create --repo targeting the repo regardless of cwd (#1047)", () => {
+  // Explicit --repo at the target still opens a ready PR bypassing the draft-first wrapper,
+  // even run from outside the repo (repoSlug null or a non-target repo).
+  const outside = decideBashGate({ command: `gh pr create --repo ${TARGET} --fill`, repoSlug: null });
+  assert.equal(outside.decision, "deny");
+  assert.match(outside.reason, /gh pr create blocked/);
+  assert.equal(
+    decideBashGate({ command: `gh pr create --repo ${TARGET} --fill`, repoSlug: "someone/else" }).decision,
+    "deny",
+  );
 });
 
 test("decideBashGate denies when PR number cannot be determined", () => {

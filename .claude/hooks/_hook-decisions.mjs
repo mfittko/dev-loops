@@ -80,10 +80,17 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // self-assigns. This closes the draft-first hole where raw `gh pr create` opens a ready PR.
   if (isCreate) {
     const explicitRepo = extractRepoFlagFromGhPrCreateAnywhere(command);
-    if (explicitRepo && explicitRepo.toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
+    const explicitTargets =
+      explicitRepo != null && explicitRepo.toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
+    const explicitOther = explicitRepo != null && !explicitTargets;
+    const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
+    if (explicitOther) {
       return ALLOW; // creating a PR on a different repo — not our concern
     }
-    if ((repoSlug ?? "").toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
+    // An explicit `--repo` pointing AT the target must be denied regardless of cwd: raw
+    // `gh pr create --repo <target>` from outside the repo still opens a ready PR, bypassing
+    // the draft-first wrapper (#1047). Without an explicit target, only gate when cwd is the repo.
+    if (!explicitTargets && !cwdTargets) {
       return ALLOW;
     }
     return {
