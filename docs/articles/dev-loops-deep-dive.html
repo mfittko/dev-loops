@@ -47,21 +47,12 @@
     padding: clamp(2rem, 6vw, 4rem) clamp(1.1rem, 5vw, 2rem) 5rem;
   }
 
+  /* One column at every width: prose and figures fill the same wrap, so all
+     left/right edges line up. Desktop widens the column; nothing floats in a
+     narrower centered measure beside a full-width diagram. */
   @media (min-width: 900px) {
-    .wrap { max-width: 72rem; }
-    .article p,
-    .article ul,
-    .article ol,
-    .article h2,
-    .article .lede { margin-left: auto; margin-right: auto; }
+    .wrap { max-width: 56rem; }
   }
-
-  /* readable article measure (~65ch) inside the wrapper */
-  .article p,
-  .article ul,
-  .article ol,
-  .article h2,
-  .article .lede { max-width: 40rem; }
 
   .kicker {
     text-transform: uppercase;
