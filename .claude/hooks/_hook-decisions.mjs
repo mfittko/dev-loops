@@ -84,22 +84,27 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
       explicitRepo != null && explicitRepo.toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
     const explicitOther = explicitRepo != null && !explicitTargets;
     const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
-    if (explicitOther) {
-      return ALLOW; // creating a PR on a different repo — not our concern
+    // The create is in scope when it explicitly targets the repo, or (with no explicit other-repo
+    // target) the cwd is the repo. An explicit `--repo <target>` is denied regardless of cwd:
+    // raw `gh pr create --repo <target>` from outside still opens a ready PR, bypassing the
+    // draft-first wrapper (#1047).
+    const createInScope = explicitTargets || (!explicitOther && cwdTargets);
+    if (createInScope) {
+      return {
+        decision: "deny",
+        reason:
+          "gh pr create blocked: open PRs via the canonical wrapper `node scripts/github/create-pr.mjs` " +
+          "(a.k.a. `dev-loops pr create`), which always creates a draft and self-assigns. Raw `gh pr create` " +
+          "defaults to ready-for-review and bypasses the draft-first contract (workflow.requireDraftFirst).",
+      };
     }
-    // An explicit `--repo` pointing AT the target must be denied regardless of cwd: raw
-    // `gh pr create --repo <target>` from outside the repo still opens a ready PR, bypassing
-    // the draft-first wrapper (#1047). Without an explicit target, only gate when cwd is the repo.
-    if (!explicitTargets && !cwdTargets) {
+    // The create is out of scope. Only allow outright when there is no ready/merge segment to
+    // evaluate — otherwise fall through so a gated `gh pr ready`/`gh pr merge` in the same
+    // compound command (e.g. `gh pr create --repo other/repo && gh pr merge 5`) is still gated
+    // below rather than short-circuited.
+    if (!isReady && !isMerge) {
       return ALLOW;
     }
-    return {
-      decision: "deny",
-      reason:
-        "gh pr create blocked: open PRs via the canonical wrapper `node scripts/github/create-pr.mjs` " +
-        "(a.k.a. `dev-loops pr create`), which always creates a draft and self-assigns. Raw `gh pr create` " +
-        "defaults to ready-for-review and bypasses the draft-first contract (workflow.requireDraftFirst).",
-    };
   }
   // When both verbs appear in a compound command, apply the stricter merge gate — if it passes,
   // the draft_gate (a subset of the pre-merge evidence check) is also satisfied.

@@ -109,7 +109,7 @@ function shellSegments(command) {
  * a run of `NAME=value` env assignments, optional `command`/`env`/`exec` wrapper
  * words, and an absolute/relative path on the gh binary (`/usr/bin/gh`).
  *
- * ponytail: this is a pragmatic normalizer, not a full shell tokenizer. Subshell
+ * Note: this is a pragmatic normalizer, not a full shell tokenizer. Subshell
  * `(gh pr create)`, `{ …; }` group, `-R=value` short-flag, and backslash-escaped
  * `\gh` forms are deliberately out of scope.
  */

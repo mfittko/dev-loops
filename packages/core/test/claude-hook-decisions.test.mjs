@@ -164,6 +164,33 @@ test("decideBashGate denies gh pr create --repo targeting the repo regardless of
   );
 });
 
+test("decideBashGate does not let an out-of-scope gh pr create short-circuit ready/merge gating", () => {
+  // An out-of-scope `--repo other/repo` create must not own the decision when a gated
+  // ready/merge segment rides along in the same compound command — the merge/ready segment
+  // is still gated below (no evidence → deny).
+  assert.equal(
+    decideBashGate({
+      command: "gh pr create --repo other/repo && gh pr merge 5",
+      repoSlug: TARGET,
+      gatePassed: false,
+    }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashGate({
+      command: "gh pr create --repo other/repo && gh pr ready 5",
+      repoSlug: TARGET,
+      gatePassed: false,
+    }).decision,
+    "deny",
+  );
+  // A pure out-of-scope create alone still passes through.
+  assert.equal(
+    decideBashGate({ command: "gh pr create --repo other/repo", repoSlug: TARGET }).decision,
+    "allow",
+  );
+});
+
 test("decideBashGate denies when PR number cannot be determined", () => {
   const d = decideBashGate({ command: "gh pr ready", repoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
