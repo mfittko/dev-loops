@@ -1088,8 +1088,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       `draft_gate self-heal for ${options.repo}#${options.pr} failed: the PR was converted to draft ` +
       `to post the verdict, but GitHub still reports it as non-draft on re-entry (draft-state read lagged ` +
       `the conversion mutation, or the conversion did not take). Not recursing. Re-run the draft_gate post ` +
-      `once the PR reflects the draft state, or reconcile manually with \`gh pr ready ${options.pr}\` / ` +
-      `\`node scripts/github/reconcile-draft-gate.mjs\`.`,
+      `once the PR reflects the draft state, or reconcile manually with ` +
+      `\`gh pr ready ${options.pr} --repo ${options.repo}\` / ` +
+      `\`node scripts/github/reconcile-draft-gate.mjs --repo ${options.repo} --pr ${options.pr}\`.`,
     );
   }
   if (gateActionForbidden) {
