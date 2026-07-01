@@ -95,6 +95,44 @@ test("decideBashGate passes through an explicit non-target --repo", () => {
   );
 });
 
+test("decideBashGate denies raw gh pr create in the target repo", () => {
+  const d = decideBashGate({ command: "gh pr create --title x --body y", repoSlug: TARGET });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr create blocked/);
+  assert.match(d.reason, /create-pr\.mjs/);
+});
+
+test("decideBashGate denies raw gh pr create --draft too (wrapper is the only path)", () => {
+  // Even an explicit --draft must route through the wrapper (it also self-assigns).
+  const d = decideBashGate({ command: "gh pr create --draft --fill", repoSlug: TARGET });
+  assert.equal(d.decision, "deny");
+});
+
+test("decideBashGate denies gh pr create in a later compound segment", () => {
+  const d = decideBashGate({ command: "git push && gh pr create --fill", repoSlug: TARGET });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr create blocked/);
+});
+
+test("decideBashGate allows the create-pr.mjs wrapper (not a raw gh pr create)", () => {
+  assert.equal(
+    decideBashGate({ command: "node scripts/github/create-pr.mjs --title x --fill", repoSlug: TARGET }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate passes through gh pr create outside the target repo", () => {
+  assert.equal(decideBashGate({ command: "gh pr create --fill", repoSlug: "someone/else" }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr create --fill", repoSlug: null }).decision, "allow");
+});
+
+test("decideBashGate passes through gh pr create with an explicit non-target --repo", () => {
+  assert.equal(
+    decideBashGate({ command: "gh pr create --repo other/repo --fill", repoSlug: TARGET }).decision,
+    "allow",
+  );
+});
+
 test("decideBashGate denies when PR number cannot be determined", () => {
   const d = decideBashGate({ command: "gh pr ready", repoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");

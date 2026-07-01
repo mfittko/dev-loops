@@ -2,8 +2,10 @@
 /**
  * PreToolUse Bash gate hook (#773).
  *
- * Blocks two commands on the target repo unless their gate evidence exists; everything else
- * passes through:
+ * Blocks three commands on the target repo; everything else passes through:
+ *   - `gh pr create` — blocked outright (no gate evidence to check): PR creation must flow through
+ *     the canonical wrapper scripts/github/create-pr.mjs (dev-loops pr create), which always drafts
+ *     and self-assigns. Closes the hole where raw `gh pr create` opens a ready PR (draft-first breach).
  *   - `gh pr ready` — needs a clean draft_gate verdict (via scripts/loop/pre-pr-ready-gate.mjs).
  *   - `gh pr merge` — needs full pre-merge evidence (clean current-head draft_gate +
  *     pre_approval_gate, via scripts/github/detect-checkpoint-evidence.mjs). This closes the hole
@@ -16,6 +18,7 @@ import { decideBashGate } from "./_hook-decisions.mjs";
 import {
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
+  commandContainsGhPrCreate,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
@@ -28,7 +31,8 @@ const input = readHookInput();
 const command = input?.tool_input?.command;
 const isReady = typeof command === "string" && commandContainsGhPrReady(command);
 const isMerge = typeof command === "string" && commandContainsGhPrMerge(command);
-if (!isReady && !isMerge) {
+const isCreate = typeof command === "string" && commandContainsGhPrCreate(command);
+if (!isReady && !isMerge && !isCreate) {
   emitAllow();
 }
 

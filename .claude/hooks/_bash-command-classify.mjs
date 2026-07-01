@@ -265,6 +265,24 @@ export function extractRepoFlagFromGhPrMergeAnywhere(command) {
   return extractRepoFlagFromSegment(findGhPrVerbSegment(command, "merge"), "merge");
 }
 
+/**
+ * Whether `command` contains a raw `gh pr create` invocation in ANY shell segment.
+ * PreToolUse gate use only — blocks raw `gh pr create` so PR creation flows through the
+ * canonical wrapper (`scripts/github/create-pr.mjs` / `dev-loops pr create`), which always
+ * creates a draft and self-assigns. The wrapper runs `gh pr create` inside a node child
+ * process, so its Bash command string (`node …/create-pr.mjs …`) never matches this — only a
+ * literal `gh pr create` in the agent's shell command does.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGhPrCreate(command) {
+  return findGhPrVerbSegment(command, "create") !== null;
+}
+
+/** Extract repo flag from `gh pr create` in any shell segment — PreToolUse gate use only. */
+export function extractRepoFlagFromGhPrCreateAnywhere(command) {
+  return extractRepoFlagFromSegment(findGhPrVerbSegment(command, "create"), "create");
+}
+
 /** @param {string} command @returns {number|null} */
 export function extractPrNumberFromGhPrMerge(command) {
   return extractPrNumberFromGhPrVerb(command, "merge");

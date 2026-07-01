@@ -13,8 +13,10 @@ import {
   extractRepoFlagFromGhPrMerge,
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
+  commandContainsGhPrCreate,
   extractPrNumberFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrMergeAnywhere,
+  extractRepoFlagFromGhPrCreateAnywhere,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -94,4 +96,21 @@ test("isMergeCapableCommand detects gh pr merge / git merge, ignores aborts and 
   assert.equal(isMergeCapableCommand("git merge --abort"), false);
   assert.equal(isMergeCapableCommand("gh pr merge --help"), false);
   assert.equal(isMergeCapableCommand("npm test"), false);
+});
+
+test("commandContainsGhPrCreate (all-segments, PreToolUse gate) detects create in any segment", () => {
+  assert.equal(commandContainsGhPrCreate("gh pr create --fill"), true);
+  assert.equal(commandContainsGhPrCreate("gh pr create --draft --title x"), true);
+  assert.equal(commandContainsGhPrCreate("git push && gh pr create --fill"), true);
+  assert.equal(commandContainsGhPrCreate("gh pr create --help"), false);
+  // The canonical wrapper runs `gh pr create` inside node, so its Bash string never matches.
+  assert.equal(commandContainsGhPrCreate("node scripts/github/create-pr.mjs --fill"), false);
+  assert.equal(commandContainsGhPrCreate("gh pr merge 1"), false);
+  assert.equal(commandContainsGhPrCreate("gh pr ready 1"), false);
+});
+
+test("extractRepoFlagFromGhPrCreateAnywhere reads --repo across segments", () => {
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("gh pr create --repo other/repo --fill"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("git push && gh pr create --repo=other/repo"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("gh pr create --fill"), null);
 });
