@@ -279,7 +279,10 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
     };
   }
 
-  const ambiguous = t0Ambiguous && (t1.changeCategories.length === 0 || t1.changeCategories.includes("LOGIC_CHANGE"));
+  // Ambiguous is reserved for genuinely unclassifiable diffs (analysis produced
+  // no categories). LOGIC_CHANGE is a classified category (resolves to its core
+  // review subset), so it no longer forces fallback-to-all.
+  const ambiguous = t0Ambiguous && t1.changeCategories.length === 0;
 
   return { t0, t1, ambiguous };
 }

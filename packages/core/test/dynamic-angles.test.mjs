@@ -82,14 +82,34 @@ test("resolveDynamicAngles: test-only includes coverage + determinism", () => {
   assert.ok(result.recommendedAngles.includes("determinism"));
 });
 
-test("resolveDynamicAngles: logic change includes many angles", () => {
+test("resolveDynamicAngles: LOGIC_CHANGE resolves to core subset, not all angles", () => {
   const result = resolveDynamicAngles({
     configuredAngles: DRAFT_ANGLES,
     changeCategories: [ChangeCategory.LOGIC_CHANGE],
   });
-  assert.ok(result.recommendedAngles.includes("correctness"));
-  assert.ok(result.recommendedAngles.includes("scope"));
-  assert.ok(result.recommendedAngles.length >= 5);
+  assert.equal(result.fallbackToAll, false);
+  // Core review subset (∩ DRAFT_ANGLES) + always-include gate-evidence.
+  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence"]) {
+    assert.ok(result.recommendedAngles.includes(a), `expected ${a} in core subset`);
+  }
+  // Peripheral lenses are dropped, not run for logic alone.
+  for (const a of ["link-check", "packaging-runtime", "config-drift", "ci-guard", "input-validation", "state-concurrency", "no-op"]) {
+    assert.ok(result.skippedAngles.includes(a), `expected ${a} skipped`);
+    assert.ok(typeof result.reasons[a] === "string");
+  }
+  // NOT all 15 — meaningfully narrower than the configured pool.
+  assert.ok(result.recommendedAngles.length < DRAFT_ANGLES.length);
+});
+
+test("resolveDynamicAngles: mixed logic + CI unions ci-guard into the core subset", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: [ChangeCategory.LOGIC_CHANGE, ChangeCategory.CI_ONLY],
+  });
+  assert.equal(result.fallbackToAll, false);
+  assert.ok(result.recommendedAngles.includes("ci-guard"));   // from CI_ONLY
+  assert.ok(result.recommendedAngles.includes("correctness")); // from LOGIC_CHANGE core
+  assert.ok(result.recommendedAngles.includes("config-drift")); // CI_ONLY unions this in
 });
 
 // ---------------------------------------------------------------------------

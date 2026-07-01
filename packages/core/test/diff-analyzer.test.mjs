@@ -147,13 +147,25 @@ test("analyzeDiff: T0 unambiguous → no T1, not ambiguous", () => {
   assert.equal(result.ambiguous, false);
 });
 
-test("analyzeDiff: T0 ambiguous with diff → runs T1, ambiguous if logic change", () => {
+test("analyzeDiff: T0 ambiguous with diff + logic change → classified, not ambiguous", () => {
   const result = analyzeDiff({
     nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/bar.md",
     diffOutput: "@@ -1,1 +1,1 @@\n+const x = 1;\n",
   });
   assert.ok(result.t1 !== null);
-  assert.equal(result.ambiguous, true); // LOGIC_CHANGE from T1 → ambiguous
+  assert.ok(result.t1.changeCategories.includes("LOGIC_CHANGE"));
+  assert.equal(result.ambiguous, false); // LOGIC_CHANGE is now a classified category
+});
+
+test("analyzeDiff: T0 ambiguous with diff + no classifiable change → ambiguous", () => {
+  // Mixed file categories (code + unknown asset) with a context-only hunk (no
+  // added/deleted lines) yields no category → genuinely unclassifiable → fallback.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tassets/logo.png",
+    diffOutput: "@@ -1,1 +1,1 @@\n unchanged context line\n",
+  });
+  assert.deepEqual(result.t1.changeCategories, []);
+  assert.equal(result.ambiguous, true);
 });
 
 test("analyzeDiff: T0 ambiguous without diff → no T1, ambiguous", () => {
