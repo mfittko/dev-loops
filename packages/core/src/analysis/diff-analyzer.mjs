@@ -199,13 +199,16 @@ export function analyzeT1(diffOutput, t0) {
     }
   }
 
-  // Build categories from T0 + hunk analysis
-  if (t0.renameOnly) categories.add("RENAME_ONLY");
-  if (t0.allDocs) categories.add("DOCS_ONLY");
-  if (t0.files.every((f) => classifyFile(f) === "config")) categories.add("CONFIG_ONLY");
-  if (t0.files.every((f) => classifyFile(f) === "test")) categories.add("TEST_ONLY");
-  if (t0.files.every((f) => classifyFile(f) === "ci")) categories.add("CI_ONLY");
+  // Build categories from T0 (shared with inferCategoriesFromT0) + hunk analysis.
+  for (const c of t0FileCategories(t0)) categories.add(c);
   if (hasLogicChange) categories.add("LOGIC_CHANGE");
+  // Mixed diffs never satisfy the exclusive `_ONLY` checks above (some files are
+  // code), so their peripheral surfaces would be dropped. In this hunk-level path
+  // (only reached for genuinely mixed diffs), also union each surface by PRESENCE
+  // so e.g. a code+workflow diff pulls ci-guard alongside the LOGIC_CHANGE core
+  // (AC: mixed logic+CI -> core union ci-guard). The pure single-surface path
+  // (inferCategoriesFromT0) keeps exclusive semantics.
+  for (const c of t0PresentSurfaceCategories(t0)) categories.add(c);
 
   // COMMENT_ONLY: hunkCount > 0 (real diff), has changed lines, all are non-logic,
   // and not a rename-only change
@@ -232,18 +235,64 @@ export function analyzeT1(diffOutput, t0) {
  */
 
 /**
- * Infer change categories from T0 analysis when T1 is not run.
+ * Categories derivable from T0 file classification alone (no hunk content).
+ * Shared by analyzeT1 (which adds hunk-derived LOGIC_CHANGE/COMMENT_ONLY on top)
+ * and inferCategoriesFromT0 (the no-T1 path). All checks are length-guarded so an
+ * empty file list yields no category.
+ *
+ * @param {T0Result} t0
+ * @returns {string[]}
+ */
+function t0FileCategories(t0) {
+  if (t0.files.length === 0) return [];
+  const categories = [];
+  if (t0.renameOnly) categories.push("RENAME_ONLY");
+  if (t0.allDocs) categories.push("DOCS_ONLY");
+  if (t0.files.every((f) => classifyFile(f) === "config")) categories.push("CONFIG_ONLY");
+  if (t0.files.every((f) => classifyFile(f) === "test")) categories.push("TEST_ONLY");
+  if (t0.files.every((f) => classifyFile(f) === "ci")) categories.push("CI_ONLY");
+  return categories;
+}
+
+/**
+ * Surface categories present in a MIXED diff (at least one file of the surface),
+ * used only by the hunk-level path to union a mixed diff's peripheral lenses on
+ * top of LOGIC_CHANGE. Reuses the same category names / angle mappings as the
+ * exclusive path; presence (not exclusivity) is the correct trigger for a mixed
+ * diff. Renames are handled by the exclusive path, so they are excluded here.
+ *
+ * @param {T0Result} t0
+ * @returns {string[]}
+ */
+function t0PresentSurfaceCategories(t0) {
+  const categories = [];
+  const cats = new Set(t0.files.map(classifyFile));
+  if (cats.has("docs")) categories.push("DOCS_ONLY");
+  if (cats.has("config")) categories.push("CONFIG_ONLY");
+  if (cats.has("test")) categories.push("TEST_ONLY");
+  if (cats.has("ci")) categories.push("CI_ONLY");
+  return categories;
+}
+
+/**
+ * Infer change categories from T0 analysis when T1 (hunk-level) is not run.
+ * Reuses the shared T0 file-category derivation, then adds the pure-code
+ * LOGIC_CHANGE inference that the hunk-level path would otherwise supply.
  *
  * @param {T0Result} t0
  * @returns {string[]}
  */
 function inferCategoriesFromT0(t0) {
-  const categories = [];
-  if (t0.renameOnly) categories.push("RENAME_ONLY");
-  if (t0.allDocs) categories.push("DOCS_ONLY");
-  if (t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "config")) categories.push("CONFIG_ONLY");
-  if (t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "test")) categories.push("TEST_ONLY");
-  if (t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "ci")) categories.push("CI_ONLY");
+  const categories = t0FileCategories(t0);
+  // Pure code-only change: a diff whose files all classify as code (and is not a
+  // rename) is a LOGIC_CHANGE. Without this, an all-code diff has a single file
+  // category (so analyzeDiff never runs hunk-level T1) and produces no category,
+  // which resolveDynamicAngles treats as "unclassifiable" → fallback-to-all. That
+  // regressed the primary case: a code-only PR must resolve to the LOGIC_CHANGE
+  // core review subset, not all angles.
+  if (!t0.renameOnly && t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "code")) {
+    categories.push("LOGIC_CHANGE");
+  }
   return categories;
 }
 
@@ -279,7 +328,14 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
     };
   }
 
-  const ambiguous = t0Ambiguous && (t1.changeCategories.length === 0 || t1.changeCategories.includes("LOGIC_CHANGE"));
+  // `ambiguous` flags one specific case: a diff T0 could not classify (mixed file
+  // categories, so t0Ambiguous) AND whose hunk analysis still produced no
+  // category. It is NOT the only fallback trigger — resolveDynamicAngles also
+  // falls back whenever changeCategories is empty (e.g. a single lone unknown/
+  // asset file yields no category yet is not t0Ambiguous). A mixed diff that
+  // yields a category (e.g. LOGIC_CHANGE) is classified and not ambiguous, so
+  // LOGIC_CHANGE never forces fallback-to-all via this flag.
+  const ambiguous = t0Ambiguous && t1.changeCategories.length === 0;
 
   return { t0, t1, ambiguous };
 }

@@ -7,6 +7,13 @@ import {
   analyzeT1,
   analyzeDiff,
 } from "../src/analysis/diff-analyzer.mjs";
+import { resolveDynamicAngles } from "../src/analysis/change-classifier.mjs";
+
+const DRAFT_ANGLES = [
+  "scope", "coverage", "correctness", "ci-guard", "contract-surface",
+  "input-validation", "determinism", "no-op", "link-check", "packaging-runtime",
+  "state-concurrency", "config-drift", "gate-evidence", "pr-description", "pr-comments",
+];
 
 // ---------------------------------------------------------------------------
 // classifyFile
@@ -147,13 +154,25 @@ test("analyzeDiff: T0 unambiguous → no T1, not ambiguous", () => {
   assert.equal(result.ambiguous, false);
 });
 
-test("analyzeDiff: T0 ambiguous with diff → runs T1, ambiguous if logic change", () => {
+test("analyzeDiff: T0 ambiguous with diff + logic change → classified, not ambiguous", () => {
   const result = analyzeDiff({
     nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/bar.md",
     diffOutput: "@@ -1,1 +1,1 @@\n+const x = 1;\n",
   });
   assert.ok(result.t1 !== null);
-  assert.equal(result.ambiguous, true); // LOGIC_CHANGE from T1 → ambiguous
+  assert.ok(result.t1.changeCategories.includes("LOGIC_CHANGE"));
+  assert.equal(result.ambiguous, false); // LOGIC_CHANGE is now a classified category
+});
+
+test("analyzeDiff: T0 ambiguous with diff + no classifiable change → ambiguous", () => {
+  // Mixed file categories (code + unknown asset) with a context-only hunk (no
+  // added/deleted lines) yields no category → genuinely unclassifiable → fallback.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tassets/logo.png",
+    diffOutput: "@@ -1,1 +1,1 @@\n unchanged context line\n",
+  });
+  assert.deepEqual(result.t1.changeCategories, []);
+  assert.equal(result.ambiguous, true);
 });
 
 test("analyzeDiff: T0 ambiguous without diff → no T1, ambiguous", () => {
@@ -166,4 +185,116 @@ test("analyzeDiff: rename-only → unambiguous", () => {
   const result = analyzeDiff({ nameStatusOutput: "R100\told.mjs\tnew.mjs" });
   assert.ok(result.t0.renameOnly);
   assert.equal(result.ambiguous, false);
+});
+
+test("analyzeDiff: pure code-only diff → LOGIC_CHANGE (not ambiguous, not fallback)", () => {
+  // AC-1: a code-only change (touches no CI/packaging/docs/config surfaces) must
+  // classify as LOGIC_CHANGE. An all-code diff has a single file category so
+  // hunk-level T1 never runs — inferCategoriesFromT0 must still classify it.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs\nM\tpackages/core/src/bar.mjs",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  assert.deepEqual(result.t1.changeCategories, ["LOGIC_CHANGE"]);
+  assert.equal(result.ambiguous, false);
+});
+
+test("analyzeDiff → resolveDynamicAngles: pure code-only resolves to core subset, not the full pool", () => {
+  // End-to-end AC-1: the real analyzeDiff → resolveDynamicAngles path for a
+  // pure-code diff must NOT fall back to all angles.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: result.t1.changeCategories,
+    ambiguous: result.ambiguous,
+  });
+  assert.equal(dyn.fallbackToAll, false);
+  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence"]) {
+    assert.ok(dyn.recommendedAngles.includes(a), `expected ${a} in core subset`);
+  }
+  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length, `must be narrower than the full pool of ${DRAFT_ANGLES.length}`);
+});
+
+test("analyzeDiff: single code file with NO diffOutput still classifies LOGIC_CHANGE", () => {
+  // The gate resolver may only have name-status. A code-only name-status must
+  // still classify LOGIC_CHANGE rather than falling back to all angles.
+  const result = analyzeDiff({ nameStatusOutput: "M\tpackages/core/src/foo.mjs" });
+  assert.deepEqual(result.t1.changeCategories, ["LOGIC_CHANGE"]);
+  assert.equal(result.ambiguous, false);
+});
+
+test("analyzeDiff: rename-only code file does NOT get LOGIC_CHANGE", () => {
+  // Guard against over-classifying: a rename of a .mjs file is RENAME_ONLY, not
+  // LOGIC_CHANGE, even though the file classifies as code.
+  const result = analyzeDiff({ nameStatusOutput: "R100\tsrc/old.mjs\tsrc/new.mjs" });
+  assert.deepEqual(result.t1.changeCategories, ["RENAME_ONLY"]);
+});
+
+// ---------------------------------------------------------------------------
+// Mixed-diff category unions (AC line 30: mixed logic+CI → core ∪ ci-guard)
+// ---------------------------------------------------------------------------
+
+test("analyzeDiff: mixed code+workflow diff unions CI_ONLY (presence, not exclusivity)", () => {
+  // The exclusive _ONLY checks never fire on a mixed diff (some files are code),
+  // so a code+workflow diff must still union the CI surface by presence.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs\nM\t.github/workflows/verify.yml",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  assert.ok(result.t1.changeCategories.includes("LOGIC_CHANGE"));
+  assert.ok(result.t1.changeCategories.includes("CI_ONLY"));
+  assert.equal(result.ambiguous, false);
+});
+
+test("analyzeDiff → resolveDynamicAngles: mixed logic+CI resolves to core ∪ ci-guard (AC line 30)", () => {
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs\nM\t.github/workflows/verify.yml",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: result.t1.changeCategories,
+    ambiguous: result.ambiguous,
+  });
+  assert.equal(dyn.fallbackToAll, false);
+  // core subset present …
+  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface"]) {
+    assert.ok(dyn.recommendedAngles.includes(a), `expected ${a} in core subset`);
+  }
+  // … unioned with the CI-specific lens.
+  assert.ok(dyn.recommendedAngles.includes("ci-guard"), "workflow file must pull ci-guard");
+  // still narrower than the full pool (peripheral non-CI lenses stay dropped).
+  assert.ok(dyn.recommendedAngles.includes("link-check") === false, "no docs → no link-check");
+  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length);
+});
+
+test("analyzeDiff → resolveDynamicAngles: mixed code+docs unions link-check, not ci-guard", () => {
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs\nM\tdocs/guide.md",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  assert.ok(result.t1.changeCategories.includes("DOCS_ONLY"));
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: result.t1.changeCategories,
+    ambiguous: result.ambiguous,
+  });
+  assert.ok(dyn.recommendedAngles.includes("link-check"), "docs file must pull link-check");
+  assert.ok(dyn.recommendedAngles.includes("ci-guard") === false, "no workflow → no ci-guard");
+});
+
+test("analyzeDiff: pure single-surface diffs keep exclusive semantics (no over-union)", () => {
+  // Presence-unioning must only apply to mixed (hunk-level) diffs; a pure CI or
+  // pure docs diff still resolves to just its exclusive category.
+  assert.deepEqual(
+    analyzeDiff({ nameStatusOutput: "M\t.github/workflows/verify.yml" }).t1.changeCategories,
+    ["CI_ONLY"],
+  );
+  assert.deepEqual(
+    analyzeDiff({ nameStatusOutput: "M\tdocs/guide.md" }).t1.changeCategories,
+    ["DOCS_ONLY"],
+  );
 });

@@ -51,9 +51,11 @@ const CATEGORY_ANGLE_MAP = {
   [ChangeCategory.COMMENT_ONLY]: [
     "dry",
   ],
+  // Core review subset for any non-trivial code change. Peripheral lenses
+  // (ci-guard, link-check, packaging-runtime, config-drift, etc.) are pulled in
+  // only when the diff's other categories implicate them, not by logic alone.
   [ChangeCategory.LOGIC_CHANGE]: [
-    "correctness", "coverage", "kiss", "dry", "srp", "soc", "deep",
-    "ocp", "lsp", "isp", "dip", "yagni", "scope", "no-op", "determinism",
+    "scope", "correctness", "coverage", "determinism", "contract-surface",
   ],
 };
 
@@ -79,8 +81,9 @@ const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr-descri
 /**
  * Resolve which gate angles to run based on detected change categories.
  *
- * When the diff is ambiguous (contains LOGIC_CHANGE or multiple mixed categories),
- * all configured angles are recommended (fallback-to-all).
+ * When the diff is ambiguous (no detected categories / analysis failure),
+ * all configured angles are recommended (fallback-to-all). A LOGIC_CHANGE
+ * diff resolves to its core review subset, not fallback-to-all.
  *
  * @param {object} options
  * @param {string[]} options.configuredAngles — all angles configured for this gate
