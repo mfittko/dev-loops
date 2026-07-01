@@ -111,6 +111,38 @@ async function readStdinText(stdin) {
   }
   return text;
 }
+// ponytail: when --message is set, stdin is read only to detect a conflicting
+// second message source. A detached/idle pipe never sends EOF, so the unbounded
+// read hangs forever (issue #1012). Termination is the hard requirement, so the
+// read is bounded: on timeout we treat --message as the authoritative source and
+// proceed. Conflict detection is therefore best-effort — a body piped and closed
+// promptly (the normal case, and how the CLI is scripted) is seen and rejected;
+// a slow/never-closed producer may be missed in favor of always terminating.
+// Raise CONFLICT_STDIN_TIMEOUT_MS to widen the conflict-detection window if needed.
+const CONFLICT_STDIN_TIMEOUT_MS = 500;
+async function readStdinTextBounded(stdin, timeoutMs) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(undefined), timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([readStdinText(stdin), timeout]);
+  } finally {
+    clearTimeout(timer);
+    // Abandoning the for-await iterator leaves stdin referenced and flowing,
+    // which keeps the event loop alive and prevents the process from ever
+    // exiting (issue #1012). Release the handle so the tool can terminate.
+    // process.stdin always has unref(); destroy() is a hard fallback so a
+    // non-tty Readable without unref() cannot silently revert to the hang.
+    stdin.pause?.();
+    if (typeof stdin.unref === "function") {
+      stdin.unref();
+    } else {
+      stdin.destroy?.();
+    }
+  }
+}
 async function resolveMessageInput(options, { stdin = process.stdin } = {}) {
   if (typeof options.message === "string") {
     if (stdin.isTTY) {
@@ -119,8 +151,8 @@ async function resolveMessageInput(options, { stdin = process.stdin } = {}) {
       }
       return options.message;
     }
-    const stdinText = await readStdinText(stdin);
-    if (stdinText.trim().length > 0) {
+    const stdinText = await readStdinTextBounded(stdin, CONFLICT_STDIN_TIMEOUT_MS);
+    if (typeof stdinText === "string" && stdinText.trim().length > 0) {
       throw parseError("Choose exactly one message source: --message <text> or stdin");
     }
     if (options.message.trim().length === 0) {

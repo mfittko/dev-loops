@@ -745,3 +745,116 @@ test("reply-resolve-review-threads skips resolved human threads by default", asy
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("reply-resolve-review-threads terminates on multi-thread input even when stdin stays open (no hang)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-no-hang-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_201", databaseId: 201, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
+        stdout: '{"id":1401,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1401"}\n',
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/201/replies"],
+        stdout: '{"id":1402,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1402"}\n',
+      },
+    ]);
+
+    // Regression for #1012: with --message set, stdin was read to detect a
+    // conflicting source. A detached/idle pipe never sends EOF, so the tool
+    // hung forever. It must terminate on its own; leave stdin open (no .end()).
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        scriptPath,
+        "--repo", "owner/repo", "--pr", "17",
+        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
+      ], { env: gh.env, stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error("reply-resolve-review-threads did not terminate (hang regression #1012)"));
+      }, 5000);
+      child.on("error", reject);
+      child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+      // Intentionally do NOT end stdin, simulating a detached/idle pipe.
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.matchedThreadCount, 2);
+    assert.equal(parsed.repliedThreadCount, 2);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads terminates even when a producer holds stdin open without EOF", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-open-pipe-terminates-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
+        stdout: '{"id":1501,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1501"}\n',
+      },
+    ]);
+
+    // Regression for #1012: termination is the hard guarantee. Even when a
+    // producer holds stdin open (writes without ever calling .end(), so no EOF),
+    // the bounded read must fall back to --message and let the tool finish.
+    // Conflict detection is best-effort in this open-pipe case; termination is not.
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        scriptPath,
+        "--repo", "owner/repo", "--pr", "17",
+        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
+      ], { env: gh.env, stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error("reply-resolve-review-threads did not terminate on an open stdin pipe (regression #1012)"));
+      }, 5000);
+      child.on("error", reject);
+      child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+      // Hold the pipe open: write without ever ending it (no EOF).
+      child.stdin.write("partial body with no newline and no end");
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.matchedThreadCount, 1);
+    assert.equal(parsed.repliedThreadCount, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
