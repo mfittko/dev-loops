@@ -2083,6 +2083,109 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
   }
 });
 
+test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the draft-state read lags the conversion mutation (#1020)", async () => {
+  // REGRESSION for the #1020 hang: `postDraftGateViaDraftTransition` converts a ready
+  // PR to draft, then re-enters upsertCheckpointVerdict to post the draft_gate verdict.
+  // If GitHub's draft-state read lags the conversion (isDraft still reads FALSE on
+  // re-entry — a race / eventual-consistency), the reconcile branch previously fired
+  // AGAIN, re-converting and re-entering without bound → indefinite recursion, eventual
+  // Node exit 13 with the error swallowed. The recursion guard must short-circuit the
+  // re-entry and surface a CLEAR error instead of recursing. (#1020)
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-draft-race-"));
+
+  try {
+    const headSha = "abc1234";
+    const cleanPreApprovalComment = {
+      id: 501,
+      body: [
+        "### Gate review: `pre_approval_gate`",
+        "",
+        "**Reviewed head SHA:** `abc1234`",
+        "**Verdict:** clean",
+        "**Execution mode:** fanout_fanin",
+        "",
+        "**Findings summary:** no issues found",
+        "",
+        "**Next action:** await final human approval",
+      ].join("\n"),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-501",
+      updated_at: "2026-05-30T17:00:00Z",
+    };
+    const copilotReviewOnHead = {
+      id: 1,
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      submittedAt: "2026-05-30T16:00:00Z",
+      commit: { oid: headSha },
+    };
+    const prFacts = (isDraft) => JSON.stringify({
+      number: 17,
+      state: "OPEN",
+      isDraft,
+      headRefOid: headSha,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      reviews: [copilotReviewOnHead],
+    }) + "\n";
+
+    // Both coordination passes report isDraft:false — pass 2 (the re-entry) simulates
+    // the lagged draft-state read. If the guard were absent, the poster would try to
+    // convert to draft again and re-enter a THIRD time; providing only ONE convert
+    // entry means a recursing implementation would exhaust the stub and fail loudly on
+    // the WRONG error. The guard must instead throw the clear #1020 self-heal error
+    // BEFORE any second conversion. `pr ready` is provided so a best-effort restore in
+    // the catch path (conversion.alreadyDraft !== true) is satisfied.
+    const { env: logEnvRaw, ghLogPath } = await writeGhStubHelper(tempDir, [
+      // --- coordination pass 1 (isDraft: false → reconcile) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      // --- resolve PR node id + convert to draft (ONLY ONCE) ---
+      { assertArgs: ["api", "graphql", "name=repo", "number=17"], stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_node","isDraft":false}}}}\n' },
+      { assertArgs: ["api", "graphql", "pullRequestId=PR_node"], stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_node","isDraft":true}}}}\n' },
+      // --- coordination pass 2 (LAGGED read: isDraft STILL false → must NOT recurse) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      // --- best-effort restore to ready after the guarded failure ---
+      { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "{}\n" },
+    ], { matchMode: "claims", logCalls: true });
+    const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
+
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha,
+        verdict: "clean",
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+        findingsSummary: "no issues found",
+        nextAction: "mark ready for review",
+        executionMode: "fanout_fanin",
+      }, { env, repoRoot: tempDir }),
+      (error) => {
+        // Clear, actionable message — not a swallowed hang.
+        assert.match(error.message, /still reports it as non-draft on re-entry/);
+        assert.match(error.message, /Not recursing/);
+        return true;
+      },
+    );
+
+    // Exactly ONE conversion to draft — proving no unbounded re-conversion loop.
+    const ghLog = await readFile(ghLogPath, "utf8");
+    const conversions = (ghLog.match(/convertPullRequestToDraft/g) || []).length;
+    assert.equal(conversions, 1, "expected exactly one convertPullRequestToDraft (no recursion loop)");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict already-satisfied no-op sources executionMode from the gate marker (#891 review)", async () => {
   // The already-satisfied no-op must source executionMode from the gate MARKER
   // summary (which carries executionMode), not the strict COMMENT summary (which
