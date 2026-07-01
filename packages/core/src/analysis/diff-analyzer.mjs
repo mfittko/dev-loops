@@ -199,12 +199,8 @@ export function analyzeT1(diffOutput, t0) {
     }
   }
 
-  // Build categories from T0 + hunk analysis
-  if (t0.renameOnly) categories.add("RENAME_ONLY");
-  if (t0.allDocs) categories.add("DOCS_ONLY");
-  if (t0.files.every((f) => classifyFile(f) === "config")) categories.add("CONFIG_ONLY");
-  if (t0.files.every((f) => classifyFile(f) === "test")) categories.add("TEST_ONLY");
-  if (t0.files.every((f) => classifyFile(f) === "ci")) categories.add("CI_ONLY");
+  // Build categories from T0 (shared with inferCategoriesFromT0) + hunk analysis.
+  for (const c of t0FileCategories(t0)) categories.add(c);
   if (hasLogicChange) categories.add("LOGIC_CHANGE");
 
   // COMMENT_ONLY: hunkCount > 0 (real diff), has changed lines, all are non-logic,
@@ -232,18 +228,35 @@ export function analyzeT1(diffOutput, t0) {
  */
 
 /**
- * Infer change categories from T0 analysis when T1 is not run.
+ * Categories derivable from T0 file classification alone (no hunk content).
+ * Shared by analyzeT1 (which adds hunk-derived LOGIC_CHANGE/COMMENT_ONLY on top)
+ * and inferCategoriesFromT0 (the no-T1 path). All checks are length-guarded so an
+ * empty file list yields no category.
+ *
+ * @param {T0Result} t0
+ * @returns {string[]}
+ */
+function t0FileCategories(t0) {
+  if (t0.files.length === 0) return [];
+  const categories = [];
+  if (t0.renameOnly) categories.push("RENAME_ONLY");
+  if (t0.allDocs) categories.push("DOCS_ONLY");
+  if (t0.files.every((f) => classifyFile(f) === "config")) categories.push("CONFIG_ONLY");
+  if (t0.files.every((f) => classifyFile(f) === "test")) categories.push("TEST_ONLY");
+  if (t0.files.every((f) => classifyFile(f) === "ci")) categories.push("CI_ONLY");
+  return categories;
+}
+
+/**
+ * Infer change categories from T0 analysis when T1 (hunk-level) is not run.
+ * Reuses the shared T0 file-category derivation, then adds the pure-code
+ * LOGIC_CHANGE inference that the hunk-level path would otherwise supply.
  *
  * @param {T0Result} t0
  * @returns {string[]}
  */
 function inferCategoriesFromT0(t0) {
-  const categories = [];
-  if (t0.renameOnly) categories.push("RENAME_ONLY");
-  if (t0.allDocs) categories.push("DOCS_ONLY");
-  if (t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "config")) categories.push("CONFIG_ONLY");
-  if (t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "test")) categories.push("TEST_ONLY");
-  if (t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "ci")) categories.push("CI_ONLY");
+  const categories = t0FileCategories(t0);
   // Pure code-only change: a diff whose files all classify as code (and is not a
   // rename) is a LOGIC_CHANGE. Without this, an all-code diff has a single file
   // category (so analyzeDiff never runs hunk-level T1) and produces no category,
