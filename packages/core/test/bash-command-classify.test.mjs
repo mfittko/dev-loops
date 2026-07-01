@@ -13,8 +13,11 @@ import {
   extractRepoFlagFromGhPrMerge,
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
+  commandContainsGhPrCreate,
   extractPrNumberFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrMergeAnywhere,
+  extractRepoFlagFromGhPrCreateAnywhere,
+  extractRepoFlagsFromGhPrCreateSegments,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -94,4 +97,67 @@ test("isMergeCapableCommand detects gh pr merge / git merge, ignores aborts and 
   assert.equal(isMergeCapableCommand("git merge --abort"), false);
   assert.equal(isMergeCapableCommand("gh pr merge --help"), false);
   assert.equal(isMergeCapableCommand("npm test"), false);
+});
+
+test("commandContainsGhPrCreate (all-segments, PreToolUse gate) detects create in any segment", () => {
+  assert.equal(commandContainsGhPrCreate("gh pr create --fill"), true);
+  assert.equal(commandContainsGhPrCreate("gh pr create --draft --title x"), true);
+  assert.equal(commandContainsGhPrCreate("git push && gh pr create --fill"), true);
+  assert.equal(commandContainsGhPrCreate("gh pr create --help"), false);
+  // The canonical wrapper runs `gh pr create` inside node, so its Bash string never matches.
+  assert.equal(commandContainsGhPrCreate("node scripts/github/create-pr.mjs --fill"), false);
+  assert.equal(commandContainsGhPrCreate("gh pr merge 1"), false);
+  assert.equal(commandContainsGhPrCreate("gh pr ready 1"), false);
+});
+
+test("extractRepoFlagFromGhPrCreateAnywhere reads --repo across segments", () => {
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("gh pr create --repo other/repo --fill"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("git push && gh pr create --repo=other/repo"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("gh pr create --fill"), null);
+});
+
+test("extractRepoFlagsFromGhPrCreateSegments returns every create segment's --repo", () => {
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrCreateSegments("gh pr create --repo other/repo && gh pr create --fill"),
+    [
+      { segment: "gh pr create --repo other/repo", explicitRepo: "other/repo" },
+      { segment: "gh pr create --fill", explicitRepo: null },
+    ],
+  );
+  // --help segments are excluded; non-create segments ignored.
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrCreateSegments("git push && gh pr create --help && gh pr create --repo=a/b"),
+    [{ segment: "gh pr create --repo=a/b", explicitRepo: "a/b" }],
+  );
+  assert.deepEqual(extractRepoFlagsFromGhPrCreateSegments("echo hi"), []);
+});
+
+test("gate detects gh pr create behind a newline separator", () => {
+  assert.equal(commandContainsGhPrCreate("echo hi\ngh pr create --fill"), true);
+  assert.equal(commandContainsGhPrCreate("echo hi\r\ngh pr create --fill"), true);
+  // shared root cause: newline separator also caught for ready/merge
+  assert.equal(commandContainsGhPrReady("echo hi\ngh pr ready 5"), true);
+  assert.equal(commandContainsGhPrMerge("echo hi\ngh pr merge 5 --squash"), true);
+});
+
+test("gate detects gh pr create behind env-assignment/wrapper/path prefixes", () => {
+  assert.equal(commandContainsGhPrCreate("GH_TOKEN=x gh pr create --fill"), true);
+  assert.equal(commandContainsGhPrCreate("command gh pr create"), true);
+  assert.equal(commandContainsGhPrCreate("env gh pr create"), true);
+  assert.equal(commandContainsGhPrCreate("exec gh pr create"), true);
+  assert.equal(commandContainsGhPrCreate("/usr/bin/gh pr create"), true);
+  // remainder extraction stays consistent through the normalized prefix
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("GH_TOKEN=x gh pr create --repo other/repo"), "other/repo");
+  // shared root cause: prefixes also caught for ready/merge
+  assert.equal(commandContainsGhPrReady("GH_TOKEN=x gh pr ready 5"), true);
+  assert.equal(commandContainsGhPrMerge("/usr/bin/gh pr merge 5"), true);
+});
+
+test("gate normalization does not over-match the wrapper or --help", () => {
+  // wrapper must never match — first token `node` is neither env-assign nor `gh`
+  assert.equal(commandContainsGhPrCreate("node scripts/github/create-pr.mjs --fill"), false);
+  assert.equal(commandContainsGhPrCreate("GH_TOKEN=x node scripts/github/create-pr.mjs --fill"), false);
+  // --help still exempts even behind a prefix
+  assert.equal(commandContainsGhPrCreate("gh pr create --help"), false);
+  assert.equal(commandContainsGhPrCreate("command gh pr create --help"), false);
 });

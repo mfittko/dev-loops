@@ -14,10 +14,12 @@ import { resolveRunId } from "./_run-context.mjs";
 import {
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
+  commandContainsGhPrCreate,
   extractPrNumberFromGhPrReadyAnywhere,
   extractRepoFlagFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrMergeAnywhere,
+  extractRepoFlagsFromGhPrCreateSegments,
   TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
 
@@ -39,7 +41,10 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 /**
  * Decide whether a PreToolUse Bash command must be blocked by a dev-loop gate boundary.
  *
- * Two gated commands on the target repo:
+ * Three gated commands on the target repo:
+ *   - `gh pr create` — blocked outright; PR creation must flow through the canonical wrapper
+ *     (`scripts/github/create-pr.mjs` / `dev-loops pr create`), which always drafts and
+ *     self-assigns. Closes the hole where raw `gh pr create` opens a ready PR, bypassing draft-first.
  *   - `gh pr ready` — blocked without clean draft_gate evidence (`pre-pr-ready-gate`).
  *   - `gh pr merge` — blocked without the full pre-merge gate evidence (`detect-checkpoint-evidence`:
  *     clean current-head draft_gate + pre_approval_gate). The loop runs this check before merging;
@@ -65,8 +70,42 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // (correct there: `false && gh pr ready 42` short-circuits so ready never ran).
   const isReady = commandContainsGhPrReady(command);
   const isMerge = commandContainsGhPrMerge(command);
-  if (!isReady && !isMerge) {
+  const isCreate = commandContainsGhPrCreate(command);
+  if (!isReady && !isMerge && !isCreate) {
     return ALLOW;
+  }
+
+  // Raw `gh pr create` is blocked outright on the target repo (no PR number / gate evidence
+  // exists yet): PR creation must flow through the canonical wrapper, which always drafts and
+  // self-assigns. This closes the draft-first hole where raw `gh pr create` opens a ready PR.
+  if (isCreate) {
+    const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
+    // Evaluate scope PER create segment, not just the first: a create is in scope when it
+    // explicitly targets the repo, or (with no explicit --repo) the cwd is the repo. An explicit
+    // `--repo <target>` is denied regardless of cwd (#1047). DENY if ANY create segment is in
+    // scope — otherwise a leading out-of-scope create (`gh pr create --repo other/repo`) would
+    // short-circuit and shield a later in-scope raw create (`&& gh pr create --fill`).
+    const anyCreateInScope = extractRepoFlagsFromGhPrCreateSegments(command).some((seg) =>
+      seg.explicitRepo == null
+        ? cwdTargets
+        : seg.explicitRepo.toLowerCase() === TARGET_REPO_SLUG.toLowerCase(),
+    );
+    if (anyCreateInScope) {
+      return {
+        decision: "deny",
+        reason:
+          "gh pr create blocked: open PRs via the canonical wrapper `node scripts/github/create-pr.mjs` " +
+          "(a.k.a. `dev-loops pr create`), which always creates a draft and self-assigns. Raw `gh pr create` " +
+          "defaults to ready-for-review and bypasses the draft-first contract (workflow.requireDraftFirst).",
+      };
+    }
+    // The create is out of scope. Only allow outright when there is no ready/merge segment to
+    // evaluate — otherwise fall through so a gated `gh pr ready`/`gh pr merge` in the same
+    // compound command (e.g. `gh pr create --repo other/repo && gh pr merge 5`) is still gated
+    // below rather than short-circuited.
+    if (!isReady && !isMerge) {
+      return ALLOW;
+    }
   }
   // When both verbs appear in a compound command, apply the stricter merge gate — if it passes,
   // the draft_gate (a subset of the pre-merge evidence check) is also satisfied.

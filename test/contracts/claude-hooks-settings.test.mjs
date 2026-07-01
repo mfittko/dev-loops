@@ -145,6 +145,29 @@ test("bash-gate hook allows gh pr ready when the (stubbed) draft gate passes", (
   }
 });
 
+test("bash-gate hook denies a raw gh pr create in the target repo (e2e)", () => {
+  // No gate stub needed — create is an unconditional block routing to the wrapper.
+  const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+    tool_name: "Bash",
+    tool_input: { command: "gh pr create --title x --body y" },
+    cwd: repoRoot,
+  });
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured decision");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /create-pr\.mjs/);
+});
+
+test("bash-gate hook allows the create-pr.mjs wrapper (e2e)", () => {
+  const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+    tool_name: "Bash",
+    tool_input: { command: "node scripts/github/create-pr.mjs --title x --fill" },
+    cwd: repoRoot,
+  });
+  assert.equal(code, 0);
+  assert.equal(json, null, "the canonical wrapper must pass through");
+});
+
 test("write-guard hook fails open when enforcement is disabled (default)", () => {
   const { code, json } = runHook("pre-tool-use-write-guard.mjs", {
     tool_name: "Write",
