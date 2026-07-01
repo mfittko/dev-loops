@@ -22,7 +22,14 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
 
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries);
-  return { ...env, DEVLOOPS_RUN_ID: "" };
+  // Hermetic guard (#1006): seed a clean local git stub on the same PATH dir so
+  // the subprocess CLI's fetchLocalConflictFiles never shells out to the real
+  // working tree. Without this, concurrent git activity under parallel
+  // `npm run verify` transiently reports unmerged entries and flips these
+  // gh-driven suites to conflict_resolution. Tests needing a specific git
+  // response (e.g. the conflict-resolution case) overwrite this stub afterward.
+  const gitEnv = await writeGitStub(tempDir, { stdout: "" });
+  return { ...env, ...gitEnv, DEVLOOPS_RUN_ID: "" };
 }
 
 async function writeGitStub(tempDir, { stdout = "", stderr = "", exitCode = 0, assertArgs = [] } = {}) {
