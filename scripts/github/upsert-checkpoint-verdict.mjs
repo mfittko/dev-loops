@@ -897,7 +897,14 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
   try {
     // The PR is now a draft, so RUN_DRAFT_GATE is the legal action. Re-enter with
     // the caller's full options; prIsDraft is now true so this branch is skipped.
-    result = await upsertCheckpointVerdict(options, { env, ghCommand, repoRoot });
+    // `_draftTransitionInProgress` guards against unbounded recursion: if GitHub's
+    // draft-state read still lags the conversion mutation on re-entry (isDraft reads
+    // false again), the reconcile branch must NOT fire a second time — it fails closed
+    // with a clear error instead of recursing indefinitely (exit 13). (#1020)
+    result = await upsertCheckpointVerdict(
+      { ...options, _draftTransitionInProgress: true },
+      { env, ghCommand, repoRoot },
+    );
   } catch (error) {
     if (conversion.alreadyDraft !== true) {
       try {
@@ -1060,10 +1067,31 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (
     options.gate === "draft_gate"
     && !prIsDraft
+    && !options._draftTransitionInProgress
     && !coordination.draftGateAlreadySatisfied
     && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
   ) {
     return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot });
+  }
+  // Fail closed on a lagged draft-state read: we are re-entering FROM
+  // postDraftGateViaDraftTransition (which just converted the PR to draft) yet the
+  // coordination context still reports the PR as non-draft. Recursing would loop
+  // indefinitely (the original #1020 hang → exit 13, error swallowed). Surface a
+  // clear, actionable error instead so the operator knows the draft conversion did
+  // not take (or GitHub's read lags the mutation) and can retry. (#1020)
+  if (
+    options.gate === "draft_gate"
+    && !prIsDraft
+    && options._draftTransitionInProgress
+  ) {
+    throw new Error(
+      `draft_gate self-heal for ${options.repo}#${options.pr} failed: the PR was converted to draft ` +
+      `to post the verdict, but GitHub still reports it as non-draft on re-entry (draft-state read lagged ` +
+      `the conversion mutation, or the conversion did not take). Not recursing. Re-run the draft_gate post ` +
+      `once the PR reflects the draft state, or reconcile manually with ` +
+      `\`gh pr ready ${options.pr} --repo ${options.repo}\` / ` +
+      `\`node scripts/github/reconcile-draft-gate.mjs --repo ${options.repo} --pr ${options.pr}\`.`,
+    );
   }
   if (gateActionForbidden) {
     throw new Error(buildGateEntryRefusalError({ options, coordination }));
