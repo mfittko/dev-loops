@@ -3,13 +3,13 @@ import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, normal
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
-import path from "node:path";
 import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
 import { detectInternalOnly as detectPrInternalOnly } from "./detect-internal-only-pr.mjs";
 import { applyConfirmedReviewRequest, interpretLoopState, NEXT_ACTIONS, STATE, summarizeLoopInterpretation, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
 import { ensureAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
+import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 
 import {
@@ -305,7 +305,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
     repo: options.repo,
     pr: options.pr,
     env,
-    cwd: path.resolve(process.cwd()),
+    cwd: resolveRepoRoot(process.cwd()),
     claimIfMissing: true,
   });
   if (!runnerOwnership.ok) {
@@ -337,7 +337,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
     { repo: options.repo, pr: options.pr },
     { env, ghCommand },
   );
-  const config = await loadDevLoopConfig({ repoRoot: path.resolve(process.cwd()) });
+  const config = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
   if (config.errors?.length > 0) {
     console.error("[copilot-pr-handoff] config warnings:", JSON.stringify(config.errors));
   }

@@ -229,7 +229,8 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
       refinementArtifact: {
         status: "unknown",
         linkedIssue: null,
-        reason: "No deterministically resolvable linked issue (no closingIssuesReferences, no unique Closes/Fixes/Resolves pattern in body).",
+        linkedIssues: [],
+        reason: "No deterministically resolvable linked issue (no closingIssuesReferences and no Closes/Fixes/Resolves #n reference in body).",
       },
     });
   } finally {
