@@ -7,6 +7,13 @@ import {
   analyzeT1,
   analyzeDiff,
 } from "../src/analysis/diff-analyzer.mjs";
+import { resolveDynamicAngles } from "../src/analysis/change-classifier.mjs";
+
+const DRAFT_ANGLES = [
+  "scope", "coverage", "correctness", "ci-guard", "contract-surface",
+  "input-validation", "determinism", "no-op", "link-check", "packaging-runtime",
+  "state-concurrency", "config-drift", "gate-evidence", "pr-description", "pr-comments",
+];
 
 // ---------------------------------------------------------------------------
 // classifyFile
@@ -178,4 +185,50 @@ test("analyzeDiff: rename-only → unambiguous", () => {
   const result = analyzeDiff({ nameStatusOutput: "R100\told.mjs\tnew.mjs" });
   assert.ok(result.t0.renameOnly);
   assert.equal(result.ambiguous, false);
+});
+
+test("analyzeDiff: pure code-only diff → LOGIC_CHANGE (not ambiguous, not fallback)", () => {
+  // AC-1: a code-only change (touches no CI/packaging/docs/config surfaces) must
+  // classify as LOGIC_CHANGE. An all-code diff has a single file category so
+  // hunk-level T1 never runs — inferCategoriesFromT0 must still classify it.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs\nM\tpackages/core/src/bar.mjs",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  assert.deepEqual(result.t1.changeCategories, ["LOGIC_CHANGE"]);
+  assert.equal(result.ambiguous, false);
+});
+
+test("analyzeDiff → resolveDynamicAngles: pure code-only resolves to core subset, not all 15", () => {
+  // End-to-end AC-1: the real analyzeDiff → resolveDynamicAngles path for a
+  // pure-code diff must NOT fall back to all angles.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tpackages/core/src/foo.mjs",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = doThing();\n",
+  });
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: result.t1.changeCategories,
+    ambiguous: result.ambiguous,
+  });
+  assert.equal(dyn.fallbackToAll, false);
+  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence"]) {
+    assert.ok(dyn.recommendedAngles.includes(a), `expected ${a} in core subset`);
+  }
+  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length, "must be narrower than all 15");
+});
+
+test("analyzeDiff: single code file with NO diffOutput still classifies LOGIC_CHANGE", () => {
+  // The gate resolver may only have name-status. A code-only name-status must
+  // still classify LOGIC_CHANGE rather than falling back to all angles.
+  const result = analyzeDiff({ nameStatusOutput: "M\tpackages/core/src/foo.mjs" });
+  assert.deepEqual(result.t1.changeCategories, ["LOGIC_CHANGE"]);
+  assert.equal(result.ambiguous, false);
+});
+
+test("analyzeDiff: rename-only code file does NOT get LOGIC_CHANGE", () => {
+  // Guard against over-classifying: a rename of a .mjs file is RENAME_ONLY, not
+  // LOGIC_CHANGE, even though the file classifies as code.
+  const result = analyzeDiff({ nameStatusOutput: "R100\tsrc/old.mjs\tsrc/new.mjs" });
+  assert.deepEqual(result.t1.changeCategories, ["RENAME_ONLY"]);
 });

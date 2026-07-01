@@ -244,6 +244,15 @@ function inferCategoriesFromT0(t0) {
   if (t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "config")) categories.push("CONFIG_ONLY");
   if (t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "test")) categories.push("TEST_ONLY");
   if (t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "ci")) categories.push("CI_ONLY");
+  // Pure code-only change: a diff whose files all classify as code (and is not a
+  // rename) is a LOGIC_CHANGE. Without this, an all-code diff has a single file
+  // category (so analyzeDiff never runs hunk-level T1) and produces no category,
+  // which resolveDynamicAngles treats as "unclassifiable" → fallback-to-all. That
+  // regressed the primary case: a code-only PR must resolve to the LOGIC_CHANGE
+  // core review subset, not all angles.
+  if (!t0.renameOnly && t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "code")) {
+    categories.push("LOGIC_CHANGE");
+  }
   return categories;
 }
 
