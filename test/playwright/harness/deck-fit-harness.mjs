@@ -430,7 +430,7 @@ export const DESKTOP = { width: 1280, height: 900 };
 // the auto-centering rule is active.
 export async function assertDesktopProseCentered(page) {
   const notCentered = await page.evaluate(() => {
-    const selectors = [".article p", ".article ul", ".article .section-h", ".article .lede"];
+    const selectors = [".article p", ".article ul", ".article ol", ".article .section-h", ".article .lede"];
     const offenders = [];
     for (const sel of selectors) {
       const els = document.querySelectorAll(sel);
