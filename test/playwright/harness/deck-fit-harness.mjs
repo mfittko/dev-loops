@@ -423,14 +423,14 @@ export function defineArticleSuite({ sliceId, articlePath }) {
 // Desktop (≥900px) layout constants for the alignment check.
 export const DESKTOP = { width: 1280, height: 900 };
 
-// On desktop (≥900px), `.article p`, `.article ul`, `.article .section-h`, and
+// On desktop (≥900px), `.article p`, `.article ul`, `.article h2`, and
 // `.article .lede` carry `margin-left: auto; margin-right: auto` so the prose
 // column is centred inside the widened `.wrap` (72rem). This check verifies the
 // rendered left-margin is non-zero (i.e. not flush-left) — the plain signal that
 // the auto-centering rule is active.
 export async function assertDesktopProseCentered(page) {
   const notCentered = await page.evaluate(() => {
-    const selectors = [".article p", ".article ul", ".article ol", ".article .section-h", ".article .lede"];
+    const selectors = [".article p", ".article ul", ".article ol", ".article h2", ".article .lede"];
     const offenders = [];
     for (const sel of selectors) {
       const els = document.querySelectorAll(sel);
