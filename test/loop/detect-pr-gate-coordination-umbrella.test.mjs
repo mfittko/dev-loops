@@ -6,7 +6,6 @@ import test from "node:test";
 
 import {
   resolveLinkedIssuesFromPr,
-  resolveLinkedIssueFromPr,
   loadRefinementArtifact,
 } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 
@@ -74,12 +73,6 @@ test("resolveLinkedIssuesFromPr: duplicates collapsed, first-appearance order pr
     resolveLinkedIssuesFromPr({ body: "Closes #5\nFixes #5\nResolves #7" }),
     [5, 7],
   );
-});
-
-test("resolveLinkedIssueFromPr: preserves exactly-one contract", () => {
-  assert.equal(resolveLinkedIssueFromPr({ closingIssuesReferences: [{ number: 42 }] }), 42);
-  assert.equal(resolveLinkedIssueFromPr({ closingIssuesReferences: [{ number: 1 }, { number: 2 }] }), null);
-  assert.equal(resolveLinkedIssueFromPr({ body: "no refs" }), null);
 });
 
 test("loadRefinementArtifact: umbrella draft PR where 2 of 3 issues have ACs → present", async (t) => {

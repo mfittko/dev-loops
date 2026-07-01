@@ -254,12 +254,6 @@ export function resolveLinkedIssuesFromPr(prData) {
   return dedupe(matches.map((m) => Number((/(\d+)/.exec(m) || [])[1])));
 }
 
-// Backward-compatible single-value resolver: preserves the "exactly one linked
-// issue" contract for external consumers.
-export function resolveLinkedIssueFromPr(prData) {
-  const arr = resolveLinkedIssuesFromPr(prData);
-  return arr.length === 1 ? arr[0] : null;
-}
 async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = "gh" } = {}) {
   const result = await runChild(
     ghCommand,

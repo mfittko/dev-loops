@@ -18,7 +18,7 @@ import { loadDevLoopConfig, resolveGateConfig, resolveRequireFanoutEvidence } fr
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
-import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
@@ -392,7 +392,7 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   // treat it as config-unavailable and leave fan-out enforcement disabled
   // (preserves default behavior). Other gate checks remain unaffected.
   let config = null;
-  const { config: loadedConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot: cwd });
+  const { config: loadedConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
   config = Array.isArray(configErrors) && configErrors.length > 0 ? null : loadedConfig;
   const fanoutEnforcement = await buildFanoutEnforcement({
     repo: options.repo,
