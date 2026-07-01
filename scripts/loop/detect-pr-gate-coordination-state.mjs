@@ -20,6 +20,7 @@ import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-co
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
+import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
 const UNMERGED_GIT_STATUS_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 const USAGE = `Usage: detect-pr-gate-coordination-state.mjs --repo <owner/name> --pr <number>
@@ -346,7 +347,6 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
   // Note: `finding`/`missing` here is only enforced by the gate when the PR is
   // draft (`_onlyEnforcedWhenDraft`); closed/merged PRs surface it informationally.
   const firstEvaluated = evaluated[0];
-  const first = firstEvaluated.artifact;
   const allFailed = evaluated.every((e) => e.artifact === null);
   if (allFailed) {
     // Preserve prior single-issue semantics: draft → missing, else unknown.
@@ -368,9 +368,14 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       reason: `Failed to fetch body for linked issue(s) ${scopeLabel}; refinement status is unknown.`,
     };
   }
+  // Mixed branch: not allFailed, so at least one body fetched but none is
+  // refined. Report against the first successfully-fetched (non-null) issue —
+  // `evaluated[0]` may be a failed fetch (null artifact) and has no fields.
+  const firstFetched = evaluated.find((e) => e.artifact !== null);
+  const first = firstFetched.artifact;
   return {
     status: "missing",
-    linkedIssue: firstEvaluated.issue,
+    linkedIssue: firstFetched.issue,
     linkedIssues,
     refinedIssues,
     source: first.source,
@@ -461,7 +466,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // READY_TO_REREQUEST_REVIEW, dead-ending the loop at the round cap (#896). This
   // keeps the gate-coordination interpretation consistent with the standalone
   // detect-copilot-loop-state path and with request-copilot-review's cap logic.
-  const interpreterRepoRoot = runtime.repoRoot ?? process.cwd();
+  const interpreterRepoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   const interpreterConfigResult = await loadDevLoopConfig({ repoRoot: interpreterRepoRoot });
   const interpreterRefinementConfig = (Array.isArray(interpreterConfigResult.errors) && interpreterConfigResult.errors.length > 0)
     ? resolveRefinement({ version: 1 })
@@ -515,7 +520,7 @@ async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.e
 
 export async function detectPrGateCoordinationState(options, runtime = {}) {
   const context = await loadPrGateCoordinationContext(options, runtime);
-  const repoRoot = runtime.repoRoot ?? process.cwd();
+  const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   const configLoadResult = await loadDevLoopConfig({ repoRoot });
   const hasConfigErrors = Array.isArray(configLoadResult.errors) && configLoadResult.errors.length > 0;
   const config = hasConfigErrors ? {} : (configLoadResult.config ?? {});

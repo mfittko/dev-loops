@@ -123,6 +123,28 @@ test("loadRefinementArtifact: umbrella draft PR where NONE have ACs → missing"
   assert.equal(result._onlyEnforcedWhenDraft, true);
 });
 
+test("loadRefinementArtifact: umbrella draft PR where some fetches fail and no fetched issue is refined → missing", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "umbrella-"));
+  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  // 1052 omitted → fetch fails (body null); 1019/1050 fetch but are unrefined.
+  // allFailed is false (not every fetch failed), so this exercises the mixed
+  // partial-failure branch, not the allFailed branch.
+  const { ghCommand, env } = await writeIssueBodyGhStub(tempDir, {
+    1019: UNREFINED_BODY,
+    1050: UNREFINED_BODY,
+  });
+  const prData = { closingIssuesReferences: [{ number: 1052 }, { number: 1019 }, { number: 1050 }] };
+  const result = await loadRefinementArtifact(
+    { repo: "owner/repo", prData, prDraft: true, prClosed: false, prMerged: false },
+    { env, ghCommand },
+  );
+  assert.equal(result.status, "missing");
+  assert.equal(result.finding, "missing_refinement_artifact");
+  assert.deepEqual(result.refinedIssues, []);
+  assert.match(result.reason, /No linked issue \(#1052, #1019, #1050\) carries a refinement artifact/);
+  assert.equal(result._onlyEnforcedWhenDraft, true);
+});
+
 test("loadRefinementArtifact: single-issue draft PR unchanged — present when refined", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "single-"));
   t.after(() => rm(tempDir, { recursive: true, force: true }));
