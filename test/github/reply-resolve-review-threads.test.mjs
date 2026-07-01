@@ -746,38 +746,25 @@ test("reply-resolve-review-threads skips resolved human threads by default", asy
   }
 });
 
-test("reply-resolve-review-threads terminates on multi-thread input even when stdin stays open (no hang)", async () => {
+test("reply-resolve-review-threads terminates on an idle open stdin pipe with no data (no hang)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-no-hang-"));
 
   try {
     const gh = await writeGhStub(tempDir, [
       {
         stdout: createReviewThreadsPayload([
-          {
-            id: "THREAD_1",
-            isResolved: false,
-            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
-          },
-          {
-            id: "THREAD_2",
-            isResolved: false,
-            comments: { nodes: [{ id: "PRRC_node_201", databaseId: 201, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
-          },
+          { id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] } },
+          { id: "THREAD_2", isResolved: false, comments: { nodes: [{ id: "PRRC_node_201", databaseId: 201, body: "note", author: { login: "Copilot", __typename: "Bot" } }] } },
         ]),
       },
-      {
-        assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
-        stdout: '{"id":1401,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1401"}\n',
-      },
-      {
-        assertArgs: ["repos/owner/repo/pulls/17/comments/201/replies"],
-        stdout: '{"id":1402,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1402"}\n',
-      },
+      { assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"], stdout: '{"id":1401,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1401"}\n' },
+      { assertArgs: ["repos/owner/repo/pulls/17/comments/201/replies"], stdout: '{"id":1402,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1402"}\n' },
     ]);
 
-    // Regression for #1012: with --message set, stdin was read to detect a
-    // conflicting source. A detached/idle pipe never sends EOF, so the tool
-    // hung forever. It must terminate on its own; leave stdin open (no .end()).
+    // Regression for #1012: with --message set, stdin was probed to detect a
+    // conflicting source. A detached/idle pipe never sends EOF nor any data, so
+    // the old unbounded read hung forever. With no data, the probe times out,
+    // the tool proceeds with --message, and it must terminate cleanly.
     const result = await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [
         scriptPath,
@@ -794,10 +781,11 @@ test("reply-resolve-review-threads terminates on multi-thread input even when st
       }, 5000);
       child.on("error", reject);
       child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
-      // Intentionally do NOT end stdin, simulating a detached/idle pipe.
+      // Intentionally do NOT write or end stdin: an idle, never-EOF pipe.
     });
 
     assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.matchedThreadCount, 2);
     assert.equal(parsed.repliedThreadCount, 2);
@@ -806,30 +794,17 @@ test("reply-resolve-review-threads terminates on multi-thread input even when st
   }
 });
 
-test("reply-resolve-review-threads terminates even when a producer holds stdin open without EOF", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-open-pipe-terminates-"));
+test("reply-resolve-review-threads detects a conflicting stdin source promptly over an open (never-EOF) pipe and terminates", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-open-pipe-conflict-"));
 
   try {
-    const gh = await writeGhStub(tempDir, [
-      {
-        stdout: createReviewThreadsPayload([
-          {
-            id: "THREAD_1",
-            isResolved: false,
-            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
-          },
-        ]),
-      },
-      {
-        assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
-        stdout: '{"id":1501,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1501"}\n',
-      },
-    ]);
+    // No gh calls expected: the conflict is detected before any capture.
+    const gh = await writeGhStub(tempDir, []);
 
-    // Regression for #1012: termination is the hard guarantee. Even when a
-    // producer holds stdin open (writes without ever calling .end(), so no EOF),
-    // the bounded read must fall back to --message and let the tool finish.
-    // Conflict detection is best-effort in this open-pipe case; termination is not.
+    // Regression for #1012: with --message set AND real data on stdin, the
+    // conflict must be detected as soon as bytes arrive — without waiting for
+    // EOF — and the tool must terminate (fail closed) rather than hang. Here the
+    // pipe is never ended, so only prompt (chunk-triggered) detection can pass.
     const result = await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [
         scriptPath,
@@ -842,18 +817,20 @@ test("reply-resolve-review-threads terminates even when a producer holds stdin o
       child.stderr.on("data", (chunk) => { stderr += String(chunk); });
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
-        reject(new Error("reply-resolve-review-threads did not terminate on an open stdin pipe (regression #1012)"));
+        reject(new Error("reply-resolve-review-threads did not terminate on open-pipe conflict (regression #1012)"));
       }, 5000);
       child.on("error", reject);
       child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
-      // Hold the pipe open: write without ever ending it (no EOF).
-      child.stdin.write("partial body with no newline and no end");
+      // Write conflicting body but never end the pipe; the conflict must be
+      // detected on the first data chunk, before any EOF.
+      child.stdin.write("Also from stdin\n");
     });
 
-    assert.equal(result.code, 0, result.stderr);
-    const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.matchedThreadCount, 1);
-    assert.equal(parsed.repliedThreadCount, 1);
+    assert.equal(result.code, 1, result.stdout);
+    assert.equal(result.stdout, "");
+    const parsed = JSON.parse(result.stderr);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error, "Choose exactly one message source: --message <text> or stdin");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

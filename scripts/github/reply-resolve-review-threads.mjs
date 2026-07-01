@@ -111,38 +111,57 @@ async function readStdinText(stdin) {
   }
   return text;
 }
-// ponytail: when --message is set, stdin is read only to detect a conflicting
-// second message source. A detached/idle pipe never sends EOF, so the unbounded
-// read hangs forever (issue #1012). Termination is the hard requirement, so the
-// read is bounded: on timeout we treat --message as the authoritative source and
-// proceed. Conflict detection is therefore best-effort — a body piped and closed
-// promptly (the normal case, and how the CLI is scripted) is seen and rejected;
-// a slow/never-closed producer may be missed in favor of always terminating.
-// Raise CONFLICT_STDIN_TIMEOUT_MS to widen the conflict-detection window if needed.
+// When --message is set, stdin is read only to detect a conflicting second
+// message source. A detached/idle pipe never sends EOF, so an unbounded read
+// hangs forever and the process never exits (issue #1012). Resolve as soon as
+// ANY data chunk arrives (a conflicting body is detected the instant bytes
+// appear — no need to wait for EOF), resolve on natural EOF, and time out on a
+// silent/idle pipe. Either way the stdin handle is released so the event loop
+// can drain and the tool always terminates.
 const CONFLICT_STDIN_TIMEOUT_MS = 500;
-async function readStdinTextBounded(stdin, timeoutMs) {
-  let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(undefined), timeoutMs);
+function readStdinConflictProbe(stdin, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      stdin.off?.("data", onData);
+      stdin.off?.("end", onEnd);
+      stdin.off?.("error", onEnd);
+      // Release the handle: an abandoned reader on a still-open pipe would
+      // otherwise keep the event loop alive and re-introduce the hang.
+      stdin.pause?.();
+      if (typeof stdin.unref === "function") {
+        stdin.unref();
+      } else {
+        stdin.destroy?.();
+      }
+    };
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    // 'text' seen on any data chunk (a conflict); '' on clean EOF with no data;
+    // undefined only on timeout (idle pipe) so the caller proceeds with --message.
+    let text = "";
+    const onData = (chunk) => {
+      text += String(chunk);
+      finish(text);
+    };
+    const onEnd = () => finish(text);
+    timer = setTimeout(() => finish(undefined), timeoutMs);
     timer.unref?.();
+    stdin.setEncoding?.("utf8");
+    stdin.on?.("data", onData);
+    stdin.on?.("end", onEnd);
+    stdin.on?.("error", onEnd);
   });
-  try {
-    return await Promise.race([readStdinText(stdin), timeout]);
-  } finally {
-    clearTimeout(timer);
-    // Abandoning the for-await iterator leaves stdin referenced and flowing,
-    // which keeps the event loop alive and prevents the process from ever
-    // exiting (issue #1012). Release the handle so the tool can terminate.
-    // process.stdin always has unref(); destroy() is a hard fallback so a
-    // non-tty Readable without unref() cannot silently revert to the hang.
-    stdin.pause?.();
-    if (typeof stdin.unref === "function") {
-      stdin.unref();
-    } else {
-      stdin.destroy?.();
-    }
-  }
 }
+
 async function resolveMessageInput(options, { stdin = process.stdin } = {}) {
   if (typeof options.message === "string") {
     if (stdin.isTTY) {
@@ -151,7 +170,7 @@ async function resolveMessageInput(options, { stdin = process.stdin } = {}) {
       }
       return options.message;
     }
-    const stdinText = await readStdinTextBounded(stdin, CONFLICT_STDIN_TIMEOUT_MS);
+    const stdinText = await readStdinConflictProbe(stdin, CONFLICT_STDIN_TIMEOUT_MS);
     if (typeof stdinText === "string" && stdinText.trim().length > 0) {
       throw parseError("Choose exactly one message source: --message <text> or stdin");
     }
