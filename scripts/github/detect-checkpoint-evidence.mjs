@@ -18,6 +18,7 @@ import { loadDevLoopConfig, resolveGateConfig, resolveRequireFanoutEvidence } fr
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
+import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
@@ -288,6 +289,19 @@ async function ledgerExists(fullPath) {
   }
 }
 /**
+ * True if the ledger (relative path) exists under ANY enumerated checkout
+ * (main + every worktree). Fixes #1050: a ledger written in the PR worktree is
+ * found even when the check runs from a different checkout's git-toplevel.
+ */
+async function ledgerExistsInAny(checkouts, ledgerPath) {
+  for (const root of checkouts) {
+    if (await ledgerExists(path.resolve(root, ledgerPath))) {
+      return true;
+    }
+  }
+  return false;
+}
+/**
  * Build the fan-out evidence enforcement descriptor.
  *
  * Enforcement is ON by default (opt-out via gates.requireFanoutEvidence: false).
@@ -298,7 +312,7 @@ async function ledgerExists(fullPath) {
  * reviewed head SHA so the pre-merge check can fail closed on inline verdicts or
  * missing ledgers.
  */
-async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd }) {
+export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd }) {
   // Fail open when config could not be loaded/validated. `== null` covers both
   // null and undefined; the loader only ever yields null on failure, but the
   // loose check defensively treats an absent config as unavailable.
@@ -312,15 +326,15 @@ async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarke
     { name: "pre_approval_gate", marker: preApprovalGateMarker, required: preApprovalRequired },
   ].filter((spec) => spec.required && spec.marker.visible);
   const gates = [];
+  const checkouts = resolveLedgerCheckouts(cwd);
   for (const spec of gateSpecs) {
     const headSha = spec.marker.headSha ?? currentHeadSha;
     const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
-    const fullPath = path.resolve(cwd, ledgerPath);
     gates.push({
       name: spec.name,
       executionMode: spec.marker.executionMode ?? null,
       ledgerPath,
-      ledgerExists: await ledgerExists(fullPath),
+      ledgerExists: await ledgerExistsInAny(checkouts, ledgerPath),
     });
   }
   return { required: true, gates };

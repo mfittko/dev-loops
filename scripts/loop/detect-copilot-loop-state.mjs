@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import {
@@ -28,6 +27,7 @@ import {
   normalizeHeadScopedCommitStatus,
   normalizeHeadScopedCiContract,
 } from "@dev-loops/core/loop/copilot-ci-status";
+import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 const USAGE = `Usage:
   detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>
   detect-copilot-loop-state.mjs --input <path>
@@ -445,7 +445,7 @@ export async function runCli(
     interpretationInput = snapshot;
   }
   let interpretation;
-  const config = await loadDevLoopConfig({ repoRoot: path.resolve(process.cwd()) });
+  const config = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
   const refinementConfig = config.errors.length > 0
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(config.config);
