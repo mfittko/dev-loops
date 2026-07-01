@@ -114,9 +114,23 @@ test("decideBashGate denies gh pr create in a later compound segment", () => {
   assert.match(d.reason, /gh pr create blocked/);
 });
 
+test("decideBashGate denies gh pr create hidden behind newline/env/wrapper/path bypasses", () => {
+  assert.equal(decideBashGate({ command: "echo hi\ngh pr create --fill", repoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "GH_TOKEN=x gh pr create --fill", repoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "command gh pr create", repoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "/usr/bin/gh pr create", repoSlug: TARGET }).decision, "deny");
+  // shared root cause: ready reached via a newline is also gated
+  assert.equal(decideBashGate({ command: "echo hi\ngh pr ready 5", repoSlug: TARGET, gatePassed: false }).decision, "deny");
+});
+
 test("decideBashGate allows the create-pr.mjs wrapper (not a raw gh pr create)", () => {
   assert.equal(
     decideBashGate({ command: "node scripts/github/create-pr.mjs --title x --fill", repoSlug: TARGET }).decision,
+    "allow",
+  );
+  // wrapper still passes through even with a leading env assignment
+  assert.equal(
+    decideBashGate({ command: "GH_TOKEN=x node scripts/github/create-pr.mjs --fill", repoSlug: TARGET }).decision,
     "allow",
   );
 });

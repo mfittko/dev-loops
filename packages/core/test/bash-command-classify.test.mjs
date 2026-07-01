@@ -114,3 +114,33 @@ test("extractRepoFlagFromGhPrCreateAnywhere reads --repo across segments", () =>
   assert.equal(extractRepoFlagFromGhPrCreateAnywhere("git push && gh pr create --repo=other/repo"), "other/repo");
   assert.equal(extractRepoFlagFromGhPrCreateAnywhere("gh pr create --fill"), null);
 });
+
+test("gate detects gh pr create behind a newline separator", () => {
+  assert.equal(commandContainsGhPrCreate("echo hi\ngh pr create --fill"), true);
+  assert.equal(commandContainsGhPrCreate("echo hi\r\ngh pr create --fill"), true);
+  // shared root cause: newline separator also caught for ready/merge
+  assert.equal(commandContainsGhPrReady("echo hi\ngh pr ready 5"), true);
+  assert.equal(commandContainsGhPrMerge("echo hi\ngh pr merge 5 --squash"), true);
+});
+
+test("gate detects gh pr create behind env-assignment/wrapper/path prefixes", () => {
+  assert.equal(commandContainsGhPrCreate("GH_TOKEN=x gh pr create --fill"), true);
+  assert.equal(commandContainsGhPrCreate("command gh pr create"), true);
+  assert.equal(commandContainsGhPrCreate("env gh pr create"), true);
+  assert.equal(commandContainsGhPrCreate("exec gh pr create"), true);
+  assert.equal(commandContainsGhPrCreate("/usr/bin/gh pr create"), true);
+  // remainder extraction stays consistent through the normalized prefix
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("GH_TOKEN=x gh pr create --repo other/repo"), "other/repo");
+  // shared root cause: prefixes also caught for ready/merge
+  assert.equal(commandContainsGhPrReady("GH_TOKEN=x gh pr ready 5"), true);
+  assert.equal(commandContainsGhPrMerge("/usr/bin/gh pr merge 5"), true);
+});
+
+test("gate normalization does not over-match the wrapper or --help", () => {
+  // wrapper must never match — first token `node` is neither env-assign nor `gh`
+  assert.equal(commandContainsGhPrCreate("node scripts/github/create-pr.mjs --fill"), false);
+  assert.equal(commandContainsGhPrCreate("GH_TOKEN=x node scripts/github/create-pr.mjs --fill"), false);
+  // --help still exempts even behind a prefix
+  assert.equal(commandContainsGhPrCreate("gh pr create --help"), false);
+  assert.equal(commandContainsGhPrCreate("command gh pr create --help"), false);
+});
