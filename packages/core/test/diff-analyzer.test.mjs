@@ -199,7 +199,7 @@ test("analyzeDiff: pure code-only diff → LOGIC_CHANGE (not ambiguous, not fall
   assert.equal(result.ambiguous, false);
 });
 
-test("analyzeDiff → resolveDynamicAngles: pure code-only resolves to core subset, not all 15", () => {
+test("analyzeDiff → resolveDynamicAngles: pure code-only resolves to core subset, not the full pool", () => {
   // End-to-end AC-1: the real analyzeDiff → resolveDynamicAngles path for a
   // pure-code diff must NOT fall back to all angles.
   const result = analyzeDiff({
@@ -215,7 +215,7 @@ test("analyzeDiff → resolveDynamicAngles: pure code-only resolves to core subs
   for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence"]) {
     assert.ok(dyn.recommendedAngles.includes(a), `expected ${a} in core subset`);
   }
-  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length, "must be narrower than all 15");
+  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length, `must be narrower than the full pool of ${DRAFT_ANGLES.length}`);
 });
 
 test("analyzeDiff: single code file with NO diffOutput still classifies LOGIC_CHANGE", () => {

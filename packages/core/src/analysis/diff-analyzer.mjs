@@ -288,12 +288,13 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
     };
   }
 
-  // Ambiguous means only: a diff T0 could not classify (mixed file categories, so
-  // t0Ambiguous) AND whose hunk analysis produced no category either. Both
-  // conditions are required — a single-category diff is already classified by T0
-  // inference (so it is never ambiguous), and a mixed diff that yields a category
-  // (e.g. LOGIC_CHANGE) is classified too. LOGIC_CHANGE is a real category that
-  // resolves to its core review subset, so it never forces fallback-to-all.
+  // `ambiguous` flags one specific case: a diff T0 could not classify (mixed file
+  // categories, so t0Ambiguous) AND whose hunk analysis still produced no
+  // category. It is NOT the only fallback trigger — resolveDynamicAngles also
+  // falls back whenever changeCategories is empty (e.g. a single lone unknown/
+  // asset file yields no category yet is not t0Ambiguous). A mixed diff that
+  // yields a category (e.g. LOGIC_CHANGE) is classified and not ambiguous, so
+  // LOGIC_CHANGE never forces fallback-to-all via this flag.
   const ambiguous = t0Ambiguous && t1.changeCategories.length === 0;
 
   return { t0, t1, ambiguous };
