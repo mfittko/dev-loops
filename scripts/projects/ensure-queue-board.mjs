@@ -1,10 +1,8 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { parseArgs } from "node:util";
-import { parse as parseYaml } from "yaml";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { resolveSettings } from "./_resolve-project.mjs";
 
 const USAGE = `Usage: dev-loops queue ensure --repo <owner/name> [--project <number>] [--title <title>] [--link-repo <owner/name>] [--repair-rename]
        (dev-loops project ensure … is a back-compat alias)
@@ -144,36 +142,6 @@ function validateRepo(repo) {
     );
   }
   return repo;
-}
-
-// ── Settings fallback ────────────────────────────────────────────────────
-
-function resolveSettings(cwd) {
-  // Try bare .devloops and extension variants (.yaml, .yml, .json)
-  // to match the config loader's consumer override detection.
-  // .json uses strict JSON.parse; all others use the YAML parser.
-  const basePath = path.join(cwd, ".devloops");
-  const extensions = ["", ".yaml", ".yml", ".json"];
-  for (const ext of extensions) {
-    try {
-      const settingsPath = basePath + ext;
-      const raw = readFileSync(settingsPath, "utf-8");
-      const settings = ext === ".json" ? JSON.parse(raw) : parseYaml(raw);
-      const queue = settings?.queue;
-      if (queue) {
-        if (typeof queue.projectNumber === "number" && Number.isInteger(queue.projectNumber) && queue.projectNumber > 0) {
-          return { project: queue.projectNumber };
-        }
-        if (typeof queue.boardTitle === "string" && queue.boardTitle.trim().length > 0) {
-          return { title: queue.boardTitle.trim() };
-        }
-      }
-      return null;
-    } catch {
-      // extension not present or unparseable — try next
-    }
-  }
-  return null;
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────

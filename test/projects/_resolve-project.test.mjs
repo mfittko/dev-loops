@@ -67,4 +67,26 @@ describe("_resolve-project — resolveSettings", () => {
       assert.strictEqual(s.project, 7);
     });
   });
+
+  it("returns null (does not throw) on a syntactically broken .devloops", () => {
+    withTempDevloops("queue:\n  projectNumber: : : bad\n", "", (dir) => {
+      assert.strictEqual(resolveSettings(dir), null);
+    });
+  });
+
+  it("ignores a float projectNumber (fail-closed) with no boardTitle", () => {
+    withTempDevloops("queue:\n  projectNumber: 5.5\n", "", (dir) => {
+      const s = resolveSettings(dir);
+      assert.strictEqual(s.project, undefined);
+      assert.strictEqual(s.title, undefined);
+    });
+  });
+
+  it("ignores a quoted-string projectNumber (fail-closed) with no boardTitle", () => {
+    withTempDevloops("queue:\n  projectNumber: \"5\"\n", "", (dir) => {
+      const s = resolveSettings(dir);
+      assert.strictEqual(s.project, undefined);
+      assert.strictEqual(s.title, undefined);
+    });
+  });
 });
