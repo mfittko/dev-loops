@@ -30,7 +30,7 @@ Exit codes:
 
 const VALID_GATES = new Set(["draft", "preApproval"]);
 
-/** Parse a comma-separated severity list into a trimmed, non-empty array (or undefined). */
+/** Parse a comma-separated severity list. Returns `undefined` when the flag is absent, otherwise a trimmed array (which may be empty `[]` for empty/whitespace-only input). */
 export function parseSeverities(csv) {
   if (csv == null) return undefined;
   const list = String(csv)

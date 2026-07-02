@@ -1069,10 +1069,13 @@ export const GATE_FULL_LABEL = "gate:full";
  *   - escalation: pass the inline pass's finding severities → auto-escalates when
  *     the inline check surfaced anything worth fixing.
  *
+ * Absent or partial `facts.scope` fails safe to full_fanout (missing
+ * filesChanged/linesChanged are treated as `Infinity` → over threshold).
+ *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} facts
- * @param {{ filesChanged: number, linesChanged: number }} facts.scope
+ * @param {{ filesChanged?: number, linesChanged?: number }} [facts.scope] PR scope; absent/partial fields fail safe to full_fanout
  * @param {boolean} [facts.hasFullLabel]           `gate:full` label present on the PR
  * @param {string[]} [facts.inlineFindingSeverities] severities from the inline pass (escalation phase)
  * @returns {{ mode: "inline"|"full_fanout", reason: string, threshold: {maxFiles:number,maxLines:number}|null }}
