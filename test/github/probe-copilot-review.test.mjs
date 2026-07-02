@@ -113,6 +113,19 @@ test("probe-copilot-review returns idle for a zero-timeout no-change check", asy
   }
 });
 
+test("probe-copilot-review --timeout-ms 0 returns idle via the CLI (restored #1087)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-cli-idle-"));
+  const baseline = createActivityPayload();
+  try {
+    const env = await writeGhStub(tempDir, [{ stdout: JSON.stringify(baseline) + "\n" }]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--timeout-ms", "0"], { env });
+    assert.equal(result.code, 0);
+    assert.equal(JSON.parse(result.stdout).status, "idle");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("probe-copilot-review returns timeout after bounded polling with no fresh Copilot activity", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-timeout-"));
   try {
@@ -256,7 +269,7 @@ test("probe-copilot-review rejects malformed arguments deterministically", async
   assert.match(JSON.parse(missingPr.stderr).error, /requires both --repo/i);
   const invalidTimeout = await runNode(["--repo", "owner/repo", "--pr", "17", "--timeout-ms", "-1"]);
   assert.equal(invalidTimeout.code, 1);
-  assert.match(JSON.parse(invalidTimeout.stderr).error, /--timeout-ms has been removed/);
+  assert.match(JSON.parse(invalidTimeout.stderr).error, /--timeout-ms must be a non-negative integer/);
   const invalidInterval = await runNode(["--repo", "owner/repo", "--pr", "17", "--poll-interval-ms", "0"]);
   assert.equal(invalidInterval.code, 1);
   assert.match(JSON.parse(invalidInterval.stderr).error, /--poll-interval-ms has been removed/);
@@ -270,7 +283,7 @@ test("probe-copilot-review --help prints usage and exits 0", async () => {
   assert(helpLong.stdout.includes("--repo"), `expected --repo in help`);
   assert(helpLong.stdout.includes("--pr"), `expected --pr in help`);
   assert(!helpLong.stdout.includes("--poll-interval-ms"), `expected --poll-interval-ms in help`);
-  assert(!helpLong.stdout.includes("--timeout-ms"), `expected --timeout-ms in help`);
+  assert(helpLong.stdout.includes("--timeout-ms"), `expected --timeout-ms in help`);
 
   const helpShort = await runNode(["-h"]);
   assert.equal(helpShort.code, 0);
@@ -287,6 +300,12 @@ test("probe-copilot-review uses production-safe defaults (1-minute poll, 30-minu
 test("probe-copilot-review trims surrounding whitespace from --repo", () => {
   const options = parseWatchCliArgs(["--repo", " owner/repo ", "--pr", "17"]);
   assert.equal(options.repo, "owner/repo");
+});
+
+test("probe-copilot-review parses --timeout-ms (0 = single check, restored #1087)", () => {
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "0"]).timeoutMs, 0);
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "60000"]).timeoutMs, 60_000);
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1"]).timeoutMs, 1_800_000);
 });
 
 test("probe-copilot-review parses --concise/--summary, --jq, --silent flags", () => {
