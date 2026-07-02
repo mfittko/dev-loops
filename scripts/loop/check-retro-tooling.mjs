@@ -81,6 +81,10 @@ const ALLOWED_WRITE_OPS = Object.freeze([
   /^gh\s+pr\s+ready\b/,
   /^gh\s+issue\s+create\b/,
   /^gh\s+issue\s+edit\b/,
+  // `gh label create` HAS a wrapper (scripts/github/create-label.mjs); this
+  // entry is belt-and-suspenders so a bare invocation (e.g. surfaced from the
+  // wrapper's own subprocess) classifies as an allowed write-op, not a violation.
+  /^gh\s+label\s+create\b/,
 ]);
 
 /** Split a command line into top-level segments on &&, ||, |, ;. */

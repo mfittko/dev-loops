@@ -130,33 +130,33 @@ Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-interna
 
 Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review angle.
 
-## Light mode (small changes) — config-only
+## Light mode (small changes)
 
-Light mode is currently **config-only**: the schema, resolver, and scope detector are implemented, but no functional wiring exists yet in the local-implementation flow. When scope is small enough, the intent is to skip fan-out/fan-in and use a single review pass instead. Light mode will still require validation and pre-approval gate once wired.
+Light mode is wired into gate dispatch. A PR that is **under threshold** (≤ `maxLines` lines changed AND ≤ `maxFiles` files, per `.devloops` field `localImplementation.lightMode` — this repo sets `maxLines: 20`, `maxFiles: 2`; the shipped built-in default has light mode disabled (`enabled: false`); if enabled without explicit values it falls back to `maxFiles: 3` / `maxLines: 200`) AND carries no `gate:full` label collapses BOTH `draft_gate` and `pre_approval_gate` to a single inline single-agent correctness + no-op check. The Copilot review request and its polling are skipped.
 
-**Eligibility:** ≤3 files AND ≤200 lines changed (configurable via `.devloops` field `localImplementation.lightMode`).
+**Escalation:**
+1. Auto-escalate — if the inline check surfaces any finding whose severity is in the gate's `blockCleanOnFindingSeverities` (i.e. ≥ `worth-fixing-now`), dispatch escalates to full fan-out.
+2. Label override — the `gate:full` label forces full fan-out regardless of PR size.
 
-Use `scripts/loop/detect-change-scope.mjs` to determine eligibility:
+The `draft_gate` boundary (draft → ready) is still recorded because `requireDraftFirst` is honored: light mode only changes HOW the gate runs (inline vs fan-out), not WHETHER the draft boundary exists.
+
+Dispatch is resolved deterministically via `resolveGateDispatchMode(config, gate, { scope, hasFullLabel, inlineFindingSeverities })` from `@dev-loops/core/config`. `scripts/loop/resolve-gate-dispatch.mjs` is the CLI wrapper the orchestrator calls, combining `detect-change-scope.mjs` output with the `gate:full` label fact.
+
+Use `scripts/loop/detect-change-scope.mjs` to determine scope:
 ```sh
 node scripts/loop/detect-change-scope.mjs
 ```
-
-**Planned light mode path (not yet wired):**
-1. Validation (`npm run verify`)
-2. Single review pass (not multi-angle fan-out)
-3. Pre-approval gate
-4. Finalization
 
 **Override threshold:**
 ```yaml
 localImplementation:
   lightMode:
     enabled: true
-    maxFiles: 5
-    maxLines: 300
+    maxFiles: 2
+    maxLines: 20
 ```
 
-Disabled by default (opt-in). Scope above threshold falls back to full fan-out/fan-in path.
+Scope above threshold falls back to the full fan-out/fan-in path.
 
 ## Deterministic logging structure
 

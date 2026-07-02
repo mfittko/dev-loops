@@ -1048,6 +1048,60 @@ export function resolveLightMode(config) {
   };
 }
 
+/** Label that forces full fan-out regardless of change size. */
+export const GATE_FULL_LABEL = "gate:full";
+
+/**
+ * Decide whether a gate should run as a single-agent inline check or the full
+ * fan-out, from light-mode config + authoritative PR facts.
+ *
+ * Precedence (first match wins):
+ *   1. `gate:full` label present            → full_fanout (label override)
+ *   2. light mode disabled / no threshold    → full_fanout (light mode off)
+ *   3. scope over threshold (files OR lines) → full_fanout (over threshold)
+ *   4. inline check produced a finding whose severity is in the gate's
+ *      blockCleanOnFindingSeverities set     → full_fanout (escalated)
+ *   5. otherwise                             → inline
+ *
+ * Two call phases share this one function:
+ *   - pre-check: omit `inlineFindingSeverities` (undefined) → decides whether to
+ *     run the inline pass at all.
+ *   - escalation: pass the inline pass's finding severities → auto-escalates when
+ *     the inline check surfaced anything worth fixing.
+ *
+ * Absent or partial `facts.scope` fails safe to full_fanout (missing
+ * filesChanged/linesChanged are treated as `Infinity` → over threshold).
+ *
+ * @param {DevLoopConfig} config
+ * @param {"draft"|"preApproval"} gate
+ * @param {object} facts
+ * @param {{ filesChanged?: number, linesChanged?: number }} [facts.scope] PR scope; absent/partial fields fail safe to full_fanout
+ * @param {boolean} [facts.hasFullLabel]           `gate:full` label present on the PR
+ * @param {string[]} [facts.inlineFindingSeverities] severities from the inline pass (escalation phase)
+ * @returns {{ mode: "inline"|"full_fanout", reason: string, threshold: {maxFiles:number,maxLines:number}|null }}
+ */
+export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = false, inlineFindingSeverities } = {}) {
+  if (hasFullLabel) {
+    return { mode: "full_fanout", reason: "gate_full_label", threshold: null };
+  }
+  const threshold = resolveLightMode(config);
+  if (!threshold) {
+    return { mode: "full_fanout", reason: "light_mode_disabled", threshold: null };
+  }
+  const filesChanged = Number(scope?.filesChanged ?? Infinity);
+  const linesChanged = Number(scope?.linesChanged ?? Infinity);
+  if (filesChanged > threshold.maxFiles || linesChanged > threshold.maxLines) {
+    return { mode: "full_fanout", reason: "over_threshold", threshold };
+  }
+  if (Array.isArray(inlineFindingSeverities) && inlineFindingSeverities.length > 0) {
+    const blocking = new Set(resolveGateConfig(config, gate).blockCleanOnFindingSeverities);
+    if (inlineFindingSeverities.some((s) => blocking.has(s))) {
+      return { mode: "full_fanout", reason: "escalated", threshold };
+    }
+  }
+  return { mode: "inline", reason: "under_threshold", threshold };
+}
+
 /**
  * Resolve review angles for a specific gate from the merged dev-loop config.
  *

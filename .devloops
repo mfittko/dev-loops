@@ -87,7 +87,7 @@ localImplementation:
   lightMode:
     enabled: true
     maxFiles: 2
-    maxLines: 100
+    maxLines: 20 # micro-PR ceiling (#1043)
 
 queue:
   boardTitle: "dev-loops Queue"
