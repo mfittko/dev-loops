@@ -4,7 +4,7 @@ import { access, open, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, readJsonIfExists } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import {
@@ -306,17 +306,6 @@ async function readFirstLineIfExists(filePath, chunkSize = 4096) {
     await handle?.close().catch(() => {});
   }
 }
-async function readJsonIfExists(filePath) {
-  const text = await readTextIfExists(filePath);
-  if (text === null) {
-    return null;
-  }
-  try {
-    return parseJsonText(text);
-  } catch {
-    return null;
-  }
-}
 function normalizeRunState(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   switch (normalized) {
@@ -455,7 +444,7 @@ async function scanSessionArtifactRoot(artifactsDir, records) {
     const record = records.get(key) ?? createRunRecord(runId, childIndex);
     const filePath = path.join(artifactsDir, entry.name);
     if (entry.name.endsWith("_meta.json")) {
-      const meta = await readJsonIfExists(filePath);
+      const meta = await readJsonIfExists(filePath).catch(() => null);
       if (meta && typeof meta === "object") {
         records.set(key, mergeRunRecord(record, {
           agent: typeof meta.agent === "string" ? meta.agent : (record.agent ?? agent),
@@ -540,7 +529,7 @@ async function scanAsyncRunRoot(asyncRoot, records) {
     const asyncDir = path.join(asyncRoot, runDirEntry.name);
     const statusPath = path.join(asyncDir, "status.json");
     const eventsPath = path.join(asyncDir, "events.jsonl");
-    const status = await readJsonIfExists(statusPath);
+    const status = await readJsonIfExists(statusPath).catch(() => null);
     if (!status || typeof status !== "object") {
       continue;
     }
@@ -632,7 +621,7 @@ async function scanAsyncResultRoot(resultsRoot, records) {
     }
     const filePath = path.join(resultsRoot, entry.name);
     if (entry.name.endsWith(".json")) {
-      const result = await readJsonIfExists(filePath);
+      const result = await readJsonIfExists(filePath).catch(() => null);
       if (!result || typeof result !== "object") {
         continue;
       }

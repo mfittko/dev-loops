@@ -183,6 +183,32 @@ test("queue category help lists run plus management subcommands (issue #912)", a
   assert.equal(stderr.read(), "");
 });
 
+test("project routes are exactly queue routes minus run (issue #1090)", async () => {
+  const readSubcommands = async (category) => {
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli({
+      argv: [category, "--help"],
+      runtime: createRuntime(),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.read(), "");
+    return stdout.read()
+      .split("\n")
+      .map((line) => line.match(/^ {4}(\S+)/)?.[1])
+      .filter(Boolean);
+  };
+
+  const queueSubs = await readSubcommands("queue");
+  const projectSubs = await readSubcommands("project");
+
+  assert.ok(queueSubs.includes("run"), "queue must expose run");
+  assert.ok(!projectSubs.includes("run"), "project help must omit run");
+  assert.deepEqual(projectSubs, queueSubs.filter((sub) => sub !== "run"));
+});
+
 test("queue add/list route to the same project scripts via --help usage (issue #912)", () => {
   const add = spawnSync("node", ["./cli/index.mjs", "queue", "add", "--help"], {
     cwd: repoRoot,

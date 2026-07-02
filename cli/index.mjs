@@ -17,6 +17,32 @@ import { createPiAdapter } from "@dev-loops/core/harness";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
+// `project` is an alias for `queue` minus the run driver — derived, not duplicated.
+const QUEUE_ROUTES = {
+  run:            "scripts/loop/run-queue.mjs",
+  list:    "scripts/projects/list-queue-items.mjs",
+  add:     "scripts/projects/add-queue-item.mjs",
+  move:    "scripts/projects/move-queue-item.mjs",
+  reorder: "scripts/projects/reorder-queue-item.mjs",
+  "archive-done": "scripts/projects/archive-done-items.mjs",
+  "sync-status": "scripts/projects/sync-item-status.mjs",
+  ensure:  "scripts/projects/ensure-queue-board.mjs",
+  "resolve-active": "scripts/projects/resolve-active-board-item.mjs",
+};
+const { run: _queueRunRoute, ...PROJECT_ROUTES } = QUEUE_ROUTES;
+
+const QUEUE_DESCRIPTIONS = {
+  run: "Run queue driver",
+  list: "List queue board items",
+  add: "Add issue/PR to queue board",
+  move: "Move queue item between Status columns",
+  reorder: "Reorder items (move-to-top/move-after/order, --dry-run)",
+  "archive-done": "Archive closed Done items older than a duration",
+  "sync-status": "Sync a queued issue/PR's board Status column (best-effort)",
+  ensure: "Create/repair queue board bootstrap surface",
+};
+const { run: _queueRunDescription, ...PROJECT_DESCRIPTIONS } = QUEUE_DESCRIPTIONS;
+
 const SUBCOMMAND_ROUTES = {
   gate: {
     "upsert-verdict":     "scripts/github/upsert-checkpoint-verdict.mjs",
@@ -50,27 +76,8 @@ const SUBCOMMAND_ROUTES = {
     "ready-for-review": "scripts/github/ready-for-review.mjs",
     "reconcile-draft":  "scripts/github/reconcile-draft-gate.mjs",
   },
-  project: {
-    list:    "scripts/projects/list-queue-items.mjs",
-    add:     "scripts/projects/add-queue-item.mjs",
-    move:    "scripts/projects/move-queue-item.mjs",
-    reorder: "scripts/projects/reorder-queue-item.mjs",
-    "archive-done": "scripts/projects/archive-done-items.mjs",
-    "sync-status": "scripts/projects/sync-item-status.mjs",
-    ensure:  "scripts/projects/ensure-queue-board.mjs",
-    "resolve-active": "scripts/projects/resolve-active-board-item.mjs",
-  },
-  queue: {
-    run:            "scripts/loop/run-queue.mjs",
-    list:    "scripts/projects/list-queue-items.mjs",
-    add:     "scripts/projects/add-queue-item.mjs",
-    move:    "scripts/projects/move-queue-item.mjs",
-    reorder: "scripts/projects/reorder-queue-item.mjs",
-    "archive-done": "scripts/projects/archive-done-items.mjs",
-    "sync-status": "scripts/projects/sync-item-status.mjs",
-    ensure:  "scripts/projects/ensure-queue-board.mjs",
-    "resolve-active": "scripts/projects/resolve-active-board-item.mjs",
-  },
+  queue: QUEUE_ROUTES,
+  project: PROJECT_ROUTES,
   inspect: {
     run:    "scripts/loop/inspect-run.mjs",
     viewer: "scripts/loop/inspect-run-viewer.mjs",
@@ -143,25 +150,8 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "ready-for-review": "Mark PR ready for review",
     "reconcile-draft": "Reconcile non-draft PR",
   },
-  project: {
-    list: "List queue board items",
-    add: "Add issue/PR to queue board",
-    move: "Move queue item between Status columns",
-    reorder: "Reorder items (move-to-top/move-after/order, --dry-run)",
-    "archive-done": "Archive closed Done items older than a duration",
-    "sync-status": "Sync a queued issue/PR's board Status column (best-effort)",
-    ensure: "Create/repair queue board bootstrap surface",
-  },
-  queue: {
-    run: "Run queue driver",
-    list: "List queue board items",
-    add: "Add issue/PR to queue board",
-    move: "Move queue item between Status columns",
-    reorder: "Reorder items (move-to-top/move-after/order, --dry-run)",
-    "archive-done": "Archive closed Done items older than a duration",
-    "sync-status": "Sync a queued issue/PR's board Status column (best-effort)",
-    ensure: "Create/repair queue board bootstrap surface",
-  },
+  queue: QUEUE_DESCRIPTIONS,
+  project: PROJECT_DESCRIPTIONS,
   inspect: {
     run: "Inspect run state",
     viewer: "Start inspection viewer",

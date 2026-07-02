@@ -46,7 +46,6 @@ function buildGhStubScript() {
     'const ghLogPath = process.env.GH_LOG_PATH;',
     'const mode = process.env.GH_STUB_MODE || "sequential";',
     'const repeatLast = process.env.GH_REPEAT_LAST_ON_OVERFLOW === "1";',
-    'const overflowMessageMode = process.env.GH_OVERFLOW_MESSAGE_MODE || "numbered";',
     'const defaultStdout = process.env.GH_DEFAULT_STDOUT ?? "{}\\n";',
     'const entries = JSON.parse(readFileSync(sequencePath, "utf8"));',
     'const actual = process.argv.slice(2);',
@@ -71,8 +70,7 @@ function buildGhStubScript() {
     '} else {',
     '  const current = Number(readFileSync(counterPath, "utf8").trim() || "0");',
     '  if (current >= entries.length && !repeatLast) {',
-    '    const message = overflowMessageMode === "generic" ? "unexpected gh call beyond scripted sequence" : `unexpected extra gh call #${current + 1}: ${actual.join(" ")}`;',
-    '    fail(97, message);',
+    '    fail(97, `unexpected extra gh call #${current + 1}: ${actual.join(" ")}`);',
     '  }',
     '  const index = entries.length === 0 ? -1 : Math.min(current, entries.length - 1);',
     '  entry = index >= 0 ? (entries[index] ?? { stdout: defaultStdout }) : { stdout: defaultStdout };',
@@ -96,13 +94,6 @@ function buildGhStubScript() {
     '    for (const expected of entry.assertStdinIncludes) {',
     '      if (!stdin.includes(expected)) {',
     '        fail(96, `missing expected stdin text: ${expected}`);',
-    '      }',
-    '    }',
-    '  }',
-    '  if (entry.assertStdinExcludes) {',
-    '    for (const forbidden of entry.assertStdinExcludes) {',
-    '      if (stdin.includes(forbidden)) {',
-    '        fail(95, `unexpected stdin text: ${forbidden}`);',
     '      }',
     '    }',
     '  }',
@@ -134,7 +125,6 @@ export async function writeGhStub(tempDir, entries = [], {
   repeatLastOnOverflow = false,
   defaultStdout = "{}\n",
   logCalls = false,
-  overflowMessageMode = "numbered",
 } = {}) {
   const sequencePath = path.join(tempDir, `${commandName}-sequence.json`);
   const ghPath = path.join(tempDir, commandName);
@@ -162,7 +152,6 @@ export async function writeGhStub(tempDir, entries = [], {
     GH_STUB_MODE: matchMode,
     GH_REPEAT_LAST_ON_OVERFLOW: repeatLastOnOverflow ? "1" : "0",
     GH_DEFAULT_STDOUT: defaultStdout,
-    GH_OVERFLOW_MESSAGE_MODE: overflowMessageMode,
   };
 
   if (counterPath) {

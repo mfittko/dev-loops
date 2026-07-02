@@ -1,4 +1,4 @@
-import { collectDevLoopChecks as collectSharedDevLoopChecks, DEV_LOOP_CHECK_IDS } from '../lib/dev-loops-core.mjs';
+import { DEV_LOOP_CHECK_IDS } from '../lib/dev-loops-core.mjs';
 import { createInspectRunViewerLifecycleManager } from '../scripts/loop/inspect-run-viewer/managed-instance.mjs';
 import type { ExtensionHarnessAdapter } from './harness-types.ts';
 
@@ -76,8 +76,4 @@ export function createExtensionCoreRuntime(
       };
     },
   };
-}
-
-export async function collectDevLoopChecks(adapter: ExtensionHarnessAdapter): Promise<DevLoopCheck[]> {
-  return collectSharedDevLoopChecks(createExtensionCoreRuntime(adapter));
 }
