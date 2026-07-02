@@ -256,13 +256,13 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
   );
   assert.match(
     step7,
-    /ask for explicit authorization before any merge-commit/i,
+    /ask for explicit authorization before any merge commit/i,
     "conflict-resolution flow should require explicit reconciliation authorization",
   );
   assert.match(
     step7,
     /default to a merge commit \(`git merge origin\/main`\)/i,
-    "conflict-resolution flow should document the default merge-commit path",
+    "conflict-resolution flow should document the default merge commit path",
   );
   assert.match(
     step7,

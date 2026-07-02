@@ -337,7 +337,7 @@ This is the default pre-approval gate for this workflow boundary. The canonical 
 Before any merge-ready or final-approval claim, run `detect-pr-gate-coordination-state.mjs` for the current PR. If it reports `gateBoundary=conflict_resolution` or `mergeStateStatus` is conflicted, stop the normal gate path immediately and use this recovery flow:
 
 1. fetch fresh `origin/main`, confirm the current PR head SHA, and summarize the conflict scope from `mergeStateStatus` plus any reported `conflictFiles`
-2. ask for explicit authorization before any merge-commit or other branch-state-changing reconciliation command
+2. ask for explicit authorization before any merge commit or other branch-state-changing reconciliation command
 3. after authorization, reconcile locally on the PR branch; default to a merge commit (`git merge origin/main`) per the behind-branch integration policy in [Local Implementation Skill](../local-implementation/SKILL.md#branch--review--merge-policy), unless the operator explicitly chooses another conflict-resolution command
 4. auto-resolve simple conflicts when the correct fix is mechanical and clearly in scope; report complex conflicts explicitly and fix them manually only for in-scope files
 5. rerun the smallest honest local validation for the touched conflict slice
