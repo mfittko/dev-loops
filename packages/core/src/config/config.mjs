@@ -196,6 +196,9 @@ export const DevLoopConfigSchema = z.strictObject({
   personas: PersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.optional(),
+  // Deprecated (removed in #1088): tolerated so consumer .devloops files that
+  // still carry a localPlanning block keep parsing. Accepted, never read.
+  localPlanning: z.unknown().optional(),
 });
 
 // ============================================================================
@@ -265,6 +268,9 @@ export const FileConfigSchema = z.strictObject({
   personas: FilePersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.partial().optional(),
+  // Deprecated (removed in #1088): tolerated so consumer .devloops files that
+  // still carry a localPlanning block keep parsing. Accepted, never read.
+  localPlanning: z.unknown().optional(),
 });
 
 // ============================================================================
@@ -962,9 +968,6 @@ export function resolveGateConfig(config, gate) {
 export function resolveRequireFanoutEvidence(config) {
   return config?.gates?.requireFanoutEvidence !== false;
 }
-
-/** Default parallel fan-out reviewer cap (mirrors GatesConfig.maxFanoutReviewers). */
-export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
 
 /**
  * Resolve whether the consolidated gate fan-out findings should be posted as a

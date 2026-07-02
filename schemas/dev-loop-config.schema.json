@@ -206,6 +206,10 @@
           "description": "Paths/globs symlinked (absolute) into the main checkout (shared \u2014 use only for read-only data). Do not target node_modules."
         }
       }
+    },
+    "localPlanning": {
+      "deprecated": true,
+      "description": "Deprecated (removed in #1088). Accepted for backward compatibility but ignored \u2014 nothing reads it."
     }
   },
   "$defs": {

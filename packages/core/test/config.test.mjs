@@ -27,7 +27,6 @@ import {
   GATE_FULL_LABEL,
   resolveRequireFanoutEvidence,
   resolveGatePostFindingsComments,
-  DEFAULT_MAX_FANOUT_REVIEWERS,
 } from "../src/config/config.mjs";
 // ============================================================================
 // Schema validation tests (S1–S26)
@@ -2906,7 +2905,6 @@ describe("gates.requireFanoutEvidence", () => {
 
 describe("gates.maxFanoutReviewers", () => {
   test("defaults to 8 when absent (parsed schema)", () => {
-    assert.equal(DEFAULT_MAX_FANOUT_REVIEWERS, 8);
     const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
     assert.equal(parsed.success, true);
     assert.equal(parsed.data.gates.maxFanoutReviewers, 8);
@@ -2926,6 +2924,21 @@ describe("gates.maxFanoutReviewers", () => {
     assert.equal(DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 0 } }).success, false);
     assert.equal(DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 2.5 } }).success, false);
     assert.equal(DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 65 } }).success, false);
+  });
+});
+
+describe("deprecated localPlanning key", () => {
+  test("a config still carrying a localPlanning block parses and the key has no effect", () => {
+    const input = { version: 1, localPlanning: { plansDir: "docs/phases/" } };
+    const full = DevLoopConfigSchema.safeParse(input);
+    assert.equal(full.success, true);
+    const file = FileConfigSchema.safeParse(input);
+    assert.equal(file.success, true);
+    // No effect: parsed output is identical to a config without the key,
+    // apart from the tolerated passthrough itself.
+    const without = DevLoopConfigSchema.safeParse({ version: 1 });
+    const { localPlanning, ...rest } = full.data;
+    assert.deepEqual(rest, without.data);
   });
 });
 
