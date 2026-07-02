@@ -18,6 +18,8 @@ import {
   extractRepoFlagFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrCreateAnywhere,
   extractRepoFlagsFromGhPrCreateSegments,
+  commandContainsRawExternalWrite,
+  extractRepoFlagsFromExternalWriteSegments,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -130,6 +132,49 @@ test("extractRepoFlagsFromGhPrCreateSegments returns every create segment's --re
     [{ segment: "gh pr create --repo=a/b", explicitRepo: "a/b" }],
   );
   assert.deepEqual(extractRepoFlagsFromGhPrCreateSegments("echo hi"), []);
+});
+
+test("commandContainsRawExternalWrite detects raw issue/pr create+comment in any segment", () => {
+  assert.equal(commandContainsRawExternalWrite("gh issue create --title x --body y"), true);
+  assert.equal(commandContainsRawExternalWrite("gh issue comment 5 --body hi"), true);
+  assert.equal(commandContainsRawExternalWrite("gh pr comment 5 --body hi"), true);
+  assert.equal(commandContainsRawExternalWrite("git push && gh issue create --title x"), true);
+  // --help is not a write
+  assert.equal(commandContainsRawExternalWrite("gh issue create --help"), false);
+  assert.equal(commandContainsRawExternalWrite("gh issue comment --help"), false);
+  // node wrappers never match — first token is `node`, not `gh`
+  assert.equal(commandContainsRawExternalWrite("node scripts/github/comment-issue.mjs 5 --body hi"), false);
+  assert.equal(commandContainsRawExternalWrite("node scripts/github/upsert-checkpoint-verdict.mjs"), false);
+  // pr create / issue view etc. are not external-write forms here
+  assert.equal(commandContainsRawExternalWrite("gh pr create --fill"), false);
+  assert.equal(commandContainsRawExternalWrite("gh issue view 5"), false);
+});
+
+test("commandContainsRawExternalWrite catches newline/env/wrapper/path prefixes", () => {
+  assert.equal(commandContainsRawExternalWrite("echo hi\ngh issue create --title x"), true);
+  assert.equal(commandContainsRawExternalWrite("GH_TOKEN=x gh issue create --title x"), true);
+  assert.equal(commandContainsRawExternalWrite("command gh pr comment 5 --body hi"), true);
+  assert.equal(commandContainsRawExternalWrite("/usr/bin/gh issue comment 5 --body hi"), true);
+});
+
+test("extractRepoFlagsFromExternalWriteSegments returns per-segment --repo across all verb forms", () => {
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh issue create --repo other/repo && gh issue comment 5 --body hi"),
+    [
+      { segment: "gh issue create --repo other/repo", explicitRepo: "other/repo" },
+      { segment: "gh issue comment 5 --body hi", explicitRepo: null },
+    ],
+  );
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh pr comment 5 --repo=a/b --body hi"),
+    [{ segment: "gh pr comment 5 --repo=a/b --body hi", explicitRepo: "a/b" }],
+  );
+  // --help excluded; wrapper ignored
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh issue create --help && node scripts/github/comment-issue.mjs 5"),
+    [],
+  );
+  assert.deepEqual(extractRepoFlagsFromExternalWriteSegments("echo hi"), []);
 });
 
 test("gate detects gh pr create behind a newline separator", () => {

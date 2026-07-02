@@ -10,6 +10,8 @@
  *   - `gh pr merge` — needs full pre-merge evidence (clean current-head draft_gate +
  *     pre_approval_gate, via scripts/github/detect-checkpoint-evidence.mjs). This closes the hole
  *     where a hand-run merge skips the loop's pre-merge gate check (and thus the pre-approval gate).
+ *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
+ *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -19,6 +21,7 @@ import {
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
+  commandContainsRawExternalWrite,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
@@ -29,10 +32,14 @@ import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
 const input = readHookInput();
 const command = input?.tool_input?.command;
+// Claude exposes `agent_type` only inside a subagent; null in the main agent. Scopes the
+// external-write guard (raw `gh issue create` etc. is blocked only from a subagent).
+const agentType = typeof input?.agent_type === "string" ? input.agent_type : null;
 const isReady = typeof command === "string" && commandContainsGhPrReady(command);
 const isMerge = typeof command === "string" && commandContainsGhPrMerge(command);
 const isCreate = typeof command === "string" && commandContainsGhPrCreate(command);
-if (!isReady && !isMerge && !isCreate) {
+const isExternalWrite = typeof command === "string" && commandContainsRawExternalWrite(command);
+if (!isReady && !isMerge && !isCreate && !isExternalWrite) {
   emitAllow();
 }
 
@@ -80,7 +87,7 @@ if (repoSlug === TARGET_REPO_SLUG) {
   }
 }
 
-const decision = decideBashGate({ command, repoSlug, gatePassed, gateError });
+const decision = decideBashGate({ command, repoSlug, gatePassed, gateError, agentType });
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
 }

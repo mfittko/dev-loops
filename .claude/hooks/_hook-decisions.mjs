@@ -20,6 +20,8 @@ import {
   extractPrNumberFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrMergeAnywhere,
   extractRepoFlagsFromGhPrCreateSegments,
+  commandContainsRawExternalWrite,
+  extractRepoFlagsFromExternalWriteSegments,
   TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
 
@@ -50,6 +52,13 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  *     clean current-head draft_gate + pre_approval_gate). The loop runs this check before merging;
  *     gating it here closes the hole where a hand-run `gh pr merge` skips the pre-approval gate
  *     entirely. Everything else passes through.
+ *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked ONLY when the call
+ *     originates from a SUBAGENT context (`agentType` is a non-null string) and targets the repo.
+ *     Sanctioned external writes flow through node wrappers (gate-verdict comments via
+ *     `upsert-checkpoint-verdict.mjs`, review replies via `reply-resolve*.mjs`, board sync,
+ *     `comment-issue.mjs`), whose Bash command string is `node scripts/…` and never matches these
+ *     raw-`gh` matchers. The MAIN AGENT / operator (agentType null) retains direct `gh issue
+ *     create` — that path is authorized (#1051).
  *
  * The hook computes `gatePassed`/`gateError` from the gate script appropriate to the command kind.
  *
@@ -58,11 +67,37 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  * @param {string|null} [params.repoSlug] - Resolved owner/name of the cwd repo (null if unknown).
  * @param {boolean} [params.gatePassed] - Whether the relevant gate evidence exists for the PR.
  * @param {string|null} [params.gateError] - Error detail when the gate guard could not run.
+ * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload; non-null
+ *   string inside a subagent, null in the main agent. Scopes the external-write guard.
  * @returns {HookDecision}
  */
-export function decideBashGate({ command, repoSlug = null, gatePassed = false, gateError = null }) {
+export function decideBashGate({ command, repoSlug = null, gatePassed = false, gateError = null, agentType = null }) {
   if (typeof command !== "string") {
     return ALLOW;
+  }
+  // Subagent-scoped external-write guard: block ad-hoc `gh issue create`/`gh issue comment`/
+  // `gh pr comment` on the target repo from a subagent, so external writes flow through the
+  // sanctioned node wrappers. The main-agent/operator path (agentType null) is unaffected (#1051).
+  if (typeof agentType === "string" && agentType && commandContainsRawExternalWrite(command)) {
+    const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
+    // Scope PER segment, mirroring the `gh pr create` block: in scope when no explicit --repo and
+    // cwd is the target, or an explicit --repo/-R equals the target. An explicit non-target --repo
+    // passes through. DENY if ANY external-write segment is in scope.
+    const anyWriteInScope = extractRepoFlagsFromExternalWriteSegments(command).some((seg) =>
+      seg.explicitRepo == null
+        ? cwdTargets
+        : seg.explicitRepo.toLowerCase() === TARGET_REPO_SLUG.toLowerCase(),
+    );
+    if (anyWriteInScope) {
+      return {
+        decision: "deny",
+        reason:
+          "Ad-hoc GitHub issue/PR creation and comments from a subagent are blocked. Use the sanctioned " +
+          "node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, " +
+          "review-thread replies via scripts/github/reply-resolve*.mjs, board sync, or scripts/github/comment-issue.mjs. " +
+          "Direct `gh issue create` is reserved for the main agent / operator.",
+      };
+    }
   }
   // Scan ALL shell segments — the PreToolUse gate blocks pre-emptively, so a gated verb in any
   // segment (even after `&&` or `;`) must be caught. This differs from the Pi extension's
