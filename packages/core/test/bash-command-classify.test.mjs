@@ -169,6 +169,15 @@ test("extractRepoFlagsFromExternalWriteSegments returns per-segment --repo acros
     extractRepoFlagsFromExternalWriteSegments("gh pr comment 5 --repo=a/b --body hi"),
     [{ segment: "gh pr comment 5 --repo=a/b --body hi", explicitRepo: "a/b" }],
   );
+  // short `-R` form (bare + `=`) is honored just like `--repo`
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh issue create -R other/repo --title x"),
+    [{ segment: "gh issue create -R other/repo --title x", explicitRepo: "other/repo" }],
+  );
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh pr comment 5 -R=other/repo --body hi"),
+    [{ segment: "gh pr comment 5 -R=other/repo --body hi", explicitRepo: "other/repo" }],
+  );
   // --help excluded; wrapper ignored
   assert.deepEqual(
     extractRepoFlagsFromExternalWriteSegments("gh issue create --help && node scripts/github/comment-issue.mjs 5"),
