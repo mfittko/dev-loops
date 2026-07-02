@@ -212,6 +212,29 @@ test("repo extractors strip a single surrounding quote pair from the --repo valu
   assert.equal(extractRepoFlagFromGhPrReady("gh pr ready --repo 'other/repo 1"), "'other/repo");
 });
 
+test("repo extractors honor an inline GH_REPO= env assignment as the effective repo (#1074)", () => {
+  // external-write path: GH_REPO= (no --repo flag) is the segment's effective repo.
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("GH_REPO=mfittko/dev-loops gh issue create --title x"),
+    [{ segment: "GH_REPO=mfittko/dev-loops gh issue create --title x", explicitRepo: "mfittko/dev-loops" }],
+  );
+  // quoted GH_REPO value is normalized.
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("GH_REPO='mfittko/dev-loops' gh issue create --title x"),
+    [{ segment: "GH_REPO='mfittko/dev-loops' gh issue create --title x", explicitRepo: "mfittko/dev-loops" }],
+  );
+  // explicit --repo/-R wins over GH_REPO (gh's own precedence — the flag overrides the env).
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("GH_REPO=mfittko/dev-loops gh issue create --repo other/repo --title x"),
+    [{ segment: "GH_REPO=mfittko/dev-loops gh issue create --repo other/repo --title x", explicitRepo: "other/repo" }],
+  );
+  // pr create/ready/merge tokenizer gets GH_REPO too (shared root-cause fix).
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("GH_REPO=mfittko/dev-loops gh pr create --fill"), "mfittko/dev-loops");
+  assert.equal(extractRepoFlagFromGhPrReady("GH_REPO=other/repo gh pr ready 1"), "other/repo");
+  // flag wins here as well.
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("GH_REPO=mfittko/dev-loops gh pr create --repo other/repo"), "other/repo");
+});
+
 test("gate detects gh pr create behind a newline separator", () => {
   assert.equal(commandContainsGhPrCreate("echo hi\ngh pr create --fill"), true);
   assert.equal(commandContainsGhPrCreate("echo hi\r\ngh pr create --fill"), true);

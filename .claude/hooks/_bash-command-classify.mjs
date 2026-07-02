@@ -40,6 +40,28 @@ function stripSurroundingQuotes(value) {
   return value;
 }
 
+/**
+ * Read an inline `GH_REPO=<value>` env-assignment prefix on a single command segment.
+ * `gh` resolves its target repo from the `GH_REPO` env var, and a segment may set it inline
+ * (`GH_REPO=owner/name gh issue create …`) — same targeting intent as `--repo owner/name`, so the
+ * scope check must treat it the same or an off-cwd redirect evades the guard (#1074). Only the
+ * FIRST leading env assignment matching `GH_REPO=` is read (env assignments precede the executable);
+ * the value is quote-normalized. Ambient `process.env.GH_REPO` is out of scope — this is a static
+ * command-string classifier, so only the inline assignment in the string is considered.
+ * @param {string} segment @returns {string|null}
+ */
+function extractGhRepoEnvAssignment(segment) {
+  if (!segment) return null;
+  for (const token of segment.trim().split(/\s+/)) {
+    const assign = token.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!assign) break; // first non-assignment token ends the env-assignment prefix
+    if (assign[1] === "GH_REPO") {
+      return trimToNull(stripSurroundingQuotes(assign[2]));
+    }
+  }
+  return null;
+}
+
 /** @param {string|null|undefined} value @returns {string|null} */
 export function trimToNull(value) {
   const trimmed = `${value ?? ""}`.trim();
@@ -185,7 +207,9 @@ function extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) {
     const repoEqMatch = token.match(/^(?:--repo|-R)=(.+)$/i);
     if (repoEqMatch) return stripSurroundingQuotes(repoEqMatch[1]);
   }
-  return null;
+  // No explicit --repo/-R flag: fall back to an inline GH_REPO= env assignment (flag wins,
+  // mirroring gh's own precedence). This closes the GH_REPO repo-targeting bypass (#1074).
+  return extractGhRepoEnvAssignment(segment);
 }
 
 /**
@@ -323,7 +347,10 @@ function extractRepoFlagFromSegment(segment, verb) {
       return stripSurroundingQuotes(repoEqMatch[1]);
     }
   }
-  return null;
+  // No explicit --repo/-R flag: fall back to an inline GH_REPO= env assignment (flag wins,
+  // mirroring gh's own precedence). Applied here too so gh pr ready/merge/create scope checks get
+  // consistent GH_REPO handling — the root-cause fix, not just the external-write path (#1074).
+  return extractGhRepoEnvAssignment(segment);
 }
 
 /** First-segment extractor for `gh pr <verb>` PR number — Pi extension public API. */

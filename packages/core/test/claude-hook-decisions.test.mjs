@@ -229,6 +229,36 @@ test("decideBashGate denies subagent gh issue create --repo targeting the repo r
   );
 });
 
+test("decideBashGate denies subagent gh issue create redirected via inline GH_REPO= to the target (#1074)", () => {
+  // GH_REPO= (no --repo flag) targets the repo → the off-cwd redirect hole is closed.
+  assert.equal(
+    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --title x`, repoSlug: null, agentType: SUB }).decision,
+    "deny",
+  );
+  // quoted GH_REPO value is normalized before the scope compare.
+  assert.equal(
+    decideBashGate({ command: `GH_REPO='${TARGET}' gh issue create --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate: explicit --repo wins over GH_REPO; non-target GH_REPO passes through (#1074)", () => {
+  // flag precedence: --repo other/repo overrides GH_REPO=target → off-target → allow.
+  assert.equal(
+    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --repo other/repo --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    "allow",
+  );
+  // GH_REPO=non-target from a non-target cwd → off-target → allow.
+  assert.equal(
+    decideBashGate({ command: "GH_REPO=other/repo gh issue create --title x", repoSlug: "someone/else", agentType: SUB }).decision,
+    "allow",
+  );
+});
+
 test("decideBashGate allows the comment-issue.mjs wrapper even from a subagent", () => {
   assert.equal(
     decideBashGate({ command: "node scripts/github/comment-issue.mjs 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
