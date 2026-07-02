@@ -7,6 +7,7 @@ import path from 'node:path';
 import playwrightConfig from '../../playwright.config.mjs';
 import { ARTICLE_REGISTRY, DECK_REGISTRY } from '../playwright/harness/deck-fit-harness.mjs';
 import { VIEWER_REGISTRY } from '../playwright/harness/inspect-run-viewer-harness.mjs';
+import { normalizeUiStateSegment } from '../playwright/harness/webkit-smoke-harness.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -34,6 +35,9 @@ test('playwright.config generates one webkit project per registered slice', () =
   for (const project of projects) {
     const sliceId = project.name;
     assert.equal(project.name, sliceId);
+    // Config enforces sliceId == normalized form so test-results/ui-smoke/<sliceId>
+    // matches the artifact path segment the harness writes.
+    assert.equal(project.name, normalizeUiStateSegment(project.name));
     assert.deepEqual(project.testMatch, [`${sliceId}.spec.mjs`]);
     assert.equal(project.outputDir, `test-results/ui-smoke/${sliceId}`);
     assert.equal(project.use.browserName, 'webkit');
