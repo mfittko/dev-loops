@@ -18,10 +18,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
-// Relative import (not the @dev-loops/core specifier): the canonical tokens live
-// in core's queue-board-ordering, which in turn imports scripts by relative path
-// — this is the same in-tree cross-boundary the module already uses. (#1091)
-import { EMPTY_NEXT_UP_MESSAGE } from "../../packages/core/src/loop/queue-board-ordering.mjs";
+import { EMPTY_NEXT_UP_MESSAGE } from "@dev-loops/core/loop/queue-board-ordering";
 
 const IN_PROGRESS_COLUMN = "In Progress";
 const NEXT_UP_COLUMN = "Next Up";
