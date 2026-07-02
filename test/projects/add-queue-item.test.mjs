@@ -575,6 +575,61 @@ describe("add-queue-item", () => {
     });
   });
 
+  describe("--next-up flag (#1091)", () => {
+    const base = ["--repo", "mfittko/dev-loops", "--project", "1", "--item", "42"];
+
+    it("parses --next-up as a boolean", () => {
+      const args = parseCliArgs([...base, "--next-up"]);
+      assert.equal(args.nextUp, true);
+    });
+
+    it("main() lands the item in the Next Up column", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.status, "Next Up");
+    });
+
+    it("main() accepts --next-up together with an agreeing --column \"Next Up\"", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, column: "Next Up" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.item.status, "Next Up");
+    });
+
+    it("main() rejects --next-up combined with a conflicting --column", async () => {
+      await assert.rejects(
+        () =>
+          main(
+            { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, column: "Backlog" },
+            { env: {}, runChild: mockRunChild([]) },
+          ),
+        /Conflicting --next-up and --column\/--status/,
+      );
+    });
+  });
+
   describe("optional --project resolved from .devloops (#1035)", () => {
     function addResponses(project) {
       return [

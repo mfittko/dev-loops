@@ -9,6 +9,7 @@ import {
   transitionEntry,
   snapshotEntry,
   nextReadyEntry,
+  findEntry,
   allDone,
   RECOVERABLE_FAILURES,
   appendBugIssue,
@@ -19,7 +20,13 @@ import {
   boardColumnForLoopState,
   loadStateColumnMap,
 } from "./queue-board-sync.mjs";
-import { resolveNextUpOrder } from "./queue-board-ordering.mjs";
+import {
+  resolveNextUpOrder,
+  REASON_NEXT_UP_EMPTY,
+  REASON_BOARD_QUERY_ERROR,
+  REASON_NEXT_UP_TARGET_MISSING_LOCALLY,
+  EMPTY_NEXT_UP_MESSAGE,
+} from "./queue-board-ordering.mjs";
 
 export const DEFAULT_QUEUE_DRIVER_OPTIONS = {
   mergeAuthorized: false,
@@ -92,23 +99,88 @@ export async function runQueue(repoRoot, repo, options = {}) {
   // (e.g. a configured "Ready for Review") still syncs. (#793 round-1 #1)
   const lastSyncedColumn = new Map();
 
-  // Optional board-aware ordering: fetch Next Up order before processing.
-  // Fail-open: if the board is unreachable, orderHint stays empty and the
-  // driver falls back to the existing queue order.
-  const ordering = opts.useBoardOrdering !== false && !allDone(queue)
+  // Next Up is the NORMATIVE, fail-closed pickup source (#1091). When a board is
+  // configured, the driver picks ONLY entries whose target is in Next Up, by
+  // POSITION ascending; entries absent from Next Up are never auto-picked. It
+  // NEVER falls back to Backlog or to the non-board local queue order.
+  //
+  // Single-issue/PR runs do not reach this gating at all — they run via the
+  // dev-loop routing path, not the queue driver — so an explicit --issue/--pr
+  // target is inherently unaffected by Next Up.
+  const ordering = !allDone(queue)
     ? await resolveNextUpOrder(repo, repoRoot, opts.env ?? process.env, opts.queueBoardSyncDependencies ?? {})
-    : { ok: true, order: [], reason: "board ordering disabled or queue idle" };
-  const orderHint = ordering.ok ? ordering.order : [];
+    : { ok: true, configured: false, order: [], reason: "queue idle" };
+
+  // (b) Board-query ERROR → surface it and stop. Do NOT fall back to Backlog
+  // or local order (fail-closed). Distinct from an empty Next Up below.
+  if (ordering.ok === false) {
+    return {
+      ok: false,
+      stopped: true,
+      reason: REASON_BOARD_QUERY_ERROR,
+      message: `Next Up query failed (${ordering.reason}); refusing to fall back to Backlog/local order`,
+      error: ordering.reason ?? "board query failed",
+      results: [],
+      queue,
+      ordering,
+    };
+  }
+
+  // Board-gated only when a board is configured.
+  const boardGated = ordering.configured === true;
+  const orderHint = ordering.order;
+  const allowedTargets = boardGated ? new Set(orderHint) : null;
+
+  // (a) Empty Next Up (successful query, zero items) → fail CLOSED: idle/stop
+  // with an actionable, machine-readable outcome. Never pull from Backlog.
+  if (boardGated && orderHint.length === 0) {
+    return {
+      ok: true,
+      idle: true,
+      reason: REASON_NEXT_UP_EMPTY,
+      message: EMPTY_NEXT_UP_MESSAGE,
+      results: [],
+      queue,
+      ordering,
+    };
+  }
+
+  // (a2) Next Up resolved one or more targets that have NO matching local queue
+  // entry (membership reconcile not run/persisted, or the board changed between
+  // reconcile and this query). Filtering them out would return a silent empty
+  // idle while real Next Up work goes undispatched — so fail CLOSED with an
+  // actionable stop instead. Distinct from the genuine empty-Next-Up idle above.
+  // Never pull from Backlog. (#1091)
+  if (boardGated) {
+    const missingTargets = orderHint.filter((t) => !findEntry(queue, t));
+    if (missingTargets.length > 0) {
+      return {
+        ok: false,
+        stopped: true,
+        reason: REASON_NEXT_UP_TARGET_MISSING_LOCALLY,
+        missingTargets,
+        message:
+          "Next Up contains items with no local queue entry — run membership reconcile / re-add them",
+        results: [],
+        queue,
+        ordering,
+      };
+    }
+  }
 
   let autoFiledCount = 0;
   const results = [];
   let incomplete = false;
 
   while (!allDone(queue)) {
-    const entry = nextReadyEntry(queue, opts.reDispatchMaxRetries, orderHint);
+    const entry = nextReadyEntry(queue, opts.reDispatchMaxRetries, orderHint, allowedTargets);
     if (!entry) {
+      // When board-gated, entries absent from Next Up are intentionally NOT
+      // picked (and are not "blocked by deps") — only unfinished Next Up members
+      // count toward an incomplete verdict.
       const remaining = queue.entries.filter(
         (e) => e.status !== "done" && e.status !== "blocked" && e.status !== "failed"
+             && (!allowedTargets || allowedTargets.has(e.target))
       );
       if (remaining.length > 0) {
         incomplete = true;

@@ -40,6 +40,7 @@
     "./loop/pr-gate-coordination": "./src/loop/pr-gate-coordination.mjs",
     "./loop/pr-title-markers": "./src/loop/pr-title-markers.mjs",
     "./loop/public-dev-loop-routing": "./src/loop/public-dev-loop-routing.mjs",
+    "./loop/queue-board-ordering": "./src/loop/queue-board-ordering.mjs",
     "./loop/queue-board-sync": "./src/loop/queue-board-sync.mjs",
     "./loop/queue-driver": "./src/loop/queue-driver.mjs",
     "./loop/queue-membership": "./src/loop/queue-membership.mjs",

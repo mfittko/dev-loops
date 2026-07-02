@@ -1,13 +1,16 @@
 #!/usr/bin/env node
-// Collapse the board's "In Progress" column to a SINGLE continue target (#988 P1).
+// Resolve the board's single continue target for the live `/loop-continue` path
+// (#988 P1, extended #1091). It lists the "In Progress" column and, failing
+// that, the "Next Up" column via list-queue-items.mjs — with NO routing opinions
+// beyond a single pick and NO guessing. It never touches Backlog.
 //
-// Pure list->single-target collapse with NO routing opinions: it lists the
-// In-Progress items via list-queue-items.mjs and either returns the lone target
-// or FAILS CLOSED. It never guesses among multiple active items.
-//
-//   exactly one  -> { ok: true, target: { kind: "issue"|"pr", number } }
-//   zero         -> { ok: false, reason: "..." }  (no in-progress item)
-//   multiple     -> { ok: false, reason: "..." }  (names the items)
+//   exactly one In Progress   -> { ok: true, target: {kind,number}, source: "in-progress" }
+//   multiple In Progress      -> { ok: false, reason: "..." }  (names the items)
+//   zero In Progress:
+//     Next Up has items        -> { ok: true, target: {kind,number}, source: "next-up" }
+//                                  (HEAD of Next Up, by POSITION ascending)
+//     Next Up empty            -> { ok: false, reason: <canonical empty-queue msg>, source: "next-up" }
+//     Next Up query errors     -> propagates (fail closed — surface it, no fallback)
 //
 // Downstream (the dev-loop skill) resolves authoritative state from this number;
 // this helper deliberately makes no further decisions.
@@ -15,14 +18,21 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
+import { EMPTY_NEXT_UP_MESSAGE } from "@dev-loops/core/loop/queue-board-ordering";
 
 const IN_PROGRESS_COLUMN = "In Progress";
+const NEXT_UP_COLUMN = "Next Up";
+// Canonical fail-closed empty-queue message — matches queue-driver.mjs so
+// operators see one string regardless of which layer detects it (#1091).
+const EMPTY_QUEUE_REASON = EMPTY_NEXT_UP_MESSAGE;
 
 const USAGE = `Usage: dev-loops queue resolve-active --repo <owner/name> --project <number|id>
 
-Collapse the board's "${IN_PROGRESS_COLUMN}" column to a single continue target.
-Used by bare \`/continue\` to pick up the one in-progress item. Fails closed
-(no guessing) when the board has zero or more than one in-progress item.
+Resolve the board's single continue target for bare \`/loop-continue\`:
+continues the one "${IN_PROGRESS_COLUMN}" item; if there is none, picks the HEAD
+of "${NEXT_UP_COLUMN}" by POSITION ascending. Fails closed (no guessing) on
+multiple in-progress items, and when "${NEXT_UP_COLUMN}" is empty. Never pulls
+from Backlog.
 
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
@@ -31,19 +41,21 @@ Options:
 
 Output (stdout):
   JSON, exactly one in-progress item:
-    { ok: true, target: { kind: "issue"|"pr", number } }
-  JSON, zero or multiple (fail closed):
+    { ok: true, target: { kind: "issue"|"pr", number }, source: "in-progress" }
+  JSON, zero in-progress + "${NEXT_UP_COLUMN}" head:
+    { ok: true, target: { kind: "issue"|"pr", number }, source: "next-up" }
+  JSON, fail closed (multiple in-progress, or empty "${NEXT_UP_COLUMN}"):
     { ok: false, reason: "..." }
 
 ${JQ_OUTPUT_USAGE}
 
 Exit codes (default / unfiltered output):
-  0 — exactly one in-progress item resolved
+  0 — a single continue target resolved (in-progress or "${NEXT_UP_COLUMN}" head)
   1 — usage or argument error
   2 — GitHub API error / invalid --jq filter
-  3 — fail closed (pass an explicit issue/PR): zero or multiple in-progress
-      items, or the board/project could not be resolved (project, status
-      field, or "${IN_PROGRESS_COLUMN}" column not found)
+  3 — fail closed (pass an explicit issue/PR): multiple in-progress items, an
+      empty "${NEXT_UP_COLUMN}" column, or the board/project could not be
+      resolved (project, status field, or the column not found)
 
 With --jq/--silent the result is filtered to a value/predicate, so the exit code
 follows the shared jq-output contract (0 = truthy/ok, 1 = falsy/non-ok, 2 =
@@ -112,28 +124,43 @@ function describeItem(item) {
   return item.title ? `${ref} (${item.title})` : ref;
 }
 
-// Collapse a list of board items to a single continue target. Prefer the linked
-// PR number when present (the canonical artifact once work is in flight), else
-// the issue. No routing opinion beyond that single pick.
+// Prefer the linked PR number when present (the canonical artifact once work is
+// in flight), else the issue. No routing opinion beyond that single pick.
+function itemToTarget(item) {
+  return item.prNumber != null
+    ? { kind: "pr", number: item.prNumber }
+    : { kind: "issue", number: item.issueNumber };
+}
+
+// Collapse the "In Progress" column to a single continue target. The caller only
+// invokes this with a NON-EMPTY column (zero In Progress falls through to
+// resolveNextUpHead in main()), so this only decides among the in-progress items
+// and never guesses when there is more than one.
 function collapseToTarget(items) {
-  if (items.length === 0) {
-    return {
-      ok: false,
-      reason: `No in-progress board item to continue. Pass an explicit issue/PR, e.g. \`/continue #N\`.`,
-    };
-  }
   if (items.length > 1) {
     const listed = items.map(describeItem).join(", ");
     return {
       ok: false,
-      reason: `${items.length} in-progress board items: ${listed}. Pass an explicit issue/PR to disambiguate, e.g. \`/continue #N\`.`,
+      reason: `${items.length} in-progress board items: ${listed}. Pass an explicit issue/PR to disambiguate, e.g. \`/loop-continue #N\`.`,
     };
   }
-  const item = items[0];
-  const target = item.prNumber != null
-    ? { kind: "pr", number: item.prNumber }
-    : { kind: "issue", number: item.issueNumber };
-  return { ok: true, target };
+  return { ok: true, target: itemToTarget(items[0]), source: "in-progress" };
+}
+
+// Zero in-progress: the live continue path falls through to the "Next Up"
+// column, HEAD by POSITION ascending (list-queue-items returns position order).
+// NEVER pulls from Backlog; empty Next Up fails closed with the canonical
+// message, and a query error propagates (fail closed — surface it, no fallback).
+async function resolveNextUpHead(args, { env, runChild } = {}) {
+  const listed = await listQueueItems(
+    { repo: args.repo, project: args.project, column: NEXT_UP_COLUMN },
+    { env, runChild },
+  );
+  const items = listed.items ?? [];
+  if (items.length === 0) {
+    return { ok: false, reason: EMPTY_QUEUE_REASON, source: "next-up" };
+  }
+  return { ok: true, target: itemToTarget(items[0]), source: "next-up" };
 }
 
 async function main(args, { env = process.env, runChild } = {}) {
@@ -141,7 +168,13 @@ async function main(args, { env = process.env, runChild } = {}) {
     { repo: args.repo, project: args.project, column: IN_PROGRESS_COLUMN },
     { env, runChild },
   );
-  return collapseToTarget(listed.items ?? []);
+  const items = listed.items ?? [];
+  // Exactly one → continue it. Multiple → fail closed (never guess). Zero →
+  // fall through to the Next Up head (the live pickup path, #1091).
+  if (items.length === 0) {
+    return resolveNextUpHead(args, { env, runChild });
+  }
+  return collapseToTarget(items);
 }
 
 function classifyExitCode(err) {
@@ -190,4 +223,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main, collapseToTarget, runCli };
+export { main, collapseToTarget, resolveNextUpHead, runCli };

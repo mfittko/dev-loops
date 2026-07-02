@@ -21,6 +21,11 @@ import { readQueue } from "@dev-loops/core/loop/queue-state";
 import { reconcileBoardMembership } from "@dev-loops/core/loop/queue-membership";
 import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
 import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad } from "@dev-loops/core/config";
+import {
+  REASON_NEXT_UP_EMPTY,
+  REASON_BOARD_QUERY_ERROR,
+  EMPTY_NEXT_UP_MESSAGE,
+} from "@dev-loops/core/loop/queue-board-ordering";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -129,24 +134,28 @@ async function main() {
     // resolution failure (which falls through to the local queue below).
     console.log(JSON.stringify({
       ok: true,
-      message: "Board configured but Next Up is empty; nothing to run",
+      // Canonical empty-Next-Up outcome — matches queue-driver.mjs so operators
+      // see one message regardless of which layer detects it.
+      message: EMPTY_NEXT_UP_MESSAGE,
       boardConfigured: true,
-      reason: null,
+      reason: REASON_NEXT_UP_EMPTY,
       results: [],
     }));
     return;
   }
 
   if (membership.emptiness === "board_unavailable") {
-    // The board IS configured but Next Up resolution failed (fail-open) and the
-    // local queue had nothing to fall back to. Do NOT claim "Next Up is empty";
-    // surface the real reason so consumers can distinguish an outage from an
-    // intentionally empty board.
+    // The board IS configured but Next Up resolution failed and the local queue
+    // had nothing to fall back to. Align with the driver's canonical fail-closed
+    // board-query-error outcome (reason + framing) so operators see one shape
+    // regardless of which layer detects the outage — an outage halts the run
+    // rather than draining Backlog/local order.
     console.log(JSON.stringify({
-      ok: true,
-      message: `Board configured but unavailable (${membership.reason}); nothing to run`,
+      ok: false,
+      stopped: true,
+      reason: REASON_BOARD_QUERY_ERROR,
+      message: `Next Up query failed (${membership.reason}); refusing to fall back to Backlog/local order — nothing to run`,
       boardConfigured: true,
-      reason: membership.reason ?? null,
       results: [],
     }));
     return;
