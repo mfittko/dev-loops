@@ -482,130 +482,38 @@ test("current-head clean pre-approval evidence advances to final approval bounda
   assert.deepEqual(result.conflictFiles, []);
 });
 
-test("retrospective merge gate blocks final approval when checkpoint is missing", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 266,
+// ---------------------------------------------------------------------------
+// Retrospective is advisory (issue #1077, Reading B)
+//
+// The retrospective NEVER blocks merge or any lifecycle transition. The merge
+// gate no longer reads behavioralReview / rawCallViolations / internalToolingOnly;
+// those findings travel in the handoff envelope's `retrospectiveFindings` field
+// (see handoff-envelope.test.mjs) and an advisory PR comment, not as a gate.
+// These tests prove a green PR reaches FINAL_APPROVAL_READY regardless of what
+// the retrospective checkpoint records — including non-empty rawCallViolations.
+// ---------------------------------------------------------------------------
+
+function advisoryRetroInputs(retrospectiveCheckpoint) {
+  return {
+    pr: 1077,
     currentHeadSha: "fedcba987654",
     prDraft: false,
     lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
     loopDisposition: DISPOSITION.CLEAN_CONVERGED,
     sameHeadCleanConverged: true,
     ciStatus: "success",
-    requireRetrospectiveGate: true,
+    // The (now-removed) retro config keys and retrospectiveCheckpoint input are
+    // ignored by evaluatePrGateCoordination — pass a checkpoint to prove it has
+    // no blocking effect.
+    retrospectiveCheckpoint,
     draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
     preApprovalGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-  });
+  };
+}
 
-  assert.equal(result.lifecycleState, "retrospective_gate_pending");
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-  assert.equal(result.loopDisposition, DISPOSITION.BLOCKED);
-  assert.match(result.reason, /retrospective_gate_pending/i);
-});
-
-test("retrospective merge gate allows final approval when retrospective explicitly approves merge", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 266,
-    currentHeadSha: "fedcba987654",
-    prDraft: false,
-    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
-    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
-    sameHeadCleanConverged: true,
-    ciStatus: "success",
-    requireRetrospectiveGate: true,
-    retrospectiveCheckpoint: {
-      state: "complete",
-      gateQuality: "Real gates with concrete findings and follow-through.",
-      mergeRecommendation: "Merge approved — all gates passed clean.",
-      unexpectedFindings: "No unexpected findings.",
-      behavioralReview: {
-        mergeApproved: true,
-        followedWorkingAgreement: true,
-        gateQualityAcceptable: true,
-        notes: "Real gates with concrete findings and follow-through.",
-        drifts: ["No unexpected findings."],
-        internalToolingOnly: true,
-        rawCallViolations: [],
-      },
-    },
-    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-    preApprovalGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    preApprovalGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-  });
-
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
-});
-
-test("retrospective merge gate: empty drifts array is valid (no unexpected findings)", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 266,
-    currentHeadSha: "fedcba987654",
-    prDraft: false,
-    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
-    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
-    sameHeadCleanConverged: true,
-    ciStatus: "success",
-    requireRetrospectiveGate: true,
-    retrospectiveCheckpoint: {
-      state: "complete",
-      gateQuality: "All gates clean.",
-      mergeRecommendation: "Proceed with merge.",
-      behavioralReview: {
-        mergeApproved: true,
-        followedWorkingAgreement: true,
-        gateQualityAcceptable: true,
-        notes: "All gates clean.",
-        drifts: [],
-        internalToolingOnly: true,
-        rawCallViolations: [],
-      },
-    },
-    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-    preApprovalGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    preApprovalGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-  });
-
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
-});
-
-test("retrospective merge gate: missing gateQualityAcceptable blocks merge", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 266,
-    currentHeadSha: "fedcba987654",
-    prDraft: false,
-    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
-    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
-    sameHeadCleanConverged: true,
-    ciStatus: "success",
-    requireRetrospectiveGate: true,
-    retrospectiveCheckpoint: {
-      state: "complete",
-      mergeRecommendation: "Proceed.",
-      behavioralReview: {
-        mergeApproved: true,
-        followedWorkingAgreement: true,
-        notes: "Missing gateQualityAcceptable.",
-        drifts: ["No unexpected findings."],
-      },
-    },
-    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-    preApprovalGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    preApprovalGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-  });
-
-  assert.equal(result.lifecycleState, "retrospective_gate_pending");
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
-  assert.match(result.reason, /gateQuality/);
-});
-
-function approvedRetroBase(overrides = {}) {
+function greenRetroBase(overrides = {}) {
   return {
     state: "complete",
     gateQuality: "All gates clean.",
@@ -623,106 +531,81 @@ function approvedRetroBase(overrides = {}) {
   };
 }
 
-function retroGateInputs(retrospectiveCheckpoint, { developerMode = true } = {}) {
-  return {
-    pr: 982,
-    currentHeadSha: "fedcba987654",
-    prDraft: false,
-    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
-    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
-    sameHeadCleanConverged: true,
-    ciStatus: "success",
-    requireRetrospectiveGate: true,
-    // The internal-tooling-only check is a developer-mode step (#982): default the
-    // helper to ON so existing blocking assertions hold; the consumer (OFF) path is
-    // covered by its own test below.
-    requireRetrospectiveInternalTooling: developerMode,
-    retrospectiveCheckpoint,
-    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-    preApprovalGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    preApprovalGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-  };
+function assertAdvisory(result, label) {
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY, `${label}: gateBoundary`);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL, `${label}: nextAction`);
+  assert.notEqual(result.lifecycleState, "retrospective_gate_pending", `${label}: must not produce retrospective_gate_pending`);
+  assert.notEqual(result.loopDisposition, DISPOSITION.BLOCKED, `${label}: must not be BLOCKED`);
 }
 
-test("retrospective merge gate: recorded raw-gh/python/node-e violation fails the gate (#982)", () => {
+test("retrospective: a missing checkpoint never blocks final approval (#1077)", () => {
+  const result = evaluatePrGateCoordination(advisoryRetroInputs(null));
+  assertAdvisory(result, "missing checkpoint");
+});
+
+test("retrospective: non-empty rawCallViolations never blocks merge or any transition (#1077)", () => {
   const result = evaluatePrGateCoordination(
-    retroGateInputs(
-      approvedRetroBase({
-        internalToolingOnly: true,
-        rawCallViolations: ["gh: gh api repos/x/y/pulls/1/comments", "python3: python3 -c 'json.load(...)'"],
+    advisoryRetroInputs(
+      greenRetroBase({
+        internalToolingOnly: false,
+        rawCallViolations: [
+          "gh: gh api repos/x/y/pulls/1/comments",
+          "python3: python3 -c 'json.load(...)'",
+        ],
       }),
     ),
   );
-
-  assert.equal(result.lifecycleState, "retrospective_gate_pending");
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
-  assert.match(result.reason, /raw-call violation/i);
-
-  // internalToolingOnly: false also blocks (the OR branch).
-  const falseFlag = evaluatePrGateCoordination(
-    retroGateInputs(approvedRetroBase({ internalToolingOnly: false })),
-  );
-  assert.equal(falseFlag.gateBoundary, PR_CHECKPOINT.BLOCKED);
-  assert.match(falseFlag.reason, /internalToolingOnly/i);
+  assertAdvisory(result, "non-empty rawCallViolations");
+  // No lifecycle action is forbidden by the raw-call record: the merge-ready
+  // transition (await final human approval) remains allowed.
 });
 
-test("retrospective merge gate: large/garbled rawCallViolations are sanitized + truncated in the reason (#982)", () => {
-  const many = Array.from({ length: 25 }, (_, i) => `gh: gh api repos/x/y/${i}\nwith newline\tand\ttabs`);
+test("retrospective: missing internalToolingOnly / behavioralReview fields never block (#1077)", () => {
+  const oldCheckpoint = greenRetroBase();
+  delete oldCheckpoint.behavioralReview.internalToolingOnly;
+  delete oldCheckpoint.behavioralReview.rawCallViolations;
+  const result = evaluatePrGateCoordination(advisoryRetroInputs(oldCheckpoint));
+  assertAdvisory(result, "old checkpoint without internal-tooling fields");
+});
+
+test("retrospective: missing gateQualityAcceptable / mergeApproved never blocks (#1077)", () => {
+  const incomplete = {
+    state: "complete",
+    mergeRecommendation: "Proceed.",
+    behavioralReview: {
+      mergeApproved: false,
+      followedWorkingAgreement: true,
+      notes: "Missing gateQualityAcceptable.",
+      drifts: ["No unexpected findings."],
+    },
+  };
+  const result = evaluatePrGateCoordination(advisoryRetroInputs(incomplete));
+  assertAdvisory(result, "incomplete behavioralReview");
+});
+
+test("retrospective: a clean, merge-approved checkpoint reaches final approval (#1077)", () => {
+  const result = evaluatePrGateCoordination(advisoryRetroInputs(greenRetroBase()));
+  assertAdvisory(result, "clean checkpoint");
+});
+
+test("retrospective: a pending (state=required) checkpoint never blocks (#1077)", () => {
   const result = evaluatePrGateCoordination(
-    retroGateInputs(approvedRetroBase({ internalToolingOnly: true, rawCallViolations: many })),
+    advisoryRetroInputs({ state: "required", triggeredAt: "2026-07-02T00:00:00.000Z" }),
   );
-
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
-  // still fails closed and reports the true count
-  assert.match(result.reason, /records 25 raw-call violation\(s\)/);
-  // newlines/tabs collapsed (no raw control whitespace leaks into the reason)
-  assert.ok(!/[\n\t]/.test(result.reason), "reason must not contain raw newlines/tabs");
-  // entry list is capped, not all 25 dumped
-  assert.match(result.reason, /\(\+\d+ more\)/);
+  assertAdvisory(result, "pending checkpoint");
 });
 
-test("retrospective merge gate: missing internalToolingOnly fails closed for old checkpoints (#982)", () => {
-  const checkpoint = approvedRetroBase();
-  delete checkpoint.behavioralReview.internalToolingOnly;
-  delete checkpoint.behavioralReview.rawCallViolations;
-
-  const result = evaluatePrGateCoordination(retroGateInputs(checkpoint));
-
-  assert.equal(result.lifecycleState, "retrospective_gate_pending");
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
-  assert.match(result.reason, /internalToolingOnly/i);
-});
-
-test("retrospective merge gate: clean internal-tooling-only record allows final approval (#982)", () => {
-  const result = evaluatePrGateCoordination(retroGateInputs(approvedRetroBase()));
-
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
-});
-
-test("retrospective merge gate: consumer (developer mode OFF) is NOT blocked by the internal-tooling check (#982)", () => {
-  // Consumer default: requireRetrospectiveInternalTooling is OFF. A complete,
-  // merge-approved checkpoint must reach final approval even when it lacks the
-  // internalToolingOnly/rawCallViolations fields entirely (back-compat) AND even
-  // when it records a raw-call "violation" — the check is inert for consumers.
-  const missingFields = approvedRetroBase();
-  delete missingFields.behavioralReview.internalToolingOnly;
-  delete missingFields.behavioralReview.rawCallViolations;
-  const missing = evaluatePrGateCoordination(
-    retroGateInputs(missingFields, { developerMode: false }),
-  );
-  assert.equal(missing.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
-  assert.equal(missing.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
-
-  const withViolation = evaluatePrGateCoordination(
-    retroGateInputs(
-      approvedRetroBase({ internalToolingOnly: false, rawCallViolations: ["gh: gh api repos/x/y"] }),
-      { developerMode: false },
+test("retrospective: the removed config keys are ignored — no retrospective_gate_pending under any input (#1077)", () => {
+  // Even if a caller passes the (now-removed) requireRetrospectiveGate /
+  // requireRetrospectiveInternalTooling flags, the gate is gone and never blocks.
+  const result = evaluatePrGateCoordination({
+    ...advisoryRetroInputs(
+      greenRetroBase({ internalToolingOnly: false, rawCallViolations: ["gh: gh api"] }),
     ),
-  );
-  assert.equal(withViolation.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
-  assert.equal(withViolation.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+    requireRetrospectiveGate: true,
+    requireRetrospectiveInternalTooling: true,
+  });
+  assertAdvisory(result, "removed config keys present");
 });
 
 test("non-draft PR with clean draft_gate on a different head still allows post-draft flow (one-time boundary)", () => {
@@ -1101,7 +984,7 @@ test("internal-only PR without clean draft gate still enters pre-approval gate w
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
 });
 
-test("internal-only PR with retrospective gate blocks when checkpoint missing", () => {
+test("internal-only PR reaches final approval even with a missing retrospective checkpoint (#1077)", () => {
   const result = evaluatePrGateCoordination({
     pr: 298,
     currentHeadSha: "abc123456789",
@@ -1109,17 +992,15 @@ test("internal-only PR with retrospective gate blocks when checkpoint missing", 
     lifecycleState: STATE.PR_READY_NO_FEEDBACK,
     loopDisposition: DISPOSITION.ACTION_REQUIRED,
     reviewMode: "internal_only",
-    requireRetrospectiveGate: true,
     draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
     preApprovalGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
   });
 
-  assert.equal(result.lifecycleState, "retrospective_gate_pending");
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-  assert.match(result.reason, /retrospective_gate_pending/i);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+  assert.notEqual(result.lifecycleState, "retrospective_gate_pending");
 });
 
 
@@ -1163,7 +1044,7 @@ test("PR_READY_NO_FEEDBACK internal_only blocks on crediblyGreen CI", () => {
   assert.match(result.reason, /unconfirmed/i);
 });
 
-test("internal-only PR with retrospective gate allows when approved", () => {
+test("internal-only PR reaches final approval regardless of retrospective checkpoint contents (#1077)", () => {
   const result = evaluatePrGateCoordination({
     pr: 298,
     currentHeadSha: "abc123456789",
@@ -1171,17 +1052,18 @@ test("internal-only PR with retrospective gate allows when approved", () => {
     lifecycleState: STATE.PR_READY_NO_FEEDBACK,
     loopDisposition: DISPOSITION.ACTION_REQUIRED,
     reviewMode: "internal_only",
-    requireRetrospectiveGate: true,
+    // The retrospective checkpoint is no longer read by the merge gate; pass a
+    // violation-laden checkpoint to prove it never blocks (advisory, #1077).
     retrospectiveCheckpoint: {
       state: "complete",
       behavioralReview: {
-        mergeApproved: true,
-        followedWorkingAgreement: true,
-        gateQualityAcceptable: true,
+        mergeApproved: false,
+        followedWorkingAgreement: false,
+        gateQualityAcceptable: false,
         notes: "All gates clean.",
         drifts: ["No unexpected findings."],
-        internalToolingOnly: true,
-        rawCallViolations: [],
+        internalToolingOnly: false,
+        rawCallViolations: ["gh: gh api repos/x/y"],
       },
       gateQuality: "All gates clean.",
       mergeRecommendation: "Proceed with merge.",
@@ -1885,7 +1767,7 @@ test("clean title still reaches final_approval_ready (title-marker control)", ()
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
 });
 
-test("title marker takes precedence over a missing retrospective checkpoint", () => {
+test("title marker blocks final approval (independent of the removed retrospective gate)", () => {
   const result = evaluatePrGateCoordination({
     pr: 842,
     currentHeadSha: "abc123456789",
@@ -1893,7 +1775,6 @@ test("title marker takes precedence over a missing retrospective checkpoint", ()
     lifecycleState: STATE.PR_READY_NO_FEEDBACK,
     loopDisposition: DISPOSITION.ACTION_REQUIRED,
     reviewMode: "internal_only",
-    requireRetrospectiveGate: true,
     prTitle: "DO NOT MERGE: pending infra",
     draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),

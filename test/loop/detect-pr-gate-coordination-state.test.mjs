@@ -979,7 +979,10 @@ test("pre-approval-gate-detector overrides to pre_approval_gate_needed when neve
   }
 });
 
-test("detect-pr-gate-coordination-state blocks merge readiness when retrospective gate is enabled without approved retrospective", async () => {
+test("detect-pr-gate-coordination-state progresses past the removed retrospective gate without an approved checkpoint (#1077 advisory)", async () => {
+  // The retrospective merge gate is gone (#1077, Reading B): a green PR with no
+  // retrospective checkpoint reaches its normal post-draft review progression
+  // (post_draft_external_review / request_copilot_review), never retrospective_gate_pending.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-retro-"));
 
   try {
@@ -988,8 +991,6 @@ test("detect-pr-gate-coordination-state blocks merge readiness when retrospectiv
       path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
       [
         "version: 1",
-        "workflow:",
-        "  requireRetrospectiveGate: true",
       ].join("\n"),
       "utf8",
     );
@@ -1066,10 +1067,15 @@ test("detect-pr-gate-coordination-state blocks merge readiness when retrospectiv
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
     const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.lifecycleState, "retrospective_gate_pending");
-    assert.equal(parsed.gateBoundary, "blocked");
-    assert.equal(parsed.nextAction, "report_blocked");
-    assert.match(parsed.reason, /retrospective_gate_pending/i);
+    // Advisory (#1077): the retrospective merge gate is gone, so a green PR with
+    // no retrospective checkpoint reaches its normal post-draft review progression
+    // (post_draft_external_review → request_copilot_review), NEVER blocked as
+    // retrospective_gate_pending. Assert the exact progressed state, not just
+    // "not blocked", so a regression to an unexpected non-blocked state is caught.
+    assert.equal(parsed.lifecycleState, "ready_to_rerequest_review");
+    assert.equal(parsed.gateBoundary, "post_draft_external_review");
+    assert.equal(parsed.nextAction, "request_copilot_review");
+    assert.notEqual(parsed.loopDisposition, "blocked");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

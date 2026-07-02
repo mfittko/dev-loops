@@ -133,7 +133,7 @@ export const LIFECYCLE_NEXT_ACTIONS = Object.freeze({
   [LIFECYCLE_STATE.PRE_APPROVAL_GATE]:
     "Run pre-approval gate review; verify gate evidence, CI, and unresolved threads.",
   [LIFECYCLE_STATE.MERGE]:
-    "Merge is authorized; run the final merge step and write the retrospective checkpoint.",
+    "Merge is authorized; run the final merge step. The retrospective is advisory and post-merge: it records flagged raw-calls for the conductor, never blocks a transition.",
 });
 
 // ---------------------------------------------------------------------------

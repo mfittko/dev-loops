@@ -30,7 +30,7 @@ Required:
   --input <path>         Path to resolver output JSON (from resolve-dev-loop-startup.mjs)
 Optional:
   --gate-state <json>    Gate state JSON string
-                           { currentHeadSha?, ciStatus?, unresolvedThreadCount?, copilotRoundCount? }
+                           { currentHeadSha?, ciStatus?, unresolvedThreadCount?, copilotRoundCount?, retrospectiveFindings? }
   --overrides <json>     Overrides JSON string
                            { mergeAuthorized?, preferLocal?, scopeConstraint?, customStopAt? }
   --repo <owner/name>    Repository slug override (falls back to bundle.repoSlug or bundle.repo)

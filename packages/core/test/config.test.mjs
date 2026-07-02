@@ -50,7 +50,6 @@ describe("schema validation", () => {
       workflow: {
         asyncStartMode: "required",
         requireRetrospective: true,
-        requireRetrospectiveGate: false,
         requireDraftFirst: false,
         devModeDefault: true,
       },
@@ -130,7 +129,6 @@ describe("schema validation", () => {
       workflow: {
         asyncStartMode: "required",
         requireRetrospective: true,
-        requireRetrospectiveGate: false,
         requireDraftFirst: false,
         devModeDefault: true,
       },
@@ -138,7 +136,6 @@ describe("schema validation", () => {
     assert.ok(result.success);
     assert.equal(result.data.workflow.asyncStartMode, "required");
     assert.equal(result.data.workflow.requireRetrospective, true);
-    assert.equal(result.data.workflow.requireRetrospectiveGate, false);
     assert.equal(result.data.workflow.requireDraftFirst, false);
     assert.equal(result.data.workflow.devModeDefault, true);
   });
@@ -149,7 +146,6 @@ describe("schema validation", () => {
       workflow: {
         asyncStartMode: "required",
         requireRetrospective: true,
-        requireRetrospectiveGate: false,
         requireDraftFirst: false,
         devModeDefault: true,
         unknownKey: true,
@@ -390,8 +386,6 @@ describe("BUILT_IN_DEFAULTS", () => {
     assert.deepEqual(BUILT_IN_DEFAULTS.workflow, {
       asyncStartMode: "required",
       requireRetrospective: false,
-      requireRetrospectiveGate: false,
-      requireRetrospectiveInternalTooling: false,
       requireDraftFirst: false,
       devModeDefault: false,
     });
@@ -458,7 +452,6 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.equal(result.config.workflow.requireRetrospective, false);
-      assert.equal(result.config.workflow.requireRetrospectiveGate, false);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -469,12 +462,11 @@ describe("loader — graceful degradation", () => {
     try {
       await writeFile(
         path.join(tmpDir, ".devloops"),
-        "version: 1\nworkflow:\n  requireRetrospective: true\n  requireRetrospectiveGate: true\n",
+        "version: 1\nworkflow:\n  requireRetrospective: true\n",
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.equal(result.config.workflow.requireRetrospective, true);
-      assert.equal(result.config.workflow.requireRetrospectiveGate, true);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -672,7 +664,6 @@ describe("loader — graceful degradation", () => {
         "workflow:",
         "  asyncStartMode: required",
         "  requireRetrospective: true",
-        "  requireRetrospectiveGate: false",
         "  requireDraftFirst: false",
         "  devModeDefault: false",
       ].join("\n"));
@@ -687,8 +678,6 @@ describe("loader — graceful degradation", () => {
       assert.deepEqual(result.config.workflow, {
         asyncStartMode: "required",
         requireRetrospective: true,
-        requireRetrospectiveGate: false,
-        requireRetrospectiveInternalTooling: false,
         requireDraftFirst: true,
         devModeDefault: false,
       });
@@ -1159,7 +1148,6 @@ describe("loader — precedence", () => {
           workflow: {
             asyncStartMode: "allowed",
             requireRetrospective: false,
-            requireRetrospectiveGate: false,
             requireDraftFirst: false,
             devModeDefault: true,
           },
@@ -1181,8 +1169,6 @@ describe("loader — precedence", () => {
       assert.deepEqual(result.config.workflow, {
         asyncStartMode: "required",
         requireRetrospective: true,
-        requireRetrospectiveGate: false,
-        requireRetrospectiveInternalTooling: false,
         requireDraftFirst: false,
         devModeDefault: true,
       });
@@ -2154,8 +2140,6 @@ describe("role resolution", () => {
     test("resolveWorkflowConfig returns built-in defaults when workflow family is absent", () => {
       assert.equal(resolveWorkflowConfig({ version: 1 }, "asyncStartMode"), "required");
       assert.equal(resolveWorkflowConfig({ version: 1 }, "requireRetrospective"), false);
-      assert.equal(resolveWorkflowConfig({ version: 1 }, "requireRetrospectiveGate"), false);
-      assert.equal(resolveWorkflowConfig({ version: 1 }, "requireRetrospectiveInternalTooling"), false);
       assert.equal(resolveWorkflowConfig({ version: 1 }, "requireDraftFirst"), false);
       assert.equal(resolveWorkflowConfig({ version: 1 }, "devModeDefault"), false);
     });
@@ -2166,16 +2150,12 @@ describe("role resolution", () => {
         workflow: {
           asyncStartMode: "allowed",
           requireRetrospective: true,
-          requireRetrospectiveGate: true,
-          requireRetrospectiveInternalTooling: true,
           requireDraftFirst: true,
           devModeDefault: false,
         },
       };
       assert.equal(resolveWorkflowConfig(config, "asyncStartMode"), "allowed");
       assert.equal(resolveWorkflowConfig(config, "requireRetrospective"), true);
-      assert.equal(resolveWorkflowConfig(config, "requireRetrospectiveGate"), true);
-      assert.equal(resolveWorkflowConfig(config, "requireRetrospectiveInternalTooling"), true);
       assert.equal(resolveWorkflowConfig(config, "requireDraftFirst"), true);
       assert.equal(resolveWorkflowConfig(config, "devModeDefault"), false);
     });
@@ -2184,7 +2164,6 @@ describe("role resolution", () => {
       const config = { version: 1, workflow: { requireDraftFirst: true } };
       assert.equal(resolveWorkflowConfig(config, "asyncStartMode"), "required");
       assert.equal(resolveWorkflowConfig(config, "requireRetrospective"), false);
-      assert.equal(resolveWorkflowConfig(config, "requireRetrospectiveGate"), false);
       assert.equal(resolveWorkflowConfig(config, "requireDraftFirst"), true);
       assert.equal(resolveWorkflowConfig(config, "devModeDefault"), false);
     });

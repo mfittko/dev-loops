@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   buildParseError,
@@ -401,16 +400,6 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git" }
   }
   return parseGitStatusConflictFiles(result.stdout);
 }
-async function loadRetrospectiveCheckpoint(repoRoot) {
-  const checkpointPath = path.join(repoRoot, ".pi", "dev-loop-retrospective-checkpoint.json");
-  try {
-    const checkpointText = await readFile(checkpointPath, "utf8");
-    const checkpoint = parseJsonText(checkpointText, { label: "retrospective checkpoint" });
-    return checkpoint && typeof checkpoint === "object" ? checkpoint : null;
-  } catch (error) {
-    return null;
-  }
-}
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const prData = await fetchPrFactsWithSettledMergeable(options, runtime);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
@@ -521,9 +510,6 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const config = hasConfigErrors ? {} : (configLoadResult.config ?? {});
   const draftGateConfig = resolveGateConfig(config, "draft");
   const maxCopilotRounds = resolveRefinementConfig(config, "maxCopilotRounds");
-  const requireRetrospectiveGate = resolveWorkflowConfig(config, "requireRetrospectiveGate");
-  const requireRetrospectiveInternalTooling = resolveWorkflowConfig(config, "requireRetrospectiveInternalTooling");
-  const retrospectiveCheckpoint = await loadRetrospectiveCheckpoint(repoRoot);
   const result = evaluatePrGateCoordination({
     repo: context.repo,
     pr: context.pr,
@@ -545,9 +531,6 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     maxCopilotRounds,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
     draftGateRequireCi: draftGateConfig.requireCi,
-    requireRetrospectiveGate,
-    requireRetrospectiveInternalTooling,
-    retrospectiveCheckpoint,
     draftGate: context.gateEvidence.draftGate,
     draftGateMarker: context.gateEvidence.draftGateMarker,
     preApprovalGate: context.gateEvidence.preApprovalGate,

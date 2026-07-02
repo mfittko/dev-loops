@@ -110,12 +110,6 @@ const ApprovalConfig = z.strictObject({
 const WorkflowConfig = z.strictObject({
   asyncStartMode: z.enum(["required", "allowed"]).default("required"),
   requireRetrospective: z.boolean(),
-  requireRetrospectiveGate: z.boolean().default(false),
-  // Developer-mode retro step (#982): enforce internal-tooling-only execution
-  // (no agent-level raw gh/python/node -e) in the retrospective gate. This is the
-  // dev-loops maintainers' own dogfooding discipline — opt-in, default OFF so
-  // consumers of the extension are never blocked by it.
-  requireRetrospectiveInternalTooling: z.boolean().default(false),
   requireDraftFirst: z.boolean(),
   devModeDefault: z.boolean(),
 });
@@ -237,8 +231,6 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
   workflow: Object.freeze({
     asyncStartMode: "required",
     requireRetrospective: false,
-    requireRetrospectiveGate: false,
-    requireRetrospectiveInternalTooling: false,
     requireDraftFirst: false,
     devModeDefault: false,
   }),
@@ -1196,7 +1188,7 @@ export async function resolveGateAnglesDynamic(config, gate, { diff } = {}) {
  * for the requested key.
  *
  * @param {DevLoopConfig} config
- * @param {"asyncStartMode"|"requireRetrospective"|"requireRetrospectiveGate"|"requireRetrospectiveInternalTooling"|"requireDraftFirst"|"devModeDefault"} key
+ * @param {"asyncStartMode"|"requireRetrospective"|"requireDraftFirst"|"devModeDefault"} key
  * @returns {string|boolean}
  */
 export function resolveWorkflowConfig(config, key) {
@@ -1206,14 +1198,6 @@ export function resolveWorkflowConfig(config, key) {
 
   if (key === "requireRetrospective") {
     return config?.workflow?.requireRetrospective ?? DEFAULT_WORKFLOW_CONFIG.requireRetrospective;
-  }
-
-  if (key === "requireRetrospectiveGate") {
-    return config?.workflow?.requireRetrospectiveGate ?? DEFAULT_WORKFLOW_CONFIG.requireRetrospectiveGate;
-  }
-
-  if (key === "requireRetrospectiveInternalTooling") {
-    return config?.workflow?.requireRetrospectiveInternalTooling ?? DEFAULT_WORKFLOW_CONFIG.requireRetrospectiveInternalTooling;
   }
 
   if (key === "requireDraftFirst") {
