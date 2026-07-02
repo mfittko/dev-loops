@@ -111,6 +111,7 @@ Preflight verdicts:
 - do not rely only on PR title/body containing a literal issue number
 - treat an open linked PR as the active implementation for this issue
 - once an open linked PR exists, that PR is the only canonical follow-up artifact for the issue; attach follow-up work to it and do not open another PR unless the prior PR was explicitly superseded and reconciled first
+- **follow-up-capture rule:** when a follow-up is discovered while working a PR/loop, note it on the originating issue (or the PR body); file a standalone issue only if the follow-up is genuinely independent of the PR **and** outlives it (a real separate bug/feature that would be lost as a note on a soon-closed issue). Prefer noting PR-scoped follow-ups on the originating artifact over spinning up standalone tracker items for work that is part of the same effort or will be resolved imminently. See [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md).
 - if a PR already exists, classify bootstrap-wait versus follow-up:
   `node <resolved-skill-scripts>/loop/detect-initial-copilot-pr-state.mjs --repo <resolved-repo> --issue <number>`
 - `waiting_for_initial_copilot_implementation`: keep waiting; in durable-auto mode use:
