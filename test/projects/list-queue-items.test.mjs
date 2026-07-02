@@ -808,11 +808,11 @@ describe("list-queue-items", () => {
       ];
     }
 
-    function withTempCwd(contents, fn) {
+    async function withTempCwd(contents, fn) {
       const dir = mkdtempSync(nodePath.join(tmpdir(), "list-queue-cfg-"));
       try {
         if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
-        return fn(dir);
+        return await fn(dir);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
