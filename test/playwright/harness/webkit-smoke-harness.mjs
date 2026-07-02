@@ -17,14 +17,6 @@ export function normalizeUiStateSegment(value) {
   return normalized;
 }
 
-function normalizeTestMatch(testMatch) {
-  const normalized = (Array.isArray(testMatch) ? testMatch : [testMatch]).filter((entry) => typeof entry === 'string' && entry.trim().length > 0);
-  if (normalized.length === 0) {
-    throw new Error('testMatch must include at least one non-empty spec pattern');
-  }
-  return normalized;
-}
-
 function requireOutputDir(outputDir) {
   if (typeof outputDir !== 'string' || outputDir.trim().length === 0) {
     throw new Error('A deterministic outputDir is required for named UI state artifacts');
@@ -34,33 +26,6 @@ function requireOutputDir(outputDir) {
 
 function buildRunId({ sliceId, stateSlug, projectName }) {
   return [sliceId, stateSlug, projectName ?? 'unknown'].map((part) => normalizeUiStateSegment(part)).join('-');
-}
-
-export function createWebkitSmokeConfig({ sliceId, testMatch, testDir = './test/playwright' }) {
-  const normalizedSliceId = normalizeUiStateSegment(sliceId);
-  return {
-    testDir,
-    testMatch: normalizeTestMatch(testMatch),
-    timeout: 30_000,
-    fullyParallel: false,
-    retries: 0,
-    outputDir: `test-results/ui-smoke/${normalizedSliceId}`,
-    reporter: [['list'], ['html', { open: 'never', outputFolder: `playwright-report/ui-smoke/${normalizedSliceId}` }]],
-    use: {
-      headless: true,
-      screenshot: 'only-on-failure',
-      trace: 'retain-on-failure',
-      video: 'off',
-    },
-    projects: [
-      {
-        name: 'webkit',
-        use: {
-          browserName: 'webkit',
-        },
-      },
-    ],
-  };
 }
 
 export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName }) {

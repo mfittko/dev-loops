@@ -26,15 +26,18 @@ It is not a general E2E framework and it does not make browser validation mandat
 
 The reusable baseline lives in:
 - `test/playwright/harness/webkit-smoke-harness.mjs` (this module)
-- the deck/article/viewer Playwright configs — e.g. `playwright.intro-deck.config.mjs`,
-  `playwright.intro-article.config.mjs`, `playwright.inspect-run-viewer.config.mjs` —
-  each a thin `createWebkitSmokeConfig(...)` adoption
+- the single `playwright.config.mjs` — one Playwright project per slice (deck,
+  article, viewer), generated from the registries, each with its own
+  `testMatch` and distinct `outputDir`; run one via `--project=<sliceId>`
 - the shared suites that consume it: `test/playwright/harness/deck-fit-harness.mjs`
   (`defineDeckSuite`/`defineArticleSuite`) and
   `test/playwright/harness/inspect-run-viewer-harness.mjs`
 
-The harness exposes three main seams:
-- `createWebkitSmokeConfig(...)` — create the minimal WebKit-only Playwright config with deterministic output/report locations
+The single `playwright.config.mjs` owns the WebKit-only project shape and
+deterministic per-slice `outputDir`; it derives one project per slice from the
+registries, so no config edit (and no per-slice config factory) is needed.
+
+The harness exposes two main runtime seams:
 - `startFixtureServer(...)` / `stopFixtureServer(...)` — start and stop a bounded local fixture-backed HTTP server for the UI surface under test
 - `captureNamedUiState(...)` — write deterministic named-state artifacts for reviewer consumption
 
@@ -42,12 +45,16 @@ The harness exposes three main seams:
 
 For a **rendered artifact** (deck, article, or the viewer) registration is the
 path — add a registry entry plus a thin spec calling `defineDeckSuite` /
-`defineArticleSuite`; the config is created via `createWebkitSmokeConfig(...)`
-(see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)). For a bespoke
-local UI surface that uses this WebKit seam directly:
+`defineArticleSuite`; `playwright.config.mjs` derives a project from the
+registry automatically, so no config edit is needed
+(see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)). The spec file
+**must** be named `<sliceId>.spec.mjs`: each generated project pins
+`testMatch: ['<sliceId>.spec.mjs']`, so the spec basename and the registry
+`sliceId` are coupled. For a bespoke local UI surface that uses this WebKit seam
+directly:
 
-1. add a small fixture-backed Playwright spec under `test/playwright/`
-2. create a thin config via `createWebkitSmokeConfig({ sliceId, testMatch })`
+1. add a registry entry for the slice (in the deck/article/viewer registry the config reads)
+2. add a fixture-backed Playwright spec named `<sliceId>.spec.mjs` under `test/playwright/` — no new/thin config file is created
 3. start the slice-specific fixture server with `startFixtureServer(...)`
 4. exercise only the small explicit UI states needed by the slice acceptance criteria
 5. call `captureNamedUiState(...)` for each named state that should remain reviewable
@@ -72,7 +79,7 @@ These paths are the local proving ground for the reusable artifact contract in [
 The current proving example is the inspect-run viewer smoke suite:
 - fixture input: `test/playwright/fixtures/inspect-run-viewer-fixture.mjs`
 - spec: `test/playwright/inspect-run-viewer.spec.mjs`
-- config: `playwright.inspect-run-viewer.config.mjs`
+- config: `playwright.config.mjs` (project `inspect-run-viewer`)
 - command: `npm run test:playwright:viewer`
 
 The example intentionally covers a small explicit set of viewer states rather than broad end-to-end workflows.

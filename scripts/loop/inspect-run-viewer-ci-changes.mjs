@@ -5,7 +5,7 @@ export const INSPECT_RUN_VIEWER_RELEVANT_EXACT_PATHS = Object.freeze([
   ".github/workflows/ci.yml",
   "package.json",
   "package-lock.json",
-  "playwright.inspect-run-viewer.config.mjs",
+  "playwright.config.mjs",
   "scripts/loop/_inspect-run-viewer-adapter.mjs",
   "scripts/loop/inspect-run-viewer.mjs",
   "scripts/loop/inspect-run-viewer-ci-changes.mjs",
