@@ -154,7 +154,7 @@ describe("move-queue-item", () => {
     it("rejects invalid project format", async () => {
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops", project: "not-a-number", item: "10", toColumn: "Next Up" }),
-        /--project must be a positive integer or a node ID/,
+        /--project must be a positive integer/,
       );
     });
 
@@ -478,6 +478,56 @@ describe("move-queue-item", () => {
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
+    });
+
+    it("resolves a user-scoped board URI without a resolveOwner round-trip", async () => {
+      // URI path: ownerKind and owner come from the URI; no user/org lookup response needed
+      const responses = [
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+          ]),
+        },
+        { payload: updateItemFieldResponse() },
+      ];
+      const result = await main(
+        {
+          repo: "mfittko/dev-loops",
+          project: "https://github.com/users/mfittko/projects/1",
+          item: "10",
+          toColumn: "Next Up",
+        },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.newColumn, "Next Up");
+    });
+
+    it("main() resolves the board by title when --project is omitted (projectTitle)", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+          ]),
+        },
+        { payload: updateItemFieldResponse() },
+      ];
+      const result = await main(
+        {
+          repo: "mfittko/dev-loops",
+          projectTitle: "Dev Loop Queue",
+          item: "10",
+          toColumn: "Next Up",
+        },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.newColumn, "Next Up");
     });
   });
 

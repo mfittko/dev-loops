@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: dev-loops queue move --repo <owner/name> --project <number|id> --item <number|node-id> --to-column <name>
+const USAGE = `Usage: dev-loops queue move --repo <owner/name> --project <number|id|board-uri> --item <number|node-id> --to-column <name>
        (dev-loops project move … is a back-compat alias)
 
 Move a GitHub Projects V2 item between Status columns.
 
 Options:
-  --repo <owner/name>         Required. Repository to scope the project search.
-  --project <number|id>       Required. Project number (integer) or node ID.
-  --item <number|node-id>     Required. Item to move: issue/PR number, or project item node ID.
-  --to-column <name>          Required. Target Status column (e.g. "Next Up", "In Progress").
-  --help, -h                  Show this help.
+  --repo <owner/name>                 Required. Repository to scope the project search.
+  --project <number|id|board-uri>     Project number, node ID, or board URI
+                                      (e.g. https://github.com/users/me/projects/3).
+                                      When omitted, resolved from .devloops
+                                      queue.projectNumber / queue.boardTitle.
+  --item <number|node-id>             Required. Item to move: issue/PR number, or project item node ID.
+  --to-column <name>                  Required. Target Status column (e.g. "Next Up", "In Progress").
+  --help, -h                          Show this help.
 
 Output (stdout):
   JSON: { ok: true, item: { itemId, issueNumber, prNumber, previousColumn, newColumn } }
@@ -116,24 +120,6 @@ function validateRepo(repo) {
     throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
   }
   return repo;
-}
-
-function parseProjectRef(raw) {
-  if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
-    throw Object.assign(new Error("--project is required"), { code: "INVALID_PROJECT" });
-  }
-  const trimmed = raw.trim();
-  const asNum = Number(trimmed);
-  if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
-    return { kind: "number", value: asNum };
-  }
-  if (trimmed === "0") {
-    throw Object.assign(new Error(`--project must be a positive integer or a node ID, got "${raw}"`), { code: "INVALID_PROJECT" });
-  }
-  if (GLOBAL_NODE_ID_RE.test(trimmed)) {
-    return { kind: "id", value: trimmed };
-  }
-  throw Object.assign(new Error(`--project must be a positive integer or a node ID, got "${raw}"`), { code: "INVALID_PROJECT" });
 }
 
 function parseItemRef(raw) {
@@ -390,30 +376,23 @@ async function main(args, { env = process.env, runChild } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
   const [owner, repoName] = repo.split("/");
-  const projectRef = parseProjectRef(args.project);
+  const selector = resolveProjectSelector(args);
   const itemRef = parseItemRef(args.item);
   const toColumn = (args.toColumn ?? "").trim();
   if (!toColumn) {
     throw Object.assign(new Error("--to-column is required"), { code: "INVALID_COLUMN" });
   }
 
-  // 1. Resolve owner
-  const { id: ownerId, kind: ownerKind } = await resolveOwner(owner, env, child);
+  // 1. Resolve owner.
+  // URI refs encode owner+kind directly; skip the API round-trip for owner resolution.
+  const projectOwner = selector.projectRef?.kind === "uri" ? selector.projectRef.owner : owner;
+  const ownerKind = selector.projectRef?.kind === "uri"
+    ? selector.projectRef.ownerKind
+    : (await resolveOwner(owner, env, child)).kind;
 
   // 2. Resolve project
-  const projects = await listAllProjects(owner, ownerKind, env, child);
-  let project;
-  if (projectRef.kind === "id") {
-    project = projects.find((p) => p.id === projectRef.value);
-  } else {
-    project = projects.find((p) => p.number === projectRef.value);
-  }
-  if (!project) {
-    throw Object.assign(
-      new Error(`Project ${projectRef.kind === "id" ? `"${projectRef.value}"` : `number ${projectRef.value}`} not found under owner "${owner}"`),
-      { code: "PROJECT_NOT_FOUND" },
-    );
-  }
+  const projects = await listAllProjects(projectOwner, ownerKind, env, child);
+  const project = findProject(projects, selector, projectOwner);
 
   // 3. Resolve Status field and target column
   const fieldNodes = await listAllFields(project.id, env, child);
@@ -527,7 +506,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 
 // ── CLI entrypoint ──────────────────────────────────────────────────────
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd() } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);
@@ -540,6 +519,10 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     stdout.write(USAGE);
     return;
   }
+
+  // Resolve the board from .devloops when --project is absent.
+  applyDevloopsBoard(args, cwd);
+
   try {
     const result = await main(args, { env });
     process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });

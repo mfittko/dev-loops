@@ -105,10 +105,45 @@ describe("_resolve-project — parseProjectRef", () => {
     assert.deepStrictEqual(parseProjectRef("PVT_abc123"), { kind: "id", value: "PVT_abc123" });
   });
 
+  it("parses a user-scoped board URI", () => {
+    assert.deepStrictEqual(
+      parseProjectRef("https://github.com/users/mfittko/projects/3"),
+      { kind: "uri", number: 3, owner: "mfittko", ownerKind: "user" },
+    );
+  });
+
+  it("parses an org-scoped board URI", () => {
+    assert.deepStrictEqual(
+      parseProjectRef("https://github.com/orgs/myorg/projects/7"),
+      { kind: "uri", number: 7, owner: "myorg", ownerKind: "org" },
+    );
+  });
+
+  it("parses a board URI with leading/trailing whitespace", () => {
+    assert.deepStrictEqual(
+      parseProjectRef("  https://github.com/users/alice/projects/1  "),
+      { kind: "uri", number: 1, owner: "alice", ownerKind: "user" },
+    );
+  });
+
   it("throws INVALID_PROJECT for empty/malformed input", () => {
     for (const bad of ["", "   ", "0", "not/a/ref"]) {
       assert.throws(() => parseProjectRef(bad), (err) => err.code === "INVALID_PROJECT");
     }
+  });
+
+  it("throws INVALID_PROJECT for a board URI with project number 0", () => {
+    assert.throws(
+      () => parseProjectRef("https://github.com/users/mfittko/projects/0"),
+      (err) => err.code === "INVALID_PROJECT",
+    );
+  });
+
+  it("throws INVALID_PROJECT for an https URL that is not a Projects V2 board URI", () => {
+    assert.throws(
+      () => parseProjectRef("https://github.com/users/mfittko/repos/dev-loops"),
+      (err) => err.code === "INVALID_PROJECT",
+    );
   });
 });
 
@@ -123,6 +158,12 @@ describe("_resolve-project — resolveProjectSelector", () => {
     const sel = resolveProjectSelector({ projectTitle: "  My Board  " });
     assert.strictEqual(sel.projectRef, null);
     assert.strictEqual(sel.projectTitle, "My Board");
+  });
+
+  it("resolves a board URI ref and exposes owner+kind", () => {
+    const sel = resolveProjectSelector({ project: "https://github.com/users/mfittko/projects/3" });
+    assert.deepStrictEqual(sel.projectRef, { kind: "uri", number: 3, owner: "mfittko", ownerKind: "user" });
+    assert.strictEqual(sel.projectTitle, null);
   });
 
   it("throws INVALID_PROJECT when neither is present", () => {
@@ -146,6 +187,11 @@ describe("_resolve-project — findProject", () => {
     assert.strictEqual(p.id, "PVT_x");
   });
 
+  it("finds by URI number", () => {
+    const p = findProject(projects, { projectRef: { kind: "uri", number: 2, owner: "mfittko", ownerKind: "user" }, projectTitle: null }, "mfittko");
+    assert.strictEqual(p.id, "PVT_y");
+  });
+
   it("finds by title", () => {
     const p = findProject(projects, { projectRef: null, projectTitle: "Beta" }, "owner");
     assert.strictEqual(p.number, 2);
@@ -162,6 +208,13 @@ describe("_resolve-project — findProject", () => {
     assert.throws(
       () => findProject(projects, { projectRef: { kind: "number", value: 99 }, projectTitle: null }, "owner"),
       (err) => err.code === "PROJECT_NOT_FOUND" && /number 99 not found under owner "owner"/.test(err.message),
+    );
+  });
+
+  it("throws PROJECT_NOT_FOUND with a URI desc", () => {
+    assert.throws(
+      () => findProject(projects, { projectRef: { kind: "uri", number: 99, owner: "mfittko", ownerKind: "user" }, projectTitle: null }, "mfittko"),
+      (err) => err.code === "PROJECT_NOT_FOUND" && /URI number 99 under "mfittko"/.test(err.message),
     );
   });
 

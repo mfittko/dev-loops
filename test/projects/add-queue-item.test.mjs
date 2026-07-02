@@ -179,7 +179,7 @@ describe("add-queue-item", () => {
     it("rejects invalid project format", async () => {
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops", project: "not-a-number", item: 10 }),
-        /--project must be a positive integer or a node ID/,
+        /--project must be a positive integer/,
       );
     });
 

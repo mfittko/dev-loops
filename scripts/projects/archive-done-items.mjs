@@ -1,25 +1,26 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
-import { resolveSettings } from "./_resolve-project.mjs";
+import { resolveSettings, parseProjectRef, findProject } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 
-const USAGE = `Usage: dev-loops queue archive-done --repo <owner/name> [--project <number|id>] [--older-than <duration>] [--dry-run]
+const USAGE = `Usage: dev-loops queue archive-done --repo <owner/name> [--project <number|id|board-uri>] [--older-than <duration>] [--dry-run]
        (dev-loops project archive-done … is a back-compat alias)
 
 Archive GitHub Projects V2 items whose issue/PR has been closed for at least the
 given duration. Operator-triggered (no webhooks). Uses archiveProjectV2Item.
 
 Options:
-  --repo <owner/name>     Required. Repository to scope the project search.
-  --project <number|id>   Project number (integer) or node ID. When omitted,
-                          resolved from .devloops queue.projectNumber /
-                          queue.boardTitle.
-  --older-than <duration> Closed-for threshold. Format: <n><unit> where unit is
-                          h (hours), d (days), or w (weeks). Default resolves
-                          from .devloops queue.archiveOlderThanDays, else 7d.
-  --dry-run               Print the intended archive mutation(s) without executing.
-  --help, -h              Show this help.
+  --repo <owner/name>                 Required. Repository to scope the project search.
+  --project <number|id|board-uri>     Project number, node ID, or board URI
+                                      (e.g. https://github.com/users/me/projects/3).
+                                      When omitted, resolved from .devloops
+                                      queue.projectNumber / queue.boardTitle.
+  --older-than <duration>             Closed-for threshold. Format: <n><unit> where unit is
+                                      h (hours), d (days), or w (weeks). Default resolves
+                                      from .devloops queue.archiveOlderThanDays, else 7d.
+  --dry-run                           Print the intended archive mutation(s) without executing.
+  --help, -h                          Show this help.
 
 Output (stdout):
   JSON: { ok: true, olderThan, scanned, archivable, archived: [{ itemId, issueNumber, prNumber, closedAt }] }
@@ -97,7 +98,6 @@ function parseCliArgs(argv) {
 
 const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const REPO_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
-const GLOBAL_NODE_ID_RE = /^[A-Za-z0-9_]+$/;
 
 function validateRepo(repo) {
   if (!repo || typeof repo !== "string") {
@@ -113,21 +113,6 @@ function validateRepo(repo) {
     throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
   }
   return repo;
-}
-
-function parseProjectRef(raw) {
-  if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
-    throw Object.assign(new Error("--project is required"), { code: "INVALID_PROJECT" });
-  }
-  const trimmed = raw.trim();
-  const asNum = Number(trimmed);
-  if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
-    return { kind: "number", value: asNum };
-  }
-  if (GLOBAL_NODE_ID_RE.test(trimmed) && trimmed !== "0") {
-    return { kind: "id", value: trimmed };
-  }
-  throw Object.assign(new Error(`--project must be a positive integer or a node ID, got "${raw}"`), { code: "INVALID_PROJECT" });
 }
 
 const DURATION_RE = /^(\d+)(h|d|w)$/;
@@ -363,22 +348,13 @@ async function main(args, { env = process.env, runChild } = {}) {
   const olderThanMs = parseDuration(olderThanRaw);
   const now = args.now ?? Date.now();
 
-  const { kind: ownerKind } = await resolveOwner(owner, env, child);
-  const projects = await listAllProjects(owner, ownerKind, env, child);
-  const project = projectRef
-    ? (projectRef.kind === "id"
-        ? projects.find((p) => p.id === projectRef.value)
-        : projects.find((p) => p.number === projectRef.value))
-    : projects.find((p) => p.title === projectTitle);
-  if (!project) {
-    const desc = projectRef
-      ? (projectRef.kind === "id" ? `"${projectRef.value}"` : `number ${projectRef.value}`)
-      : `title "${projectTitle}"`;
-    throw Object.assign(
-      new Error(`Project ${desc} not found under owner "${owner}"`),
-      { code: "PROJECT_NOT_FOUND" },
-    );
-  }
+  // URI refs encode owner+kind directly; skip the API round-trip for owner resolution.
+  const projectOwner = projectRef?.kind === "uri" ? projectRef.owner : owner;
+  const ownerKind = projectRef?.kind === "uri"
+    ? projectRef.ownerKind
+    : (await resolveOwner(owner, env, child)).kind;
+  const projects = await listAllProjects(projectOwner, ownerKind, env, child);
+  const project = findProject(projects, { projectRef, projectTitle }, projectOwner);
 
   const rawItems = await fetchAllItems(project.id, env, child);
   // Only consider items whose content belongs to the target repo (single-repo scope).

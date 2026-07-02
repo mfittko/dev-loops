@@ -125,21 +125,21 @@ describe("list-queue-items", () => {
     it("rejects invalid project format", async () => {
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops", project: "not-a-number" }),
-        /--project must be a positive integer or a node ID/,
+        /--project must be a positive integer/,
       );
     });
 
     it("rejects negative project number", async () => {
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops", project: "-1" }),
-        /--project must be a positive integer or a node ID/,
+        /--project must be a positive integer/,
       );
     });
 
     it("rejects zero project number", async () => {
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops", project: "0" }),
-        /--project must be a positive integer or a node ID/,
+        /--project must be a positive integer/,
       );
     });
 
@@ -360,6 +360,50 @@ describe("list-queue-items", () => {
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.ok, true);
+    });
+
+    it("resolves a user-scoped board URI without a resolveOwner round-trip", async () => {
+      // URI encodes owner+kind directly; the mock has no user/org lookup response
+      const responses = [
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) }, // project #1 under mfittko
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsResponse([]) },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "https://github.com/users/mfittko/projects/1" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.items.length, 0);
+    });
+
+    it("resolves an org-scoped board URI without a resolveOwner round-trip", async () => {
+      const orgProject = {
+        id: "PVT_orgproj",
+        number: 3,
+        title: "Org Queue",
+        url: "https://github.com/orgs/myorg/projects/3",
+      };
+      const responses = [
+        { payload: listOrgProjectsResponse([orgProject]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsResponse([]) },
+      ];
+      const result = await main(
+        { repo: "myorg/repo", project: "https://github.com/orgs/myorg/projects/3" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+    });
+
+    it("throws INVALID_PROJECT for a non-board github URL", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "https://github.com/users/mfittko/repos" },
+          { env: {}, runChild: mockRunChild([]) },
+        ),
+        (err) => err.code === "INVALID_PROJECT",
+      );
     });
 
     it("supports paginated project listing", async () => {
