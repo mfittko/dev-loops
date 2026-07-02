@@ -1,6 +1,15 @@
 import { loadBoardConfig, resolveProjectNumber } from "./queue-board-sync.mjs";
 import { main as listQueueItemsMain } from "../../../../scripts/projects/list-queue-items.mjs";
 
+// Canonical fail-closed Next Up tokens — the SINGLE source of truth so the reason
+// codes and the empty-queue message stay byte-identical across every layer that
+// detects them (queue-driver, run-queue, resolve-active-board-item). These strings
+// drifted twice before centralization (#1091); import them, never re-inline them.
+export const REASON_NEXT_UP_EMPTY = "next-up-empty";
+export const REASON_BOARD_QUERY_ERROR = "board-query-error";
+export const REASON_NEXT_UP_TARGET_MISSING_LOCALLY = "next-up-target-missing-locally";
+export const EMPTY_NEXT_UP_MESSAGE = "queue empty — prioritize Backlog items into Next Up";
+
 /**
  * Resolve the board's "Next Up" pickup order (issue #1091).
  *

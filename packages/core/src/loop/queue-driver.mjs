@@ -20,7 +20,13 @@ import {
   boardColumnForLoopState,
   loadStateColumnMap,
 } from "./queue-board-sync.mjs";
-import { resolveNextUpOrder } from "./queue-board-ordering.mjs";
+import {
+  resolveNextUpOrder,
+  REASON_NEXT_UP_EMPTY,
+  REASON_BOARD_QUERY_ERROR,
+  REASON_NEXT_UP_TARGET_MISSING_LOCALLY,
+  EMPTY_NEXT_UP_MESSAGE,
+} from "./queue-board-ordering.mjs";
 
 export const DEFAULT_QUEUE_DRIVER_OPTIONS = {
   mergeAuthorized: false,
@@ -111,7 +117,7 @@ export async function runQueue(repoRoot, repo, options = {}) {
     return {
       ok: false,
       stopped: true,
-      reason: "board-query-error",
+      reason: REASON_BOARD_QUERY_ERROR,
       message: `Next Up query failed (${ordering.reason}); refusing to fall back to Backlog/local order`,
       error: ordering.reason ?? "board query failed",
       results: [],
@@ -131,8 +137,8 @@ export async function runQueue(repoRoot, repo, options = {}) {
     return {
       ok: true,
       idle: true,
-      reason: "next-up-empty",
-      message: "queue empty — prioritize Backlog items into Next Up",
+      reason: REASON_NEXT_UP_EMPTY,
+      message: EMPTY_NEXT_UP_MESSAGE,
       results: [],
       queue,
       ordering,
@@ -151,7 +157,7 @@ export async function runQueue(repoRoot, repo, options = {}) {
       return {
         ok: false,
         stopped: true,
-        reason: "next-up-target-missing-locally",
+        reason: REASON_NEXT_UP_TARGET_MISSING_LOCALLY,
         missingTargets,
         message:
           "Next Up contains items with no local queue entry — run membership reconcile / re-add them",

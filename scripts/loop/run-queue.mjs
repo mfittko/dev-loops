@@ -21,6 +21,14 @@ import { readQueue } from "@dev-loops/core/loop/queue-state";
 import { reconcileBoardMembership } from "@dev-loops/core/loop/queue-membership";
 import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
 import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad } from "@dev-loops/core/config";
+// Relative import (not the @dev-loops/core specifier): the canonical tokens live
+// in core's queue-board-ordering, which itself imports scripts by relative path
+// — the same in-tree cross-boundary the module already uses. (#1091)
+import {
+  REASON_NEXT_UP_EMPTY,
+  REASON_BOARD_QUERY_ERROR,
+  EMPTY_NEXT_UP_MESSAGE,
+} from "../../packages/core/src/loop/queue-board-ordering.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -131,9 +139,9 @@ async function main() {
       ok: true,
       // Canonical empty-Next-Up outcome — matches queue-driver.mjs so operators
       // see one message regardless of which layer detects it.
-      message: "queue empty — prioritize Backlog items into Next Up",
+      message: EMPTY_NEXT_UP_MESSAGE,
       boardConfigured: true,
-      reason: "next-up-empty",
+      reason: REASON_NEXT_UP_EMPTY,
       results: [],
     }));
     return;
@@ -148,7 +156,7 @@ async function main() {
     console.log(JSON.stringify({
       ok: false,
       stopped: true,
-      reason: "board-query-error",
+      reason: REASON_BOARD_QUERY_ERROR,
       message: `Next Up query failed (${membership.reason}); refusing to fall back to Backlog/local order — nothing to run`,
       boardConfigured: true,
       results: [],

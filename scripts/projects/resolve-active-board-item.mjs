@@ -18,12 +18,16 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
+// Relative import (not the @dev-loops/core specifier): the canonical tokens live
+// in core's queue-board-ordering, which in turn imports scripts by relative path
+// — this is the same in-tree cross-boundary the module already uses. (#1091)
+import { EMPTY_NEXT_UP_MESSAGE } from "../../packages/core/src/loop/queue-board-ordering.mjs";
 
 const IN_PROGRESS_COLUMN = "In Progress";
 const NEXT_UP_COLUMN = "Next Up";
 // Canonical fail-closed empty-queue message — matches queue-driver.mjs so
 // operators see one string regardless of which layer detects it (#1091).
-const EMPTY_QUEUE_REASON = "queue empty — prioritize Backlog items into Next Up";
+const EMPTY_QUEUE_REASON = EMPTY_NEXT_UP_MESSAGE;
 
 const USAGE = `Usage: dev-loops queue resolve-active --repo <owner/name> --project <number|id>
 
@@ -131,16 +135,11 @@ function itemToTarget(item) {
     : { kind: "issue", number: item.issueNumber };
 }
 
-// Collapse the "In Progress" column to a single continue target. Zero is handled
-// by the caller (it falls through to Next Up); this only decides among the
-// in-progress items and never guesses when there is more than one.
+// Collapse the "In Progress" column to a single continue target. The caller only
+// invokes this with a NON-EMPTY column (zero In Progress falls through to
+// resolveNextUpHead in main()), so this only decides among the in-progress items
+// and never guesses when there is more than one.
 function collapseToTarget(items) {
-  if (items.length === 0) {
-    return {
-      ok: false,
-      reason: `No in-progress board item to continue. Pass an explicit issue/PR, e.g. \`/loop-continue #N\`.`,
-    };
-  }
   if (items.length > 1) {
     const listed = items.map(describeItem).join(", ");
     return {
