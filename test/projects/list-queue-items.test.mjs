@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { main } from "../../scripts/projects/list-queue-items.mjs";
+import { main, parseCliArgs } from "../../scripts/projects/list-queue-items.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -556,6 +556,138 @@ describe("list-queue-items", () => {
       assert.equal(result.ok, true);
       assert.equal(result.items.length, 1);
       assert.equal(result.items[0].issueNumber, 20);
+    });
+  });
+
+  describe("summary mode — grouped by status", () => {
+    function summaryResponses(items) {
+      return [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsResponse(items) },
+      ];
+    }
+
+    const SAMPLE_ITEMS = [
+      makeItem("PVTI_1", "I_1", "Issue", 10, "A", "https://github.com/mfittko/repo/issues/10", "Backlog"),
+      makeItem("PVTI_2", "I_2", "Issue", 20, "B", "https://github.com/mfittko/repo/issues/20", "Backlog"),
+      makeItem("PVTI_3", "PR_3", "PullRequest", 30, "C", "https://github.com/mfittko/repo/pull/30", "In Progress"),
+      makeItem("PVTI_4", "I_4", "Issue", 40, "D", "https://github.com/mfittko/repo/issues/40", "Done"),
+      makeItem("PVTI_5", "I_5", "Issue", 50, "E", "https://github.com/mfittko/repo/issues/50", "Done"),
+      makeItem("PVTI_6", "I_6", "Issue", 60, "F", "https://github.com/mfittko/repo/issues/60", "Done"),
+      makeItem("PVTI_7", "I_7", "Issue", 70, "G", "https://github.com/mfittko/repo/issues/70", null),
+    ];
+
+    it("groups items by status with counts; empty column present with count 0", async () => {
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", summary: true },
+        { env: {}, runChild: mockRunChild(summaryResponses(SAMPLE_ITEMS)) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.items, undefined);
+      assert.equal(result.groups.Backlog.count, 2);
+      assert.equal(result.groups.Backlog.items.length, 2);
+      assert.equal(result.groups.Backlog.items[0].issueNumber, 10);
+      // "Next Up" exists on the board but has no items
+      assert.equal(result.groups["Next Up"].count, 0);
+      assert.deepEqual(result.groups["Next Up"].items, []);
+      assert.equal(result.groups["In Progress"].count, 1);
+      assert.equal(result.groups["In Progress"].items[0].prNumber, 30);
+      assert.equal(result.groups.Done.count, 3);
+      assert.equal(result.groups.Done.items.length, 3);
+    });
+
+    it("null-status items are not placed in any group", async () => {
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", summary: true },
+        { env: {}, runChild: mockRunChild(summaryResponses(SAMPLE_ITEMS)) },
+      );
+      const total = Object.values(result.groups).reduce((s, g) => s + g.count, 0);
+      assert.equal(total, 6); // 7 items minus the 1 null-status item
+    });
+
+    it("groups are keyed in board Status-option order", async () => {
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", summary: true },
+        { env: {}, runChild: mockRunChild(summaryResponses(SAMPLE_ITEMS)) },
+      );
+      assert.deepEqual(
+        Object.keys(result.groups),
+        STATUS_FIELD.options.map((o) => o.name),
+      );
+    });
+
+    it("--done-limit caps Done items but not its count; other columns unaffected", async () => {
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", summary: true, doneLimit: 1 },
+        { env: {}, runChild: mockRunChild(summaryResponses(SAMPLE_ITEMS)) },
+      );
+      assert.equal(result.groups.Done.count, 3);
+      assert.equal(result.groups.Done.items.length, 1);
+      assert.equal(result.groups.Backlog.count, 2);
+      assert.equal(result.groups.Backlog.items.length, 2);
+    });
+
+    it("--done-limit 0 yields Done count>0 with empty items", async () => {
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", summary: true, doneLimit: 0 },
+        { env: {}, runChild: mockRunChild(summaryResponses(SAMPLE_ITEMS)) },
+      );
+      assert.equal(result.groups.Done.count, 3);
+      assert.deepEqual(result.groups.Done.items, []);
+    });
+
+    it("rejects --summary with --column", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", summary: true, column: "Backlog" },
+          { env: {}, runChild: mockRunChild(summaryResponses(SAMPLE_ITEMS)) },
+        ),
+        (err) => err.code === "INVALID_ARGS" && /mutually exclusive/.test(err.message),
+      );
+    });
+
+    it("rejects --summary with --limit", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", summary: true, limit: 5 },
+          { env: {}, runChild: mockRunChild(summaryResponses(SAMPLE_ITEMS)) },
+        ),
+        (err) => err.code === "INVALID_ARGS" && /mutually exclusive/.test(err.message),
+      );
+    });
+
+    it("rejects --done-limit without --summary", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", doneLimit: 5 },
+          { env: {}, runChild: mockRunChild(summaryResponses(SAMPLE_ITEMS)) },
+        ),
+        (err) => err.code === "INVALID_ARGS",
+      );
+    });
+
+    it("--group-by status parses to summary mode", () => {
+      const args = parseCliArgs(["--repo", "o/r", "--project", "1", "--group-by", "status"]);
+      assert.equal(args.summary, true);
+    });
+
+    it("--summary parses as boolean flag", () => {
+      const args = parseCliArgs(["--repo", "o/r", "--project", "1", "--summary"]);
+      assert.equal(args.summary, true);
+    });
+
+    it("--group-by with unsupported value throws usage error", () => {
+      assert.throws(
+        () => parseCliArgs(["--repo", "o/r", "--project", "1", "--group-by", "assignee"]),
+        /only supports "status"/,
+      );
+    });
+
+    it("--done-limit parses non-negative integer including 0", () => {
+      const args = parseCliArgs(["--repo", "o/r", "--project", "1", "--summary", "--done-limit", "0"]);
+      assert.equal(args.doneLimit, 0);
     });
   });
 
