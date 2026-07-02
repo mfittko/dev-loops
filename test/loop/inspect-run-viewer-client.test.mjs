@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -31,7 +32,7 @@ import {
   REVIEWER_STATE,
   REVIEWER_TRANSITIONS,
 } from "../../packages/core/src/loop/reviewer-loop-state.mjs";
-import { resolveMermaidBrowserAssetPath } from "../../scripts/loop/inspect-run-viewer/constants.mjs";
+import { MERMAID_BROWSER_ASSET_PATH } from "../../scripts/loop/inspect-run-viewer/constants.mjs";
 import { makeSnapshot } from "./inspect-run-viewer-test-helpers.mjs";
 test("createInspectionViewerAdapter loadSnapshot validates target deterministically", async () => {
   const adapter = createInspectionViewerAdapter({
@@ -405,25 +406,14 @@ test("buildInspectionMermaidGraph normalizes and de-duplicates transition tokens
   assert.match(html, /copilot layer:[\s\S]*full authoritative state machine shown; waiting_for_ci, ready_to_rerequest_review/);
   assert.doesNotMatch(html, /waiting_for_ci,\s*waiting_for_ci/);
 });
-test("resolveMermaidBrowserAssetPath prefers module resolution when available", () => {
-  const resolvedPath = resolveMermaidBrowserAssetPath({
-    resolveImpl: (specifier) => {
-      assert.equal(specifier, "mermaid/dist/mermaid.min.js");
-      return "/tmp/custom-mermaid/mermaid.min.js";
-    },
-  });
-
-  assert.equal(resolvedPath, "/tmp/custom-mermaid/mermaid.min.js");
-});
-
-test("resolveMermaidBrowserAssetPath falls back to the repo-relative mermaid asset path", () => {
-  const resolvedPath = resolveMermaidBrowserAssetPath({
-    resolveImpl: () => {
-      throw new Error("module resolution unavailable");
-    },
-  });
-
-  assert.match(resolvedPath, /node_modules[\\/]mermaid[\\/]dist[\\/]mermaid\.min\.js$/);
+test("MERMAID_BROWSER_ASSET_PATH points at the vendored mermaid bundle and the file matches the mermaid@11.15.0 pin", async () => {
+  assert.match(MERMAID_BROWSER_ASSET_PATH, /scripts[\\/]loop[\\/]inspect-run-viewer[\\/]vendor[\\/]mermaid\.min\.js$/);
+  const assetStat = await stat(MERMAID_BROWSER_ASSET_PATH);
+  assert.ok(assetStat.isFile());
+  // sha256 of mermaid@11.15.0 dist/mermaid.min.js — the vendored bundle pin.
+  const MERMAID_11_15_0_DIST_SHA256 = "70137e77bb273bb2ef972b86e8b0400cca8be53cb25bfc45911a186dc98665de";
+  const digest = createHash("sha256").update(await readFile(MERMAID_BROWSER_ASSET_PATH)).digest("hex");
+  assert.equal(digest, MERMAID_11_15_0_DIST_SHA256);
 });
 test("loadMermaidBrowserScript clears failed cache entries so later retries can recover", async () => {
   let callCount = 0;

@@ -19,7 +19,8 @@ test("package metadata exposes the extension entrypoint and root extension test 
   assert.match(packageJson.scripts["test:extension"], /extension-post-merge-update/);
   assert.match(packageJson.scripts["test:extension"], /extension-command-contract/);
   assert.match(packageJson.scripts["test:extension"], /extension-package-contract/);
-  assert.equal(packageJson.dependencies.mermaid, "11.15.0");
+  assert.equal(typeof packageJson.dependencies, "object");
+  assert.ok(!("mermaid" in packageJson.dependencies), "mermaid is vendored (#1089); must not be a runtime dependency");
   assert.deepEqual(packageJson.pi.skills, ["skills"]);
   assert.deepEqual(packageJson.pi.agents, ["agents"]);
 });

@@ -71,7 +71,6 @@
     ]
   },
   "dependencies": {
-    "mermaid": "11.15.0",
     "@dev-loops/core": "^0.6.0"
   },
   "repository": {
