@@ -182,6 +182,152 @@ test("decideBashGate evaluates each gh pr create segment's scope (multi-create b
   );
 });
 
+// --- subagent-scoped external-write guard (#1051) ---
+
+const SUB = "dev-loop"; // any non-null agent_type = subagent context
+
+test("decideBashGate denies raw gh issue create from a subagent on the target repo", () => {
+  const d = decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET, agentType: SUB });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /Ad-hoc GitHub issue\/PR creation/);
+});
+
+test("decideBashGate ALLOWS raw gh issue create from the MAIN agent (agentType null) — AC3", () => {
+  assert.equal(decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET }).decision, "allow");
+  assert.equal(
+    decideBashGate({ command: "gh issue create --title x", repoSlug: TARGET, agentType: null }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate denies raw gh issue/pr comment from a subagent on the target repo", () => {
+  assert.equal(
+    decideBashGate({ command: "gh issue comment 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashGate({ command: "gh pr comment 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate allows subagent gh issue create with an explicit non-target --repo", () => {
+  assert.equal(
+    decideBashGate({ command: "gh issue create --repo other/repo --title x", repoSlug: TARGET, agentType: SUB }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate denies subagent gh issue create --repo targeting the repo regardless of cwd", () => {
+  assert.equal(
+    decideBashGate({ command: `gh issue create --repo ${TARGET} --title x`, repoSlug: null, agentType: SUB }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashGate({ command: `gh issue create --repo ${TARGET} --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate denies subagent gh issue create redirected via inline GH_REPO= to the target (#1074)", () => {
+  // GH_REPO= (no --repo flag) targets the repo → the off-cwd redirect hole is closed.
+  assert.equal(
+    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --title x`, repoSlug: null, agentType: SUB }).decision,
+    "deny",
+  );
+  // quoted GH_REPO value is normalized before the scope compare.
+  assert.equal(
+    decideBashGate({ command: `GH_REPO='${TARGET}' gh issue create --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate: explicit --repo wins over GH_REPO; non-target GH_REPO passes through (#1074)", () => {
+  // flag precedence: --repo other/repo overrides GH_REPO=target → off-target → allow.
+  assert.equal(
+    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --repo other/repo --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    "allow",
+  );
+  // GH_REPO=non-target from a non-target cwd → off-target → allow.
+  assert.equal(
+    decideBashGate({ command: "GH_REPO=other/repo gh issue create --title x", repoSlug: "someone/else", agentType: SUB }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate allows the comment-issue.mjs wrapper even from a subagent", () => {
+  assert.equal(
+    decideBashGate({ command: "node scripts/github/comment-issue.mjs 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    "allow",
+  );
+  assert.equal(
+    decideBashGate({ command: "node scripts/github/upsert-checkpoint-verdict.mjs --pr 5", repoSlug: TARGET, agentType: SUB }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate denies subagent external write hidden behind compound/newline/env bypasses", () => {
+  assert.equal(
+    decideBashGate({ command: "git push && gh issue create --title x", repoSlug: TARGET, agentType: SUB }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashGate({ command: "echo hi\ngh issue create --title x", repoSlug: TARGET, agentType: SUB }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashGate({ command: "GH_TOKEN=x gh issue comment 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate passes through subagent external write off-target / no target --repo", () => {
+  assert.equal(
+    decideBashGate({ command: "gh issue create --title x", repoSlug: "someone/else", agentType: SUB }).decision,
+    "allow",
+  );
+  assert.equal(
+    decideBashGate({ command: "gh issue create --title x", repoSlug: null, agentType: SUB }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate does not let a leading out-of-scope external write shield a later in-scope one", () => {
+  assert.equal(
+    decideBashGate({ command: "gh issue create --repo other/repo && gh issue comment 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate treats an EMPTY-STRING agent_type as subagent context (non-null) — denies on target (#1074)", () => {
+  assert.equal(
+    decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET, agentType: "" }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate denies subagent gh issue create with a QUOTED target --repo (#1074)", () => {
+  assert.equal(
+    decideBashGate({ command: `gh issue create --repo '${TARGET}' --title x`, repoSlug: null, agentType: SUB }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashGate({ command: `gh issue create --repo "${TARGET}" --title x`, repoSlug: null, agentType: SUB }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate denies gh pr create with a QUOTED target --repo (#1074)", () => {
+  assert.equal(
+    decideBashGate({ command: `gh pr create --repo '${TARGET}' --fill`, repoSlug: null }).decision,
+    "deny",
+  );
+});
+
 test("decideBashGate does not let an out-of-scope gh pr create short-circuit ready/merge gating", () => {
   // An out-of-scope `--repo other/repo` create must not own the decision when a gated
   // ready/merge segment rides along in the same compound command — the merge/ready segment

@@ -18,6 +18,8 @@ import {
   extractRepoFlagFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrCreateAnywhere,
   extractRepoFlagsFromGhPrCreateSegments,
+  commandContainsRawExternalWrite,
+  extractRepoFlagsFromExternalWriteSegments,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -130,6 +132,107 @@ test("extractRepoFlagsFromGhPrCreateSegments returns every create segment's --re
     [{ segment: "gh pr create --repo=a/b", explicitRepo: "a/b" }],
   );
   assert.deepEqual(extractRepoFlagsFromGhPrCreateSegments("echo hi"), []);
+});
+
+test("commandContainsRawExternalWrite detects raw issue/pr create+comment in any segment", () => {
+  assert.equal(commandContainsRawExternalWrite("gh issue create --title x --body y"), true);
+  assert.equal(commandContainsRawExternalWrite("gh issue comment 5 --body hi"), true);
+  assert.equal(commandContainsRawExternalWrite("gh pr comment 5 --body hi"), true);
+  assert.equal(commandContainsRawExternalWrite("git push && gh issue create --title x"), true);
+  // --help is not a write
+  assert.equal(commandContainsRawExternalWrite("gh issue create --help"), false);
+  assert.equal(commandContainsRawExternalWrite("gh issue comment --help"), false);
+  // node wrappers never match — first token is `node`, not `gh`
+  assert.equal(commandContainsRawExternalWrite("node scripts/github/comment-issue.mjs 5 --body hi"), false);
+  assert.equal(commandContainsRawExternalWrite("node scripts/github/upsert-checkpoint-verdict.mjs"), false);
+  // pr create / issue view etc. are not external-write forms here
+  assert.equal(commandContainsRawExternalWrite("gh pr create --fill"), false);
+  assert.equal(commandContainsRawExternalWrite("gh issue view 5"), false);
+});
+
+test("commandContainsRawExternalWrite catches newline/env/wrapper/path prefixes", () => {
+  assert.equal(commandContainsRawExternalWrite("echo hi\ngh issue create --title x"), true);
+  assert.equal(commandContainsRawExternalWrite("GH_TOKEN=x gh issue create --title x"), true);
+  assert.equal(commandContainsRawExternalWrite("command gh pr comment 5 --body hi"), true);
+  assert.equal(commandContainsRawExternalWrite("/usr/bin/gh issue comment 5 --body hi"), true);
+});
+
+test("extractRepoFlagsFromExternalWriteSegments returns per-segment --repo across all verb forms", () => {
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh issue create --repo other/repo && gh issue comment 5 --body hi"),
+    [
+      { segment: "gh issue create --repo other/repo", explicitRepo: "other/repo" },
+      { segment: "gh issue comment 5 --body hi", explicitRepo: null },
+    ],
+  );
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh pr comment 5 --repo=a/b --body hi"),
+    [{ segment: "gh pr comment 5 --repo=a/b --body hi", explicitRepo: "a/b" }],
+  );
+  // short `-R` form (bare + `=`) is honored just like `--repo`
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh issue create -R other/repo --title x"),
+    [{ segment: "gh issue create -R other/repo --title x", explicitRepo: "other/repo" }],
+  );
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh pr comment 5 -R=other/repo --body hi"),
+    [{ segment: "gh pr comment 5 -R=other/repo --body hi", explicitRepo: "other/repo" }],
+  );
+  // --help excluded; wrapper ignored
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh issue create --help && node scripts/github/comment-issue.mjs 5"),
+    [],
+  );
+  assert.deepEqual(extractRepoFlagsFromExternalWriteSegments("echo hi"), []);
+});
+
+test("repo extractors strip a single surrounding quote pair from the --repo value (#1074)", () => {
+  // external-write extractor (shared subcmd path)
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh issue create --repo 'other/repo' --title x"),
+    [{ segment: "gh issue create --repo 'other/repo' --title x", explicitRepo: "other/repo" }],
+  );
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments(`gh issue create --repo "other/repo" --title x`),
+    [{ segment: `gh issue create --repo "other/repo" --title x`, explicitRepo: "other/repo" }],
+  );
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh pr comment 5 -R='other/repo' --body hi"),
+    [{ segment: "gh pr comment 5 -R='other/repo' --body hi", explicitRepo: "other/repo" }],
+  );
+  // pr create/ready/merge extractor (the other tokenizer)
+  assert.equal(extractRepoFlagFromGhPrReady("gh pr ready --repo 'other/repo' 1"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrReady(`gh pr ready --repo="other/repo" 1`), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("gh pr create --repo 'other/repo' --fill"), "other/repo");
+  // mismatched / partial quotes are NOT stripped (single balanced pair only)
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments(`gh issue create --repo 'other/repo" --title x`),
+    [{ segment: `gh issue create --repo 'other/repo" --title x`, explicitRepo: `'other/repo"` }],
+  );
+  assert.equal(extractRepoFlagFromGhPrReady("gh pr ready --repo 'other/repo 1"), "'other/repo");
+});
+
+test("repo extractors honor an inline GH_REPO= env assignment as the effective repo (#1074)", () => {
+  // external-write path: GH_REPO= (no --repo flag) is the segment's effective repo.
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("GH_REPO=mfittko/dev-loops gh issue create --title x"),
+    [{ segment: "GH_REPO=mfittko/dev-loops gh issue create --title x", explicitRepo: "mfittko/dev-loops" }],
+  );
+  // quoted GH_REPO value is normalized.
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("GH_REPO='mfittko/dev-loops' gh issue create --title x"),
+    [{ segment: "GH_REPO='mfittko/dev-loops' gh issue create --title x", explicitRepo: "mfittko/dev-loops" }],
+  );
+  // explicit --repo/-R wins over GH_REPO (gh's own precedence — the flag overrides the env).
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("GH_REPO=mfittko/dev-loops gh issue create --repo other/repo --title x"),
+    [{ segment: "GH_REPO=mfittko/dev-loops gh issue create --repo other/repo --title x", explicitRepo: "other/repo" }],
+  );
+  // pr create/ready/merge tokenizer gets GH_REPO too (shared root-cause fix).
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("GH_REPO=mfittko/dev-loops gh pr create --fill"), "mfittko/dev-loops");
+  assert.equal(extractRepoFlagFromGhPrReady("GH_REPO=other/repo gh pr ready 1"), "other/repo");
+  // flag wins here as well.
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("GH_REPO=mfittko/dev-loops gh pr create --repo other/repo"), "other/repo");
 });
 
 test("gate detects gh pr create behind a newline separator", () => {

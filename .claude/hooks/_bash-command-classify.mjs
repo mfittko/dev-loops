@@ -24,6 +24,44 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  */
 const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||\n|\r)\s*/;
 
+/**
+ * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
+ * A repo flag value may reach us quoted (`--repo 'owner/name'`); the scope check compares against
+ * the bare slug, so quotes must be normalized or a quoted on-target repo evades the guard (#1074).
+ * ponytail: single balanced pair only — no full shell tokenization (mismatched/partial quotes stay).
+ * @param {string|null} value @returns {string|null}
+ */
+function stripSurroundingQuotes(value) {
+  if (value == null || value.length < 2) return value;
+  const first = value[0];
+  if ((first === "'" || first === '"') && value[value.length - 1] === first) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+/**
+ * Read an inline `GH_REPO=<value>` env-assignment prefix on a single command segment.
+ * `gh` resolves its target repo from the `GH_REPO` env var, and a segment may set it inline
+ * (`GH_REPO=owner/name gh issue create …`) — same targeting intent as `--repo owner/name`, so the
+ * scope check must treat it the same or an off-cwd redirect evades the guard (#1074). Only the
+ * FIRST leading env assignment matching `GH_REPO=` is read (env assignments precede the executable);
+ * the value is quote-normalized. Ambient `process.env.GH_REPO` is out of scope — this is a static
+ * command-string classifier, so only the inline assignment in the string is considered.
+ * @param {string} segment @returns {string|null}
+ */
+function extractGhRepoEnvAssignment(segment) {
+  if (!segment) return null;
+  for (const token of segment.trim().split(/\s+/)) {
+    const assign = token.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!assign) break; // first non-assignment token ends the env-assignment prefix
+    if (assign[1] === "GH_REPO") {
+      return trimToNull(stripSurroundingQuotes(assign[2]));
+    }
+  }
+  return null;
+}
+
 /** @param {string|null|undefined} value @returns {string|null} */
 export function trimToNull(value) {
   const trimmed = `${value ?? ""}`.trim();
@@ -117,22 +155,29 @@ function shellSegments(command) {
 const GH_PR_VERB_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env|exec)\\s+)*(?:\\S*/)?";
 
 /**
- * Build the `gh pr <verb>` prefix matcher for a `gh pr <verb>` subcommand.
+ * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").
  * Tolerates a leading env-assignment/wrapper/path prefix so `GH_TOKEN=x gh pr create`,
- * `command gh pr create`, and `/usr/bin/gh pr create` are all matched. The same regex
+ * `command gh issue create`, and `/usr/bin/gh pr create` are all matched. The same regex
  * is reused to strip the matched prefix (`segment.replace(re, "")`), so remainder
- * extraction stays consistent across all matcher/extractor call sites.
+ * extraction stays consistent across all matcher/extractor call sites. The `gh` prefix
+ * requirement means node-wrapper commands (`node scripts/github/comment-issue.mjs …`) never
+ * match — their first token is `node`, not `gh`.
  */
+function ghSubcmdVerbRegex(subcmd, verb) {
+  return new RegExp(`^${GH_PR_VERB_PREFIX}gh\\s+${subcmd}\\s+${verb}(?:\\s|$)`, "i");
+}
+
+/** Build the `gh pr <verb>` prefix matcher — delegates to the generic subcmd matcher (DRY). */
 function ghPrVerbRegex(verb) {
-  return new RegExp(`^${GH_PR_VERB_PREFIX}gh\\s+pr\\s+${verb}(?:\\s|$)`, "i");
+  return ghSubcmdVerbRegex("pr", verb);
 }
 
 /**
- * Return the first segment in the command that is a `gh pr <verb>` call (ignoring --help/-h),
- * or null. Scans ALL segments so compound commands (`echo ok && gh pr merge 1`) are caught.
+ * Return the first segment in the command that is a `gh <subcmd> <verb>` call (ignoring
+ * --help/-h), or null. Scans ALL segments so compound commands are caught.
  */
-function findGhPrVerbSegment(command, verb) {
-  const re = ghPrVerbRegex(verb);
+function findGhSubcmdVerbSegment(command, subcmd, verb) {
+  const re = ghSubcmdVerbRegex(subcmd, verb);
   for (const segment of shellSegments(command)) {
     if (!re.test(segment)) continue;
     const remainder = segment.replace(re, "").trim();
@@ -141,6 +186,94 @@ function findGhPrVerbSegment(command, verb) {
     if (!args.includes("--help") && !args.includes("-h")) return segment;
   }
   return null;
+}
+
+/**
+ * Extract the `--repo`/`-R` flag value from an already-isolated `gh <subcmd> <verb>` segment.
+ * @param {string} segment @param {string} subcmd @param {string} verb @returns {string|null}
+ */
+function extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) {
+  const re = ghSubcmdVerbRegex(subcmd, verb);
+  if (!segment || !re.test(segment)) return null;
+  const remainder = segment.replace(re, "").trim();
+  if (!remainder) return null;
+  const tokens = remainder.split(/\s+/);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const lower = token.toLowerCase();
+    if (lower === "-r" || lower === "--repo") {
+      if (i + 1 < tokens.length && !tokens[i + 1].startsWith("-")) return stripSurroundingQuotes(tokens[i + 1]);
+    }
+    const repoEqMatch = token.match(/^(?:--repo|-R)=(.+)$/i);
+    if (repoEqMatch) return stripSurroundingQuotes(repoEqMatch[1]);
+  }
+  // No explicit --repo/-R flag: fall back to an inline GH_REPO= env assignment (flag wins,
+  // mirroring gh's own precedence). This closes the GH_REPO repo-targeting bypass (#1074).
+  return extractGhRepoEnvAssignment(segment);
+}
+
+/**
+ * Return one `{ segment, explicitRepo }` entry for EVERY `gh <subcmd> <verb>` segment (ignoring
+ * --help/-h). Mirrors `extractRepoFlagsFromGhPrCreateSegments`.
+ * @param {string} command @param {string} subcmd @param {string} verb
+ * @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+function extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb) {
+  const re = ghSubcmdVerbRegex(subcmd, verb);
+  const out = [];
+  for (const segment of shellSegments(command)) {
+    if (!re.test(segment)) continue;
+    const remainder = segment.replace(re, "").trim();
+    if (remainder) {
+      const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
+      if (args.includes("--help") || args.includes("-h")) continue;
+    }
+    out.push({ segment, explicitRepo: extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) });
+  }
+  return out;
+}
+
+/**
+ * The raw external-write verb forms that must be blocked when originating from a subagent:
+ * ad-hoc GitHub issue/PR creation and comments run directly via `gh` (not the sanctioned node
+ * wrappers). Each entry is `[subcmd, verb]`.
+ */
+const EXTERNAL_WRITE_VERB_FORMS = Object.freeze([
+  ["issue", "create"],
+  ["issue", "comment"],
+  ["pr", "comment"],
+]);
+
+/**
+ * Whether `command` contains a raw `gh issue create`, `gh issue comment`, or `gh pr comment`
+ * invocation in ANY shell segment (ignoring --help/-h). PreToolUse gate use only — the gate
+ * blocks these when they originate from a subagent context. Node-wrapper commands
+ * (`node scripts/github/comment-issue.mjs …`) never match (first token is `node`, not `gh`).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsRawExternalWrite(command) {
+  return EXTERNAL_WRITE_VERB_FORMS.some(([subcmd, verb]) => findGhSubcmdVerbSegment(command, subcmd, verb) !== null);
+}
+
+/**
+ * Return `{ segment, explicitRepo }` for every raw external-write segment across all three verb
+ * forms (`gh issue create` / `gh issue comment` / `gh pr comment`). PreToolUse gate use only —
+ * lets the gate decide in-scope-ness per segment so a leading out-of-scope write can't shield a
+ * later in-scope one. `explicitRepo` is the segment's `--repo`/`-R` value or null.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromExternalWriteSegments(command) {
+  return EXTERNAL_WRITE_VERB_FORMS.flatMap(([subcmd, verb]) =>
+    extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb),
+  );
+}
+
+/**
+ * Return the first segment in the command that is a `gh pr <verb>` call (ignoring --help/-h),
+ * or null. Scans ALL segments so compound commands (`echo ok && gh pr merge 1`) are caught.
+ */
+function findGhPrVerbSegment(command, verb) {
+  return findGhSubcmdVerbSegment(command, "pr", verb);
 }
 
 /**
@@ -206,15 +339,18 @@ function extractRepoFlagFromSegment(segment, verb) {
     const lower = token.toLowerCase();
     if (lower === "-r" || lower === "--repo") {
       if (i + 1 < tokens.length && !tokens[i + 1].startsWith("-")) {
-        return tokens[i + 1];
+        return stripSurroundingQuotes(tokens[i + 1]);
       }
     }
     const repoEqMatch = token.match(/^(?:--repo|-R)=(.+)$/i);
     if (repoEqMatch) {
-      return repoEqMatch[1];
+      return stripSurroundingQuotes(repoEqMatch[1]);
     }
   }
-  return null;
+  // No explicit --repo/-R flag: fall back to an inline GH_REPO= env assignment (flag wins,
+  // mirroring gh's own precedence). Applied here too so gh pr ready/merge/create scope checks get
+  // consistent GH_REPO handling — the root-cause fix, not just the external-write path (#1074).
+  return extractGhRepoEnvAssignment(segment);
 }
 
 /** First-segment extractor for `gh pr <verb>` PR number — Pi extension public API. */
@@ -318,18 +454,7 @@ export function extractRepoFlagFromGhPrCreateAnywhere(command) {
  * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
  */
 export function extractRepoFlagsFromGhPrCreateSegments(command) {
-  const re = ghPrVerbRegex("create");
-  const out = [];
-  for (const segment of shellSegments(command)) {
-    if (!re.test(segment)) continue;
-    const remainder = segment.replace(re, "").trim();
-    if (remainder) {
-      const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
-      if (args.includes("--help") || args.includes("-h")) continue;
-    }
-    out.push({ segment, explicitRepo: extractRepoFlagFromSegment(segment, "create") });
-  }
-  return out;
+  return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "create");
 }
 
 /** @param {string} command @returns {number|null} */
