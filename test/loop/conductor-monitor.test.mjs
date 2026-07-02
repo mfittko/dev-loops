@@ -349,6 +349,49 @@ test("conductor-monitor --auto-resume ignores invalid async JSON side artifacts 
   }
 });
 
+test("conductor-monitor --auto-resume ignores malformed session artifact meta JSON instead of crashing the scan", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-invalid-meta-json-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const badArtifactsDir = path.join(sessionsRoot, "2026-06-03T00-00-00-000Z_session", "subagent-artifacts");
+    await mkdir(badArtifactsDir, { recursive: true });
+    await writeFile(path.join(badArtifactsDir, "run-bad-meta-99_dev-loop_0_meta.json"), "{not valid json\n", "utf8");
+    await writeFile(path.join(badArtifactsDir, "run-bad-meta-99_dev-loop_0_output.md"), "Active PR: owner/repo#99\n", "utf8");
+
+    const env = await writeGhStub(tempDir, buildGhEntries({
+      prs: [{ number: 44, requestCopilot: true }],
+    }));
+
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    assert.equal(payload.queueStatus, "monitoring");
+    assert.equal(payload.resumePlanCount, 0);
+    assert.equal(payload.manualAttentionCount, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume ignores malformed async result JSON instead of crashing the scan", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-invalid-result-json-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    await writeFile(path.join(asyncResultsRoot, "run-bad-result-45.json"), "{not valid json\n", "utf8");
+
+    const env = await writeGhStub(tempDir, buildGhEntries({
+      prs: [{ number: 45, requestCopilot: true }],
+    }));
+
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    assert.equal(payload.queueStatus, "monitoring");
+    assert.equal(payload.resumePlanCount, 0);
+    assert.equal(payload.manualAttentionCount, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("conductor-monitor flags unresolved-feedback PRs as needing attention while preserving pending waits", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-attention-"));
   const mixedThreadsFixture = await readFile(mixedThreadsFixturePath, "utf8");
