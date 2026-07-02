@@ -79,10 +79,7 @@ workflow:
   # comment → comment-issue.mjs; #993 wrapped the remaining three on top of #981),
   # so a clean tooling record (no agent-level raw gh / python / node -e) is reachable
   # without dead-ending a session. This re-arms the hard retro check on our own retros.
-  # TEMPORARY (0.7 cycle bootstrap): flipped OFF to land #1057, which wraps the last
-  # PR-facing raw gh reads/edits (gh pr view/checks/edit) that make this gate
-  # currently unsatisfiable. Re-armed to true immediately after #1057 merges.
-  requireRetrospectiveInternalTooling: false
+  requireRetrospectiveInternalTooling: true
   requireDraftFirst: true
   devModeDefault: true
 
