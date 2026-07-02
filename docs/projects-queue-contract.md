@@ -100,7 +100,7 @@ The Status field must contain these four columns. Tooling keys off the option **
 | Column | Meaning |
 |---|---|
 | **Backlog** | Unprioritized intake. Default Status for newly added items. Position within Backlog carries **no scheduling meaning** — the driver never picks from Backlog. Promoting an item to Next Up is the deliberate prioritization step. |
-| **Next Up** | The **normative pickup order**. When no explicit `--issue`/`--pr` target is given, the driver picks **only** from this column, by POSITION ascending. |
+| **Next Up** | The **normative pickup order**. The driver picks **only** from this column, by POSITION ascending. |
 | **In Progress** | Currently running through the dev-loop. |
 | **Done** | Completed (merged or explicitly closed). |
 
@@ -291,9 +291,9 @@ The inner `result.ok` / `result.item` shape is owned by the underlying `move-que
 
 ## Queue pickup ordering
 
-When a queue board is configured, `Next Up` is the **normative, fail-closed pickup source** — not a soft hint. When no explicit `--issue`/`--pr` target is given, the driver **MUST** pick **only** from the `Next Up` column, by POSITION ascending, and **MUST NOT** auto-pull from Backlog or fall back to non-board local queue order under any circumstance.
+When a queue board is configured, `Next Up` is the **normative, fail-closed pickup source** — not a soft hint. The driver **MUST** pick **only** from the `Next Up` column, by POSITION ascending, and **MUST NOT** auto-pull from Backlog or fall back to non-board local queue order under any circumstance.
 
-### Behavior (board configured, no explicit target)
+### Behavior (board configured)
 
 - The driver queries items in the `Next Up` column by POSITION ascending before the first dispatch, and dispatches **only** those items, in that order.
 - An entry present in the local queue but **absent** from `Next Up` is **never** auto-picked. Working an item requires the deliberate prioritization step of moving it to `Next Up` first.
@@ -302,7 +302,7 @@ When a queue board is configured, `Next Up` is the **normative, fail-closed pick
 
 ### Carve-outs
 
-- **Explicit target is authoritative.** An explicit `--issue`/`--pr` target bypasses `Next Up` selection entirely: the item runs regardless of the board (the `Next Up` query is not even consulted for gating).
+- **A single-issue/PR run never reaches this gating.** Running a specific `--issue`/`--pr` target goes through the dev-loop routing path, not the queue driver, so `Next Up` gating does not apply to it at all — it runs regardless of the board. The queue driver itself has no explicit-target flag; `Next Up` gating is unconditional for every item the driver picks.
 - **No board configured.** When `.devloops` does not configure a board, there is no `Next Up` to gate on; the driver keeps its legacy local (topological/insertion) order.
 
 ### Example

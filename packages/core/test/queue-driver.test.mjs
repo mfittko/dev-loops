@@ -686,36 +686,3 @@ test("runQueue surfaces a board-query ERROR and stops; no Backlog/local fallback
     await rm(dir, { recursive: true, force: true });
   }
 });
-
-test("runQueue with an explicit target runs regardless of Next Up (bypasses gating) (#1091)", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-explicit-"));
-  try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  projectNumber: 3\n");
-    const queue = { version: 1, entries: [createEntry(99, "issue")] };
-    await writeQueue(dir, queue);
-
-    let listCalled = false;
-    const processed = [];
-    const result = await runQueue(dir, "test/repo", {
-      mergeAuthorized: true,
-      explicitTarget: 99,
-      runEntry: async (entry) => {
-        processed.push(entry.target);
-        return { ok: true, pr: 990 };
-      },
-      queueBoardSyncDependencies: {
-        moveQueueItem: async () => ({ ok: true, item: {} }),
-        // Even an empty Next Up must not block an explicit target; the resolver
-        // is not even consulted for gating.
-        listQueueItems: async () => { listCalled = true; return { ok: true, items: [] }; },
-      },
-    });
-
-    assert.equal(result.ok, true);
-    assert.deepEqual(processed, [99]);
-    assert.equal(listCalled, false, "Next Up is not consulted when an explicit target is given");
-    assert.equal(result.queue.entries[0].status, "done");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});

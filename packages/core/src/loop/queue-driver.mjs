@@ -92,18 +92,17 @@ export async function runQueue(repoRoot, repo, options = {}) {
   // (e.g. a configured "Ready for Review") still syncs. (#793 round-1 #1)
   const lastSyncedColumn = new Map();
 
-  // Next Up is the NORMATIVE, fail-closed pickup source (#1091). When no
-  // explicit --issue/--pr target is given and a board is configured, the driver
-  // picks ONLY entries whose target is in Next Up, by POSITION ascending;
-  // entries absent from Next Up are never auto-picked. It NEVER falls back to
-  // Backlog or to the non-board local queue order.
+  // Next Up is the NORMATIVE, fail-closed pickup source (#1091). When a board is
+  // configured, the driver picks ONLY entries whose target is in Next Up, by
+  // POSITION ascending; entries absent from Next Up are never auto-picked. It
+  // NEVER falls back to Backlog or to the non-board local queue order.
   //
-  // An explicit target (`opts.explicitTarget`) bypasses Next Up gating entirely
-  // and remains authoritative — the item runs regardless of the board.
-  const explicitTarget = opts.explicitTarget != null;
-  const ordering = opts.useBoardOrdering !== false && !allDone(queue) && !explicitTarget
+  // Single-issue/PR runs do not reach this gating at all — they run via the
+  // dev-loop routing path, not the queue driver — so an explicit --issue/--pr
+  // target is inherently unaffected by Next Up.
+  const ordering = opts.useBoardOrdering !== false && !allDone(queue)
     ? await resolveNextUpOrder(repo, repoRoot, opts.env ?? process.env, opts.queueBoardSyncDependencies ?? {})
-    : { ok: true, configured: false, order: [], reason: "board ordering disabled, queue idle, or explicit target" };
+    : { ok: true, configured: false, order: [], reason: "board ordering disabled or queue idle" };
 
   // (b) Board-query ERROR → surface it and stop. Do NOT fall back to Backlog
   // or local order (fail-closed). Distinct from an empty Next Up below.
@@ -120,8 +119,8 @@ export async function runQueue(repoRoot, repo, options = {}) {
     };
   }
 
-  // Board-gated only when a board is configured and no explicit target overrides.
-  const boardGated = ordering.configured === true && !explicitTarget;
+  // Board-gated only when a board is configured.
+  const boardGated = ordering.configured === true;
   const orderHint = ordering.order;
   const allowedTargets = boardGated ? new Set(orderHint) : null;
 

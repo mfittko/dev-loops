@@ -143,13 +143,14 @@ it is the **authoritative source of queue membership and ordering** — not just
 - **Configured and reachable**: `dev-loops queue run` resolves the board's `Next Up` column and
   reconciles those items into `.pi/dev-loop-queue.json` (appending a queued entry for any
   `Next Up` issue not already present) before running. `Next Up` is the **normative, fail-closed
-  pickup source**: with no explicit `--issue`/`--pr` target the driver picks **only** `Next Up`
+  pickup source**: the driver picks **only** `Next Up`
   members, by POSITION ascending, and **never** auto-pulls from Backlog. **Backlog is
   unprioritized intake and is never auto-picked** — promote an item to `Next Up` (the deliberate
   prioritization step) to schedule it. Enqueue work for immediate pickup via
   `dev-loops queue add ... --next-up` rather than hand-editing the queue file. See the
   "Queue pickup ordering" section of `docs/projects-queue-contract.md` for the full MUST-level
-  contract (including the empty-`Next Up` fail-closed idle and the explicit-target carve-out).
+  contract (including the empty-`Next Up` fail-closed idle and why a single-issue/PR run — which
+  runs via the dev-loop routing path, not the queue driver — is unaffected by `Next Up` gating).
 - **Configured but unreachable (API error)**: reconciliation fails open — the run continues
   with the existing local queue entries; no board mutations are attempted.
 - **Configured but `Next Up` is empty**: the run reports "Board configured but Next Up is empty;
