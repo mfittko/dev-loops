@@ -159,6 +159,11 @@ it is the **authoritative source of queue membership and ordering** — not just
   local-order run.)
 - **Configured but `Next Up` is empty**: the run reports "Board configured but Next Up is empty;
   nothing to run", distinct from the unconfigured "Queue is empty".
+- **Configured but a `Next Up` target is missing locally**: when `Next Up` lists an item with no
+  matching entry in `.pi/dev-loop-queue.json` (reconcile not run/persisted, or the board changed
+  since reconcile), the driver **fails closed** and stops with `reason: "next-up-target-missing-locally"`
+  (the offending numbers in `missingTargets`) rather than silently skipping the item. Run membership
+  reconcile / re-add the items. No Backlog pickup.
 - **Not configured**: the queue falls back to its local entry order (`.pi/dev-loop-queue.json`),
   and the legacy "Queue is empty" message applies when that file has no pending entries.
 

@@ -651,6 +651,45 @@ test("runQueue fails CLOSED on empty Next Up: idle outcome, explicit reason, NO 
   }
 });
 
+test("runQueue fails CLOSED when a Next Up target has no local queue entry: actionable stop, NO Backlog pickup (#1091)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-nextup-missing-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "queue:\n  projectNumber: 3\n");
+    // Local queue has 1; Next Up lists 1 AND 99. 99 has no local entry (reconcile
+    // not run/persisted, or the board changed since reconcile).
+    const queue = {
+      version: 1,
+      entries: [createEntry(1, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    const processed = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async (entry) => {
+        processed.push(entry.target);
+        return { ok: true, pr: 10 };
+      },
+      queueBoardSyncDependencies: {
+        moveQueueItem: async () => ({ ok: true, item: {} }),
+        listQueueItems: async () => ({ ok: true, items: [{ issueNumber: 1 }, { issueNumber: 99 }] }),
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.stopped, true);
+    assert.equal(result.reason, "next-up-target-missing-locally");
+    assert.deepEqual(result.missingTargets, [99]);
+    assert.match(result.message, /no local queue entry/);
+    // Fail closed: nothing ran, no Backlog fallback, local entry untouched.
+    assert.deepEqual(processed, []);
+    assert.deepEqual(result.results, []);
+    assert.equal(result.queue.entries.find((e) => e.target === 1).status, "queued");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("runQueue surfaces a board-query ERROR and stops; no Backlog/local fallback (#1091)", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-nextup-error-"));
   try {

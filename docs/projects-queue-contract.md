@@ -299,6 +299,7 @@ When a queue board is configured, `Next Up` is the **normative, fail-closed pick
 - An entry present in the local queue but **absent** from `Next Up` is **never** auto-picked. Working an item requires the deliberate prioritization step of moving it to `Next Up` first.
 - **Empty `Next Up` (successful query, zero items) → fail closed.** The driver idles/stops with an explicit, machine-readable outcome (`reason: "next-up-empty"`, message `"queue empty — prioritize Backlog items into Next Up"`). It **MUST NOT** fall back to Backlog or local order.
 - **Board-query error (API/unreachable/unresolvable project) → surface and stop** (`reason: "board-query-error"`). Again, **no** fallback to Backlog or local order. This is deliberately distinct from an empty `Next Up`: an outage never silently drains Backlog.
+- **`Next Up` target with no local queue entry → fail closed.** When the resolved `Next Up` order contains one or more targets absent from `.pi/dev-loop-queue.json` (membership reconcile not run/persisted, or the board changed between reconcile and this query), the driver **MUST** stop with an actionable outcome (`reason: "next-up-target-missing-locally"`, the offending numbers in `missingTargets`, message `"Next Up contains items with no local queue entry — run membership reconcile / re-add them"`) rather than silently filtering them out and returning an empty idle. This is distinct from an empty `Next Up`: real Next Up work exists but is undispatchable locally. **No** Backlog pickup.
 
 ### Carve-outs
 

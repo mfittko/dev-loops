@@ -9,6 +9,7 @@ import {
   transitionEntry,
   snapshotEntry,
   nextReadyEntry,
+  findEntry,
   allDone,
   RECOVERABLE_FAILURES,
   appendBugIssue,
@@ -100,9 +101,9 @@ export async function runQueue(repoRoot, repo, options = {}) {
   // Single-issue/PR runs do not reach this gating at all — they run via the
   // dev-loop routing path, not the queue driver — so an explicit --issue/--pr
   // target is inherently unaffected by Next Up.
-  const ordering = opts.useBoardOrdering !== false && !allDone(queue)
+  const ordering = !allDone(queue)
     ? await resolveNextUpOrder(repo, repoRoot, opts.env ?? process.env, opts.queueBoardSyncDependencies ?? {})
-    : { ok: true, configured: false, order: [], reason: "board ordering disabled or queue idle" };
+    : { ok: true, configured: false, order: [], reason: "queue idle" };
 
   // (b) Board-query ERROR → surface it and stop. Do NOT fall back to Backlog
   // or local order (fail-closed). Distinct from an empty Next Up below.
@@ -136,6 +137,29 @@ export async function runQueue(repoRoot, repo, options = {}) {
       queue,
       ordering,
     };
+  }
+
+  // (a2) Next Up resolved one or more targets that have NO matching local queue
+  // entry (membership reconcile not run/persisted, or the board changed between
+  // reconcile and this query). Filtering them out would return a silent empty
+  // idle while real Next Up work goes undispatched — so fail CLOSED with an
+  // actionable stop instead. Distinct from the genuine empty-Next-Up idle above.
+  // Never pull from Backlog. (#1091)
+  if (boardGated) {
+    const missingTargets = orderHint.filter((t) => !findEntry(queue, t));
+    if (missingTargets.length > 0) {
+      return {
+        ok: false,
+        stopped: true,
+        reason: "next-up-target-missing-locally",
+        missingTargets,
+        message:
+          "Next Up contains items with no local queue entry — run membership reconcile / re-add them",
+        results: [],
+        queue,
+        ordering,
+      };
+    }
   }
 
   let autoFiledCount = 0;
