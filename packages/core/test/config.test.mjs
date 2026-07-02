@@ -2937,6 +2937,7 @@ describe("deprecated localPlanning key", () => {
     // No effect: parsed output is identical to a config without the key,
     // apart from the tolerated passthrough itself.
     const without = DevLoopConfigSchema.safeParse({ version: 1 });
+    assert.equal(without.success, true);
     const { localPlanning, ...rest } = full.data;
     assert.deepEqual(rest, without.data);
   });
