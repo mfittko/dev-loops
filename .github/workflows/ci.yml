@@ -61,12 +61,12 @@ jobs:
           CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           # Triggers include the harness/specs/configs that drive the smoke so a
           # change to the assertions themselves re-runs the affected family.
-          if echo "$CHANGED" | grep -Eq '^docs/presentations/.*\.html$|^test/playwright/(harness/deck-fit-harness|harness/webkit-smoke-harness|intro-deck\.spec|deep-dive-deck\.spec)\.mjs$|^playwright\.(intro-deck|dev-loops-deep-dive)\.config\.mjs$'; then
+          if echo "$CHANGED" | grep -Eq '^docs/presentations/.*\.html$|^test/playwright/(harness/deck-fit-harness|harness/webkit-smoke-harness|intro-deck\.spec|deep-dive-deck\.spec)\.mjs$|^playwright\.config\.mjs$'; then
             echo 'presentations=true' >> "$GITHUB_OUTPUT"
           else
             echo 'presentations=false' >> "$GITHUB_OUTPUT"
           fi
-          if echo "$CHANGED" | grep -Eq '^docs/articles/.*\.html$|^test/playwright/(harness/deck-fit-harness|harness/webkit-smoke-harness|intro-article\.spec|deep-dive-article\.spec)\.mjs$|^playwright\.(intro-article|deep-dive-article)\.config\.mjs$'; then
+          if echo "$CHANGED" | grep -Eq '^docs/articles/.*\.html$|^test/playwright/(harness/deck-fit-harness|harness/webkit-smoke-harness|intro-article\.spec|deep-dive-article\.spec)\.mjs$|^playwright\.config\.mjs$'; then
             echo 'articles=true' >> "$GITHUB_OUTPUT"
           else
             echo 'articles=false' >> "$GITHUB_OUTPUT"

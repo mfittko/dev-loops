@@ -26,9 +26,9 @@ It is not a general E2E framework and it does not make browser validation mandat
 
 The reusable baseline lives in:
 - `test/playwright/harness/webkit-smoke-harness.mjs` (this module)
-- the deck/article/viewer Playwright configs — e.g. `playwright.intro-deck.config.mjs`,
-  `playwright.intro-article.config.mjs`, `playwright.inspect-run-viewer.config.mjs` —
-  each a thin `createWebkitSmokeConfig(...)` adoption
+- the single `playwright.config.mjs` — one Playwright project per slice (deck,
+  article, viewer), generated from the registries, each with its own
+  `testMatch` and distinct `outputDir`; run one via `--project=<sliceId>`
 - the shared suites that consume it: `test/playwright/harness/deck-fit-harness.mjs`
   (`defineDeckSuite`/`defineArticleSuite`) and
   `test/playwright/harness/inspect-run-viewer-harness.mjs`
@@ -42,7 +42,8 @@ The harness exposes three main seams:
 
 For a **rendered artifact** (deck, article, or the viewer) registration is the
 path — add a registry entry plus a thin spec calling `defineDeckSuite` /
-`defineArticleSuite`; the config is created via `createWebkitSmokeConfig(...)`
+`defineArticleSuite`; `playwright.config.mjs` derives a project from the
+registry automatically, so no config edit is needed
 (see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)). For a bespoke
 local UI surface that uses this WebKit seam directly:
 
@@ -72,7 +73,7 @@ These paths are the local proving ground for the reusable artifact contract in [
 The current proving example is the inspect-run viewer smoke suite:
 - fixture input: `test/playwright/fixtures/inspect-run-viewer-fixture.mjs`
 - spec: `test/playwright/inspect-run-viewer.spec.mjs`
-- config: `playwright.inspect-run-viewer.config.mjs`
+- config: `playwright.config.mjs` (project `inspect-run-viewer`)
 - command: `npm run test:playwright:viewer`
 
 The example intentionally covers a small explicit set of viewer states rather than broad end-to-end workflows.

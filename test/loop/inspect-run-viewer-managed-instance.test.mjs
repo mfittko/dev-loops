@@ -732,7 +732,7 @@ test('runCli emits github output entries for inspect-run viewer smoke gating', a
   try {
     await writeFile(pathsFile, [
       'README.md',
-      'playwright.inspect-run-viewer.config.mjs',
+      'playwright.config.mjs',
       'test/playwright/harness/webkit-smoke-harness.mjs',
     ].join('\n'), 'utf8');
 
@@ -751,7 +751,7 @@ test('runCli emits github output entries for inspect-run viewer smoke gating', a
     });
 
     assert.equal(result.shouldRun, true);
-    assert.deepEqual(result.relevantPaths, ['playwright.inspect-run-viewer.config.mjs', 'test/playwright/harness/webkit-smoke-harness.mjs']);
+    assert.deepEqual(result.relevantPaths, ['playwright.config.mjs', 'test/playwright/harness/webkit-smoke-harness.mjs']);
 
     const payload = JSON.parse(writes.join(''));
     assert.equal(payload.ok, true);
