@@ -6,9 +6,11 @@ import { collapseToTarget, main, runCli } from "../../scripts/projects/resolve-a
 // Status column name to the items GraphQL returns for it; list-queue-items
 // fetches the whole board and filters client-side, so we return every column's
 // items (each tagged with its own Status field value) on the items query and let
-// the resolver's --column filter pick. `itemsError` forces the items query to
-// fail (simulating a Next Up query error / API outage).
+// the resolver's --column filter pick. `itemsError` forces only the SECOND items
+// query to fail (the resolver queries In Progress first, then Next Up), so the
+// In Progress query succeeds and only the Next Up query errors / hits an outage.
 function boardRunChild({ columns = {}, itemsError = false } = {}) {
+  let itemsQueryCount = 0;
   const options = ["Backlog", "Next Up", "In Progress", "Done"].map((name, i) => ({ id: `O_${i}`, name }));
   const nodes = [];
   for (const [status, items] of Object.entries(columns)) {
@@ -37,8 +39,9 @@ function boardRunChild({ columns = {}, itemsError = false } = {}) {
     if (query.includes("fields(first")) {
       return json({ node: { fields: { nodes: [{ name: "Status", options }], pageInfo: { hasNextPage: false, endCursor: null } } } });
     }
-    // items query
-    if (itemsError) return { code: 1, stdout: "", stderr: "boom: API unreachable" };
+    // items query — fail only the second one (Next Up), leaving In Progress OK
+    itemsQueryCount += 1;
+    if (itemsError && itemsQueryCount === 2) return { code: 1, stdout: "", stderr: "boom: API unreachable" };
     return json({ node: { items: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } });
   };
 }

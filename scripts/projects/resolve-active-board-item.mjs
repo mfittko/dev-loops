@@ -138,14 +138,14 @@ function collapseToTarget(items) {
   if (items.length === 0) {
     return {
       ok: false,
-      reason: `No in-progress board item to continue. Pass an explicit issue/PR, e.g. \`/continue #N\`.`,
+      reason: `No in-progress board item to continue. Pass an explicit issue/PR, e.g. \`/loop-continue #N\`.`,
     };
   }
   if (items.length > 1) {
     const listed = items.map(describeItem).join(", ");
     return {
       ok: false,
-      reason: `${items.length} in-progress board items: ${listed}. Pass an explicit issue/PR to disambiguate, e.g. \`/continue #N\`.`,
+      reason: `${items.length} in-progress board items: ${listed}. Pass an explicit issue/PR to disambiguate, e.g. \`/loop-continue #N\`.`,
     };
   }
   return { ok: true, target: itemToTarget(items[0]), source: "in-progress" };
