@@ -20,8 +20,9 @@ At least one edit:
   --add-assignee <u>            Assignee to add (repeatable)
   --remove-assignee <u>         Assignee to remove (repeatable)
   --milestone <m>               Milestone to set (empty string clears it)
-                                (--title/--body reject an empty value; use
-                                --milestone "" only to clear the milestone)
+                                (--title/--body/--body-file reject empty or
+                                whitespace-only values; use --milestone "" only
+                                to clear the milestone)
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):
@@ -85,11 +86,19 @@ export function parseEditPrCliArgs(argv) {
       continue;
     }
     if (token.name === "title") {
-      options.title = requireTokenValue(token, parseError);
+      const title = requireTokenValue(token, parseError);
+      if (title.trim().length === 0) {
+        throw parseError("--title must not be empty or whitespace-only");
+      }
+      options.title = title;
       continue;
     }
     if (token.name === "body") {
-      options.body = requireTokenValue(token, parseError);
+      const body = requireTokenValue(token, parseError);
+      if (body.trim().length === 0) {
+        throw parseError("--body must not be empty or whitespace-only");
+      }
+      options.body = body;
       continue;
     }
     if (token.name === "body-file") {
@@ -160,7 +169,13 @@ export function parseEditPrCliArgs(argv) {
 async function resolveBody(options) {
   if (options.bodyFile === undefined) return options.body;
   const source = options.bodyFile === "-" ? 0 : options.bodyFile;
-  return readFile(source, "utf8");
+  const body = await readFile(source, "utf8");
+  // Fail closed on an empty / whitespace-only file so a blank --body-file cannot
+  // silently clear the PR body (USAGE promises --body/--title reject empties).
+  if (body.trim().length === 0) {
+    throw new Error(`--body-file ${options.bodyFile} is empty`);
+  }
+  return body;
 }
 
 // Build the `gh pr edit` args and the parallel `edited` list (which fields were

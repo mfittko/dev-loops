@@ -137,7 +137,7 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
    - Issue list/filter → `scripts/github/list-issues.mjs --repo <o/r> [--state <open|closed|all>] [--label <l>] [--limit <n>]`, **never raw `gh issue list`**. (The queue tool lists the project board; this is for arbitrary issue queries.)
    - Issue comment → `scripts/github/comment-issue.mjs --repo <o/r> --issue <n> (--body <text> | --body-file <path>)`, **never raw `gh issue comment`**. Returns `{ ok, commentUrl }`.
    - PR facts read (branch/state/mergeStateStatus/head SHA/etc.) → `scripts/github/view-pr.mjs --repo <o/r> --pr <n> [--json <fields>]`, **never raw `gh pr view`**. (For composite loop-routing/CI facts prefer `loop info --pr`; this is the thin field-read counterpart.)
-   - PR edit (title/body/assignee/milestone) → `scripts/github/edit-pr.mjs --repo <o/r> --pr <n> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>]`, **never raw `gh pr edit`**. Returns `{ ok, edited }`.
+   - PR edit (title/body/assignee/milestone) → `scripts/github/edit-pr.mjs --repo <o/r> --pr <n> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>]`, **never raw `gh pr edit`**. Returns `{ ok, repo, pr, edited }`.
    - PR checks/status → `scripts/github/probe-ci-status.mjs --repo <o/r> --pr <n> --timeout-ms 0` for a single live combined-CI check, **never raw `gh pr checks`**. (Provider-agnostic; drop the `--timeout-ms 0` to block-wait.)
 
    These accept the same `--jq`/`--silent` output flags as the other JSON-emitting scripts (`probe-ci-status.mjs` emits structured JSON but is watch-shaped, not `--jq`-wired).

@@ -43,6 +43,11 @@ test("parseEditPrCliArgs: --milestone with no value is rejected", () => {
   assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--milestone"]), /--milestone requires a value/);
 });
 
+test("parseEditPrCliArgs: rejects whitespace-only --title / --body", () => {
+  assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--title", "   "]), /--title must not be empty or whitespace/);
+  assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--body", "\t\n"]), /--body must not be empty or whitespace/);
+});
+
 test("parseEditPrCliArgs: collects repeated assignees", () => {
   const out = parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--add-assignee", "a", "--add-assignee", "b"]);
   assert.deepEqual(out.addAssignees, ["a", "b"]);
@@ -85,6 +90,17 @@ test("runCli: --jq extracts an edited field; --silent maps to exit code", async 
   const { run: run2 } = stubGh();
   const code2 = await runCli(["--repo", "o/n", "--pr", "1", "--title", "T", "--silent"], { run: run2, stdout: captureStream() });
   assert.equal(code2, 0);
+});
+
+test("editPr: --body-file fails closed on an empty/whitespace-only file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "edit-pr-"));
+  const emptyPath = join(dir, "empty.md");
+  writeFileSync(emptyPath, "   \n  ");
+  const { run } = stubGh();
+  await assert.rejects(
+    () => editPr({ repo: "o/n", pr: 5, bodyFile: emptyPath, addAssignees: [], removeAssignees: [] }, { run }),
+    /is empty/,
+  );
 });
 
 test("editPr: --body-file reads the body from a real file", async () => {
