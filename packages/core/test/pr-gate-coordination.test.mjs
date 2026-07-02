@@ -296,6 +296,31 @@ test("round-cap exhaustion opens the pre-approval gate window even without a cur
   assert.match(result.reason, /pre_approval_gate/i);
 });
 
+test("significant post-convergence changes at the round cap reopen a new Copilot cycle", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: false,
+    ciStatus: "success",
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    postConvergenceSignificantChange: true,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /significant post-convergence changes/i);
+});
+
 // #896: a post-cap commit leaves the head unreviewed by Copilot. The interpreter
 // resolves ROUND_CAP_CLEAN_FALLBACK (clean threads + green CI at the cap), and the
 // coordinator must route that to the pre_approval_gate — which reviews the post-cap
@@ -423,6 +448,18 @@ test("guard returns false for round-cap clean fallback even without same-head cl
     roundCapCleanFallback: true,
     gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
   }), false);
+});
+
+test("guard does not suppress formal-request checks when significant post-convergence changes require a new cycle", () => {
+  assert.equal(shouldGuardCopilotReviewRequest({
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    sameHeadCleanConverged: false,
+    roundCapCleanFallback: true,
+    postConvergenceSignificantChange: true,
+    gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  }), true);
 });
 
 // Guard backward-compat: without the roundCapCleanFallback signal and without

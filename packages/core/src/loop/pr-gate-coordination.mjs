@@ -397,6 +397,9 @@ function buildResult({
  *   the current head, including a post-cap head Copilot has not (and will not)
  *   re-review. No further Copilot round is permitted, so the formal-request guard
  *   must not fire — the pre_approval_gate reviews the post-cap head (per #848).
+ * @param {boolean} [params.postConvergenceSignificantChange=false] - significant
+ *   post-convergence changes on a newer head start a new review cycle and must
+ *   not be treated as round-cap clean-fallback suppression.
  * @param {string} params.gateBoundary - current gate boundary
  * @returns {boolean}
  */
@@ -407,6 +410,7 @@ export function shouldGuardCopilotReviewRequest({
   maxCopilotRounds = null,
   sameHeadCleanConverged = false,
   roundCapCleanFallback = false,
+  postConvergenceSignificantChange = false,
   gateBoundary,
 }) {
   const gateBoundariesRequiringCopilotFormalRequest = new Set([
@@ -442,7 +446,11 @@ export function shouldGuardCopilotReviewRequest({
   const roundCapReached = maxCopilotRounds !== null
     && typeof copilotReviewRoundCount === "number"
     && copilotReviewRoundCount >= maxCopilotRounds;
-  if (roundCapReached && (sameHeadCleanConverged || roundCapCleanFallback)) {
+  if (
+    roundCapReached
+    && (sameHeadCleanConverged || roundCapCleanFallback)
+    && !postConvergenceSignificantChange
+  ) {
     return false;
   }
   return true;
@@ -530,6 +538,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const copilotReviewRoundCount = normalizeNonNegativeInteger(input.copilotReviewRoundCount);
   const maxCopilotRounds = normalizePositiveInteger(input.maxCopilotRounds);
   const roundCapReached = maxCopilotRounds !== null && copilotReviewRoundCount >= maxCopilotRounds;
+  const postConvergenceSignificantChange = input.postConvergenceSignificantChange === true;
+  const roundCapNewCycleRequired = roundCapReached && copilotReviewRoundCount > 0 && postConvergenceSignificantChange;
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
   // UI e2e auto-scoping (#976): the PR changed-file set + whether the shared UI
   // e2e suite passed for this head. Inclusion is path-triggered, never annotated.
@@ -1114,11 +1124,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
       });
     }
 
-    const roundExhaustionGateEvidenceNote = roundCapReached
+    const roundExhaustionGateEvidenceNote = (roundCapReached && !roundCapNewCycleRequired)
       ? buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds })
       : null;
 
-    if (!sameHeadCleanConverged && !roundCapReached) {
+    if (!sameHeadCleanConverged && (!roundCapReached || roundCapNewCycleRequired)) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
@@ -1134,7 +1144,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
-        reason: "The review loop is between passes, but the current head does not yet have a clean settled Copilot convergence point, so `pre_approval_gate` is still forbidden.",
+        reason: roundCapNewCycleRequired
+          ? "The previous Copilot cycle converged at the round cap, but significant post-convergence changes landed on a newer head; start a new Copilot review cycle and re-request review before `pre_approval_gate`."
+          : "The review loop is between passes, but the current head does not yet have a clean settled Copilot convergence point, so `pre_approval_gate` is still forbidden.",
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
@@ -1244,6 +1256,35 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // blocked states are handled earlier, so genuinely-blocked states still forbid
   // pre_approval. Mirrors LOW_SIGNAL_CONVERGED routing with round-cap reasoning.
   if (effectiveLifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK) {
+    if (roundCapNewCycleRequired) {
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
+      pushUnique(forbiddenActions, [
+        PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+        PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+        PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+        PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+        PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+      ]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+        loopDisposition: DISPOSITION.ACTION_REQUIRED,
+        gateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+        draftGateAlreadySatisfied: roundCapReached ? true : draftGateAlreadySatisfied,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
+        reason: `The previous Copilot cycle converged at the round cap (${copilotReviewRoundCount}/${maxCopilotRounds}), but significant post-convergence changes landed on the current head. Open a new cycle and re-request Copilot review before entering \`pre_approval_gate\`.`,
+        mergeStateStatus,
+        conflictFiles,
+        refinementArtifact,
+        copilotReviewRoundCount,
+      });
+    }
     if (ciStatus === "failure" || ciStatus === "crediblyGreen") {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, postDraftForbidden);
