@@ -323,6 +323,28 @@ describe("reorder-queue-item — error handling", () => {
   });
 });
 
+describe("reorder-queue-item — URI project resolution", () => {
+  it("resolves a user-scoped board URI without a resolveOwner round-trip", async () => {
+    const responses = [
+      { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+      { payload: getItemsByContentResponse([makeItemNode("PVTI_item_1", 630)]) },
+      { payload: updatePositionResponse() },
+    ];
+    const result = await main(
+      {
+        repo: "mfittko/dev-loops",
+        project: "https://github.com/users/mfittko/projects/1",
+        item: "630",
+      },
+      { runChild: mockRunChild(responses) },
+    );
+    assert.ok(result.ok);
+    assert.strictEqual(result.item.itemId, "PVTI_item_1");
+    assert.strictEqual(result.item.issueNumber, 630);
+    assert.strictEqual(result.item.position, "top");
+  });
+});
+
 describe("reorder-queue-item — mutation input construction", () => {
   it("constructs top-position mutation input correctly", async () => {
     const responses = [

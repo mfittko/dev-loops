@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { resolveProjectSelector, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 
 const USAGE = `Usage:
-  dev-loops queue reorder --repo <owner/name> --project <number|id> --item <number|node-id> [--after <number|node-id>]
-  dev-loops queue reorder move-to-top <ref> --repo <owner/name> --project <number|id>
-  dev-loops queue reorder move-after <ref> <after-ref> --repo <owner/name> --project <number|id>
-  dev-loops queue reorder order <ref1> <ref2> ... --repo <owner/name> --project <number|id>
+  dev-loops queue reorder --repo <owner/name> --project <number|id|board-uri> --item <number|node-id> [--after <number|node-id>]
+  dev-loops queue reorder move-to-top <ref> --repo <owner/name> --project <number|id|board-uri>
+  dev-loops queue reorder move-after <ref> <after-ref> --repo <owner/name> --project <number|id|board-uri>
+  dev-loops queue reorder order <ref1> <ref2> ... --repo <owner/name> --project <number|id|board-uri>
   (dev-loops project reorder … is a back-compat alias)
 
 Reorder GitHub Projects V2 items by board position via updateProjectV2ItemPosition.
@@ -22,12 +23,15 @@ Forms:
 A <ref> is an issue/PR number OR a project item node ID. Works for both issues and PRs.
 
 Options:
-  --repo <owner/name>         Required. Repository to scope the project search.
-  --project <number|id>       Required. Project number (integer) or node ID.
-  --item <number|node-id>     Flag form: item to reorder.
-  --after <number|node-id>    Flag form: position after this item. When omitted, move to top.
-  --dry-run                   Print the intended GraphQL mutation(s) without executing.
-  --help, -h                  Show this help.
+  --repo <owner/name>                 Required. Repository to scope the project search.
+  --project <number|id|board-uri>     Project number, node ID, or board URI
+                                      (e.g. https://github.com/users/me/projects/3).
+                                      When omitted, resolved from .devloops
+                                      queue.projectNumber / queue.boardTitle.
+  --item <number|node-id>             Flag form: item to reorder.
+  --after <number|node-id>            Flag form: position after this item. When omitted, move to top.
+  --dry-run                           Print the intended GraphQL mutation(s) without executing.
+  --help, -h                          Show this help.
 
 Output (stdout):
   JSON. Move/move-to-top: { ok, item, after_ref|null, before, after }.
@@ -142,24 +146,6 @@ function validateRepo(repo) {
     throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
   }
   return repo;
-}
-
-function parseProjectRef(raw) {
-  if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
-    throw Object.assign(new Error("--project is required"), { code: "INVALID_PROJECT" });
-  }
-  const trimmed = raw.trim();
-  const asNum = Number(trimmed);
-  if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
-    return { kind: "number", value: asNum };
-  }
-  if (trimmed === "0") {
-    throw Object.assign(new Error(`--project must be a positive integer or a node ID, got "${raw}"`), { code: "INVALID_PROJECT" });
-  }
-  if (GLOBAL_NODE_ID_RE.test(trimmed)) {
-    return { kind: "id", value: trimmed };
-  }
-  throw Object.assign(new Error(`--project must be a positive integer or a node ID, got "${raw}"`), { code: "INVALID_PROJECT" });
 }
 
 function parseItemRef(raw) {
@@ -522,15 +508,38 @@ function classifyExitCode(err) {
 
 // ── Resolve owner + project (shared) ──────────────────────────────────────
 
-async function resolveProject(owner, projectRef, env, child) {
-  const { kind: ownerKind } = await resolveOwner(owner, env, child);
-  const projects = await listAllProjects(owner, ownerKind, env, child);
-  const project = projectRef.kind === "id"
-    ? projects.find((p) => p.id === projectRef.value)
-    : projects.find((p) => p.number === projectRef.value);
+// Resolve the project based on a selector (from resolveProjectSelector).
+// When the selector contains a URI ref, the URI-encoded owner overrides the
+// repo-derived owner so cross-scope boards (user vs org) resolve unambiguously.
+async function resolveProject(repoOwner, selector, env, child) {
+  const projectRef = selector.projectRef;
+  const effectiveOwner = projectRef?.kind === "uri" ? projectRef.owner : repoOwner;
+  const ownerKind = projectRef?.kind === "uri"
+    ? projectRef.ownerKind
+    : (await resolveOwner(repoOwner, env, child)).kind;
+  const projects = await listAllProjects(effectiveOwner, ownerKind, env, child);
+  let project;
+  if (projectRef) {
+    if (projectRef.kind === "id") {
+      project = projects.find((p) => p.id === projectRef.value);
+    } else if (projectRef.kind === "uri") {
+      project = projects.find((p) => p.number === projectRef.number);
+    } else {
+      project = projects.find((p) => p.number === projectRef.value);
+    }
+  } else {
+    project = projects.find((p) => p.title === selector.projectTitle);
+  }
   if (!project) {
+    const desc = projectRef
+      ? (projectRef.kind === "id"
+          ? `"${projectRef.value}"`
+          : projectRef.kind === "uri"
+            ? `URI number ${projectRef.number} under "${projectRef.owner}"`
+            : `number ${projectRef.value}`)
+      : `title "${selector.projectTitle}"`;
     throw Object.assign(
-      new Error(`Project ${projectRef.kind === "id" ? `"${projectRef.value}"` : `number ${projectRef.value}`} not found under owner "${owner}"`),
+      new Error(`Project ${desc} not found under owner "${effectiveOwner}"`),
       { code: "PROJECT_NOT_FOUND" },
     );
   }
@@ -742,7 +751,7 @@ async function main(args, { env = process.env, runChild } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
   const [owner, repoName] = repo.split("/");
-  const projectRef = parseProjectRef(args.project);
+  const selector = resolveProjectSelector(args);
 
   // Fail closed: the legacy flag form takes no positional arguments. A stray
   // token (e.g. `reorder 630 --item ...`) must not be silently ignored.
@@ -753,7 +762,7 @@ async function main(args, { env = process.env, runChild } = {}) {
     );
   }
 
-  const project = await resolveProject(owner, projectRef, env, child);
+  const project = await resolveProject(owner, selector, env, child);
 
   if (args._subcommand) {
     return mainSubcommand(args, { env, child, repo, project });
@@ -763,7 +772,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 
 // ── CLI entrypoint ──────────────────────────────────────────────────────
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd() } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);
@@ -776,6 +785,10 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     stdout.write(USAGE);
     return;
   }
+
+  // Resolve the board from .devloops when --project is absent.
+  applyDevloopsBoard(args, cwd);
+
   try {
     const result = await main(args, { env });
     stdout.write(JSON.stringify(result) + "\n");

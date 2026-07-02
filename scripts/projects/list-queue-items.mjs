@@ -410,12 +410,16 @@ async function main(args, { env = process.env, runChild } = {}) {
     );
   }
 
-  // 1. Resolve owner (user or org)
-  const { id: ownerId, kind: ownerKind } = await resolveOwner(owner, env, child);
+  // 1. Resolve owner (user or org).
+  // URI refs encode owner+kind directly; skip the API round-trip for owner resolution.
+  const projectOwner = selector.projectRef?.kind === "uri" ? selector.projectRef.owner : owner;
+  const ownerKind = selector.projectRef?.kind === "uri"
+    ? selector.projectRef.ownerKind
+    : (await resolveOwner(owner, env, child)).kind;
 
   // 2. Resolve project
-  const projects = await listAllProjects(owner, ownerKind, env, child);
-  const project = findProject(projects, selector, owner);
+  const projects = await listAllProjects(projectOwner, ownerKind, env, child);
+  const project = findProject(projects, selector, projectOwner);
 
   // 3. Resolve Status field and target column
   const fieldNodes = await listAllFields(project.id, env, child);
