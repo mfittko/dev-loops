@@ -2,6 +2,7 @@
 import path from "node:path";
 import {
   buildParseError,
+  extractReviewCommitSha,
   formatCliError,
   isCopilotLogin,
   isDirectCliRun,
@@ -502,6 +503,95 @@ async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.e
   return false;
 }
 
+function getLatestSubmittedCopilotReviewHeadSha(reviews) {
+  const copilotSubmitted = (Array.isArray(reviews) ? reviews : [])
+    .filter((review) => {
+      const login = review?.author?.login;
+      const state = String(review?.state ?? "").toUpperCase();
+      return isCopilotLogin(login) && state !== "PENDING";
+    })
+    .map((review, index) => {
+      const submittedAt = review?.submittedAt ?? review?.submitted_at;
+      const submittedAtMs = typeof submittedAt === "string" ? Date.parse(submittedAt) : Number.NaN;
+      return { review, submittedAtMs, index };
+    })
+    .sort((left, right) => {
+      const leftValid = !Number.isNaN(left.submittedAtMs);
+      const rightValid = !Number.isNaN(right.submittedAtMs);
+      if (leftValid && rightValid) {
+        return right.submittedAtMs - left.submittedAtMs;
+      }
+      if (leftValid !== rightValid) {
+        return leftValid ? -1 : 1;
+      }
+      return right.index - left.index;
+    });
+  const latest = copilotSubmitted[0]?.review;
+  const sha = extractReviewCommitSha(latest);
+  return typeof sha === "string" && sha.trim().length > 0 ? sha.trim() : null;
+}
+
+function isTrivialDocumentationOnlyPath(filePath) {
+  if (typeof filePath !== "string") return true;
+  const normalized = filePath.trim().toLowerCase();
+  if (normalized.length === 0) return true;
+  if (normalized.startsWith("docs/")) return true;
+  return normalized.endsWith(".md")
+    || normalized.endsWith(".mdx")
+    || normalized.endsWith(".txt")
+    || normalized.endsWith(".rst")
+    || normalized.endsWith(".adoc");
+}
+
+async function detectPostConvergenceSignificantChange(
+  { repo, pr, currentHeadSha, reviews, changedFiles, roundCapReached, regularCopilotRounds },
+  { env = process.env, ghCommand = "gh" } = {},
+) {
+  if (!roundCapReached || !regularCopilotRounds) {
+    return false;
+  }
+  if (!Array.isArray(changedFiles) || changedFiles.length === 0) {
+    return false;
+  }
+  const lastReviewedHeadSha = getLatestSubmittedCopilotReviewHeadSha(reviews);
+  if (!lastReviewedHeadSha || lastReviewedHeadSha === currentHeadSha) {
+    return false;
+  }
+  const compareResult = await runChild(
+    ghCommand,
+    ["api", `repos/${repo}/compare/${lastReviewedHeadSha}...${currentHeadSha}`],
+    env,
+  );
+  if (compareResult.code !== 0) {
+    return false;
+  }
+  let payload;
+  try {
+    payload = parseJsonText(compareResult.stdout, { label: "gh compare" });
+  } catch {
+    return false;
+  }
+  const files = Array.isArray(payload?.files) ? payload.files : [];
+  if (files.length === 0) {
+    return false;
+  }
+  const hasNonDocChanges = files.some((file) => !isTrivialDocumentationOnlyPath(file?.filename));
+  if (!hasNonDocChanges) {
+    return false;
+  }
+  const totalChangedLines = files.reduce((sum, file) => {
+    const changes = Number(file?.changes);
+    if (Number.isFinite(changes) && changes > 0) {
+      return sum + changes;
+    }
+    const additions = Number(file?.additions);
+    const deletions = Number(file?.deletions);
+    const fallback = (Number.isFinite(additions) ? additions : 0) + (Number.isFinite(deletions) ? deletions : 0);
+    return sum + (fallback > 0 ? fallback : 0);
+  }, 0);
+  return totalChangedLines >= 20 || files.length >= 2;
+}
+
 export async function detectPrGateCoordinationState(options, runtime = {}) {
   const context = await loadPrGateCoordinationContext(options, runtime);
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
@@ -510,6 +600,21 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const config = hasConfigErrors ? {} : (configLoadResult.config ?? {});
   const draftGateConfig = resolveGateConfig(config, "draft");
   const maxCopilotRounds = resolveRefinementConfig(config, "maxCopilotRounds");
+  const roundCapReached = maxCopilotRounds !== null
+    && typeof (context.snapshot?.copilotReviewRoundCount) === "number"
+    && context.snapshot?.copilotReviewRoundCount >= maxCopilotRounds;
+  const postConvergenceSignificantChange = await detectPostConvergenceSignificantChange(
+    {
+      repo: context.repo,
+      pr: context.pr,
+      currentHeadSha: context.currentHeadSha,
+      reviews: context.prData?.reviews,
+      changedFiles: context.prData?.files,
+      roundCapReached: roundCapReached && context.interpretation?.roundCapCleanEligible === true,
+      regularCopilotRounds: (context.snapshot?.copilotReviewRoundCount ?? 0) > 0,
+    },
+    runtime,
+  );
   const result = evaluatePrGateCoordination({
     repo: context.repo,
     pr: context.pr,
@@ -536,6 +641,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     preApprovalGate: context.gateEvidence.preApprovalGate,
     preApprovalGateMarker: context.gateEvidence.preApprovalGateMarker,
     refinementArtifact: context.refinementArtifact,
+    postConvergenceSignificantChange,
   });
   // Copilot review request guard (#613): When Copilot has reviewed the PR
   // but no formal review request was made, block pre-approval gate entry.
@@ -547,9 +653,6 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
     PR_CHECKPOINT.FINAL_APPROVAL_READY,
   ]);
-  const roundCapReached = maxCopilotRounds !== null
-    && typeof (context.snapshot?.copilotReviewRoundCount) === "number"
-    && context.snapshot?.copilotReviewRoundCount >= maxCopilotRounds;
   const sameHeadCleanConverged = context.interpretation?.sameHeadCleanConverged ?? false;
   // Round-cap clean fallback (#896): the interpreter resolved a clean post-cap head
   // (zero unresolved threads + green CI) that Copilot will not re-review. The formal
@@ -557,7 +660,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const roundCapCleanFallback = context.interpretation?.roundCapCleanEligible ?? false;
   const copilotReviewEverFormallyRequested = copilotReviewRequestStatus === "none"
     && guardBoundaries.has(result.gateBoundary)
-    && !(roundCapReached && (sameHeadCleanConverged || roundCapCleanFallback))
+    && !(roundCapReached
+      && (sameHeadCleanConverged || roundCapCleanFallback)
+      && !postConvergenceSignificantChange)
     ? await fetchCopilotEverFormallyRequested(
         { repo: context.repo, pr: context.pr },
         runtime,
@@ -570,6 +675,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     maxCopilotRounds,
     sameHeadCleanConverged,
     roundCapCleanFallback,
+    postConvergenceSignificantChange,
     gateBoundary: result.gateBoundary,
   })) {
     result.gateBoundary = PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW;

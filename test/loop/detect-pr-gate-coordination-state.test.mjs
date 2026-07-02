@@ -542,6 +542,66 @@ test("detect-pr-gate-coordination-state routes a post-cap clean head to pre_appr
   }
 });
 
+test("detect-pr-gate-coordination-state re-requests Copilot when significant post-convergence changes land after cap convergence", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-round-cap-significant-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({
+          number: 266,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: "def56789abcdef",
+          files: [{ path: "scripts/loop/resolve-active-board-item.mjs" }],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          reviews: [
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "1111111111111111111111111111111111111111" }, submittedAt: "2026-05-31T20:00:00Z" },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "2222222222222222222222222222222222222222" }, submittedAt: "2026-05-31T20:05:00Z" },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "3333333333333333333333333333333333333333" }, submittedAt: "2026-05-31T20:10:00Z" },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "4444444444444444444444444444444444444444" }, submittedAt: "2026-05-31T20:15:00Z" },
+            { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "5555555555555555555555555555555555555555" }, submittedAt: "2026-05-31T20:20:00Z" },
+          ],
+        }),
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"], stdout: jsonLine({ users: [], teams: [] }) },
+      { assertArgs: ["api", "graphql", "pr=266"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
+      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
+        stdout: jsonLine([[
+          {
+            id: 21,
+            body: ["Gate review: draft_gate", "Reviewed head SHA: def56789abcdef", "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+            html_url: "https://example.test/comment/21",
+            updated_at: "2026-05-31T19:00:00Z",
+          },
+        ]]),
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/266/reviews?per_page=100"], stdout: '[]\n' },
+      { assertArgs: ["api", "repos/owner/repo/compare/5555555555555555555555555555555555555555...def56789abcdef"], stdout: jsonLine({ files: [{ filename: "scripts/loop/resolve-active-board-item.mjs", changes: 670 }] }) },
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.gateBoundary, "post_draft_external_review");
+    assert.equal(parsed.nextAction, "rerequest_copilot_review");
+    assert.ok(parsed.allowedNextActions.includes("rerequest_copilot_review"));
+    assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
+    assert.match(parsed.reason, /significant post-convergence changes/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-pr-gate-coordination-state auto-detects local-fix-without-reply (#464) when unresolved threads exist on older review commit", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-464-"));
 

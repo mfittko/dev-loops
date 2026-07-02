@@ -134,3 +134,4 @@ Failure output:
 - review re-entry requires an explicit re-request in a new review pass context
 - `waiting_for_author_followup` / `waiting_for_re_request` are legacy external-wait compatibility states, not preferred internal loop terminals
 - unexpected failures fail closed into `blocked_needs_user_decision`
+- round-cap exhaustion in a concluded Copilot cycle is not a blanket stop: significant post-convergence logic/test changes on a newer head open a new Copilot cycle and require re-request before pre-approval

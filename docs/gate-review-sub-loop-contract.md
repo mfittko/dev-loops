@@ -194,6 +194,14 @@ Each gate chain exits when one of these conditions is met:
 | Maximum retry cycles exhausted without reaching `clean` | Stop; escalate to operator |
 | Fix cycle produces no net progress (same findings after fix attempt) | Stop; escalate to operator |
 
+## Copilot round-cap interplay
+
+The gate chain can complete cleanly at a head that was accepted via round-cap fallback.
+If significant post-convergence changes later land on a newer head (product/test logic,
+not doc/message/comment-only edits), that opens a new Copilot review cycle and requires
+another Copilot round before pre-approval proceeds. The prior cycle's cap does not carry
+forward to suppress that new-cycle re-request when regular rounds are already > 0.
+
 ## Machine-parseable fields
 
 The sub-loop execution shape can be referenced programmatically via these fields:
