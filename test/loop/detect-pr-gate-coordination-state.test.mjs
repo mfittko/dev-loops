@@ -979,9 +979,10 @@ test("pre-approval-gate-detector overrides to pre_approval_gate_needed when neve
   }
 });
 
-test("detect-pr-gate-coordination-state reaches final approval without an approved retrospective checkpoint (#1077 advisory)", async () => {
+test("detect-pr-gate-coordination-state progresses past the removed retrospective gate without an approved checkpoint (#1077 advisory)", async () => {
   // The retrospective merge gate is gone (#1077, Reading B): a green PR with no
-  // retrospective checkpoint reaches FINAL_APPROVAL_READY, never retrospective_gate_pending.
+  // retrospective checkpoint reaches its normal post-draft review progression
+  // (post_draft_external_review / request_copilot_review), never retrospective_gate_pending.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-retro-"));
 
   try {
