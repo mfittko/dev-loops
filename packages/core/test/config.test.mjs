@@ -23,6 +23,8 @@ import {
   resolveGateAnglesDynamic,
   resolveWorkflowConfig,
   resolveLightMode,
+  resolveGateDispatchMode,
+  GATE_FULL_LABEL,
   resolveRequireFanoutEvidence,
   resolveMaxFanoutReviewers,
   resolveGatePostFindingsComments,
@@ -2461,6 +2463,81 @@ test("resolveLightMode uses built-in defaults when enabled with no overrides", (
 test("resolveLightMode with built-in defaults (disabled)", () => {
   const result = resolveLightMode({ version: 1 });
   assert.equal(result, null);
+});
+
+// ── Gate dispatch mode ───────────────────────────────────────────────────
+
+const lightConfig = (over = {}) => ({
+  version: 1,
+  localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20, ...over } },
+  gates: {
+    preApproval: { blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"] },
+  },
+});
+
+test("resolveGateDispatchMode: gate:full label forces full fan-out even when tiny", () => {
+  const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+    scope: { filesChanged: 1, linesChanged: 1 },
+    hasFullLabel: true,
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "gate_full_label");
+});
+
+test("resolveGateDispatchMode: light mode disabled → full fan-out", () => {
+  const result = resolveGateDispatchMode(lightConfig({ enabled: false }), "preApproval", {
+    scope: { filesChanged: 1, linesChanged: 1 },
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "light_mode_disabled");
+});
+
+test("resolveGateDispatchMode: over threshold on files → full fan-out", () => {
+  const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+    scope: { filesChanged: 3, linesChanged: 5 },
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "over_threshold");
+});
+
+test("resolveGateDispatchMode: over threshold on lines → full fan-out", () => {
+  const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+    scope: { filesChanged: 1, linesChanged: 21 },
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "over_threshold");
+});
+
+test("resolveGateDispatchMode: under threshold, no findings → inline", () => {
+  const config = lightConfig();
+  const result = resolveGateDispatchMode(config, "preApproval", {
+    scope: { filesChanged: 2, linesChanged: 20 },
+  });
+  assert.equal(result.mode, "inline");
+  assert.equal(result.reason, "under_threshold");
+  assert.deepStrictEqual(result.threshold, resolveLightMode(config));
+});
+
+test("resolveGateDispatchMode: under threshold + blocking inline finding → escalated", () => {
+  const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["worth-fixing-now"],
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "escalated");
+});
+
+test("resolveGateDispatchMode: under threshold + only non-blocking finding → inline", () => {
+  const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["defer"],
+  });
+  assert.equal(result.mode, "inline");
+  assert.equal(result.reason, "under_threshold");
+});
+
+test("GATE_FULL_LABEL is gate:full", () => {
+  assert.equal(GATE_FULL_LABEL, "gate:full");
 });
 
 // ── Light mode eligibility ───────────────────────────────────────────────
