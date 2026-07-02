@@ -10,7 +10,7 @@ The board provides durable, visible, shared state for queue ordering and item st
 - **Visible** — operators can inspect and reorder the queue from the GitHub UI
 - **Authoritative for membership + ordering when configured** — when a board is configured (`queue.projectNumber` or `queue.boardTitle`), `dev-loops queue run` reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` before running, so the board (not hand edits) drives **which** issues are worked and their order. Without a configured board, `dev-loops queue` falls back to the local queue file's entry order.
 
-> Add work to the queue via the board (`dev-loops queue add ... --column "Next Up"`), not by hand-editing `.pi/dev-loop-queue.json`. With a populated board and an empty local queue, the runner reconciles the board's `Next Up` items in rather than reporting an empty queue. If a board is configured but `Next Up` is empty, the runner reports "Board configured but Next Up is empty; nothing to run" — distinct from the unconfigured-and-empty "Queue is empty".
+> Add work to the queue via the board (`dev-loops queue add ... --column "Next Up"`), not by hand-editing `.pi/dev-loop-queue.json`. With a populated board and an empty local queue, the runner reconciles the board's `Next Up` items in rather than reporting an empty queue. If a board is configured but `Next Up` is empty, the runner reports the canonical "queue empty — prioritize Backlog items into Next Up" (`reason: "next-up-empty"`) — distinct from the unconfigured-and-empty "Queue is empty".
 
 ## Setup
 

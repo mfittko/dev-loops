@@ -157,8 +157,10 @@ it is the **authoritative source of queue membership and ordering** — not just
   pre-step is fail-open and attempts no board mutations on error, but the driver then re-queries
   `Next Up` itself and stops on the same error, so the net outcome is a halted run, not a
   local-order run.)
-- **Configured but `Next Up` is empty**: the run reports "Board configured but Next Up is empty;
-  nothing to run", distinct from the unconfigured "Queue is empty".
+- **Configured but `Next Up` is empty**: the run reports the canonical fail-closed outcome
+  `reason: "next-up-empty"`, message "queue empty — prioritize Backlog items into Next Up"
+  (the same string the driver emits, so operators see one message regardless of which layer
+  detects it), distinct from the unconfigured "Queue is empty".
 - **Configured but a `Next Up` target is missing locally**: when `Next Up` lists an item with no
   matching entry in `.pi/dev-loop-queue.json` (reconcile not run/persisted, or the board changed
   since reconcile), the driver **fails closed** and stops with `reason: "next-up-target-missing-locally"`
@@ -166,6 +168,12 @@ it is the **authoritative source of queue membership and ordering** — not just
   reconcile / re-add the items. No Backlog pickup.
 - **Not configured**: the queue falls back to its local entry order (`.pi/dev-loop-queue.json`),
   and the legacy "Queue is empty" message applies when that file has no pending entries.
+
+> **Limitation:** the normative `Next Up` rule (and `--next-up`, `queue add`/`list`/`move`)
+> currently assumes the **default** `Next Up` display name. Renaming the logical column via
+> `queue.statusColumns.next_up` (and siblings) is respected by board-sync but **not** yet by the
+> ordering + projects-script layer, so a renamed Next Up column is not fully supported here.
+> Honoring `statusColumns` across those layers is tracked in #1098.
 
 Board state is read at dispatch time; the queue does not continuously sync local state to board
 state. When a board is configured, the pickup posture is deliberately **fail-closed**: a transient

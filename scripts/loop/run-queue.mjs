@@ -129,9 +129,11 @@ async function main() {
     // resolution failure (which falls through to the local queue below).
     console.log(JSON.stringify({
       ok: true,
-      message: "Board configured but Next Up is empty; nothing to run",
+      // Canonical empty-Next-Up outcome — matches queue-driver.mjs so operators
+      // see one message regardless of which layer detects it.
+      message: "queue empty — prioritize Backlog items into Next Up",
       boardConfigured: true,
-      reason: null,
+      reason: "next-up-empty",
       results: [],
     }));
     return;

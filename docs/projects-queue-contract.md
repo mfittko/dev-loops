@@ -306,6 +306,10 @@ When a queue board is configured, `Next Up` is the **normative, fail-closed pick
 - **A single-issue/PR run never reaches this gating.** Running a specific `--issue`/`--pr` target goes through the dev-loop routing path, not the queue driver, so `Next Up` gating does not apply to it at all — it runs regardless of the board. The queue driver itself has no explicit-target flag; `Next Up` gating is unconditional for every item the driver picks.
 - **No board configured.** When `.devloops` does not configure a board, there is no `Next Up` to gate on; the driver keeps its legacy local (topological/insertion) order.
 
+### Limitation: default `Next Up` display name
+
+The normative `Next Up` rule above currently assumes the **default** `Next Up` display name. Honoring a `queue.statusColumns.next_up` override (and its siblings `in_progress`/`done`) across the pickup-ordering and projects-script layer (`resolveNextUpOrder`, `queue add`, `queue list`, `queue move`) is **not yet implemented** — those layers key off the literal `Next Up`/`In Progress`/`Done` names even though board-sync respects `statusColumns`. Renaming the logical Next Up column via `statusColumns` is therefore not fully supported by this contract yet; that work is tracked in #1098.
+
 ### Example
 
 ```yaml
