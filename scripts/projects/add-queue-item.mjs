@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
-import { resolveSettings } from "./_resolve-project.mjs";
+import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
@@ -117,7 +117,6 @@ function parseCliArgs(argv) {
 
 const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const REPO_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
-const GLOBAL_NODE_ID_RE = /^[A-Za-z0-9_]+$/;
 
 function validateRepo(repo) {
   if (!repo || typeof repo !== "string") {
@@ -140,30 +139,6 @@ function validateRepo(repo) {
     throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
   }
   return repo;
-}
-
-function parseProjectRef(raw) {
-  if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
-    throw Object.assign(new Error("--project is required"), { code: "INVALID_PROJECT" });
-  }
-  const trimmed = raw.trim();
-  const asNum = Number(trimmed);
-  if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
-    return { kind: "number", value: asNum };
-  }
-  if (trimmed === "0") {
-    throw Object.assign(
-      new Error(`--project must be a positive integer or a node ID, got "${raw}"`),
-      { code: "INVALID_PROJECT" },
-    );
-  }
-  if (GLOBAL_NODE_ID_RE.test(trimmed)) {
-    return { kind: "id", value: trimmed };
-  }
-  throw Object.assign(
-    new Error(`--project must be a positive integer or a node ID, got "${raw}"`),
-    { code: "INVALID_PROJECT" },
-  );
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────
@@ -392,19 +367,7 @@ async function main(args, { env = process.env, runChild } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
   const [owner, repoName] = repo.split("/");
-  // Board: explicit --project ref wins; otherwise resolve by board title from
-  // .devloops (passed in as args.projectTitle by runCli). Fail closed if neither.
-  const hasProjectRef = typeof args.project === "string" && args.project.trim().length > 0;
-  const projectRef = hasProjectRef ? parseProjectRef(args.project) : null;
-  const projectTitle = !hasProjectRef && typeof args.projectTitle === "string" && args.projectTitle.trim().length > 0
-    ? args.projectTitle.trim()
-    : null;
-  if (!projectRef && !projectTitle) {
-    throw Object.assign(
-      new Error("--project is required (or set queue.projectNumber / queue.boardTitle in .devloops)"),
-      { code: "INVALID_PROJECT" },
-    );
-  }
+  const selector = resolveProjectSelector(args);
   const itemNumber = args.item;
   if (!Number.isInteger(itemNumber) || itemNumber < 1) {
     throw Object.assign(new Error("--item is required and must be a positive integer"), { code: "INVALID_ITEM" });
@@ -425,20 +388,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 
   // 2. Resolve project
   const projects = await listAllProjects(owner, ownerKind, env, child);
-  const project = projectRef
-    ? (projectRef.kind === "id"
-        ? projects.find((p) => p.id === projectRef.value)
-        : projects.find((p) => p.number === projectRef.value))
-    : projects.find((p) => p.title === projectTitle);
-  if (!project) {
-    const desc = projectRef
-      ? (projectRef.kind === "id" ? `"${projectRef.value}"` : `number ${projectRef.value}`)
-      : `title "${projectTitle}"`;
-    throw Object.assign(
-      new Error(`Project ${desc} not found under owner "${owner}"`),
-      { code: "PROJECT_NOT_FOUND" },
-    );
-  }
+  const project = findProject(projects, selector, owner);
 
   // 3. Resolve Status field and target column
   const fieldNodes = await listAllFields(project.id, env, child);
@@ -570,12 +520,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
   }
 
   // Resolve the board from .devloops when --project is absent.
-  // Precedence: explicit --project flag > queue.projectNumber/boardTitle.
-  if (args.project === undefined) {
-    const settings = resolveSettings(cwd);
-    if (settings?.project) args.project = String(settings.project);
-    else if (settings?.title) args.projectTitle = settings.title;
-  }
+  applyDevloopsBoard(args, cwd);
 
   try {
     const result = await main(args, { env, runChild });
