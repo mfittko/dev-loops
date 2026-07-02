@@ -20,7 +20,9 @@ Options:
                           column order. Emits { ok, groups: { <status>: { count, items } } }.
   --group-by status       Alias for --summary. Only "status" is supported.
   --done-limit <n>        With --summary: cap the "Done" group's items array to
-                          <n> (count stays the true total). Use 0 for counts only.
+                          <n> (or the last/terminal board column if no column is
+                          named "Done"). Count stays the true total; use 0 for
+                          counts only.
   --help, -h              Show this help.
 
 Grouping / aggregation is done via --summary (this mode). Do NOT pipe flat
@@ -520,7 +522,9 @@ async function main(args, { env = process.env, runChild } = {}) {
 
   // 5a. Summary mode: group by Status column in board option order.
   if (args.summary) {
-    const groups = {};
+    // Object.create(null): board option names are free text, so a column named
+    // "__proto__"/"constructor" must be an own key, not touch Object.prototype.
+    const groups = Object.create(null);
     for (const option of statusField.options) {
       groups[option.name] = { count: 0, items: [] };
     }
@@ -532,8 +536,14 @@ async function main(args, { env = process.env, runChild } = {}) {
       group.count += 1;
       group.items.push(r);
     }
-    if (args.doneLimit !== undefined && groups.Done) {
-      groups.Done.items = groups.Done.items.slice(0, args.doneLimit);
+    if (args.doneLimit !== undefined) {
+      // Cap "Done" per the issue AC; if no column is literally named "Done",
+      // fall back to the last board option (conventionally the terminal column)
+      // so --done-limit is honest instead of a silent no-op.
+      const doneGroup = groups.Done ?? groups[statusField.options.at(-1)?.name];
+      if (doneGroup) {
+        doneGroup.items = doneGroup.items.slice(0, args.doneLimit);
+      }
     }
     return { ok: true, groups };
   }

@@ -638,6 +638,85 @@ describe("list-queue-items", () => {
       assert.deepEqual(result.groups.Done.items, []);
     });
 
+    it("board option named '__proto__' is an own group with correct count/items", async () => {
+      const protoField = {
+        id: "PVTSSF_status",
+        name: "Status",
+        options: [
+          { id: "opt1", name: "Backlog" },
+          { id: "optp", name: "__proto__" },
+        ],
+      };
+      const items = [
+        makeItem("PVTI_1", "I_1", "Issue", 10, "A", "https://github.com/mfittko/repo/issues/10", "Backlog"),
+        makeItem("PVTI_2", "I_2", "Issue", 20, "B", "https://github.com/mfittko/repo/issues/20", "__proto__"),
+        makeItem("PVTI_3", "I_3", "Issue", 30, "C", "https://github.com/mfittko/repo/issues/30", "__proto__"),
+      ];
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([protoField]) },
+        { payload: getItemsResponse(items) },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", summary: true },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.ok(Object.hasOwn(result.groups, "__proto__"));
+      assert.equal(result.groups["__proto__"].count, 2);
+      assert.equal(result.groups["__proto__"].items.length, 2);
+      assert.equal(result.groups["__proto__"].items[0].issueNumber, 20);
+      assert.equal(result.groups.Backlog.count, 1);
+    });
+
+    it("item with non-null status not among board options is dropped, no rogue key", async () => {
+      const items = [
+        makeItem("PVTI_1", "I_1", "Issue", 10, "A", "https://github.com/mfittko/repo/issues/10", "Backlog"),
+        // "Archived" is not a current board option (renamed/deleted)
+        makeItem("PVTI_2", "I_2", "Issue", 20, "B", "https://github.com/mfittko/repo/issues/20", "Archived"),
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", summary: true },
+        { env: {}, runChild: mockRunChild(summaryResponses(items)) },
+      );
+      assert.equal(Object.hasOwn(result.groups, "Archived"), false);
+      assert.deepEqual(Object.keys(result.groups), STATUS_FIELD.options.map((o) => o.name));
+      assert.equal(result.groups.Backlog.count, 1);
+      const total = Object.values(result.groups).reduce((s, g) => s + g.count, 0);
+      assert.equal(total, 1); // Archived item dropped
+    });
+
+    it("--done-limit caps the terminal column when no column is named 'Done'", async () => {
+      const shippedField = {
+        id: "PVTSSF_status",
+        name: "Status",
+        options: [
+          { id: "opt1", name: "Backlog" },
+          { id: "opts", name: "Shipped" },
+        ],
+      };
+      const items = [
+        makeItem("PVTI_1", "I_1", "Issue", 10, "A", "https://github.com/mfittko/repo/issues/10", "Backlog"),
+        makeItem("PVTI_2", "I_2", "Issue", 20, "B", "https://github.com/mfittko/repo/issues/20", "Shipped"),
+        makeItem("PVTI_3", "I_3", "Issue", 30, "C", "https://github.com/mfittko/repo/issues/30", "Shipped"),
+        makeItem("PVTI_4", "I_4", "Issue", 40, "D", "https://github.com/mfittko/repo/issues/40", "Shipped"),
+      ];
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([shippedField]) },
+        { payload: getItemsResponse(items) },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", summary: true, doneLimit: 1 },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.groups.Shipped.count, 3); // true total unchanged
+      assert.equal(result.groups.Shipped.items.length, 1); // capped
+      assert.equal(result.groups.Backlog.count, 1);
+      assert.equal(result.groups.Backlog.items.length, 1);
+    });
+
     it("rejects --summary with --column", async () => {
       await assert.rejects(
         () => main(
