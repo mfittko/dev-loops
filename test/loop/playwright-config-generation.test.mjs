@@ -20,7 +20,15 @@ test('playwright.config generates one webkit project per registered slice', () =
   const projects = playwrightConfig.projects;
   assert.ok(Array.isArray(projects), 'config exposes a projects array');
 
-  const projectNames = projects.map((p) => p.name).sort();
+  const names = projects.map((p) => p.name);
+  for (const name of names) {
+    assert.ok(typeof name === 'string' && name.length > 0, 'each project.name is a non-empty string');
+  }
+  // Playwright requires unique project names; a duplicate sliceId would still
+  // pass a set-based comparison, so assert uniqueness explicitly.
+  assert.equal(new Set(names).size, names.length, 'project names are unique');
+
+  const projectNames = [...names].sort();
   assert.deepEqual(projectNames, [...expectedSliceIds].sort());
 
   for (const project of projects) {

@@ -17,8 +17,10 @@ export default defineConfig({
   timeout: 30_000,
   fullyParallel: false,
   retries: 0,
-  // ponytail: html outputFolder can't be per-project; per-project outputDir gives per-slice artifacts.
-  reporter: [["list"], ["html", { open: "never" }]],
+  // Note: the html reporter's outputFolder is global, not per-project, but each
+  // smoke npm script runs exactly one project and sets PW_UI_SLICE, so each
+  // slice's HTML report keeps its playwright-report/ui-smoke/<sliceId>/ contract path.
+  reporter: [["list"], ["html", { open: "never", outputFolder: `playwright-report/ui-smoke/${process.env.PW_UI_SLICE ?? "all"}` }]],
   use: {
     headless: true,
     screenshot: "only-on-failure",
