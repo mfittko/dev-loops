@@ -132,7 +132,7 @@ Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review
 
 ## Light mode (small changes)
 
-Light mode is wired into gate dispatch. A PR that is **under threshold** (≤ `maxLines` lines changed AND ≤ `maxFiles` files, per `.devloops` field `localImplementation.lightMode`; defaults `maxLines: 20`, `maxFiles: 2`) AND carries no `gate:full` label collapses BOTH `draft_gate` and `pre_approval_gate` to a single inline single-agent correctness + no-op check. The Copilot review request and its polling are skipped.
+Light mode is wired into gate dispatch. A PR that is **under threshold** (≤ `maxLines` lines changed AND ≤ `maxFiles` files, per `.devloops` field `localImplementation.lightMode` — this repo sets `maxLines: 20`, `maxFiles: 2`; the shipped built-in default is disabled at `maxFiles: 3` / `maxLines: 200`) AND carries no `gate:full` label collapses BOTH `draft_gate` and `pre_approval_gate` to a single inline single-agent correctness + no-op check. The Copilot review request and its polling are skipped.
 
 **Escalation:**
 1. Auto-escalate — if the inline check surfaces any finding whose severity is in the gate's `blockCleanOnFindingSeverities` (i.e. ≥ `worth-fixing-now`), dispatch escalates to full fan-out.

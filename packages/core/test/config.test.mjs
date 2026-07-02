@@ -2508,6 +2508,12 @@ test("resolveGateDispatchMode: over threshold on lines → full fan-out", () => 
   assert.equal(result.reason, "over_threshold");
 });
 
+test("resolveGateDispatchMode: missing/empty scope → over_threshold (Infinity fail-safe)", () => {
+  const result = resolveGateDispatchMode(lightConfig(), "preApproval", { scope: {} });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "over_threshold");
+});
+
 test("resolveGateDispatchMode: under threshold, no findings → inline", () => {
   const config = lightConfig();
   const result = resolveGateDispatchMode(config, "preApproval", {

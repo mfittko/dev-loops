@@ -17,6 +17,12 @@ Options:
   --full-label                 PR has the ${GATE_FULL_LABEL} label (forces full fan-out)
   --inline-severities <csv>    Comma-separated severities from the inline pass (escalation phase)
   --help, -h                   Show this help
+Output (stdout, JSON):
+  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20 } }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20 } }
+  { "ok": true, "gate": "draft", "scope": { "ok": false, ... }, "mode": "full_fanout", "reason": "scope_detection_failed", "threshold": null }
+Error output (stderr, JSON):
+  { "ok": false, "error": "...", "usage"?: "..." }
 Exit codes:
   0   Success
   1   Error
@@ -78,6 +84,21 @@ export async function run(argv) {
   try {
     const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
     const scope = detectScope({ base: opts.base, head: opts.head });
+    // Fail CLOSED on unmeasurable scope: a broken/failed diff must route to the
+    // full gate, never silently collapse to inline (which would bypass review).
+    if (scope.ok === false) {
+      process.stdout.write(
+        JSON.stringify({
+          ok: true,
+          gate: opts.gate,
+          scope,
+          mode: "full_fanout",
+          reason: "scope_detection_failed",
+          threshold: null,
+        }) + "\n"
+      );
+      return;
+    }
     const decision = resolveGateDispatchMode(config, opts.gate, {
       scope,
       hasFullLabel: opts.hasFullLabel,
