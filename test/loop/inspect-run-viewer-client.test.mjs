@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -31,7 +31,7 @@ import {
   REVIEWER_STATE,
   REVIEWER_TRANSITIONS,
 } from "../../packages/core/src/loop/reviewer-loop-state.mjs";
-import { resolveMermaidBrowserAssetPath } from "../../scripts/loop/inspect-run-viewer/constants.mjs";
+import { MERMAID_BROWSER_ASSET_PATH } from "../../scripts/loop/inspect-run-viewer/constants.mjs";
 import { makeSnapshot } from "./inspect-run-viewer-test-helpers.mjs";
 test("createInspectionViewerAdapter loadSnapshot validates target deterministically", async () => {
   const adapter = createInspectionViewerAdapter({
@@ -405,25 +405,10 @@ test("buildInspectionMermaidGraph normalizes and de-duplicates transition tokens
   assert.match(html, /copilot layer:[\s\S]*full authoritative state machine shown; waiting_for_ci, ready_to_rerequest_review/);
   assert.doesNotMatch(html, /waiting_for_ci,\s*waiting_for_ci/);
 });
-test("resolveMermaidBrowserAssetPath prefers module resolution when available", () => {
-  const resolvedPath = resolveMermaidBrowserAssetPath({
-    resolveImpl: (specifier) => {
-      assert.equal(specifier, "mermaid/dist/mermaid.min.js");
-      return "/tmp/custom-mermaid/mermaid.min.js";
-    },
-  });
-
-  assert.equal(resolvedPath, "/tmp/custom-mermaid/mermaid.min.js");
-});
-
-test("resolveMermaidBrowserAssetPath falls back to the repo-relative mermaid asset path", () => {
-  const resolvedPath = resolveMermaidBrowserAssetPath({
-    resolveImpl: () => {
-      throw new Error("module resolution unavailable");
-    },
-  });
-
-  assert.match(resolvedPath, /node_modules[\\/]mermaid[\\/]dist[\\/]mermaid\.min\.js$/);
+test("MERMAID_BROWSER_ASSET_PATH points at the vendored mermaid bundle and the file exists", async () => {
+  assert.match(MERMAID_BROWSER_ASSET_PATH, /scripts[\\/]loop[\\/]inspect-run-viewer[\\/]vendor[\\/]mermaid\.min\.js$/);
+  const assetStat = await stat(MERMAID_BROWSER_ASSET_PATH);
+  assert.ok(assetStat.isFile());
 });
 test("loadMermaidBrowserScript clears failed cache entries so later retries can recover", async () => {
   let callCount = 0;
