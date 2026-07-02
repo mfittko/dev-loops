@@ -504,6 +504,31 @@ describe("move-queue-item", () => {
       assert.equal(result.ok, true);
       assert.equal(result.item.newColumn, "Next Up");
     });
+
+    it("main() resolves the board by title when --project is omitted (projectTitle)", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+          ]),
+        },
+        { payload: updateItemFieldResponse() },
+      ];
+      const result = await main(
+        {
+          repo: "mfittko/dev-loops",
+          projectTitle: "Dev Loop Queue",
+          item: "10",
+          toColumn: "Next Up",
+        },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.newColumn, "Next Up");
+    });
   });
 
   describe("regression — well-formed GraphQL for both lookup paths", () => {

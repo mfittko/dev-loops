@@ -345,6 +345,28 @@ describe("reorder-queue-item — URI project resolution", () => {
   });
 });
 
+describe("reorder-queue-item — board title resolution (no --project)", () => {
+  it("main() resolves the board by title when --project is omitted (projectTitle)", async () => {
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+      { payload: getItemsByContentResponse([makeItemNode("PVTI_item_1", 630)]) },
+      { payload: updatePositionResponse() },
+    ];
+    const result = await main(
+      {
+        repo: "mfittko/dev-loops",
+        projectTitle: "Dev Loop Queue",
+        item: "630",
+      },
+      { runChild: mockRunChild(responses) },
+    );
+    assert.ok(result.ok);
+    assert.strictEqual(result.item.itemId, "PVTI_item_1");
+    assert.strictEqual(result.item.issueNumber, 630);
+  });
+});
+
 describe("reorder-queue-item — mutation input construction", () => {
   it("constructs top-position mutation input correctly", async () => {
     const responses = [

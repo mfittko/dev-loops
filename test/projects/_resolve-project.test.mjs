@@ -132,6 +132,13 @@ describe("_resolve-project — parseProjectRef", () => {
     }
   });
 
+  it("throws INVALID_PROJECT for a board URI with project number 0", () => {
+    assert.throws(
+      () => parseProjectRef("https://github.com/users/mfittko/projects/0"),
+      (err) => err.code === "INVALID_PROJECT",
+    );
+  });
+
   it("throws INVALID_PROJECT for an https URL that is not a Projects V2 board URI", () => {
     assert.throws(
       () => parseProjectRef("https://github.com/users/mfittko/repos/dev-loops"),

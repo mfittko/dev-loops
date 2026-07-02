@@ -58,6 +58,12 @@ function parseProjectRef(raw) {
     const ownerKind = uriMatch[1] === "users" ? "user" : "org";
     const owner = uriMatch[2];
     const number = Number(uriMatch[3]);
+    if (number < 1) {
+      throw Object.assign(
+        new Error(`--project board URI must reference a positive project number, got "${raw}"`),
+        { code: "INVALID_PROJECT" },
+      );
+    }
     return { kind: "uri", number, owner, ownerKind };
   }
 
