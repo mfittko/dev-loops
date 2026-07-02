@@ -16,12 +16,9 @@
     "./claude/hook-decisions": "./src/claude/hook-decisions.mjs",
     "./config": "./src/config/config.mjs",
     "./debt/cluster": "./src/debt/cluster.mjs",
-    "./debt/finding": "./src/debt/debt-finding.mjs",
     "./debt/remediation-to-issue": "./src/debt/remediation-to-issue.mjs",
-    "./debt/score": "./src/debt/score.mjs",
     "./debt/shape": "./src/debt/shape.mjs",
     "./debt/signal": "./src/debt/debt-signal.mjs",
-    "./debt/signals": "./src/debt/deep-persona-signals.mjs",
     "./github/copilot-helpers": "./src/github/copilot-helpers.mjs",
     "./github/repo-slug": "./src/github/repo-slug.mjs",
     "./github/review-threads": "./src/github/review-threads.mjs",
@@ -57,7 +54,6 @@
     "./loop/timeout-policy": "./src/loop/timeout-policy.mjs",
     "./loop/tracker-pr-state": "./src/loop/tracker-pr-state.mjs",
     "./loop/ui-e2e-scoping": "./src/loop/ui-e2e-scoping.mjs",
-    "./refinement/ac-dod-matrix": "./src/refinement/ac-dod-matrix.mjs",
     "./harness": "./src/harness/index.mjs",
     "./loop/worktree-guard": "./src/loop/worktree-guard.mjs",
     "./loop/tracker-first-loop-state": "./src/loop/tracker-first-loop-state.mjs"
@@ -65,8 +61,7 @@
   "bin": {
     "dev-loops-log-bash-exit-1": "./bin/log-bash-exit-1.mjs",
     "dev-loops-ensure-phase-files": "./bin/ensure-phase-files.mjs",
-    "dev-loops-parse-review-threads": "./bin/parse-review-threads.mjs",
-    "dev-loops-capture-deep-persona-signals": "./bin/capture-deep-persona-signals.mjs"
+    "dev-loops-parse-review-threads": "./bin/parse-review-threads.mjs"
   },
   "files": [
     "src/**/*.mjs",

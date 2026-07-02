@@ -103,7 +103,7 @@ Under local-planning, one plan file moves through four stages. Each stage has a 
 
 ### P1 — Plan-file artifact + config (#949)
 
-The plan file is a phase-doc-format markdown document. Its directory is `localPlanning.plansDir`, which defaults to `docs/phases/` (built-in default in `config.mjs`, mirrored in `extension-defaults.yaml`; `resolvePlansDir(config)` resolves it). Its required base authoring sections — `## Status`, `## Objective`, `## In scope`, `## Explicit non-goals` — and the validator `scripts/refine/validate-plan-file.mjs` (`validatePlanFile`, distinct `missing_*` codes per absent or empty section) are defined in the [Plan-file Contract](plan-file-contract.md).
+The plan file is a phase-doc-format markdown document. It lives under `docs/phases/`, the existing phase-docs directory. Its required base authoring sections — `## Status`, `## Objective`, `## In scope`, `## Explicit non-goals` — and the validator `scripts/refine/validate-plan-file.mjs` (`validatePlanFile`, distinct `missing_*` codes per absent or empty section) are defined in the [Plan-file Contract](plan-file-contract.md).
 
 ### P2 — Intake (#950)
 

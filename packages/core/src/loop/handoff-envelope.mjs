@@ -571,13 +571,6 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     envelope.retrospectiveFindings = retrospectiveFindings;
   }
 
-  // Optional refinement contract (AC/DoD matrix) from the refiner.
-  // Set via options.refinementContract, bundle.refinementContract, or resolverOutput.refinementContract.
-  const refinementContract = options.refinementContract ?? bundle.refinementContract ?? resolverOutput.refinementContract ?? null;
-  if (refinementContract != null) {
-    envelope.refinementContract = refinementContract;
-  }
-
   return deepFreeze(envelope);
 }
 
@@ -808,79 +801,6 @@ export function validateHandoffEnvelope(envelope) {
       reason: `must be one of: ${VALID_ASYNC_START_MODES.join(", ")}`,
       got: envelope.asyncStartEffective,
     });
-  }
-
-  // ----- refinementContract (optional) -----
-  if (envelope.refinementContract !== undefined && envelope.refinementContract !== null) {
-    if (typeof envelope.refinementContract !== "object" || Array.isArray(envelope.refinementContract)) {
-      errors.push({
-        field: "refinementContract",
-        reason: "if present, must be a non-array object with schema, items, generatedAt, and isComplete",
-        got: envelope.refinementContract,
-      });
-    } else {
-      if (envelope.refinementContract.schema !== "ac-dod-matrix/v1") {
-        warnings.push({
-          field: "refinementContract.schema",
-          reason: "expected 'ac-dod-matrix/v1'",
-          got: envelope.refinementContract.schema,
-        });
-      }
-      if (!Array.isArray(envelope.refinementContract.items) || envelope.refinementContract.items.length === 0) {
-        errors.push({
-          field: "refinementContract.items",
-          reason: "must be a non-empty array of AC/DoD matrix items",
-          got: envelope.refinementContract.items,
-        });
-      } else {
-        const bad = [];
-        for (let i = 0; i < envelope.refinementContract.items.length; i++) {
-          const item = envelope.refinementContract.items[i];
-          if (
-            !item || typeof item !== "object" ||
-            typeof item.item !== "string" || !item.item.trim() ||
-            !["AC", "DoD", "Non-goal"].includes(item.type) ||
-            !["Met", "Partial", "Unmet", "Unverified"].includes(item.status) ||
-            typeof item.evidence !== "string" ||
-            typeof item.notes !== "string"
-          ) {
-            bad.push(i);
-          }
-        }
-        if (bad.length > 0) {
-          errors.push({
-            field: "refinementContract.items",
-            reason: `entries at indices [${bad.join(",")}] must have valid item, type, status, evidence, and notes fields`,
-            got: envelope.refinementContract.items,
-          });
-        }
-      }
-      if (typeof envelope.refinementContract.generatedAt !== "string" || isNaN(Date.parse(envelope.refinementContract.generatedAt))) {
-        errors.push({
-          field: "refinementContract.generatedAt",
-          reason: "must be a valid ISO 8601 timestamp",
-          got: envelope.refinementContract.generatedAt,
-        });
-      }
-      if (typeof envelope.refinementContract.isComplete !== "boolean") {
-        errors.push({
-          field: "refinementContract.isComplete",
-          reason: "must be a boolean",
-          got: envelope.refinementContract.isComplete,
-        });
-      } else if (envelope.refinementContract.items && Array.isArray(envelope.refinementContract.items)) {
-        const allMet = envelope.refinementContract.items.every(
-          (item) => item && typeof item === "object" && item.status === "Met"
-        );
-        if (envelope.refinementContract.isComplete !== allMet) {
-          errors.push({
-            field: "refinementContract.isComplete",
-            reason: "must match items status (true iff every item has status 'Met')",
-            got: { isComplete: envelope.refinementContract.isComplete, allItemsMet: allMet },
-          });
-        }
-      }
-    }
   }
 
   // ----- retrospectiveFindings (optional, advisory — issue #1077) -----

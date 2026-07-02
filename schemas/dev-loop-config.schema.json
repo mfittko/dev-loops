@@ -208,16 +208,8 @@
       }
     },
     "localPlanning": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Local-planning mode settings: where local plan files (docs/phases-style phase docs) live for plan-file intake.",
-      "properties": {
-        "plansDir": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Repo-relative directory holding local plan files (phase docs). Defaults to docs/phases/."
-        }
-      }
+      "deprecated": true,
+      "description": "Deprecated (removed in #1088). Accepted for backward compatibility but ignored \u2014 nothing reads it."
     }
   },
   "$defs": {

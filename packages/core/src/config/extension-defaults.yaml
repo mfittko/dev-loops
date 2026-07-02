@@ -107,11 +107,6 @@ workflow:
   # via its own repo-root .devloops (which takes precedence over these extension defaults).
   devModeDefault: false
 
-# Local-planning: where persisted markdown plan files (phase-doc format) live
-# when work originates from a plan file rather than a tracker issue (#949).
-localPlanning:
-  plansDir: docs/phases/
-
 # Light-mode threshold for small local changes.
 localImplementation:
   lightMode:

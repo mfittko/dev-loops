@@ -145,16 +145,6 @@ const WorktreeConfig = z.strictObject({
   linkOnInit: z.array(z.string().trim().min(1)).optional(),
 });
 
-/**
- * Local-planning config (#949): where persisted markdown plan files (phase-doc
- * format) live when work originates from a plan file rather than a tracker
- * issue. `plansDir` is a repo-relative directory; defaults to the existing
- * phase-docs directory. See skills/docs/plan-file-contract.md.
- */
-const LocalPlanningConfig = z.strictObject({
-  plansDir: z.string().trim().min(1).optional(),
-});
-
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */
 const InternalPatternsConfig = z.array(z.string().trim().min(1)).min(1);
 
@@ -206,7 +196,9 @@ export const DevLoopConfigSchema = z.strictObject({
   personas: PersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.optional(),
-  localPlanning: LocalPlanningConfig.optional(),
+  // Deprecated (removed in #1088): tolerated so consumer .devloops files that
+  // still carry a localPlanning block keep parsing. Accepted, never read.
+  localPlanning: z.unknown().optional(),
 });
 
 // ============================================================================
@@ -255,7 +247,6 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
     "^test/",
   ]),
   worktree: Object.freeze({ copyOnInit: Object.freeze([]), linkOnInit: Object.freeze([]) }),
-  localPlanning: Object.freeze({ plansDir: "docs/phases/" }),
 });
 
 // ============================================================================
@@ -277,7 +268,9 @@ export const FileConfigSchema = z.strictObject({
   personas: FilePersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.partial().optional(),
-  localPlanning: LocalPlanningConfig.partial().optional(),
+  // Deprecated (removed in #1088): tolerated so consumer .devloops files that
+  // still carry a localPlanning block keep parsing. Accepted, never read.
+  localPlanning: z.unknown().optional(),
 });
 
 // ============================================================================
@@ -976,30 +969,6 @@ export function resolveRequireFanoutEvidence(config) {
   return config?.gates?.requireFanoutEvidence !== false;
 }
 
-/** Default parallel fan-out reviewer cap (mirrors GatesConfig.maxFanoutReviewers). */
-export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
-
-/**
- * Resolve the parallel fan-out reviewer cap for the gate sub-loop.
- *
- * Returns the configured `gates.maxFanoutReviewers` when it is an integer in
- * the schema-bounded range 1..64; otherwise the built-in default (8). Clamping
- * here (not just the Zod schema) keeps programmatically-constructed config
- * objects that bypass schema validation within the same bound. The fan-out
- * spawns at most this many scoped `review` reviewers in parallel; overflow runs
- * sequentially.
- *
- * @param {DevLoopConfig} config
- * @returns {number}
- */
-export function resolveMaxFanoutReviewers(config) {
-  const raw = config?.gates?.maxFanoutReviewers;
-  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 64) {
-    return raw;
-  }
-  return DEFAULT_MAX_FANOUT_REVIEWERS;
-}
-
 /**
  * Resolve whether the consolidated gate fan-out findings should be posted as a
  * visible, marker-tagged PR comment.
@@ -1211,20 +1180,6 @@ export function resolveWorkflowConfig(config, key) {
   throw new Error(`Unknown workflow config key: ${key}`);
 }
 
-const DEFAULT_INTERNAL_PATH_PATTERNS = BUILT_IN_DEFAULTS.internalPathPatterns;
-
-/**
- * Resolve the internal path patterns from the merged dev-loop config.
- *
- * Returns an array of regex pattern strings used by detect-internal-only-pr.mjs
- * to classify files as internal tooling (vs consumer-facing). When the config
- * omits this section, returns the built-in shipped defaults.
- *
- * Consumers can override these in .devloops at repo root.
- *
- * @param {DevLoopConfig} config
- * @returns {string[]}
- */
 /**
  * Resolve the worktree lifecycle config from the merged dev-loop config.
  *
@@ -1243,24 +1198,6 @@ export function resolveWorktreeConfig(config) {
       ? v.map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
       : [];
   return { copyOnInit: list(wt?.copyOnInit), linkOnInit: list(wt?.linkOnInit) };
-}
-
-/**
- * Resolve the local-planning plans directory from the merged dev-loop config.
- *
- * Returns the configured `localPlanning.plansDir` (trimmed) when present and
- * non-empty, otherwise the built-in default (`docs/phases/`) — the existing
- * phase-docs directory. See skills/docs/plan-file-contract.md.
- *
- * @param {DevLoopConfig} config
- * @returns {string}
- */
-export function resolvePlansDir(config) {
-  const raw = config?.localPlanning?.plansDir;
-  if (typeof raw === "string" && raw.trim().length > 0) {
-    return raw.trim();
-  }
-  return BUILT_IN_DEFAULTS.localPlanning.plansDir;
 }
 
 /**
@@ -1296,15 +1233,4 @@ export function resolveHumanHandoffConfig(config) {
     candidatesFrom: enabled ? candidatesFrom : [],
     assignees: enabled ? assignees : [],
   };
-}
-
-export function resolveInternalPathPatterns(config) {
-  if (
-    config?.internalPathPatterns &&
-    Array.isArray(config.internalPathPatterns) &&
-    config.internalPathPatterns.length > 0
-  ) {
-    return [...config.internalPathPatterns];
-  }
-  return [...DEFAULT_INTERNAL_PATH_PATTERNS];
 }

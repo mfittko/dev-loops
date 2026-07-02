@@ -4,7 +4,7 @@ A plan file is the persisted markdown artifact that drives work in local-plannin
 
 ## Format
 
-A plan file is a markdown document whose sections are level-2 (`##`) headings. It follows the same shape as the phase docs already committed under `docs/phases/`. The directory that holds plan files is `localPlanning.plansDir`, which defaults to `docs/phases/`.
+A plan file is a markdown document whose sections are level-2 (`##`) headings. It follows the same shape as the phase docs already committed under `docs/phases/`, which is also the directory that holds plan files.
 
 ## Base authoring sections
 
