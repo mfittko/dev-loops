@@ -7,7 +7,6 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import {
   buildNamedUiStateArtifactPaths,
   captureNamedUiState,
-  createWebkitSmokeConfig,
   normalizeUiStateSegment,
 } from '../playwright/harness/webkit-smoke-harness.mjs';
 
@@ -16,28 +15,6 @@ test('normalizeUiStateSegment collapses UI state names into stable path segments
   assert.equal(normalizeUiStateSegment('100% zoom'), '100-zoom');
   assert.equal(normalizeUiStateSegment('a__b'), 'a-b');
   assert.throws(() => normalizeUiStateSegment('!!!'), /must contain at least one/i);
-});
-
-test('createWebkitSmokeConfig returns the minimal reusable WebKit smoke baseline', () => {
-  const config = createWebkitSmokeConfig({
-    sliceId: 'inspect-run-viewer',
-    testMatch: ['inspect-run-viewer.spec.mjs'],
-  });
-
-  assert.equal(config.testDir, './test/playwright');
-  assert.deepEqual(config.testMatch, ['inspect-run-viewer.spec.mjs']);
-  assert.equal(config.outputDir, 'test-results/ui-smoke/inspect-run-viewer');
-  assert.deepEqual(config.reporter, [['list'], ['html', { open: 'never', outputFolder: 'playwright-report/ui-smoke/inspect-run-viewer' }]]);
-  assert.equal(config.use.headless, true);
-  assert.equal(config.use.screenshot, 'only-on-failure');
-  assert.equal(config.projects.length, 1);
-  assert.equal(config.projects[0].name, 'webkit');
-  assert.equal(config.projects[0].use.browserName, 'webkit');
-});
-
-test('createWebkitSmokeConfig rejects missing testMatch up front', () => {
-  assert.throws(() => createWebkitSmokeConfig({ sliceId: 'inspect-run-viewer' }), /testMatch must include at least one/i);
-  assert.throws(() => createWebkitSmokeConfig({ sliceId: 'inspect-run-viewer', testMatch: [] }), /testMatch must include at least one/i);
 });
 
 test('buildNamedUiStateArtifactPaths derives deterministic screenshot and state paths', () => {

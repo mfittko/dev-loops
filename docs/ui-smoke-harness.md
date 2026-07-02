@@ -33,8 +33,11 @@ The reusable baseline lives in:
   (`defineDeckSuite`/`defineArticleSuite`) and
   `test/playwright/harness/inspect-run-viewer-harness.mjs`
 
-The harness exposes three main seams:
-- `createWebkitSmokeConfig(...)` — create the minimal WebKit-only Playwright config with deterministic output/report locations
+The single `playwright.config.mjs` owns the WebKit-only project shape and
+deterministic per-slice `outputDir`; it derives one project per slice from the
+registries, so no config edit (and no per-slice config factory) is needed.
+
+The harness exposes two main runtime seams:
 - `startFixtureServer(...)` / `stopFixtureServer(...)` — start and stop a bounded local fixture-backed HTTP server for the UI surface under test
 - `captureNamedUiState(...)` — write deterministic named-state artifacts for reviewer consumption
 
@@ -44,11 +47,14 @@ For a **rendered artifact** (deck, article, or the viewer) registration is the
 path — add a registry entry plus a thin spec calling `defineDeckSuite` /
 `defineArticleSuite`; `playwright.config.mjs` derives a project from the
 registry automatically, so no config edit is needed
-(see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)). For a bespoke
-local UI surface that uses this WebKit seam directly:
+(see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)). The spec file
+**must** be named `<sliceId>.spec.mjs`: each generated project pins
+`testMatch: ['<sliceId>.spec.mjs']`, so the spec basename and the registry
+`sliceId` are coupled. For a bespoke local UI surface that uses this WebKit seam
+directly:
 
-1. add a small fixture-backed Playwright spec under `test/playwright/`
-2. create a thin config via `createWebkitSmokeConfig({ sliceId, testMatch })`
+1. add a registry entry for the slice (in the deck/article/viewer registry the config reads)
+2. add a fixture-backed Playwright spec named `<sliceId>.spec.mjs` under `test/playwright/` — no new/thin config file is created
 3. start the slice-specific fixture server with `startFixtureServer(...)`
 4. exercise only the small explicit UI states needed by the slice acceptance criteria
 5. call `captureNamedUiState(...)` for each named state that should remain reviewable
