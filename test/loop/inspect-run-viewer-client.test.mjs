@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -405,10 +406,14 @@ test("buildInspectionMermaidGraph normalizes and de-duplicates transition tokens
   assert.match(html, /copilot layer:[\s\S]*full authoritative state machine shown; waiting_for_ci, ready_to_rerequest_review/);
   assert.doesNotMatch(html, /waiting_for_ci,\s*waiting_for_ci/);
 });
-test("MERMAID_BROWSER_ASSET_PATH points at the vendored mermaid bundle and the file exists", async () => {
+test("MERMAID_BROWSER_ASSET_PATH points at the vendored mermaid bundle and the file matches the mermaid@11.15.0 pin", async () => {
   assert.match(MERMAID_BROWSER_ASSET_PATH, /scripts[\\/]loop[\\/]inspect-run-viewer[\\/]vendor[\\/]mermaid\.min\.js$/);
   const assetStat = await stat(MERMAID_BROWSER_ASSET_PATH);
   assert.ok(assetStat.isFile());
+  // sha256 of mermaid@11.15.0 dist/mermaid.min.js — the vendored bundle pin.
+  const MERMAID_11_15_0_DIST_SHA256 = "70137e77bb273bb2ef972b86e8b0400cca8be53cb25bfc45911a186dc98665de";
+  const digest = createHash("sha256").update(await readFile(MERMAID_BROWSER_ASSET_PATH)).digest("hex");
+  assert.equal(digest, MERMAID_11_15_0_DIST_SHA256);
 });
 test("loadMermaidBrowserScript clears failed cache entries so later retries can recover", async () => {
   let callCount = 0;
