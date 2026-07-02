@@ -125,9 +125,14 @@ export function parseEditPrCliArgs(argv) {
       // Read the raw token value: an empty string is a valid milestone value
       // (`gh pr edit --milestone ""` clears it), so this deliberately does NOT
       // go through requireTokenValue (which rejects empty). Guard only a truly
-      // missing value (`--milestone` with no following token).
+      // missing value (`--milestone` with no following token). A whitespace-only
+      // value is neither a clear nor a real milestone name — fail closed rather
+      // than forwarding it to gh for a less actionable error.
       if (typeof token.value !== "string") {
         throw parseError("--milestone requires a value (use an empty string to clear)");
+      }
+      if (token.value.length > 0 && token.value.trim().length === 0) {
+        throw parseError('--milestone must be a milestone name or "" to clear (whitespace-only is not allowed)');
       }
       options.milestone = token.value;
       continue;

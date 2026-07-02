@@ -38,6 +38,12 @@ test("parseEditPrCliArgs: --milestone '' parses (empty clears; not rejected as m
   assert.equal(out.milestone, "");
 });
 
+test("parseEditPrCliArgs: --milestone rejects whitespace-only but allows a real name and empty clear", () => {
+  assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--milestone", "   "]), /whitespace-only is not allowed/);
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--milestone", "v1.0"]).milestone, "v1.0");
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--milestone", ""]).milestone, "");
+});
+
 test("parseEditPrCliArgs: --milestone with no value is rejected", () => {
   // A bare --milestone (no following token) is a real omission, not an empty clear.
   assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--milestone"]), /--milestone requires a value/);
