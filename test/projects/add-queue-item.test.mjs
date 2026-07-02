@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { main, parseCliArgs } from "../../scripts/projects/add-queue-item.mjs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
+import { main, parseCliArgs, runCli } from "../../scripts/projects/add-queue-item.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -569,6 +572,95 @@ describe("add-queue-item", () => {
         { env: {}, runChild: mockRunChild(responses) },
       );
       assert.equal(result.item.status, "Next Up");
+    });
+  });
+
+  describe("optional --project resolved from .devloops (#1035)", () => {
+    function addResponses(project) {
+      return [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([project]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+    }
+
+    function withTempCwd(contents, fn) {
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "add-queue-cfg-"));
+      try {
+        if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
+        return fn(dir);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    function noopStream() {
+      return { write() {} };
+    }
+
+    it("main() resolves the board by title when --project is omitted (projectTitle)", async () => {
+      const result = await main(
+        { repo: "mfittko/dev-loops", projectTitle: "Dev Loop Queue", item: 10 },
+        { env: {}, runChild: mockRunChild(addResponses(EXISTING_PROJECT)) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.itemId, "PVTI_new");
+    });
+
+    it("main() fails closed with INVALID_PROJECT when neither --project nor projectTitle given", async () => {
+      await assert.rejects(
+        () => main({ repo: "mfittko/dev-loops", item: 10 }, { env: {}, runChild: mockRunChild([]) }),
+        (e) => e.code === "INVALID_PROJECT" && /queue\.projectNumber/.test(e.message),
+      );
+    });
+
+    it("runCli resolves projectNumber from .devloops when --project omitted", async () => {
+      await withTempCwd("queue:\n  projectNumber: 1\n", async (cwd) => {
+        await runCli(["--repo", "mfittko/dev-loops", "--item", "10"], {
+          env: {}, cwd, runChild: mockRunChild(addResponses(EXISTING_PROJECT)),
+          stdout: noopStream(), stderr: noopStream(),
+        });
+        assert.equal(process.exitCode, 0);
+      });
+    });
+
+    it("runCli resolves boardTitle from .devloops when --project omitted", async () => {
+      await withTempCwd("queue:\n  boardTitle: \"Dev Loop Queue\"\n", async (cwd) => {
+        await runCli(["--repo", "mfittko/dev-loops", "--item", "10"], {
+          env: {}, cwd, runChild: mockRunChild(addResponses(EXISTING_PROJECT)),
+          stdout: noopStream(), stderr: noopStream(),
+        });
+        assert.equal(process.exitCode, 0);
+      });
+    });
+
+    it("runCli: explicit --project wins over .devloops", async () => {
+      const other = { id: "PVT_flag", number: 9, title: "Flag Project", url: "u" };
+      await withTempCwd("queue:\n  projectNumber: 1\n", async (cwd) => {
+        // Only project #9 is returned; if .devloops (#1) had won, resolution would 404.
+        await runCli(["--repo", "mfittko/dev-loops", "--project", "9", "--item", "10"], {
+          env: {}, cwd, runChild: mockRunChild(addResponses(other)),
+          stdout: noopStream(), stderr: noopStream(),
+        });
+        assert.equal(process.exitCode, 0);
+      });
+    });
+
+    it("runCli fails closed (exit 1) when neither --project nor .devloops resolves", async () => {
+      await withTempCwd(null, async (cwd) => {
+        let err = "";
+        await runCli(["--repo", "mfittko/dev-loops", "--item", "10"], {
+          env: {}, cwd, runChild: mockRunChild([]),
+          stdout: noopStream(), stderr: { write(s) { err += s; } },
+        });
+        assert.equal(process.exitCode, 1);
+        assert.match(err, /INVALID_PROJECT/);
+        process.exitCode = 0; // avoid leaking a failure code into the test runner
+      });
     });
   });
 });

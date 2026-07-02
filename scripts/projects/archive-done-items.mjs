@@ -1,9 +1,7 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { parse as parseYaml } from "yaml";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { resolveSettings } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 
 const USAGE = `Usage: dev-loops queue archive-done --repo <owner/name> [--project <number|id>] [--older-than <duration>] [--dry-run]
@@ -152,37 +150,6 @@ function parseDuration(raw) {
     throw Object.assign(new Error(`--older-than must be a positive amount, got "${raw}"`), { code: "INVALID_DURATION" });
   }
   return n * UNIT_MS[m[2]];
-}
-
-// ── Settings fallback ──────────────────────────────────────────────────────
-
-// Read .devloops (and extension variants) queue settings, mirroring the
-// resolution used by ensure-queue-board.mjs. Returns { project }, { title },
-// and/or { olderThanDays } when configured; never throws on a missing/bad file.
-function resolveSettings(cwd) {
-  const basePath = path.join(cwd, ".devloops");
-  const extensions = ["", ".yaml", ".yml", ".json"];
-  for (const ext of extensions) {
-    try {
-      const raw = readFileSync(basePath + ext, "utf-8");
-      const settings = ext === ".json" ? JSON.parse(raw) : parseYaml(raw);
-      const queue = settings?.queue;
-      if (!queue) return null;
-      const out = {};
-      if (typeof queue.projectNumber === "number" && Number.isInteger(queue.projectNumber) && queue.projectNumber > 0) {
-        out.project = queue.projectNumber;
-      } else if (typeof queue.boardTitle === "string" && queue.boardTitle.trim().length > 0) {
-        out.title = queue.boardTitle.trim();
-      }
-      if (typeof queue.archiveOlderThanDays === "number" && Number.isInteger(queue.archiveOlderThanDays) && queue.archiveOlderThanDays > 0) {
-        out.olderThanDays = queue.archiveOlderThanDays;
-      }
-      return out;
-    } catch {
-      // extension not present or unparseable — try next
-    }
-  }
-  return null;
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────
