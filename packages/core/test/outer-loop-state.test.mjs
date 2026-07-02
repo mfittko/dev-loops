@@ -6,9 +6,7 @@ import {
   STOP_REASON,
   OUTER_GRAPH,
   OUTER_NEXT_ACTIONS,
-  OUTER_NONTERMINAL_STATES,
   OUTER_STATE,
-  OUTER_STATE_TO_OUTER_ACTION,
   OUTER_TERMINAL_STATES,
   OUTER_TRANSITIONS,
   getAllowedOuterTransitions,
@@ -45,24 +43,19 @@ test("outer-loop graph metadata exports one semantic start and one semantic end"
   assert.deepEqual([...OUTER_GRAPH.entryStates].sort(), Object.values(OUTER_STATE).sort());
 });
 
-test("outer-loop terminal and nonterminal sets stay exact", () => {
+test("outer-loop terminal set stays exact", () => {
   assert.deepEqual(OUTER_TERMINAL_STATES, [
     OUTER_STATE.STOP_NEEDS_HUMAN,
     OUTER_STATE.DONE_TERMINAL,
     OUTER_STATE.NEEDS_RECONCILE,
   ]);
-  assert.deepEqual(OUTER_NONTERMINAL_STATES, [
-    OUTER_STATE.CONTINUE_CURRENT_WAIT,
-    OUTER_STATE.HANDOFF_TO_COPILOT_LOOP,
-    OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP,
-    OUTER_STATE.STAY_WITH_CURRENT_LIVE_OWNER,
-  ]);
 });
 
 test("outer-loop transition table stays broad for nonterminal states and empty for terminal states", () => {
   const allStates = Object.values(OUTER_STATE);
+  const nonterminalStates = allStates.filter((state) => !OUTER_TERMINAL_STATES.includes(state));
 
-  for (const state of OUTER_NONTERMINAL_STATES) {
+  for (const state of nonterminalStates) {
     assert.deepEqual(OUTER_TRANSITIONS[state], allStates);
     assert.deepEqual(getAllowedOuterTransitions(state), allStates);
     assert.notEqual(getAllowedOuterTransitions(state), OUTER_TRANSITIONS[state]);
@@ -218,16 +211,4 @@ test("interpretOuterLoopState fails closed for malformed inputs", () => {
   assert.equal(result.stopReason, STOP_REASON.UNKNOWN_STATE);
   assert.equal(result.isTerminal, true);
   assert.deepEqual(result.allowedTransitions, []);
-});
-
-test("outer-loop outerAction compatibility mapping stays exact", () => {
-  assert.deepEqual(OUTER_STATE_TO_OUTER_ACTION, {
-    [OUTER_STATE.CONTINUE_CURRENT_WAIT]: "continue_wait",
-    [OUTER_STATE.HANDOFF_TO_COPILOT_LOOP]: "reenter_copilot_loop",
-    [OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP]: "reenter_reviewer_loop",
-    [OUTER_STATE.STAY_WITH_CURRENT_LIVE_OWNER]: "continue_wait",
-    [OUTER_STATE.STOP_NEEDS_HUMAN]: "stop",
-    [OUTER_STATE.DONE_TERMINAL]: "done",
-    [OUTER_STATE.NEEDS_RECONCILE]: "stop",
-  });
 });

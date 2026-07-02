@@ -206,18 +206,6 @@
           "description": "Paths/globs symlinked (absolute) into the main checkout (shared \u2014 use only for read-only data). Do not target node_modules."
         }
       }
-    },
-    "localPlanning": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Local-planning mode settings: where local plan files (docs/phases-style phase docs) live for plan-file intake.",
-      "properties": {
-        "plansDir": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Repo-relative directory holding local plan files (phase docs). Defaults to docs/phases/."
-        }
-      }
     }
   },
   "$defs": {

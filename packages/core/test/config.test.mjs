@@ -26,9 +26,7 @@ import {
   resolveGateDispatchMode,
   GATE_FULL_LABEL,
   resolveRequireFanoutEvidence,
-  resolveMaxFanoutReviewers,
   resolveGatePostFindingsComments,
-  resolvePlansDir,
   DEFAULT_MAX_FANOUT_REVIEWERS,
 } from "../src/config/config.mjs";
 // ============================================================================
@@ -2907,21 +2905,17 @@ describe("gates.requireFanoutEvidence", () => {
 });
 
 describe("gates.maxFanoutReviewers", () => {
-  test("defaults to 8 when absent (resolver + parsed schema)", () => {
+  test("defaults to 8 when absent (parsed schema)", () => {
     assert.equal(DEFAULT_MAX_FANOUT_REVIEWERS, 8);
-    assert.equal(resolveMaxFanoutReviewers({}), 8);
-    assert.equal(resolveMaxFanoutReviewers({ gates: {} }), 8);
     const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
     assert.equal(parsed.success, true);
     assert.equal(parsed.data.gates.maxFanoutReviewers, 8);
-    assert.equal(resolveMaxFanoutReviewers(parsed.data), 8);
   });
 
   test("honors a configured override in full and file schemas", () => {
     const full = DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 4 } });
     assert.equal(full.success, true);
     assert.equal(full.data.gates.maxFanoutReviewers, 4);
-    assert.equal(resolveMaxFanoutReviewers(full.data), 4);
 
     const file = FileConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 12 } });
     assert.equal(file.success, true);
@@ -2932,21 +2926,6 @@ describe("gates.maxFanoutReviewers", () => {
     assert.equal(DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 0 } }).success, false);
     assert.equal(DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 2.5 } }).success, false);
     assert.equal(DevLoopConfigSchema.safeParse({ version: 1, gates: { maxFanoutReviewers: 65 } }).success, false);
-  });
-
-  test("resolver falls back to default for invalid runtime values", () => {
-    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 0 } }), 8);
-    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: -3 } }), 8);
-    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: "x" } }), 8);
-  });
-
-  test("resolver clamps out-of-schema-range values (programmatic config bypassing Zod)", () => {
-    // Schema bounds maxFanoutReviewers to 1..64; the resolver enforces the same
-    // bound for config objects constructed without schema validation.
-    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 65 } }), 8);
-    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 1000 } }), 8);
-    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 64 } }), 64);
-    assert.equal(resolveMaxFanoutReviewers({ gates: { maxFanoutReviewers: 1 } }), 1);
   });
 });
 
@@ -2984,51 +2963,5 @@ describe("gates.postFindingsComments", () => {
   test("rejects non-boolean postFindingsComments", () => {
     const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: "yes" } });
     assert.equal(bad.success, false);
-  });
-});
-
-describe("localPlanning", () => {
-  test("valid plansDir parses in full and file schemas", () => {
-    const full = DevLoopConfigSchema.safeParse({ version: 1, localPlanning: { plansDir: "docs/plans/" } });
-    assert.equal(full.success, true);
-    assert.equal(full.data.localPlanning.plansDir, "docs/plans/");
-
-    const file = FileConfigSchema.safeParse({ version: 1, localPlanning: { plansDir: "docs/plans/" } });
-    assert.equal(file.success, true);
-    assert.equal(file.data.localPlanning.plansDir, "docs/plans/");
-  });
-
-  test("rejects an unknown sibling key (fail-closed strictObject)", () => {
-    const bad = DevLoopConfigSchema.safeParse({
-      version: 1,
-      localPlanning: { plansDir: "docs/phases/", unknownKey: true },
-    });
-    assert.equal(bad.success, false);
-  });
-
-  test("rejects a non-string plansDir", () => {
-    const bad = DevLoopConfigSchema.safeParse({ version: 1, localPlanning: { plansDir: 7 } });
-    assert.equal(bad.success, false);
-  });
-
-  test("BUILT_IN_DEFAULTS exposes plansDir defaulting to docs/phases/", () => {
-    assert.equal(BUILT_IN_DEFAULTS.localPlanning.plansDir, "docs/phases/");
-  });
-
-  test("resolvePlansDir returns the default when absent and the override when set", () => {
-    assert.equal(resolvePlansDir({}), "docs/phases/");
-    assert.equal(resolvePlansDir({ localPlanning: {} }), "docs/phases/");
-    assert.equal(resolvePlansDir({ localPlanning: { plansDir: "  docs/plans/  " } }), "docs/plans/");
-  });
-
-  test("shipped extension defaults parse and expose localPlanning.plansDir", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-LP-"));
-    try {
-      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
-      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.equal(result.config.localPlanning.plansDir, "docs/phases/");
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
   });
 });
