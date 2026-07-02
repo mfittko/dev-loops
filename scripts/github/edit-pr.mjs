@@ -20,6 +20,8 @@ At least one edit:
   --add-assignee <u>            Assignee to add (repeatable)
   --remove-assignee <u>         Assignee to remove (repeatable)
   --milestone <m>               Milestone to set (empty string clears it)
+                                (--title/--body reject an empty value; use
+                                --milestone "" only to clear the milestone)
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):
@@ -111,8 +113,14 @@ export function parseEditPrCliArgs(argv) {
       continue;
     }
     if (token.name === "milestone") {
-      // Value may be empty to clear the milestone; do not trim away a real name.
-      options.milestone = requireTokenValue(token, parseError);
+      // Read the raw token value: an empty string is a valid milestone value
+      // (`gh pr edit --milestone ""` clears it), so this deliberately does NOT
+      // go through requireTokenValue (which rejects empty). Guard only a truly
+      // missing value (`--milestone` with no following token).
+      if (typeof token.value !== "string") {
+        throw parseError("--milestone requires a value (use an empty string to clear)");
+      }
+      options.milestone = token.value;
       continue;
     }
     if (token.name === "jq") {

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { parseEditPrCliArgs, editPr, runCli } from "../../scripts/github/edit-pr.mjs";
 
 function stubGh({ code = 0, stderr = "" } = {}) {
@@ -27,6 +31,16 @@ test("parseEditPrCliArgs: --body and --body-file are mutually exclusive", () => 
     () => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--body", "x", "--body-file", "f"]),
     /mutually exclusive/,
   );
+});
+
+test("parseEditPrCliArgs: --milestone '' parses (empty clears; not rejected as missing)", () => {
+  const out = parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--milestone", ""]);
+  assert.equal(out.milestone, "");
+});
+
+test("parseEditPrCliArgs: --milestone with no value is rejected", () => {
+  // A bare --milestone (no following token) is a real omission, not an empty clear.
+  assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--milestone"]), /--milestone requires a value/);
 });
 
 test("parseEditPrCliArgs: collects repeated assignees", () => {
@@ -71,4 +85,30 @@ test("runCli: --jq extracts an edited field; --silent maps to exit code", async 
   const { run: run2 } = stubGh();
   const code2 = await runCli(["--repo", "o/n", "--pr", "1", "--title", "T", "--silent"], { run: run2, stdout: captureStream() });
   assert.equal(code2, 0);
+});
+
+test("editPr: --body-file reads the body from a real file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "edit-pr-"));
+  const bodyPath = join(dir, "body.md");
+  writeFileSync(bodyPath, "Body from file\nsecond line");
+  const { run, calls } = stubGh();
+  const result = await editPr(
+    { repo: "o/n", pr: 5, bodyFile: bodyPath, addAssignees: [], removeAssignees: [] },
+    { run },
+  );
+  assert.deepEqual(result.edited, ["body"]);
+  assert.deepEqual(calls[0], ["pr", "edit", "5", "--repo", "o/n", "--body", "Body from file\nsecond line"]);
+});
+
+test("editPr: --remove-assignee builds gh args and reports the edited field", async () => {
+  const { run, calls } = stubGh();
+  const result = await editPr(
+    { repo: "o/n", pr: 5, addAssignees: ["a"], removeAssignees: ["b", "c"] },
+    { run },
+  );
+  assert.deepEqual(result.edited, ["add-assignee", "remove-assignee"]);
+  assert.deepEqual(calls[0], [
+    "pr", "edit", "5", "--repo", "o/n",
+    "--add-assignee", "a", "--remove-assignee", "b", "--remove-assignee", "c",
+  ]);
 });
