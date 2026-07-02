@@ -273,6 +273,31 @@ test("decideBashGate does not let a leading out-of-scope external write shield a
   );
 });
 
+test("decideBashGate treats an EMPTY-STRING agent_type as subagent context (non-null) — denies on target (#1074)", () => {
+  assert.equal(
+    decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET, agentType: "" }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate denies subagent gh issue create with a QUOTED target --repo (#1074)", () => {
+  assert.equal(
+    decideBashGate({ command: `gh issue create --repo '${TARGET}' --title x`, repoSlug: null, agentType: SUB }).decision,
+    "deny",
+  );
+  assert.equal(
+    decideBashGate({ command: `gh issue create --repo "${TARGET}" --title x`, repoSlug: null, agentType: SUB }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate denies gh pr create with a QUOTED target --repo (#1074)", () => {
+  assert.equal(
+    decideBashGate({ command: `gh pr create --repo '${TARGET}' --fill`, repoSlug: null }).decision,
+    "deny",
+  );
+});
+
 test("decideBashGate does not let an out-of-scope gh pr create short-circuit ready/merge gating", () => {
   // An out-of-scope `--repo other/repo` create must not own the decision when a gated
   // ready/merge segment rides along in the same compound command — the merge/ready segment

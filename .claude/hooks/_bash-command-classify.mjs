@@ -24,6 +24,22 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  */
 const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||\n|\r)\s*/;
 
+/**
+ * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
+ * A repo flag value may reach us quoted (`--repo 'owner/name'`); the scope check compares against
+ * the bare slug, so quotes must be normalized or a quoted on-target repo evades the guard (#1074).
+ * ponytail: single balanced pair only — no full shell tokenization (mismatched/partial quotes stay).
+ * @param {string|null} value @returns {string|null}
+ */
+function stripSurroundingQuotes(value) {
+  if (value == null || value.length < 2) return value;
+  const first = value[0];
+  if ((first === "'" || first === '"') && value[value.length - 1] === first) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
 /** @param {string|null|undefined} value @returns {string|null} */
 export function trimToNull(value) {
   const trimmed = `${value ?? ""}`.trim();
@@ -164,10 +180,10 @@ function extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) {
     const token = tokens[i];
     const lower = token.toLowerCase();
     if (lower === "-r" || lower === "--repo") {
-      if (i + 1 < tokens.length && !tokens[i + 1].startsWith("-")) return tokens[i + 1];
+      if (i + 1 < tokens.length && !tokens[i + 1].startsWith("-")) return stripSurroundingQuotes(tokens[i + 1]);
     }
     const repoEqMatch = token.match(/^(?:--repo|-R)=(.+)$/i);
-    if (repoEqMatch) return repoEqMatch[1];
+    if (repoEqMatch) return stripSurroundingQuotes(repoEqMatch[1]);
   }
   return null;
 }
@@ -299,12 +315,12 @@ function extractRepoFlagFromSegment(segment, verb) {
     const lower = token.toLowerCase();
     if (lower === "-r" || lower === "--repo") {
       if (i + 1 < tokens.length && !tokens[i + 1].startsWith("-")) {
-        return tokens[i + 1];
+        return stripSurroundingQuotes(tokens[i + 1]);
       }
     }
     const repoEqMatch = token.match(/^(?:--repo|-R)=(.+)$/i);
     if (repoEqMatch) {
-      return repoEqMatch[1];
+      return stripSurroundingQuotes(repoEqMatch[1]);
     }
   }
   return null;

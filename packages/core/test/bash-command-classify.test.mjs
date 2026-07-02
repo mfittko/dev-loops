@@ -186,6 +186,32 @@ test("extractRepoFlagsFromExternalWriteSegments returns per-segment --repo acros
   assert.deepEqual(extractRepoFlagsFromExternalWriteSegments("echo hi"), []);
 });
 
+test("repo extractors strip a single surrounding quote pair from the --repo value (#1074)", () => {
+  // external-write extractor (shared subcmd path)
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh issue create --repo 'other/repo' --title x"),
+    [{ segment: "gh issue create --repo 'other/repo' --title x", explicitRepo: "other/repo" }],
+  );
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments(`gh issue create --repo "other/repo" --title x`),
+    [{ segment: `gh issue create --repo "other/repo" --title x`, explicitRepo: "other/repo" }],
+  );
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments("gh pr comment 5 -R='other/repo' --body hi"),
+    [{ segment: "gh pr comment 5 -R='other/repo' --body hi", explicitRepo: "other/repo" }],
+  );
+  // pr create/ready/merge extractor (the other tokenizer)
+  assert.equal(extractRepoFlagFromGhPrReady("gh pr ready --repo 'other/repo' 1"), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrReady(`gh pr ready --repo="other/repo" 1`), "other/repo");
+  assert.equal(extractRepoFlagFromGhPrCreateAnywhere("gh pr create --repo 'other/repo' --fill"), "other/repo");
+  // mismatched / partial quotes are NOT stripped (single balanced pair only)
+  assert.deepEqual(
+    extractRepoFlagsFromExternalWriteSegments(`gh issue create --repo 'other/repo" --title x`),
+    [{ segment: `gh issue create --repo 'other/repo" --title x`, explicitRepo: `'other/repo"` }],
+  );
+  assert.equal(extractRepoFlagFromGhPrReady("gh pr ready --repo 'other/repo 1"), "'other/repo");
+});
+
 test("gate detects gh pr create behind a newline separator", () => {
   assert.equal(commandContainsGhPrCreate("echo hi\ngh pr create --fill"), true);
   assert.equal(commandContainsGhPrCreate("echo hi\r\ngh pr create --fill"), true);

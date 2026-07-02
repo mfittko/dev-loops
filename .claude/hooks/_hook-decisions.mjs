@@ -78,7 +78,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // Subagent-scoped external-write guard: block ad-hoc `gh issue create`/`gh issue comment`/
   // `gh pr comment` on the target repo from a subagent, so external writes flow through the
   // sanctioned node wrappers. The main-agent/operator path (agentType null) is unaffected (#1051).
-  if (typeof agentType === "string" && agentType && commandContainsRawExternalWrite(command)) {
+  if (typeof agentType === "string" && commandContainsRawExternalWrite(command)) {
     const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
     // Scope PER segment, mirroring the `gh pr create` block: in scope when no explicit --repo and
     // cwd is the target, or an explicit --repo/-R equals the target. An explicit non-target --repo
