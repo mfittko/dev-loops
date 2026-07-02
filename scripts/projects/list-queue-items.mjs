@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: dev-loops queue list --repo <owner/name> --project <number|id> [--column <name>] [--limit <n>]
+       dev-loops queue list --repo <owner/name> --project <number|id> --summary [--done-limit <n>]
        (dev-loops project list … is a back-compat alias)
 
 List GitHub Projects V2 items filtered by Status column, ordered by position
@@ -14,11 +15,25 @@ Options:
   --repo <owner/name>     Required. Repository to scope the project search.
   --project <number|id>   Required. Project number (integer) or node ID.
   --column <name>         Filter items by Status column value (e.g. "Next Up").
-  --limit <n>             Return at most <n> items.
+  --limit <n>             Return at most <n> items (flat mode only).
+  --summary               Whole-board digest grouped by Status column, in board
+                          column order. Emits { ok, groups: { <status>: { count, items } } }.
+  --group-by status       Alias for --summary. Only "status" is supported.
+  --done-limit <n>        With --summary: cap the "Done" group's items array to
+                          <n> (or the last/terminal board column if no column is
+                          named "Done"). Count stays the true total; use 0 for
+                          counts only.
   --help, -h              Show this help.
 
+Grouping / aggregation is done via --summary (this mode). Do NOT pipe flat
+output through inline parsers (e.g. \`| python3\`) or reduce/group_by jq filters
+to build a per-status digest — the summary mode is the sanctioned one-call path.
+
+--summary is mutually exclusive with --column and --limit (both exit 1).
+
 Output (stdout):
-  JSON: { ok: true, items: [{ issueNumber, prNumber, title, url, itemId, contentId, status }, ...] }
+  flat:    { ok: true, items: [{ issueNumber, prNumber, title, url, itemId, contentId, status }, ...] }
+  summary: { ok: true, groups: { "<Status>": { count, items: [ <item>, ... ] }, ... } }
 
 ${JQ_OUTPUT_USAGE}
 
@@ -47,6 +62,9 @@ function parseCliArgs(argv) {
       project: { type: "string" },
       column: { type: "string" },
       limit: { type: "string" },
+      summary: { type: "boolean" },
+      "group-by": { type: "string" },
+      "done-limit": { type: "string" },
       help: { type: "boolean", short: "h" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -85,6 +103,29 @@ function parseCliArgs(argv) {
           throw parseError(`--limit must be a positive integer, got "${raw}"`);
         }
         args.limit = val;
+        break;
+      }
+      case "summary":
+        if (token.value !== undefined) {
+          throw parseError(`Unknown flag: ${token.rawName}=${token.value}`);
+        }
+        args.summary = true;
+        break;
+      case "group-by": {
+        const val = requireValue(token, "--group-by requires a value (only \"status\" is supported)");
+        if (val !== "status") {
+          throw parseError(`--group-by only supports "status", got "${val}"`);
+        }
+        args.summary = true;
+        break;
+      }
+      case "done-limit": {
+        const raw = requireValue(token, "--done-limit requires a non-negative integer");
+        const val = Number(raw);
+        if (!Number.isInteger(val) || val < 0) {
+          throw parseError(`--done-limit must be a non-negative integer, got "${raw}"`);
+        }
+        args.doneLimit = val;
         break;
       }
       case "jq":
@@ -371,6 +412,27 @@ async function main(args, { env = process.env, runChild } = {}) {
   const [owner] = repo.split("/");
   const projectRef = parseProjectRef(args.project);
 
+  // Mutual exclusion: --summary is the whole-board grouped view; --column/--limit
+  // are flat-mode knobs. Combining them is ambiguous.
+  if (args.summary && args.column) {
+    throw Object.assign(
+      new Error("--summary and --column are mutually exclusive (--column filters to one status; --summary groups the whole board)"),
+      { code: "INVALID_ARGS" },
+    );
+  }
+  if (args.summary && args.limit) {
+    throw Object.assign(
+      new Error("--summary and --limit are mutually exclusive; use --done-limit to cap the Done group (or terminal column if no Done column exists)"),
+      { code: "INVALID_ARGS" },
+    );
+  }
+  if (args.doneLimit !== undefined && !args.summary) {
+    throw Object.assign(
+      new Error("--done-limit only applies with --summary"),
+      { code: "INVALID_ARGS" },
+    );
+  }
+
   // 1. Resolve owner (user or org)
   const { id: ownerId, kind: ownerKind } = await resolveOwner(owner, env, child);
 
@@ -458,7 +520,35 @@ async function main(args, { env = process.env, runChild } = {}) {
     });
   }
 
-  // 5. Items are returned in position order from GraphQL. Apply limit.
+  // 5a. Summary mode: group by Status column in board option order.
+  if (args.summary) {
+    // Object.create(null): board option names are free text, so a column named
+    // "__proto__"/"constructor" must be an own key, not touch Object.prototype.
+    const groups = Object.create(null);
+    for (const option of statusField.options) {
+      groups[option.name] = { count: 0, items: [] };
+    }
+    for (const r of results) {
+      // Items with null status belong to no Status option, so they are excluded here — matches --column filtering behavior.
+      if (r.status === null) continue;
+      const group = groups[r.status];
+      if (!group) continue; // status value not among current board options
+      group.count += 1;
+      group.items.push(r);
+    }
+    if (args.doneLimit !== undefined) {
+      // Cap "Done" per the issue AC; if no column is literally named "Done",
+      // fall back to the last board option (conventionally the terminal column)
+      // so --done-limit is honest instead of a silent no-op.
+      const doneGroup = groups.Done ?? groups[statusField.options.at(-1)?.name];
+      if (doneGroup) {
+        doneGroup.items = doneGroup.items.slice(0, args.doneLimit);
+      }
+    }
+    return { ok: true, groups };
+  }
+
+  // 5b. Flat mode: items are returned in position order from GraphQL. Apply limit.
   const limited = args.limit ? results.slice(0, args.limit) : results;
 
   return {
@@ -498,4 +588,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main };
+export { main, parseCliArgs };
