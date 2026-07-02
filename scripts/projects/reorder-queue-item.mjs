@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
-import { resolveProjectSelector, applyDevloopsBoard } from "./_resolve-project.mjs";
+import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 
 const USAGE = `Usage:
@@ -518,32 +518,7 @@ async function resolveProject(repoOwner, selector, env, child) {
     ? projectRef.ownerKind
     : (await resolveOwner(repoOwner, env, child)).kind;
   const projects = await listAllProjects(effectiveOwner, ownerKind, env, child);
-  let project;
-  if (projectRef) {
-    if (projectRef.kind === "id") {
-      project = projects.find((p) => p.id === projectRef.value);
-    } else if (projectRef.kind === "uri") {
-      project = projects.find((p) => p.number === projectRef.number);
-    } else {
-      project = projects.find((p) => p.number === projectRef.value);
-    }
-  } else {
-    project = projects.find((p) => p.title === selector.projectTitle);
-  }
-  if (!project) {
-    const desc = projectRef
-      ? (projectRef.kind === "id"
-          ? `"${projectRef.value}"`
-          : projectRef.kind === "uri"
-            ? `URI number ${projectRef.number} under "${projectRef.owner}"`
-            : `number ${projectRef.value}`)
-      : `title "${selector.projectTitle}"`;
-    throw Object.assign(
-      new Error(`Project ${desc} not found under owner "${effectiveOwner}"`),
-      { code: "PROJECT_NOT_FOUND" },
-    );
-  }
-  return project;
+  return findProject(projects, selector, effectiveOwner);
 }
 
 function executePosition(projectId, itemId, afterId) {

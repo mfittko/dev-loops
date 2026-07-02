@@ -43,7 +43,7 @@ function resolveSettings(cwd) {
 const GLOBAL_NODE_ID_RE = /^[A-Za-z0-9_]+$/;
 
 // GitHub Projects V2 board URI pattern (user- or org-scoped boards).
-const BOARD_URI_RE = /^https:\/\/github\.com\/(users|orgs)\/([A-Za-z0-9][A-Za-z0-9-]*)\/projects\/(\d+)$/;
+const BOARD_URI_RE = /^https:\/\/github\.com\/(users|orgs)\/([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\/projects\/(\d+)$/;
 
 function parseProjectRef(raw) {
   if (!raw || typeof raw !== "string" || raw.trim().length === 0) {

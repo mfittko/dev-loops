@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
-import { resolveSettings, parseProjectRef } from "./_resolve-project.mjs";
+import { resolveSettings, parseProjectRef, findProject } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 
 const USAGE = `Usage: dev-loops queue archive-done --repo <owner/name> [--project <number|id|board-uri>] [--older-than <duration>] [--dry-run]
@@ -354,31 +354,7 @@ async function main(args, { env = process.env, runChild } = {}) {
     ? projectRef.ownerKind
     : (await resolveOwner(owner, env, child)).kind;
   const projects = await listAllProjects(projectOwner, ownerKind, env, child);
-  let project;
-  if (projectRef) {
-    if (projectRef.kind === "id") {
-      project = projects.find((p) => p.id === projectRef.value);
-    } else if (projectRef.kind === "uri") {
-      project = projects.find((p) => p.number === projectRef.number);
-    } else {
-      project = projects.find((p) => p.number === projectRef.value);
-    }
-  } else {
-    project = projects.find((p) => p.title === projectTitle);
-  }
-  if (!project) {
-    const desc = projectRef
-      ? (projectRef.kind === "id"
-          ? `"${projectRef.value}"`
-          : projectRef.kind === "uri"
-            ? `URI number ${projectRef.number} under "${projectRef.owner}"`
-            : `number ${projectRef.value}`)
-      : `title "${projectTitle}"`;
-    throw Object.assign(
-      new Error(`Project ${desc} not found under owner "${projectOwner}"`),
-      { code: "PROJECT_NOT_FOUND" },
-    );
-  }
+  const project = findProject(projects, { projectRef, projectTitle }, projectOwner);
 
   const rawItems = await fetchAllItems(project.id, env, child);
   // Only consider items whose content belongs to the target repo (single-repo scope).
