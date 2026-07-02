@@ -422,7 +422,7 @@ async function main(args, { env = process.env, runChild } = {}) {
   }
   if (args.summary && args.limit) {
     throw Object.assign(
-      new Error("--summary and --limit are mutually exclusive; use --done-limit to cap the Done group"),
+      new Error("--summary and --limit are mutually exclusive; use --done-limit to cap the Done group (or terminal column if no Done column exists)"),
       { code: "INVALID_ARGS" },
     );
   }
@@ -529,7 +529,7 @@ async function main(args, { env = process.env, runChild } = {}) {
       groups[option.name] = { count: 0, items: [] };
     }
     for (const r of results) {
-      // ponytail: status===null items get no board column — skipped, matches --column behavior.
+      // Items with null status belong to no Status option, so they are excluded here — matches --column filtering behavior.
       if (r.status === null) continue;
       const group = groups[r.status];
       if (!group) continue; // status value not among current board options
