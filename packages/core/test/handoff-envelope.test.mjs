@@ -1452,6 +1452,35 @@ test("retrospectiveFindings (#1077): null/invalid input yields no field (never b
   }
 });
 
+test("retrospectiveFindings (#1077): present-but-invalid gateState falls back to valid options (review fix)", () => {
+  // A present-but-invalid gateState value (e.g. a string) must NOT shadow a valid
+  // options.retrospectiveFindings fallback. Each source is normalized independently;
+  // the options fallback is used when the gateState value normalizes to null.
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    defaultSettings,
+    { retrospectiveFindings: "not-an-object" },
+    { ...defaultOptions, retrospectiveFindings: { internalToolingOnly: true, rawCallViolations: [], allowedWriteOps: [] } },
+  );
+  assert.deepEqual(env.retrospectiveFindings, {
+    internalToolingOnly: true,
+    rawCallViolations: [],
+    allowedWriteOps: [],
+  });
+  assert.equal(validateHandoffEnvelope(env).ok, true);
+});
+
+test("retrospectiveFindings (#1077): whitespace entries are trimmed before filtering (review fix)", () => {
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    defaultSettings,
+    { retrospectiveFindings: { internalToolingOnly: false, rawCallViolations: ["  gh: gh api  ", "   ", ""], allowedWriteOps: [] } },
+    defaultOptions,
+  );
+  // "  gh: gh api  " is trimmed to "gh: gh api"; whitespace-only/empty are dropped.
+  assert.deepEqual(env.retrospectiveFindings.rawCallViolations, ["gh: gh api"]);
+});
+
 test("retrospectiveFindings (#1077): normalizeRetrospectiveFindings carries the check-retro-tooling JSON shape", () => {
   // Mirrors scripts/loop/check-retro-tooling.mjs --json output.
   const out = normalizeRetrospectiveFindings({

@@ -1067,10 +1067,14 @@ test("detect-pr-gate-coordination-state reaches final approval without an approv
     assert.equal(result.stderr, "");
     const parsed = JSON.parse(result.stdout);
     // Advisory (#1077): the retrospective merge gate is gone, so a green PR with
-    // no retrospective checkpoint is NEVER blocked as retrospective_gate_pending.
-    assert.notEqual(parsed.lifecycleState, "retrospective_gate_pending");
-    assert.notEqual(parsed.gateBoundary, "blocked");
-    assert.notEqual(parsed.nextAction, "report_blocked");
+    // no retrospective checkpoint reaches its normal post-draft review progression
+    // (post_draft_external_review → request_copilot_review), NEVER blocked as
+    // retrospective_gate_pending. Assert the exact progressed state, not just
+    // "not blocked", so a regression to an unexpected non-blocked state is caught.
+    assert.equal(parsed.lifecycleState, "ready_to_rerequest_review");
+    assert.equal(parsed.gateBoundary, "post_draft_external_review");
+    assert.equal(parsed.nextAction, "request_copilot_review");
+    assert.notEqual(parsed.loopDisposition, "blocked");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

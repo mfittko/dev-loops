@@ -432,7 +432,7 @@ function normalizeRetrospectiveFindings(findings) {
   if (typeof findings !== "object" || Array.isArray(findings)) return null;
 
   const toStrArray = (v) => Array.isArray(v)
-    ? v.map((x) => (typeof x === "string" ? x : String(x))).filter((x) => x.length > 0)
+    ? v.map((x) => (typeof x === "string" ? x : String(x)).trim()).filter((x) => x.length > 0)
     : [];
 
   const internalToolingOnly = findings.internalToolingOnly === true;
@@ -492,7 +492,11 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
 
   const gs = normalizeGateState(gateState);
   const subGate = resolveSubGate(strategy, gs);
-  const retrospectiveFindings = normalizeRetrospectiveFindings(gateState?.retrospectiveFindings ?? options.retrospectiveFindings);
+  // Normalize each source independently, then fall back on the normalized result
+  // (not the raw value): a present-but-invalid gateState value must NOT shadow a
+  // valid options.retrospectiveFindings fallback (issue #1077 review finding).
+  const retrospectiveFindings = normalizeRetrospectiveFindings(gateState?.retrospectiveFindings)
+    ?? normalizeRetrospectiveFindings(options.retrospectiveFindings);
 
   const target = deriveTarget(bundle, repo);
   const requiredReads = deriveRequiredReads(bundle, resolverOutput);
