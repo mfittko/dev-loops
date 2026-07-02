@@ -25,6 +25,7 @@ Key contract:
 - GitHub issue state is authoritative — not local notes or chat context
 - A linked PR is the single canonical follow-up artifact for the issue
 - When an open linked PR exists, reuse it rather than opening another
+- Follow-ups discovered while working a PR/loop are noted on the originating issue or PR body by default; a standalone issue is filed only when the follow-up is genuinely independent of the PR and outlives it (see [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md))
 - Implementation may proceed through either the GitHub-first routed path or the local implementation strategy (see [Public Dev Loop Contract](public-dev-loop-contract.md) `targetPreference`)
 
 ### Local-planning

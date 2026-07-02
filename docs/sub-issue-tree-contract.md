@@ -21,10 +21,16 @@ listing, attaching, ordering, and verifying the tree.
 | One issue blocks another but is not a structural child | Plain "blocked by #N" in body |
 | A PR implements an issue | PR body / `Closes #N` syntax (not sub-issue) |
 | Background investigation or spike precedes a slice | Plain related reference; promote to sub-issue if it becomes a required step |
+| A follow-up is discovered while working a PR/loop | Note it on the originating issue (or the PR body); file a standalone issue only if the follow-up is genuinely independent of the PR **and** outlives it (a real separate bug/feature that would be lost as a note on a soon-closed issue) |
 
 **Rule of thumb:** use the sub-issue tree when the parent issue's progress is structurally
 defined by completing its children in some intended order. Use plain references for everything
 else.
+
+**Conservatism clause:** prefer noting PR-scoped follow-ups on the originating artifact
+(issue body or PR body) rather than spinning up standalone tracker items for work that is part
+of the same effort or will be resolved imminently. Cross-cutting contract/policy changes and
+genuinely independent bugs that outlive the PR remain their own issues.
 
 ## Default decomposition flow
 
