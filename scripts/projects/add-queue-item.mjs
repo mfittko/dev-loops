@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: dev-loops queue add --repo <owner/name> --project <number|id> --item <number>
+const USAGE = `Usage: dev-loops queue add --repo <owner/name> [--project <number|id>] --item <number>
        dev-loops project add … (back-compat alias for "queue add")
 
 Add an existing issue or PR to a GitHub Projects V2 board.
 
 Options:
   --repo <owner/name>         Required. Repository containing the issue/PR.
-  --project <number|id>       Required. Project number (integer) or node ID.
+  --project <number|id>       Project number (integer) or node ID. When omitted,
+                              resolved from .devloops queue.projectNumber /
+                              queue.boardTitle.
   --item <number>             Required. Issue or PR number to add.
   --column <name>             Initial Status column (default: "Backlog").
   --status <name>             Back-compat alias for --column.
@@ -114,7 +117,6 @@ function parseCliArgs(argv) {
 
 const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const REPO_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
-const GLOBAL_NODE_ID_RE = /^[A-Za-z0-9_]+$/;
 
 function validateRepo(repo) {
   if (!repo || typeof repo !== "string") {
@@ -137,30 +139,6 @@ function validateRepo(repo) {
     throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
   }
   return repo;
-}
-
-function parseProjectRef(raw) {
-  if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
-    throw Object.assign(new Error("--project is required"), { code: "INVALID_PROJECT" });
-  }
-  const trimmed = raw.trim();
-  const asNum = Number(trimmed);
-  if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
-    return { kind: "number", value: asNum };
-  }
-  if (trimmed === "0") {
-    throw Object.assign(
-      new Error(`--project must be a positive integer or a node ID, got "${raw}"`),
-      { code: "INVALID_PROJECT" },
-    );
-  }
-  if (GLOBAL_NODE_ID_RE.test(trimmed)) {
-    return { kind: "id", value: trimmed };
-  }
-  throw Object.assign(
-    new Error(`--project must be a positive integer or a node ID, got "${raw}"`),
-    { code: "INVALID_PROJECT" },
-  );
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────
@@ -389,7 +367,7 @@ async function main(args, { env = process.env, runChild } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
   const [owner, repoName] = repo.split("/");
-  const projectRef = parseProjectRef(args.project);
+  const selector = resolveProjectSelector(args);
   const itemNumber = args.item;
   if (!Number.isInteger(itemNumber) || itemNumber < 1) {
     throw Object.assign(new Error("--item is required and must be a positive integer"), { code: "INVALID_ITEM" });
@@ -410,18 +388,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 
   // 2. Resolve project
   const projects = await listAllProjects(owner, ownerKind, env, child);
-  let project;
-  if (projectRef.kind === "id") {
-    project = projects.find((p) => p.id === projectRef.value);
-  } else {
-    project = projects.find((p) => p.number === projectRef.value);
-  }
-  if (!project) {
-    throw Object.assign(
-      new Error(`Project ${projectRef.kind === "id" ? `"${projectRef.value}"` : `number ${projectRef.value}`} not found under owner "${owner}"`),
-      { code: "PROJECT_NOT_FOUND" },
-    );
-  }
+  const project = findProject(projects, selector, owner);
 
   // 3. Resolve Status field and target column
   const fieldNodes = await listAllFields(project.id, env, child);
@@ -538,7 +505,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 
 // ── CLI entrypoint ──────────────────────────────────────────────────────
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd(), runChild } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);
@@ -551,8 +518,12 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     stdout.write(USAGE);
     return;
   }
+
+  // Resolve the board from .devloops when --project is absent.
+  applyDevloopsBoard(args, cwd);
+
   try {
-    const result = await main(args, { env });
+    const result = await main(args, { env, runChild });
     process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
   } catch (err) {
     stderr.write(JSON.stringify({ ok: false, error: err.message, code: err.code ?? "UNKNOWN" }) + "\n");
@@ -567,4 +538,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main, parseCliArgs };
+export { main, parseCliArgs, runCli };

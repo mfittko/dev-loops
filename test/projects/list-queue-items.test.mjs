@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { main, parseCliArgs } from "../../scripts/projects/list-queue-items.mjs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
+import { main, parseCliArgs, runCli } from "../../scripts/projects/list-queue-items.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -792,6 +795,91 @@ describe("list-queue-items", () => {
         assert.ok(json.error.includes("not found"));
         assert.equal(json.code, "PROJECT_NOT_FOUND");
       }
+    });
+  });
+
+  describe("optional --project resolved from .devloops (#1035)", () => {
+    function listResponses(project) {
+      return [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([project]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsResponse([]) },
+      ];
+    }
+
+    async function withTempCwd(contents, fn) {
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "list-queue-cfg-"));
+      try {
+        if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
+        return await fn(dir);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    function noopStream() {
+      return { write() {} };
+    }
+
+    it("main() resolves the board by title when --project is omitted (projectTitle)", async () => {
+      const result = await main(
+        { repo: "mfittko/dev-loops", projectTitle: "Dev Loop Queue" },
+        { env: {}, runChild: mockRunChild(listResponses(EXISTING_PROJECT)) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.items.length, 0);
+    });
+
+    it("main() fails closed with INVALID_PROJECT when neither --project nor projectTitle given", async () => {
+      await assert.rejects(
+        () => main({ repo: "mfittko/dev-loops" }, { env: {}, runChild: mockRunChild([]) }),
+        (e) => e.code === "INVALID_PROJECT" && /queue\.projectNumber/.test(e.message),
+      );
+    });
+
+    it("runCli resolves projectNumber from .devloops when --project omitted", async () => {
+      await withTempCwd("queue:\n  projectNumber: 1\n", async (cwd) => {
+        await runCli(["--repo", "mfittko/dev-loops"], {
+          env: {}, cwd, runChild: mockRunChild(listResponses(EXISTING_PROJECT)),
+          stdout: noopStream(), stderr: noopStream(),
+        });
+        assert.equal(process.exitCode, 0);
+      });
+    });
+
+    it("runCli resolves boardTitle from .devloops when --project omitted", async () => {
+      await withTempCwd("queue:\n  boardTitle: \"Dev Loop Queue\"\n", async (cwd) => {
+        await runCli(["--repo", "mfittko/dev-loops"], {
+          env: {}, cwd, runChild: mockRunChild(listResponses(EXISTING_PROJECT)),
+          stdout: noopStream(), stderr: noopStream(),
+        });
+        assert.equal(process.exitCode, 0);
+      });
+    });
+
+    it("runCli: explicit --project wins over .devloops", async () => {
+      const other = { id: "PVT_flag", number: 9, title: "Flag Project", url: "u" };
+      await withTempCwd("queue:\n  projectNumber: 1\n", async (cwd) => {
+        await runCli(["--repo", "mfittko/dev-loops", "--project", "9"], {
+          env: {}, cwd, runChild: mockRunChild(listResponses(other)),
+          stdout: noopStream(), stderr: noopStream(),
+        });
+        assert.equal(process.exitCode, 0);
+      });
+    });
+
+    it("runCli fails closed (exit 1) when neither --project nor .devloops resolves", async () => {
+      await withTempCwd(null, async (cwd) => {
+        let err = "";
+        await runCli(["--repo", "mfittko/dev-loops"], {
+          env: {}, cwd, runChild: mockRunChild([]),
+          stdout: noopStream(), stderr: { write(s) { err += s; } },
+        });
+        assert.equal(process.exitCode, 1);
+        assert.match(err, /INVALID_PROJECT/);
+        process.exitCode = 0; // avoid leaking a failure code into the test runner
+      });
     });
   });
 });

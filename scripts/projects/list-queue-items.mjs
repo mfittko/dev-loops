@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: dev-loops queue list --repo <owner/name> --project <number|id> [--column <name>] [--limit <n>]
-       dev-loops queue list --repo <owner/name> --project <number|id> --summary [--done-limit <n>]
+const USAGE = `Usage: dev-loops queue list --repo <owner/name> [--project <number|id>] [--column <name>] [--limit <n>]
+       dev-loops queue list --repo <owner/name> [--project <number|id>] --summary [--done-limit <n>]
        (dev-loops project list … is a back-compat alias)
 
 List GitHub Projects V2 items filtered by Status column, ordered by position
@@ -13,7 +14,9 @@ ascending. Returns machine-readable JSON.
 
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
-  --project <number|id>   Required. Project number (integer) or node ID.
+  --project <number|id>   Project number (integer) or node ID. When omitted,
+                          resolved from .devloops queue.projectNumber /
+                          queue.boardTitle.
   --column <name>         Filter items by Status column value (e.g. "Next Up").
   --limit <n>             Return at most <n> items (flat mode only).
   --summary               Whole-board digest grouped by Status column, in board
@@ -144,7 +147,6 @@ function parseCliArgs(argv) {
 
 const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const REPO_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
-const GLOBAL_NODE_ID_RE = /^[A-Za-z0-9_]+$/;
 
 function validateRepo(repo) {
   if (!repo || typeof repo !== "string") {
@@ -167,31 +169,6 @@ function validateRepo(repo) {
     throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
   }
   return repo;
-}
-
-function parseProjectRef(raw) {
-  if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
-    throw Object.assign(new Error("--project is required"), { code: "INVALID_PROJECT" });
-  }
-  const trimmed = raw.trim();
-  const asNum = Number(trimmed);
-  if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
-    return { kind: "number", value: asNum };
-  }
-  // Reject bare "0" — valid node ID character but not a meaningful project reference
-  if (trimmed === "0") {
-    throw Object.assign(
-      new Error(`--project must be a positive integer or a node ID, got "${raw}"`),
-      { code: "INVALID_PROJECT" },
-    );
-  }
-  if (GLOBAL_NODE_ID_RE.test(trimmed)) {
-    return { kind: "id", value: trimmed };
-  }
-  throw Object.assign(
-    new Error(`--project must be a positive integer or a node ID, got "${raw}"`),
-    { code: "INVALID_PROJECT" },
-  );
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────
@@ -410,7 +387,7 @@ async function main(args, { env = process.env, runChild } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
   const [owner] = repo.split("/");
-  const projectRef = parseProjectRef(args.project);
+  const selector = resolveProjectSelector(args);
 
   // Mutual exclusion: --summary is the whole-board grouped view; --column/--limit
   // are flat-mode knobs. Combining them is ambiguous.
@@ -437,28 +414,8 @@ async function main(args, { env = process.env, runChild } = {}) {
   const { id: ownerId, kind: ownerKind } = await resolveOwner(owner, env, child);
 
   // 2. Resolve project
-  let project;
-  if (projectRef.kind === "id") {
-    // Direct ID: use it directly (verify it belongs to owner via projects list)
-    const projects = await listAllProjects(owner, ownerKind, env, child);
-    project = projects.find((p) => p.id === projectRef.value);
-    if (!project) {
-      throw Object.assign(
-        new Error(`Project with ID "${projectRef.value}" not found under owner "${owner}"`),
-        { code: "PROJECT_NOT_FOUND" },
-      );
-    }
-  } else {
-    // By number
-    const projects = await listAllProjects(owner, ownerKind, env, child);
-    project = projects.find((p) => p.number === projectRef.value);
-    if (!project) {
-      throw Object.assign(
-        new Error(`Project number ${projectRef.value} not found under owner "${owner}"`),
-        { code: "PROJECT_NOT_FOUND" },
-      );
-    }
-  }
+  const projects = await listAllProjects(owner, ownerKind, env, child);
+  const project = findProject(projects, selector, owner);
 
   // 3. Resolve Status field and target column
   const fieldNodes = await listAllFields(project.id, env, child);
@@ -559,7 +516,7 @@ async function main(args, { env = process.env, runChild } = {}) {
 
 // ── CLI entrypoint ──────────────────────────────────────────────────────
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd(), runChild } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);
@@ -572,8 +529,12 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     stdout.write(USAGE);
     return;
   }
+
+  // Resolve the board from .devloops when --project is absent.
+  applyDevloopsBoard(args, cwd);
+
   try {
-    const result = await main(args, { env });
+    const result = await main(args, { env, runChild });
     process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
   } catch (err) {
     stderr.write(JSON.stringify({ ok: false, error: err.message, code: err.code ?? "UNKNOWN" }) + "\n");
@@ -588,4 +549,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main, parseCliArgs };
+export { main, parseCliArgs, runCli };
