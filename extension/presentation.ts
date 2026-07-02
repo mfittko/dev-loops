@@ -19,7 +19,7 @@ function checkMap(checks: DevLoopCheck[]): Map<DevLoopCheckId, DevLoopCheck> {
   return new Map(checks.map((check) => [check.id, check]));
 }
 
-export function orderedSetupSteps(checks: DevLoopCheck[]): string[] {
+function orderedSetupSteps(checks: DevLoopCheck[]): string[] {
   const byId = checkMap(checks);
   const uniqueSteps = [...new Set(DEV_LOOP_CHECK_IDS.filter((id) => byId.get(id)?.ok === false).map((id) => SETUP_GUIDANCE[id]))];
   const steps = uniqueSteps.map((step, index) => `${index + 1}. ${step}`);

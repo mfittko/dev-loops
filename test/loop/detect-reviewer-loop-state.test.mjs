@@ -12,7 +12,7 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, opt
 
 const writeJson = writeJsonHelper;
 
-const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, entries, { overflowMessageMode: "generic" });
+const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, entries);
 
 test("detect-reviewer-loop-state --input returns correct states for planning/running/merge snapshots", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-state-detect-"));
@@ -378,10 +378,10 @@ test("detect-reviewer-loop-state auto-detect fails when gh stub call budget is e
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
-    assert.deepEqual(JSON.parse(result.stderr), {
-      ok: false,
-      error: "gh command failed: unexpected gh call beyond scripted sequence",
-    });
+    const parsed = JSON.parse(result.stderr);
+    assert.equal(parsed.ok, false);
+    // The stub reports the overflowing call's index and args; only the budget-exceeded prefix is stable.
+    assert.match(parsed.error, /^gh command failed: unexpected extra gh call #2: /);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

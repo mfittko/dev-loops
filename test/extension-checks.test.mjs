@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { collectDevLoopChecks } from "../extension/checks.ts";
+import { createExtensionCoreRuntime } from "../extension/checks.ts";
 import { createPiExtensionAdapter } from "../extension/pi-extension-adapter.ts";
-import { renderCheckLines, summarizeChecks } from "../lib/dev-loops-core.mjs";
+import { collectDevLoopChecks as collectCoreChecks, renderCheckLines, summarizeChecks } from "../lib/dev-loops-core.mjs";
+
+// Production reaches the shared collector via createExtensionCoreRuntime (executeDevLoopsCommand);
+// exercise the same path here instead of a test-only wrapper.
+const collectDevLoopChecks = (adapter) => collectCoreChecks(createExtensionCoreRuntime(adapter));
 
 function createFakePi({ commandResults = new Map(), tools = [], commands = [] } = {}) {
   return {

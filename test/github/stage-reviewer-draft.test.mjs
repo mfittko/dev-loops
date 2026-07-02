@@ -37,15 +37,25 @@ test("stage-reviewer-draft posts a deterministic pending review and writes local
     const gh = await writeGhStub(tempDir, [
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        // Exact full-payload match: subsumes the old field-by-field includes and the
+        // '"event"' exclusion (a pending review must not carry an event field).
         assertStdinIncludes: [
-          '"commit_id":"abc123"',
-          '"path":"src/app.ts"',
-          '"line":10',
-          '"body":"Handle null"',
-          'Reviewer-loop draft verdict: REQUEST_CHANGES',
-          'Summary findings:\\n- [low] Consider the stale draft-review cleanup path',
+          JSON.stringify({
+            commit_id: "abc123",
+            body: [
+              "Reviewer-loop draft verdict: REQUEST_CHANGES",
+              "Total findings: 2",
+              "Review runs merged: 2",
+              "",
+              "Summary findings:",
+              "- [low] Consider the stale draft-review cleanup path",
+              "",
+            ].join("\n"),
+            comments: [
+              { path: "src/app.ts", line: 10, body: "Handle null", side: "RIGHT" },
+            ],
+          }),
         ],
-        assertStdinExcludes: ['"event"'],
         stdout: '{"id":444,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-444","state":"PENDING","commit_id":"abc123"}\n',
       },
     ]);
