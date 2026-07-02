@@ -131,7 +131,7 @@
         "humanHandoff": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Offer to assign the PR to a human reviewer/assignee at the pre-approval / merge-handoff boundary. Opt-in; disabled by default. OFFER-only — the operator confirms the assignee.",
+          "description": "Offer to assign the PR to a human reviewer/assignee at the pre-approval / merge-handoff boundary. Opt-in; disabled by default. OFFER-only \u2014 the operator confirms the assignee.",
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -167,15 +167,6 @@
         "requireRetrospective": {
           "type": "boolean"
         },
-        "requireRetrospectiveGate": {
-          "type": "boolean",
-          "default": false
-        },
-        "requireRetrospectiveInternalTooling": {
-          "type": "boolean",
-          "default": false,
-          "description": "Developer-mode retro step (#982): enforce internal-tooling-only execution (no agent-level raw gh/python/node -e) in the retrospective gate. Opt-in dogfooding discipline for dev-loops maintainers; default OFF so consumers are never blocked."
-        },
         "requireDraftFirst": {
           "type": "boolean"
         },
@@ -204,7 +195,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Paths/globs copied into the worktree (isolated per worktree — use for mutable files). Do not target node_modules."
+          "description": "Paths/globs copied into the worktree (isolated per worktree \u2014 use for mutable files). Do not target node_modules."
         },
         "linkOnInit": {
           "type": "array",
@@ -212,7 +203,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Paths/globs symlinked (absolute) into the main checkout (shared — use only for read-only data). Do not target node_modules."
+          "description": "Paths/globs symlinked (absolute) into the main checkout (shared \u2014 use only for read-only data). Do not target node_modules."
         }
       }
     },
@@ -263,10 +254,16 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["must-fix", "worth-fixing-now", "defer"]
+            "enum": [
+              "must-fix",
+              "worth-fixing-now",
+              "defer"
+            ]
           },
           "minItems": 1,
-          "default": ["must-fix"],
+          "default": [
+            "must-fix"
+          ],
           "description": "Finding severities that block a clean gate verdict."
         },
         "dynamicAngles": {

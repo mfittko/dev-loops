@@ -14,6 +14,7 @@ import {
   deriveCwd,
   deriveRequiredReads,
   normalizeGateState,
+  normalizeRetrospectiveFindings,
   resolveSubGate,
   lookupAcceptanceTemplate,
   buildWorktreeSlug,
@@ -1355,4 +1356,123 @@ test("invariant: every strategy with default stop rules has an acceptance templa
       `Strategy "${s}" missing acceptance template`,
     );
   }
+});
+
+
+// ===========================================================================
+// Advisory retrospective findings (issue #1077, Reading B)
+//
+// The retrospective is advisory: findings travel in the envelope's
+// `retrospectiveFindings` field (the check-retro-tooling.mjs JSON output shape)
+// for the conductor to surface as an advisory PR comment. They NEVER block.
+// ===========================================================================
+
+test("retrospectiveFindings (#1077): omitted by default — field absent", () => {
+  const env = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
+  assert.equal(env.retrospectiveFindings, undefined);
+  assert.equal(validateHandoffEnvelope(env).ok, true);
+});
+
+test("retrospectiveFindings (#1077): structured findings flow from gateState to the envelope", () => {
+  const findings = {
+    ok: false,
+    internalToolingOnly: false,
+    rawCallViolations: ["gh: gh api repos/x/y/pulls/1/comments", "node -e: node -e 'JSON.parse(...)'"],
+    allowedWriteOps: ["gh pr merge"],
+  };
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    defaultSettings,
+    { retrospectiveFindings: findings },
+    defaultOptions,
+  );
+  assert.deepEqual(env.retrospectiveFindings, {
+    internalToolingOnly: false,
+    rawCallViolations: ["gh: gh api repos/x/y/pulls/1/comments", "node -e: node -e 'JSON.parse(...)'"],
+    allowedWriteOps: ["gh pr merge"],
+  });
+  assert.equal(validateHandoffEnvelope(env).ok, true);
+});
+
+test("retrospectiveFindings (#1077): non-empty rawCallViolations do NOT block — envelope stays valid", () => {
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    defaultSettings,
+    {
+      retrospectiveFindings: {
+        ok: false,
+        internalToolingOnly: false,
+        rawCallViolations: ["gh: gh api", "python3: python3 -c 'x'", "node -e: node -e '1'"],
+        allowedWriteOps: [],
+      },
+    },
+    defaultOptions,
+  );
+  // Advisory: findings present, nextAction/gateBoundary unchanged — never a block.
+  assert.equal(env.retrospectiveFindings.rawCallViolations.length, 3);
+  assert.equal(env.retrospectiveFindings.internalToolingOnly, false);
+  assert.equal(validateHandoffEnvelope(env).ok, true);
+});
+
+test("retrospectiveFindings (#1077): options.retrospectiveFindings is a fallback source", () => {
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    defaultSettings,
+    {},
+    { ...defaultOptions, retrospectiveFindings: { internalToolingOnly: true, rawCallViolations: [], allowedWriteOps: [] } },
+  );
+  assert.deepEqual(env.retrospectiveFindings, {
+    internalToolingOnly: true,
+    rawCallViolations: [],
+    allowedWriteOps: [],
+  });
+});
+
+test("retrospectiveFindings (#1077): gateState takes precedence over options", () => {
+  const env = buildDevLoopHandoffEnvelope(
+    issueBundle(42),
+    defaultSettings,
+    { retrospectiveFindings: { internalToolingOnly: false, rawCallViolations: ["gh: gh api"], allowedWriteOps: [] } },
+    { ...defaultOptions, retrospectiveFindings: { internalToolingOnly: true, rawCallViolations: [], allowedWriteOps: [] } },
+  );
+  assert.equal(env.retrospectiveFindings.internalToolingOnly, false);
+  assert.equal(env.retrospectiveFindings.rawCallViolations.length, 1);
+});
+
+test("retrospectiveFindings (#1077): null/invalid input yields no field (never blocks)", () => {
+  for (const bad of [null, undefined, "not-an-object", 42, []]) {
+    const env = buildDevLoopHandoffEnvelope(
+      issueBundle(42),
+      defaultSettings,
+      { retrospectiveFindings: bad },
+      defaultOptions,
+    );
+    assert.equal(env.retrospectiveFindings, undefined, `input ${JSON.stringify(bad)} must not produce a field`);
+    assert.equal(validateHandoffEnvelope(env).ok, true);
+  }
+});
+
+test("retrospectiveFindings (#1077): normalizeRetrospectiveFindings carries the check-retro-tooling JSON shape", () => {
+  // Mirrors scripts/loop/check-retro-tooling.mjs --json output.
+  const out = normalizeRetrospectiveFindings({
+    ok: false,
+    internalToolingOnly: false,
+    rawCallViolations: ["gh: gh api repos/o/r/pulls/1/comments", "python3: python3 -c 'json.load(...)'"],
+    allowedWriteOps: ["gh pr merge", "gh pr ready"],
+  });
+  assert.deepEqual(out, {
+    internalToolingOnly: false,
+    rawCallViolations: ["gh: gh api repos/o/r/pulls/1/comments", "python3: python3 -c 'json.load(...)'"],
+    allowedWriteOps: ["gh pr merge", "gh pr ready"],
+  });
+});
+
+test("retrospectiveFindings validation (#1077): malformed field fails validation", () => {
+  const env = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
+  // Hand-build a malformed envelope to exercise the validator.
+  const malformed = { ...env, retrospectiveFindings: { internalToolingOnly: "yes", rawCallViolations: "not-array" } };
+  const result = validateHandoffEnvelope(malformed);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.field === "retrospectiveFindings.internalToolingOnly"));
+  assert.ok(result.errors.some((e) => e.field === "retrospectiveFindings.rawCallViolations"));
 });

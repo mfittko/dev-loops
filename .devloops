@@ -69,17 +69,6 @@ gates:
 
 workflow:
   requireRetrospective: true
-  requireRetrospectiveGate: true
-  # Developer mode: this repo dogfoods the dev-loops tooling and its INTENDED posture
-  # is to enforce the internal-tooling-only retro discipline on itself (#982) — that
-  # intended-on state is what skills/docs/retrospective-checkpoint-contract.md and the
-  # 0.5.0 CHANGELOG describe. Consumers default OFF.
-  # ON: compliance is now achievable — every agent-level gh READ has a dev-loops
-  # wrapper (CI-log → fetch-ci-logs.mjs, issue list/filter → list-issues.mjs, issue
-  # comment → comment-issue.mjs; #993 wrapped the remaining three on top of #981),
-  # so a clean tooling record (no agent-level raw gh / python / node -e) is reachable
-  # without dead-ending a session. This re-arms the hard retro check on our own retros.
-  requireRetrospectiveInternalTooling: true
   requireDraftFirst: true
   devModeDefault: true
 

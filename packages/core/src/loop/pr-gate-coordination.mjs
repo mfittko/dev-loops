@@ -239,160 +239,6 @@ function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopi
 }
 
 /**
- * Render the (user-authored) rawCallViolations array into a bounded, single-line
- * fragment for the gate failure reason. Collapses whitespace/newlines per entry,
- * caps per-entry length, and caps the number of entries shown so a large or
- * garbled checkpoint cannot bloat or break gate output. Still fails closed —
- * this only formats the reason; the violation count above does the gating.
- */
-function summarizeRawCallViolations(violations, { maxEntries = 10, maxEntryLen = 200 } = {}) {
-  const shown = violations.slice(0, maxEntries).map((v) => {
-    const flat = String(v).replace(/\s+/g, " ").trim();
-    return flat.length > maxEntryLen ? `${flat.slice(0, maxEntryLen)}…` : flat;
-  });
-  const more = violations.length - shown.length;
-  return more > 0 ? `${shown.join("; ")}; …(+${more} more)` : shown.join("; ");
-}
-
-function evaluateRetrospectiveMergeApproval(checkpoint, { developerMode = false } = {}) {
-  if (!checkpoint || typeof checkpoint !== "object") {
-    return { approved: false, reason: "No retrospective checkpoint was found." };
-  }
-
-  const state = typeof checkpoint.state === "string" ? checkpoint.state.trim().toLowerCase() : "";
-  if (state !== "complete") {
-    return { approved: false, reason: `Retrospective is not complete (state: ${state || "missing"}).` };
-  }
-
-  // Read merge approval from behavioralReview (existing format) or top-level (future flat format).
-  const br = checkpoint.behavioralReview && typeof checkpoint.behavioralReview === "object"
-    ? checkpoint.behavioralReview
-    : null;
-  const mergeApproved = br !== null ? br.mergeApproved : checkpoint.mergeApproved;
-  if (mergeApproved !== true) {
-    return { approved: false, reason: "Retrospective does not explicitly approve merge (`mergeApproved: true` is required)." };
-  }
-
-  // followedWorkingAgreement: required boolean (existing checkpoint uses behavioralReview.followedWorkingAgreement).
-  const followedWorkingAgreement = br !== null
-    ? br.followedWorkingAgreement
-    : checkpoint.followedWorkingAgreement;
-  if (typeof followedWorkingAgreement !== "boolean") {
-    return { approved: false, reason: "Retrospective is missing `followedWorkingAgreement` (true/false)." };
-  }
-
-  // gateQuality: require gateQualityAcceptable=true AND non-empty notes (behavioralReview)
-  // or explicit gateQuality string (flat format). Avoid empty-notes bypass.
-  const gateQualityAcceptable = br !== null
-    ? br.gateQualityAcceptable
-    : checkpoint.gateQualityAcceptable;
-  if (typeof gateQualityAcceptable !== "boolean" || gateQualityAcceptable !== true) {
-    return { approved: false, reason: `Retrospective gate quality is not explicitly acceptable (gateQualityAcceptable: ${String(gateQualityAcceptable)}).` };
-  }
-  const gateQuality = typeof checkpoint.gateQuality === "string" && checkpoint.gateQuality.trim().length > 0
-    ? checkpoint.gateQuality
-    : null;
-  if (!gateQuality) {
-    return { approved: false, reason: "Retrospective is missing `gateQuality` details; provide a notes field with gate-quality assessment or an explicit gateQuality string." };
-  }
-
-  // unexpectedFindings: derive from behavioralReview.drifts if flat field absent. Empty array is valid (no findings).
-  const unexpectedFindings = typeof checkpoint.unexpectedFindings === "string" && checkpoint.unexpectedFindings.trim().length > 0
-    ? checkpoint.unexpectedFindings
-    : (br !== null && Array.isArray(br.drifts)
-      ? (br.drifts.length > 0 ? br.drifts.join("; ") : "none")
-      : null);
-  if (!unexpectedFindings) {
-    return { approved: false, reason: "Retrospective is missing `unexpectedFindings` details." };
-  }
-
-  // mergeRecommendation: require explicit mergeRecommendation field (string).
-  const mergeRecommendation = typeof checkpoint.mergeRecommendation === "string" && checkpoint.mergeRecommendation.trim().length > 0
-    ? checkpoint.mergeRecommendation
-    : null;
-  if (!mergeRecommendation) {
-    return { approved: false, reason: "Retrospective is missing explicit `mergeRecommendation`." };
-  }
-
-  // internalToolingOnly: the loop's own execution must have used internal dev-loops
-  // tooling only — no agent-level raw `gh`/`python`/`python3`/`node -e` (issue #982).
-  // This is a DEVELOPER-MODE retro step: it enforces the dev-loops maintainers'
-  // own dogfooding discipline and is opt-in via `workflow.requireRetrospectiveInternalTooling`
-  // (default OFF). CONSUMERS of the extension are never blocked by it — they may
-  // legitimately use raw gh/python/node -e in their own workflow — so when the flag
-  // is OFF these fields are neither required nor enforced (a complete checkpoint
-  // without them passes exactly as it did before #982). When ON it fails closed:
-  // a complete checkpoint must explicitly attest a clean tooling record, and an OLD
-  // checkpoint missing `internalToolingOnly` fails (not a silent pass). Re-record the
-  // retrospective with the new fields to clear it.
-  if (developerMode) {
-    const internalToolingOnly = br !== null ? br.internalToolingOnly : checkpoint.internalToolingOnly;
-    if (internalToolingOnly !== true) {
-      return {
-        approved: false,
-        reason: "Retrospective does not attest internal-tooling-only execution (`internalToolingOnly: true` is required in developer mode; agent-level raw gh/python/node -e is a violation). — re-record the retrospective with internalToolingOnly + rawCallViolations.",
-      };
-    }
-    const rawCallViolations = br !== null ? br.rawCallViolations : checkpoint.rawCallViolations;
-    if (!Array.isArray(rawCallViolations)) {
-      return { approved: false, reason: "Retrospective is missing `rawCallViolations` (array; empty when clean). — re-record the retrospective with internalToolingOnly + rawCallViolations." };
-    }
-    if (rawCallViolations.length > 0) {
-      return {
-        approved: false,
-        reason: `Retrospective records ${rawCallViolations.length} raw-call violation(s) (agent-level gh/python/node -e): ${summarizeRawCallViolations(rawCallViolations)}.`,
-      };
-    }
-  }
-
-  return { approved: true, reason: null };
-}
-
-function buildRetrospectiveGatePendingResult({
-  input,
-  currentHeadSha,
-  draftGateAlreadySatisfied,
-  draftGate,
-  preApprovalGate,
-  mergeStateStatus,
-  conflictFiles,
-  reason,
-  refinementArtifact = null,
-}) {
-  const allowedNextActions = [];
-  const forbiddenActions = [];
-  pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
-  pushUnique(forbiddenActions, [
-    PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
-    PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
-    PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
-    PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-    PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
-    PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
-  ]);
-
-  return buildResult({
-    repo: input.repo ?? null,
-    pr: Number.isInteger(input.pr) ? input.pr : null,
-    currentHeadSha,
-    lifecycleState: "retrospective_gate_pending",
-    loopDisposition: DISPOSITION.BLOCKED,
-    gateBoundary: PR_CHECKPOINT.BLOCKED,
-    draftGateAlreadySatisfied,
-    draftGate,
-    preApprovalGate,
-    allowedNextActions,
-    forbiddenActions,
-    nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-    reason,
-    mergeStateStatus,
-    conflictFiles,
-      refinementArtifact,
-  });
-}
-
-
-/**
  * Blocked result for a PR that would otherwise reach final_approval_ready but
  * still carries a merge-blocking marker in its title (issue #842). The title is
  * the most visible contract surface, so a WIP/DRAFT/DO NOT MERGE title must
@@ -684,11 +530,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const copilotReviewRoundCount = normalizeNonNegativeInteger(input.copilotReviewRoundCount);
   const maxCopilotRounds = normalizePositiveInteger(input.maxCopilotRounds);
   const roundCapReached = maxCopilotRounds !== null && copilotReviewRoundCount >= maxCopilotRounds;
-  const requireRetrospectiveGate = input.requireRetrospectiveGate === true;
-  // Developer-mode flag (#982): only the dev-loops repo dogfooding itself enforces the
-  // internal-tooling-only retro discipline. Default OFF so consumer state changes pass.
-  const requireRetrospectiveInternalTooling = input.requireRetrospectiveInternalTooling === true;
-  const retrospectiveCheckpoint = input.retrospectiveCheckpoint;
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
   // UI e2e auto-scoping (#976): the PR changed-file set + whether the shared UI
   // e2e suite passed for this head. Inclusion is path-triggered, never annotated.
@@ -849,7 +690,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // registered in the shared UI e2e suite AND that suite must have passed for
   // this head. A rendered-artifact change with no registered/passing coverage
   // blocks here with a reason naming the artifact. Distinct seam from the
-  // mergeability (#980) and retrospective (#982) preconditions to minimize
+  // mergeability (#980) preconditions to minimize
   // merge-time conflict. Non-UI changes pass through untouched (required=false).
   const uiE2eScoping = evaluateUiE2eScoping(changedFiles, { uiE2ePassed });
   if (uiE2eScoping.required && !uiE2eScoping.satisfied) {
@@ -1061,24 +902,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
             refinementArtifact,
           });
         }
-        if (requireRetrospectiveGate) {
-          const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint, { developerMode: requireRetrospectiveInternalTooling });
-          if (!retrospectiveGate.approved) {
-            return buildRetrospectiveGatePendingResult({
-              input,
-              currentHeadSha,
-              draftGateAlreadySatisfied: roundCapReached ? true : draftGateAlreadySatisfied,
-              draftGate,
-              preApprovalGate,
-              mergeStateStatus,
-              conflictFiles,
-              reason: `Merge remains blocked: retrospective_gate_pending. ${retrospectiveGate.reason}`,
-            refinementArtifact,
-            });
-          }
-        }
-
-
         if (!draftGate.cleanEvidenceExists) {
           return buildDraftGateNeededForMergeResult({
             input,
@@ -1333,23 +1156,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
           refinementArtifact,
         });
       }
-      if (requireRetrospectiveGate) {
-        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint, { developerMode: requireRetrospectiveInternalTooling });
-        if (!retrospectiveGate.approved) {
-          return buildRetrospectiveGatePendingResult({
-            input,
-            currentHeadSha,
-            draftGateAlreadySatisfied: roundCapReached ? true : draftGateAlreadySatisfied,
-            draftGate,
-            preApprovalGate,
-            mergeStateStatus,
-            conflictFiles,
-            reason: `Merge remains blocked: retrospective_gate_pending. ${retrospectiveGate.reason}`,
-          refinementArtifact,
-          });
-        }
-      }
-
 
       if (!draftGate.cleanEvidenceExists && !roundCapReached) {
         return buildDraftGateNeededForMergeResult({
@@ -1499,23 +1305,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
           refinementArtifact,
         });
       }
-      if (requireRetrospectiveGate) {
-        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint, { developerMode: requireRetrospectiveInternalTooling });
-        if (!retrospectiveGate.approved) {
-          return buildRetrospectiveGatePendingResult({
-            input,
-            currentHeadSha,
-            draftGateAlreadySatisfied: true,
-            draftGate,
-            preApprovalGate,
-            mergeStateStatus,
-            conflictFiles,
-            reason: `Merge remains blocked: retrospective_gate_pending. ${retrospectiveGate.reason}`,
-            refinementArtifact,
-          });
-        }
-      }
-
       // Mirror LOW_SIGNAL_CONVERGED (#579): a clean current head with no clean
       // draft_gate evidence must reconcile the draft gate rather than jump to
       // final approval. This keeps the core handler consistent with the
@@ -1659,23 +1448,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
           refinementArtifact,
         });
       }
-      if (requireRetrospectiveGate) {
-        const retrospectiveGate = evaluateRetrospectiveMergeApproval(retrospectiveCheckpoint, { developerMode: requireRetrospectiveInternalTooling });
-        if (!retrospectiveGate.approved) {
-          return buildRetrospectiveGatePendingResult({
-            input,
-            currentHeadSha,
-            draftGateAlreadySatisfied: roundCapReached ? true : draftGateAlreadySatisfied,
-            draftGate,
-            preApprovalGate,
-            mergeStateStatus,
-            conflictFiles,
-            reason: `Merge remains blocked: retrospective_gate_pending. ${retrospectiveGate.reason}`,
-          refinementArtifact,
-          });
-        }
-      }
-
 
       if (!draftGate.cleanEvidenceExists) {
         return buildDraftGateNeededForMergeResult({

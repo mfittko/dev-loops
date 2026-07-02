@@ -412,6 +412,37 @@ function normalizeGateState(gateState) {
   };
 }
 
+
+/**
+ * Normalize the structured retrospective findings (issue #1077, Reading B).
+ *
+ * The retrospective is advisory: it never blocks merge or any lifecycle
+ * transition. Its findings travel in the handoff envelope (the conductor's
+ * decision input) and in an advisory PR comment — never on disk as a gate.
+ *
+ * The source is the `check-retro-tooling.mjs` JSON output shape:
+ *   { ok, internalToolingOnly, rawCallViolations, allowedWriteOps }
+ *
+ * Returns a normalized object carrying the substantive fields, or null when no
+ * findings were supplied (the field is optional — present only when the loop
+ * subagent ran the retrospective tooling).
+ */
+function normalizeRetrospectiveFindings(findings) {
+  if (findings === null || findings === undefined) return null;
+  if (typeof findings !== "object" || Array.isArray(findings)) return null;
+
+  const toStrArray = (v) => Array.isArray(v)
+    ? v.map((x) => (typeof x === "string" ? x : String(x))).filter((x) => x.length > 0)
+    : [];
+
+  const internalToolingOnly = findings.internalToolingOnly === true;
+  return {
+    internalToolingOnly,
+    rawCallViolations: toStrArray(findings.rawCallViolations),
+    allowedWriteOps: toStrArray(findings.allowedWriteOps),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Sub-gate resolution
 // ---------------------------------------------------------------------------
@@ -461,6 +492,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
 
   const gs = normalizeGateState(gateState);
   const subGate = resolveSubGate(strategy, gs);
+  const retrospectiveFindings = normalizeRetrospectiveFindings(gateState?.retrospectiveFindings ?? options.retrospectiveFindings);
 
   const target = deriveTarget(bundle, repo);
   const requiredReads = deriveRequiredReads(bundle, resolverOutput);
@@ -526,6 +558,13 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
 
   if (overrides) {
     envelope.overrides = overrides;
+  }
+
+  // Advisory retrospective findings (issue #1077, Reading B). Optional structured
+  // field carrying the check-retro-tooling.mjs JSON output to the conductor. Never a
+  // gate — the conductor surfaces these as an advisory PR comment, not a block.
+  if (retrospectiveFindings) {
+    envelope.retrospectiveFindings = retrospectiveFindings;
   }
 
   // Optional refinement contract (AC/DoD matrix) from the refiner.
@@ -840,6 +879,28 @@ export function validateHandoffEnvelope(envelope) {
     }
   }
 
+  // ----- retrospectiveFindings (optional, advisory — issue #1077) -----
+  if (envelope.retrospectiveFindings !== undefined && envelope.retrospectiveFindings !== null) {
+    const rf = envelope.retrospectiveFindings;
+    if (typeof rf !== "object" || Array.isArray(rf)) {
+      errors.push({
+        field: "retrospectiveFindings",
+        reason: "if present, must be a non-array object { internalToolingOnly, rawCallViolations, allowedWriteOps }",
+        got: rf,
+      });
+    } else {
+      if (typeof rf.internalToolingOnly !== "boolean") {
+        errors.push({ field: "retrospectiveFindings.internalToolingOnly", reason: "must be a boolean", got: rf.internalToolingOnly });
+      }
+      if (!Array.isArray(rf.rawCallViolations) || rf.rawCallViolations.some((v) => typeof v !== "string")) {
+        errors.push({ field: "retrospectiveFindings.rawCallViolations", reason: "must be an array of strings", got: rf.rawCallViolations });
+      }
+      if (!Array.isArray(rf.allowedWriteOps) || rf.allowedWriteOps.some((v) => typeof v !== "string")) {
+        errors.push({ field: "retrospectiveFindings.allowedWriteOps", reason: "must be an array of strings", got: rf.allowedWriteOps });
+      }
+    }
+  }
+
   // ----- derivedAt (informational, warn on missing) -----
   if (typeof envelope.derivedAt !== "string" || !envelope.derivedAt.trim()) {
     warnings.push({ field: "derivedAt", reason: "should be an ISO 8601 timestamp" });
@@ -863,6 +924,7 @@ export {
   deriveCwd,
   deriveRequiredReads,
   normalizeGateState,
+  normalizeRetrospectiveFindings,
   resolveSubGate,
   lookupAcceptanceTemplate,
   buildWorktreeSlug,

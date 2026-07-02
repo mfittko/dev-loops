@@ -51,7 +51,6 @@ gates:
 
 workflow:
   requireRetrospective: true
-  requireRetrospectiveGate: true
   requireDraftFirst: true
   devModeDefault: true
 
