@@ -301,6 +301,18 @@ When a queue board is configured, `Next Up` is the **normative, fail-closed pick
 - **Board-query error (API/unreachable/unresolvable project) → surface and stop** (`reason: "board-query-error"`). Again, **no** fallback to Backlog or local order. This is deliberately distinct from an empty `Next Up`: an outage never silently drains Backlog.
 - **`Next Up` target with no local queue entry → fail closed.** When the resolved `Next Up` order contains one or more targets absent from `.pi/dev-loop-queue.json` (membership reconcile not run/persisted, or the board changed between reconcile and this query), the driver **MUST** stop with an actionable outcome (`reason: "next-up-target-missing-locally"`, the offending numbers in `missingTargets`, message `"Next Up contains items with no local queue entry — run membership reconcile / re-add them"`) rather than silently filtering them out and returning an empty idle. This is distinct from an empty `Next Up`: real Next Up work exists but is undispatchable locally. **No** Backlog pickup.
 
+### Live pickup path (`/loop-continue`)
+
+Bare `/loop-continue` is the operator-facing pickup path, and it enforces the same `Next Up` normative source. It resolves a single continue target via `scripts/projects/resolve-active-board-item.mjs`:
+
+- **Exactly one `In Progress` item →** continue it (`source: "in-progress"`).
+- **Multiple `In Progress` items →** fail closed (never guesses); the operator must pass an explicit `/loop-continue #N`.
+- **Zero `In Progress` items →** fall through to the **HEAD of `Next Up` by POSITION ascending** (`source: "next-up"`).
+  - **Empty `Next Up` →** fail closed (idle) with the canonical `"queue empty — prioritize Backlog items into Next Up"`. **No** Backlog pickup.
+  - **`Next Up` query error →** surface and stop (fail closed). No fallback, no guessing.
+
+The live path never pulls from Backlog and never picks more than one target. It resolves the concrete target and hands `continue dev loop on #<number>` to the dev-loop skill.
+
 ### Carve-outs
 
 - **A single-issue/PR run never reaches this gating.** Running a specific `--issue`/`--pr` target goes through the dev-loop routing path, not the queue driver, so `Next Up` gating does not apply to it at all — it runs regardless of the board. The queue driver itself has no explicit-target flag; `Next Up` gating is unconditional for every item the driver picks.

@@ -181,6 +181,16 @@ GitHub API outage or unresolvable board halts the run (`board-query-error`) rath
 an unprioritized or stale set — an outage never silently drains Backlog. Only the **unconfigured**
 case falls back to local entry order.
 
+### Live pickup path (`/loop-continue`)
+
+The operator-facing pickup path (bare `/loop-continue`) enforces the same `Next Up` source via
+`scripts/projects/resolve-active-board-item.mjs`. It continues the single **In Progress** item; if
+there is none, it picks the **HEAD of `Next Up` by position** (`source: "next-up"`). It **fails
+closed** when `Next Up` is empty (canonical `"queue empty — prioritize Backlog items into Next Up"`)
+and when there is more than one In-Progress item (pass an explicit `/loop-continue #N`). A `Next Up`
+query error is surfaced and stops the pickup. This path **never** pulls from Backlog. So the live
+continue path enforces `Next Up` just like the queue driver does for the orchestrated path.
+
 ### Completion is reflected, never fabricated
 
 The queue runner is a **deterministic adapter** over the board — it is **not** the orchestration
