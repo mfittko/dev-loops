@@ -110,6 +110,7 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
 - runs in an isolated worktree when worktrees are available
 - produces a focused findings artifact with verdict (clean/findings_present) and file references
+- **completion is detected via the harness completion notification, or by the presence of the reviewer's findings artifact at its deterministic output path — never by reading the reviewer's transcript.** The orchestrator awaits fan-in on those artifact paths (or the completion notification) and joins via `consolidateFanin` (Phase 3); it must not tail/parse a reviewer's JSONL transcript, use `node -e`/`python3` to parse tool JSON, or `sleep`-poll a shell loop for completion (forbidden — see [anti-patterns](../skills/docs/anti-patterns.md)).
 
 Reviewers run in parallel when practical. If parallel execution is impractical
 (for example due to tooling or resource constraints), run all reviewers sequentially
