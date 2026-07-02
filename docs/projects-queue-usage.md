@@ -15,10 +15,10 @@ hint — not as a database or transactional state store.
 - **Board state is authoritative when configured** — a configured board is the source of queue membership and ordering; the queue runner reconciles its `Next Up` items into `.pi/dev-loop-queue.json` before running. When no board is configured, the local queue file's entry order is used.
 - **No local queue file duplication** — the board drives membership/ordering while `.pi/dev-loop-queue.json` tracks entry lifecycle; the board does not introduce a second local file
 
-This means board position is a **good-enough** signal for ordering the outer queue. The board
-does not need to be transactionally consistent with local state for the queue to work correctly:
-if a board operation fails, the queue continues; if the board is absent, the queue falls back
-to its default entry order.
+When a board **is** configured, `Next Up` is the authoritative, **fail-closed** pickup source:
+the driver picks only `Next Up` members by position and, if the board query fails, **stops**
+rather than falling back (see the pickup-behavior list below and the contract). When **no** board
+is configured, the queue falls back to its local entry order (`.pi/dev-loop-queue.json`).
 
 ## How to opt in
 
@@ -151,16 +151,22 @@ it is the **authoritative source of queue membership and ordering** — not just
   "Queue pickup ordering" section of `docs/projects-queue-contract.md` for the full MUST-level
   contract (including the empty-`Next Up` fail-closed idle and why a single-issue/PR run — which
   runs via the dev-loop routing path, not the queue driver — is unaffected by `Next Up` gating).
-- **Configured but unreachable (API error)**: reconciliation fails open — the run continues
-  with the existing local queue entries; no board mutations are attempted.
+- **Configured but unreachable (API error)**: the driver **fails closed** and stops with
+  `reason: "board-query-error"` (see the contract). It does **not** fall back to Backlog or to
+  local queue order — an outage never silently drains Backlog. (The separate membership-reconcile
+  pre-step is fail-open and attempts no board mutations on error, but the driver then re-queries
+  `Next Up` itself and stops on the same error, so the net outcome is a halted run, not a
+  local-order run.)
 - **Configured but `Next Up` is empty**: the run reports "Board configured but Next Up is empty;
   nothing to run", distinct from the unconfigured "Queue is empty".
 - **Not configured**: the queue falls back to its local entry order (`.pi/dev-loop-queue.json`),
   and the legacy "Queue is empty" message applies when that file has no pending entries.
 
-This posture keeps the queue resilient: a transient GitHub API outage or misconfigured board
-does not block the run. Board state is read at dispatch time; the queue does not continuously
-sync local state to board state.
+Board state is read at dispatch time; the queue does not continuously sync local state to board
+state. When a board is configured, the pickup posture is deliberately **fail-closed**: a transient
+GitHub API outage or unresolvable board halts the run (`board-query-error`) rather than dispatching
+an unprioritized or stale set — an outage never silently drains Backlog. Only the **unconfigured**
+case falls back to local entry order.
 
 ### Completion is reflected, never fabricated
 
