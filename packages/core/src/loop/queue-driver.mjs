@@ -92,23 +92,66 @@ export async function runQueue(repoRoot, repo, options = {}) {
   // (e.g. a configured "Ready for Review") still syncs. (#793 round-1 #1)
   const lastSyncedColumn = new Map();
 
-  // Optional board-aware ordering: fetch Next Up order before processing.
-  // Fail-open: if the board is unreachable, orderHint stays empty and the
-  // driver falls back to the existing queue order.
-  const ordering = opts.useBoardOrdering !== false && !allDone(queue)
+  // Next Up is the NORMATIVE, fail-closed pickup source (#1091). When no
+  // explicit --issue/--pr target is given and a board is configured, the driver
+  // picks ONLY entries whose target is in Next Up, by POSITION ascending;
+  // entries absent from Next Up are never auto-picked. It NEVER falls back to
+  // Backlog or to the non-board local queue order.
+  //
+  // An explicit target (`opts.explicitTarget`) bypasses Next Up gating entirely
+  // and remains authoritative — the item runs regardless of the board.
+  const explicitTarget = opts.explicitTarget != null;
+  const ordering = opts.useBoardOrdering !== false && !allDone(queue) && !explicitTarget
     ? await resolveNextUpOrder(repo, repoRoot, opts.env ?? process.env, opts.queueBoardSyncDependencies ?? {})
-    : { ok: true, order: [], reason: "board ordering disabled or queue idle" };
-  const orderHint = ordering.ok ? ordering.order : [];
+    : { ok: true, configured: false, order: [], reason: "board ordering disabled, queue idle, or explicit target" };
+
+  // (b) Board-query ERROR → surface it and stop. Do NOT fall back to Backlog
+  // or local order (fail-closed). Distinct from an empty Next Up below.
+  if (ordering.ok === false) {
+    return {
+      ok: false,
+      stopped: true,
+      reason: "board-query-error",
+      message: `Next Up query failed (${ordering.reason}); refusing to fall back to Backlog/local order`,
+      error: ordering.reason ?? "board query failed",
+      results: [],
+      queue,
+      ordering,
+    };
+  }
+
+  // Board-gated only when a board is configured and no explicit target overrides.
+  const boardGated = ordering.configured === true && !explicitTarget;
+  const orderHint = ordering.order;
+  const allowedTargets = boardGated ? new Set(orderHint) : null;
+
+  // (a) Empty Next Up (successful query, zero items) → fail CLOSED: idle/stop
+  // with an actionable, machine-readable outcome. Never pull from Backlog.
+  if (boardGated && orderHint.length === 0) {
+    return {
+      ok: true,
+      idle: true,
+      reason: "next-up-empty",
+      message: "queue empty — prioritize Backlog items into Next Up",
+      results: [],
+      queue,
+      ordering,
+    };
+  }
 
   let autoFiledCount = 0;
   const results = [];
   let incomplete = false;
 
   while (!allDone(queue)) {
-    const entry = nextReadyEntry(queue, opts.reDispatchMaxRetries, orderHint);
+    const entry = nextReadyEntry(queue, opts.reDispatchMaxRetries, orderHint, allowedTargets);
     if (!entry) {
+      // When board-gated, entries absent from Next Up are intentionally NOT
+      // picked (and are not "blocked by deps") — only unfinished Next Up members
+      // count toward an incomplete verdict.
       const remaining = queue.entries.filter(
         (e) => e.status !== "done" && e.status !== "blocked" && e.status !== "failed"
+             && (!allowedTargets || allowedTargets.has(e.target))
       );
       if (remaining.length > 0) {
         incomplete = true;

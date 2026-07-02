@@ -18,6 +18,10 @@ Options:
   --item <number>             Required. Issue or PR number to add.
   --column <name>             Initial Status column (default: "Backlog").
   --status <name>             Back-compat alias for --column.
+  --next-up                   Land the item directly in the "Next Up" column
+                              (the normative pickup queue). Sugar for
+                              --column "Next Up"; cannot be combined with a
+                              conflicting --column/--status.
   --help, -h                  Show this help.
 
 Output (stdout):
@@ -51,6 +55,7 @@ function parseCliArgs(argv) {
       item: { type: "string" },
       column: { type: "string" },
       status: { type: "string" },
+      "next-up": { type: "boolean" },
       help: { type: "boolean", short: "h" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -99,6 +104,12 @@ function parseCliArgs(argv) {
         // conflicting `--column X --status Y` is rejected rather than silently
         // resolved by argv order.
         args.status = requireValue(token, "--status requires a value");
+        break;
+      case "next-up":
+        if (token.value !== undefined) {
+          throw Object.assign(new Error(`Unknown flag: ${token.rawName}=${token.value}`), { code: "INVALID_ARGS", usage: USAGE });
+        }
+        args.nextUp = true;
         break;
       case "jq":
         args.jq = requireValue(token, "--jq requires a filter");
@@ -378,7 +389,16 @@ async function main(args, { env = process.env, runChild } = {}) {
       { code: "INVALID_ARGS", usage: USAGE },
     );
   }
-  const targetStatus = (args.column ?? args.status ?? "Backlog").trim();
+  // --next-up is sugar for --column "Next Up" (the normative pickup queue, #1091).
+  // Reject combining it with a conflicting explicit column/status.
+  const explicitColumn = args.column ?? args.status ?? null;
+  if (args.nextUp && explicitColumn != null && explicitColumn.trim() !== "Next Up") {
+    throw Object.assign(
+      new Error(`Conflicting --next-up and --column/--status ("${explicitColumn}") — pass only one.`),
+      { code: "INVALID_ARGS", usage: USAGE },
+    );
+  }
+  const targetStatus = (args.nextUp ? "Next Up" : (explicitColumn ?? "Backlog")).trim();
   if (!targetStatus) {
     throw Object.assign(new Error("--column must not be empty"), { code: "INVALID_STATUS" });
   }

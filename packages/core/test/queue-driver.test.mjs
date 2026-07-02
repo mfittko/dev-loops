@@ -304,6 +304,7 @@ test("runQueue wires board transitions when configured and records them", async 
           moves.push({ ...args });
           return { ok: true, item: { newColumn: args.toColumn } };
         },
+        listQueueItems: async () => ({ ok: true, items: [{ issueNumber: 101 }] }),
       },
     });
 
@@ -338,6 +339,7 @@ test("runQueue syncs final-approval column for open PR when merge not authorized
           moves.push({ ...args });
           return { ok: true, item: { newColumn: args.toColumn } };
         },
+        listQueueItems: async () => ({ ok: true, items: [{ issueNumber: 201 }] }),
       },
     });
 
@@ -379,6 +381,7 @@ test("runQueue does sync a distinct Ready for Review column for open PR (#793)",
           moves.push({ ...args });
           return { ok: true, item: { newColumn: args.toColumn } };
         },
+        listQueueItems: async () => ({ ok: true, items: [{ issueNumber: 203 }] }),
       },
     });
 
@@ -445,6 +448,7 @@ test("runQueue records fallback board transition on failure", async () => {
           moves.push({ ...args });
           return { ok: true, item: { newColumn: args.toColumn } };
         },
+        listQueueItems: async () => ({ ok: true, items: [{ issueNumber: 102 }] }),
       },
     });
 
@@ -516,6 +520,7 @@ test("runQueue reflects a real merged-PR terminal signal to Done (#913 legit pat
           moves.push({ ...args });
           return { ok: true, item: { newColumn: args.toColumn } };
         },
+        listQueueItems: async () => ({ ok: true, items: [{ issueNumber: 101 }] }),
       },
     });
 
@@ -567,6 +572,149 @@ test("runQueue reorders ready entries by board Next Up order", async () => {
       result.results.map((r) => r.target),
       [3, 1, 2],
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── #1091: Next Up is the normative, fail-closed pickup source ──────────
+
+test("runQueue picks Next Up members by position ascending; a local entry ABSENT from Next Up is NOT picked (#1091)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-nextup-gate-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "queue:\n  projectNumber: 3\n");
+    // 4 is present locally but ABSENT from Next Up → must never run.
+    const queue = {
+      version: 1,
+      entries: [createEntry(1, "issue"), createEntry(2, "issue"), createEntry(4, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    const processed = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async (entry) => {
+        processed.push(entry.target);
+        return { ok: true, pr: entry.target * 10 };
+      },
+      queueBoardSyncDependencies: {
+        moveQueueItem: async () => ({ ok: true, item: {} }),
+        // Next Up (position order): 2 then 1. Entry 4 is deliberately excluded.
+        listQueueItems: async () => ({ ok: true, items: [{ issueNumber: 2 }, { issueNumber: 1 }] }),
+      },
+    });
+
+    assert.equal(result.ok, true);
+    // Only Next Up members, by position ascending.
+    assert.deepEqual(processed, [2, 1]);
+    // Absent-from-Next-Up entry left untouched (still queued), never auto-picked.
+    assert.equal(result.queue.entries.find((e) => e.target === 4).status, "queued");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue fails CLOSED on empty Next Up: idle outcome, explicit reason, NO Backlog fallback (#1091)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-nextup-empty-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "queue:\n  projectNumber: 3\n");
+    // Local queue HAS work, but none of it is in Next Up → must NOT run.
+    const queue = {
+      version: 1,
+      entries: [createEntry(1, "issue"), createEntry(2, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    const processed = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async (entry) => {
+        processed.push(entry.target);
+        return { ok: true, pr: 10 };
+      },
+      queueBoardSyncDependencies: {
+        moveQueueItem: async () => ({ ok: true, item: {} }),
+        // Successful query, zero items → genuinely empty Next Up.
+        listQueueItems: async () => ({ ok: true, items: [] }),
+      },
+    });
+
+    assert.equal(result.idle, true);
+    assert.equal(result.reason, "next-up-empty");
+    assert.match(result.message, /prioritize Backlog items into Next Up/);
+    // Fail closed: nothing ran, no Backlog fallback.
+    assert.deepEqual(processed, []);
+    assert.deepEqual(result.results, []);
+    for (const e of result.queue.entries) assert.equal(e.status, "queued");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue surfaces a board-query ERROR and stops; no Backlog/local fallback (#1091)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-nextup-error-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "queue:\n  projectNumber: 3\n");
+    const queue = {
+      version: 1,
+      entries: [createEntry(1, "issue"), createEntry(2, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    const processed = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async (entry) => {
+        processed.push(entry.target);
+        return { ok: true, pr: 10 };
+      },
+      queueBoardSyncDependencies: {
+        moveQueueItem: async () => ({ ok: true, item: {} }),
+        listQueueItems: async () => { throw new Error("GraphQL timeout"); },
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.stopped, true);
+    assert.equal(result.reason, "board-query-error");
+    assert.match(result.error, /GraphQL timeout/);
+    // Error path: nothing ran, no fallback to Backlog/local order.
+    assert.deepEqual(processed, []);
+    assert.deepEqual(result.results, []);
+    for (const e of result.queue.entries) assert.equal(e.status, "queued");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue with an explicit target runs regardless of Next Up (bypasses gating) (#1091)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-explicit-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "queue:\n  projectNumber: 3\n");
+    const queue = { version: 1, entries: [createEntry(99, "issue")] };
+    await writeQueue(dir, queue);
+
+    let listCalled = false;
+    const processed = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      explicitTarget: 99,
+      runEntry: async (entry) => {
+        processed.push(entry.target);
+        return { ok: true, pr: 990 };
+      },
+      queueBoardSyncDependencies: {
+        moveQueueItem: async () => ({ ok: true, item: {} }),
+        // Even an empty Next Up must not block an explicit target; the resolver
+        // is not even consulted for gating.
+        listQueueItems: async () => { listCalled = true; return { ok: true, items: [] }; },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(processed, [99]);
+    assert.equal(listCalled, false, "Next Up is not consulted when an explicit target is given");
+    assert.equal(result.queue.entries[0].status, "done");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

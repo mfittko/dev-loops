@@ -1,6 +1,26 @@
 import { loadBoardConfig, resolveProjectNumber } from "./queue-board-sync.mjs";
 import { main as listQueueItemsMain } from "../../../../scripts/projects/list-queue-items.mjs";
 
+/**
+ * Resolve the board's "Next Up" pickup order (issue #1091).
+ *
+ * Next Up is the NORMATIVE, fail-closed pickup source. This resolver reports
+ * enough to let the driver distinguish three cases cleanly (it never silently
+ * collapses them):
+ *
+ *   - Board NOT configured → `{ ok:true, configured:false, order:[] }`. The
+ *     Next Up concept does not exist; the driver keeps its legacy local order.
+ *   - Board configured, Next Up query SUCCEEDS → `{ ok:true, configured:true,
+ *     order:[…], reason:null }`. `order` may be empty (a genuinely empty Next
+ *     Up → the driver fails closed / idles, it MUST NOT fall back to Backlog).
+ *   - Board configured, query ERRORS (unreachable / project unresolvable / API
+ *     failure) → `{ ok:false, configured:true, order:[], reason:<msg> }`. The
+ *     driver surfaces the error and stops; it MUST NOT fall back to Backlog.
+ *
+ * `order` and `reason` are always present so the fail-open membership layer
+ * (queue-membership.mjs), which predates the `ok`/`configured` fields, keeps
+ * working unchanged (it reads `order`/`reason` only).
+ */
 export async function resolveNextUpOrder(
   repo,
   repoRoot,
@@ -9,17 +29,19 @@ export async function resolveNextUpOrder(
 ) {
   const config = loadBoardConfig(repoRoot);
   if (!config.enabled) {
-    return { ok: true, order: [], reason: config.reason ?? "board not configured" };
+    return { ok: true, configured: false, order: [], reason: config.reason ?? "board not configured" };
   }
 
   let projectNumber;
   try {
     projectNumber = await resolveProjectNumber(repo, config, env, dependencies.runChild);
   } catch (err) {
-    return { ok: true, order: [], reason: err.message ?? "board lookup failed" };
+    // Board IS configured but we cannot resolve/reach it: this is a query ERROR,
+    // not an empty Next Up. Fail closed at the driver, never Backlog fallback.
+    return { ok: false, configured: true, order: [], reason: err.message ?? "board lookup failed" };
   }
   if (!projectNumber) {
-    return { ok: true, order: [], reason: "could not resolve board project" };
+    return { ok: false, configured: true, order: [], reason: "could not resolve board project" };
   }
 
   const listItems = dependencies.listQueueItems ?? listQueueItemsMain;
@@ -35,8 +57,10 @@ export async function resolveNextUpOrder(
     const order = (result?.items ?? [])
       .map((it) => it.issueNumber ?? it.prNumber)
       .filter((n) => typeof n === "number");
-    return { ok: true, order, reason: null };
+    // Successful query — order may be empty (genuinely empty Next Up).
+    return { ok: true, configured: true, order, reason: null };
   } catch (err) {
-    return { ok: true, order: [], reason: err.message ?? "Next Up query failed" };
+    // Query ERROR — surface it; the driver stops and never falls back.
+    return { ok: false, configured: true, order: [], reason: err.message ?? "Next Up query failed" };
   }
 }

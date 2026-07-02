@@ -14,13 +14,33 @@ async function makeRepo(configYaml) {
   return dir;
 }
 
-test("resolveNextUpOrder returns empty when board not configured", async () => {
+test("resolveNextUpOrder returns configured:false when board not configured", async () => {
   const dir = await makeRepo(null);
   try {
     const result = await resolveNextUpOrder("owner/repo", dir, {});
     assert.equal(result.ok, true);
+    assert.equal(result.configured, false);
     assert.deepEqual(result.order, []);
     assert.equal(result.reason, "board not configured");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveNextUpOrder returns ok:true, configured:true, empty order for a genuinely empty Next Up", async () => {
+  const dir = await makeRepo("queue:\n  projectNumber: 3\n");
+  try {
+    const result = await resolveNextUpOrder(
+      "owner/repo",
+      dir,
+      { GH_TOKEN: "mock" },
+      { listQueueItems: async () => ({ ok: true, items: [] }) },
+    );
+    // Successful query, zero items → NOT an error; the driver fails closed/idles.
+    assert.equal(result.ok, true);
+    assert.equal(result.configured, true);
+    assert.deepEqual(result.order, []);
+    assert.equal(result.reason, null);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -166,7 +186,10 @@ test("resolveNextUpOrder yields a clean reason (not '--project is required') whe
       items: [],
     });
     const result = await resolveNextUpOrder("owner/missingrepo", dir, { GH_TOKEN: "mock" }, { runChild });
-    assert.equal(result.ok, true);
+    // Board configured but unresolvable → query ERROR (fail-closed at driver),
+    // not a fail-open empty. Still carries order:[]/reason for the membership layer.
+    assert.equal(result.ok, false);
+    assert.equal(result.configured, true);
     assert.deepEqual(result.order, []);
     assert.notEqual(result.reason, "--project is required");
     assert.match(result.reason, /not found under/);
@@ -175,7 +198,7 @@ test("resolveNextUpOrder yields a clean reason (not '--project is required') whe
   }
 });
 
-test("resolveNextUpOrder fail-open on list error", async () => {
+test("resolveNextUpOrder reports ok:false on list query error (fail-closed at driver)", async () => {
   const dir = await makeRepo("queue:\n  projectNumber: 3\n");
   try {
     const result = await resolveNextUpOrder(
@@ -188,7 +211,10 @@ test("resolveNextUpOrder fail-open on list error", async () => {
         },
       },
     );
-    assert.equal(result.ok, true);
+    // Query error → ok:false so the driver surfaces it and stops (no Backlog
+    // fallback). order/reason preserved for the fail-open membership layer.
+    assert.equal(result.ok, false);
+    assert.equal(result.configured, true);
     assert.deepEqual(result.order, []);
     assert.equal(result.reason, "GraphQL timeout");
   } finally {

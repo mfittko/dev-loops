@@ -99,8 +99,8 @@ The Status field must contain these four columns. Tooling keys off the option **
 
 | Column | Meaning |
 |---|---|
-| **Backlog** | Not yet scheduled. Default Status for newly added items. |
-| **Next Up** | Next item(s) the queue should pick up. Ordered by POSITION within this column. |
+| **Backlog** | Unprioritized intake. Default Status for newly added items. Position within Backlog carries **no scheduling meaning** — the driver never picks from Backlog. Promoting an item to Next Up is the deliberate prioritization step. |
+| **Next Up** | The **normative pickup order**. When no explicit `--issue`/`--pr` target is given, the driver picks **only** from this column, by POSITION ascending. |
 | **In Progress** | Currently running through the dev-loop. |
 | **Done** | Completed (merged or explicitly closed). |
 
@@ -289,15 +289,21 @@ The queue driver returns a `boardSync` array on each entry result. Each element 
 The inner `result.ok` / `result.item` shape is owned by the underlying `move-queue-item.mjs` script. When the board is not configured or the sync fails in fail-open mode, `skipped` is `true` and a `reason` explains why.
 
 
-## Queue-aware pickup ordering
+## Queue pickup ordering
 
-When a queue board is configured, the queue driver can optionally sort ready entries by the `Next Up` column order before picking the next item to run. This is only a scheduling hint: it applies when the local queue has multiple ready entries and no explicit `--issue`/`--pr` target has been supplied. Explicit targets remain authoritative and are unaffected.
+When a queue board is configured, `Next Up` is the **normative, fail-closed pickup source** — not a soft hint. When no explicit `--issue`/`--pr` target is given, the driver **MUST** pick **only** from the `Next Up` column, by POSITION ascending, and **MUST NOT** auto-pull from Backlog or fall back to non-board local queue order under any circumstance.
 
-### Behavior
+### Behavior (board configured, no explicit target)
 
-- If `.devloops` configures a board (`queue.projectNumber` or `queue.boardTitle`), the driver queries items in the `Next Up` column by POSITION ascending before the first dispatch.
-- Ready queue entries are ordered so that entries whose target appears earlier in `Next Up` run first. Entries not on the board keep their existing topological/insertion order and run after board-ordered entries.
-- If the board is absent, misconfigured, or the query fails, ordering falls back to the existing behavior and the run continues. The fallback is logged in the `ordering` result field.
+- The driver queries items in the `Next Up` column by POSITION ascending before the first dispatch, and dispatches **only** those items, in that order.
+- An entry present in the local queue but **absent** from `Next Up` is **never** auto-picked. Working an item requires the deliberate prioritization step of moving it to `Next Up` first.
+- **Empty `Next Up` (successful query, zero items) → fail closed.** The driver idles/stops with an explicit, machine-readable outcome (`reason: "next-up-empty"`, message `"queue empty — prioritize Backlog items into Next Up"`). It **MUST NOT** fall back to Backlog or local order.
+- **Board-query error (API/unreachable/unresolvable project) → surface and stop** (`reason: "board-query-error"`). Again, **no** fallback to Backlog or local order. This is deliberately distinct from an empty `Next Up`: an outage never silently drains Backlog.
+
+### Carve-outs
+
+- **Explicit target is authoritative.** An explicit `--issue`/`--pr` target bypasses `Next Up` selection entirely: the item runs regardless of the board (the `Next Up` query is not even consulted for gating).
+- **No board configured.** When `.devloops` does not configure a board, there is no `Next Up` to gate on; the driver keeps its legacy local (topological/insertion) order.
 
 ### Example
 
@@ -306,7 +312,7 @@ queue:
   projectNumber: 5
 ```
 
-With local queue entries `[#1, #2, #3]` and board `Next Up` order `[#3, #1]`, the driver dispatches `#3`, then `#1`, then `#2`.
+With local queue entries `[#1, #2, #3]`, an entry `#4` that is **not** in `Next Up`, and board `Next Up` order `[#3, #1]`, the driver dispatches `#3` then `#1` and nothing else — `#2` and `#4` are left untouched. If `Next Up` is empty, the driver idles with `"queue empty — prioritize Backlog items into Next Up"` and never touches Backlog.
 ## Configuration shape
 
 Queue board configuration lives under `.devloops` at repo root. All keys are optional;

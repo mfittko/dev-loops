@@ -183,9 +183,20 @@ function applyOrderHint(ordered, orderHint) {
   return [...inHint, ...rest];
 }
 
-export function nextReadyEntry(queue, maxRetries = 1, orderHint = []) {
+/**
+ * Pick the next ready entry.
+ *
+ * @param {object} queue
+ * @param {number} maxRetries
+ * @param {number[]} orderHint - preferred order (targets sorted to the front).
+ * @param {Set<number>|null} allowedTargets - when non-null, ONLY entries whose
+ *   target is in this set are eligible. Used for board-gated (Next Up)
+ *   selection (#1091): entries absent from Next Up are never auto-picked.
+ */
+export function nextReadyEntry(queue, maxRetries = 1, orderHint = [], allowedTargets = null) {
   const ordered = topologicalOrder(queue.entries);
-  const sorted = applyOrderHint(ordered, orderHint);
+  const restricted = allowedTargets ? ordered.filter((e) => allowedTargets.has(e.target)) : ordered;
+  const sorted = applyOrderHint(restricted, orderHint);
   for (const entry of sorted) {
     if (entry.status === "queued" && entryDependenciesSatisfied(queue, entry)) {
       return entry;

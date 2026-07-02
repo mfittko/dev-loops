@@ -57,8 +57,13 @@ dev-loops queue list --repo mfittko/dev-loops --project 1 --limit 5
 ### Add an item to the queue
 
 ```sh
-# Add issue #42 to the Backlog column (default)
+# Add issue #42 to the Backlog column (default = unprioritized intake).
+# Backlog items are NEVER auto-picked; promote to Next Up to schedule them.
 dev-loops queue add --repo mfittko/dev-loops --project 1 --item 42
+
+# Enqueue for immediate work: land directly in Next Up (the normative pickup
+# queue). --next-up is sugar for --column "Next Up".
+dev-loops queue add --repo mfittko/dev-loops --project 1 --item 42 --next-up
 
 # Add issue #42 to a specific column (--status is a back-compat alias for --column)
 dev-loops queue add --repo mfittko/dev-loops --project 1 --item 42 --column "Next Up"
@@ -137,9 +142,14 @@ it is the **authoritative source of queue membership and ordering** — not just
 
 - **Configured and reachable**: `dev-loops queue run` resolves the board's `Next Up` column and
   reconciles those items into `.pi/dev-loop-queue.json` (appending a queued entry for any
-  `Next Up` issue not already present) before running. The board therefore drives **which**
-  issues are worked and their order. Enqueue work via `dev-loops queue add ... --column "Next Up"`
-  rather than hand-editing the queue file.
+  `Next Up` issue not already present) before running. `Next Up` is the **normative, fail-closed
+  pickup source**: with no explicit `--issue`/`--pr` target the driver picks **only** `Next Up`
+  members, by POSITION ascending, and **never** auto-pulls from Backlog. **Backlog is
+  unprioritized intake and is never auto-picked** — promote an item to `Next Up` (the deliberate
+  prioritization step) to schedule it. Enqueue work for immediate pickup via
+  `dev-loops queue add ... --next-up` rather than hand-editing the queue file. See the
+  "Queue pickup ordering" section of `docs/projects-queue-contract.md` for the full MUST-level
+  contract (including the empty-`Next Up` fail-closed idle and the explicit-target carve-out).
 - **Configured but unreachable (API error)**: reconciliation fails open — the run continues
   with the existing local queue entries; no board mutations are attempted.
 - **Configured but `Next Up` is empty**: the run reports "Board configured but Next Up is empty;
