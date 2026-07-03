@@ -222,7 +222,7 @@ Current Phase 3+ contract:
 
 Root verification and test commands are intentionally explicit:
 - `npm run verify` is the canonical root verification path (`npm test` + `npm run test:dev-loop`)
-- `npm test` runs the current root test suite (`test:assets`, `test:extension`, `test:scripts`, and `test:core`)
+- `npm test` runs the current root test suite (`test:assets`, `test:extension`, `test:scripts`, `test:core`, and `test:docs`)
 - `npm run test:extension`
 - `npm run test:extension` currently expands to one `node --import tsx --test ...` invocation in `package.json`; prefer the script entrypoint over copying the file list into downstream docs or runbooks
 - `npm run test:scripts`
