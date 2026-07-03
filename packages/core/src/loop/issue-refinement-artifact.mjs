@@ -11,7 +11,7 @@
  *
  * This module owns:
  * - canonical section-name matching for AC / DoD blocks
- * - bullet-item extraction (both `- [ ]` and `- [x]`)
+ * - bullet-item extraction (checklist `- [ ]`/`- [x]` and top-level `- ` bullets)
  * - linked-refinement-doc detection from issue body
  *
  * It deliberately does NOT:
@@ -97,10 +97,18 @@ function findSectionByPatterns(sections, patterns) {
 }
 
 /**
- * Extract checklist bullet items (`- [ ]` and `- [x]`) from a section body.
- * Returns the trimmed item text for each matching line. The checkbox state
- * (checked vs unchecked) is intentionally not preserved: callers only need
- * the item text to satisfy the refinement-artifact contract.
+ * Extract bullet items from a section body. Counts both `- [ ]`/`- [x]`
+ * checklist items and top-level plain `- ` bullets (dash at column 0, so
+ * nested/indented sub-bullets are not counted). Empty checkbox placeholders
+ * (`- [ ]` / `- [x]` with no trailing text) are skipped, not counted, so a
+ * section of only unfilled placeholders reports as unrefined. Returns the
+ * trimmed item text for each matching line. The checkbox state (checked vs
+ * unchecked) is intentionally not preserved: callers only need the item
+ * text to satisfy the refinement-artifact contract.
+ *
+ * This is only ever called on the body of an already-recognized AC/DoD
+ * section (see `detectIssueRefinementArtifact`), so counting plain bullets
+ * is scoped to those sections and never affects prose sections.
  */
 export function extractChecklistItems(sectionBody) {
   if (typeof sectionBody !== "string" || sectionBody.length === 0) {
@@ -111,9 +119,22 @@ export function extractChecklistItems(sectionBody) {
   const lines = sectionBody.split(/\r?\n/u);
 
   for (const line of lines) {
-    const match = /^\s*-\s+\[(?:[ xX])\]\s+(.+?)\s*$/u.exec(line);
-    if (match) {
-      const text = match[1].trim();
+    // Checklist item: `- [ ]` / `- [x]` (leading indentation tolerated).
+    // Consume ANY checkbox-marker line here; push only when it carries text,
+    // so empty placeholders (`- [ ]`) are skipped rather than counted.
+    const checkboxMatch = /^\s*-\s+\[(?:[ xX])\](?:\s+(.+?))?\s*$/u.exec(line);
+    if (checkboxMatch) {
+      const text = (checkboxMatch[1] ?? "").trim();
+      if (text.length > 0) {
+        items.push(text);
+      }
+      continue;
+    }
+    // Top-level plain bullet: dash at column 0, space required (so `---`
+    // horizontal rules and `-x` do not match; indented sub-bullets do not).
+    const bulletMatch = /^-\s+(.+?)\s*$/u.exec(line);
+    if (bulletMatch) {
+      const text = bulletMatch[1].trim();
       if (text.length > 0) {
         items.push(text);
       }
