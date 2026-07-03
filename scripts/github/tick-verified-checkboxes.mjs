@@ -3,7 +3,7 @@
 // pre_approval_gate verification, flip each verified item's `- [ ]` to `- [x]`
 // in the PR body via a single `gh pr edit --body-file` update. Matches labels by
 // EXACT (trimmed) text and fails closed — never blanket-checks, never unchecks.
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -165,13 +165,22 @@ export async function tickCheckboxes(
     return { ok: true, pr: options.pr, flipped, unmatched, edited: false };
   }
   const dir = await mkdtemp(join(tmpdir(), "tick-verified-"));
-  const bodyFile = join(dir, "body.md");
-  await writeFile(bodyFile, nextBody, "utf8");
-  await edit(
-    { repo: options.repo, pr: options.pr, bodyFile, addAssignees: [], removeAssignees: [] },
-    { env, ghCommand, run },
-  );
-  return { ok: true, pr: options.pr, flipped, unmatched, edited: true };
+  try {
+    const bodyFile = join(dir, "body.md");
+    await writeFile(bodyFile, nextBody, "utf8");
+    await edit(
+      { repo: options.repo, pr: options.pr, bodyFile, addAssignees: [], removeAssignees: [] },
+      { env, ghCommand, run },
+    );
+    return { ok: true, pr: options.pr, flipped, unmatched, edited: true };
+  } finally {
+    // Clean up the temp dir on success or failure; never let cleanup mask the result/error.
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup failures
+    }
+  }
 }
 
 export async function runCli(
