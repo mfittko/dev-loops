@@ -741,7 +741,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
         // board self-heals on the next entry if it doesn't finish. The timer is
         // unref'd so it never keeps the event loop alive on its own.
         await Promise.race([
-          reconcileQueue({ repo: detectRepoSlug(reconcileRoot) }, { env: adapter.getEnv(), cwd: reconcileRoot }),
+          reconcileQueue({ repo: detectRepoSlug(reconcileRoot) }, { env: adapter.getEnv(), cwd: reconcileRoot, skipTerminalColumn: true }),
           new Promise((resolve) => { const t = setTimeout(resolve, STARTUP_RECONCILE_BUDGET_MS); t.unref?.(); }),
         ]);
       } catch { /* best-effort */ }

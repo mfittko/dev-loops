@@ -90,7 +90,7 @@ describe("reconcile-queue main (#1069)", () => {
     assert.equal(moveCalls.length, 0);
   });
 
-  it("gatherLiveFacts skips a Done-status item (zero gh calls) but still gathers a non-Done item", async () => {
+  it("gatherLiveFacts with doneColumn skips a Done-status item (zero gh calls) but still gathers a non-Done item", async () => {
     const calls = [];
     const runChild = async (cmd, argv) => {
       calls.push({ cmd, argv });
@@ -110,6 +110,19 @@ describe("reconcile-queue main (#1069)", () => {
     assert.ok(calls.length > 0);
     assert.ok(calls.every((c) => c.argv.includes("2")));
     assert.ok(calls.every((c) => !c.argv.includes("1")));
+  });
+
+  it("gatherLiveFacts WITHOUT doneColumn gathers a Done-status item (explicit-run recovery)", async () => {
+    const calls = [];
+    const runChild = async (cmd, argv) => {
+      calls.push({ cmd, argv });
+      return { code: 0, stdout: JSON.stringify({ state: "CLOSED" }), stderr: "" };
+    };
+    const items = [{ itemId: "I_done", issueNumber: 1, prNumber: null, status: "Done" }];
+    // No doneColumn (explicit `dev-loops queue reconcile`) → the Done item IS gathered.
+    const facts = await gatherLiveFacts(items, "o/r", { env: {}, runChild });
+    assert.equal(facts.has("I_done"), true);
+    assert.ok(calls.some((c) => c.argv.includes("1")));
   });
 
   it("resolves .devloops boardTitle when --project is omitted and forwards projectTitle to list/move", async () => {

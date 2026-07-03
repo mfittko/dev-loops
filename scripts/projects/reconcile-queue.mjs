@@ -123,10 +123,11 @@ export async function gatherLiveFacts(items, repo, { env, runChild, doneColumn }
   for (const item of items) {
     const number = item.prNumber != null ? item.prNumber : item.issueNumber;
     if (number == null || item.itemId == null) continue;
-    // Done is terminal for reconcile; items already in Done are left untouched
-    // (planReconcile treats a missing fact as unchanged). Skip the gh calls
-    // entirely. A rare reopened/re-linked artifact stuck in Done can still be
-    // recovered via an explicit `dev-loops queue reconcile` run.
+    // Done is terminal for reconcile; planReconcile treats a missing fact as
+    // unchanged. At loop startup (doneColumn set) we skip the gh calls for
+    // Done items entirely — terminal + perf. An explicit `dev-loops queue
+    // reconcile` run passes no doneColumn, so Done items ARE gathered and a
+    // reopened/re-linked artifact can be moved back out of Done (recovery).
     if (doneColumn != null && item.status === doneColumn) continue;
     try {
       if (item.prNumber != null) {
@@ -146,7 +147,7 @@ export async function gatherLiveFacts(items, repo, { env, runChild, doneColumn }
         }
         let prState = null;
         let prIsDraft = null;
-        const linkage = await detectLinkedIssuePr({ repo, issue: item.issueNumber }, { env });
+        const linkage = await detectLinkedIssuePr({ repo, issue: item.issueNumber }, { env, runChild });
         if (linkage?.hasOpenLinkedPr) {
           const pr = await ghJson(["pr", "view", String(linkage.prNumber), "--repo", repo, "--json", "state,isDraft,mergedAt"], { env, runChild });
           prState = pr?.mergedAt ? "MERGED" : String(pr?.state ?? "").toUpperCase();
@@ -167,7 +168,7 @@ export async function gatherLiveFacts(items, repo, { env, runChild, doneColumn }
   return byItemId;
 }
 
-async function main(args, { env = process.env, runChild, cwd = process.cwd(), listItems, gatherFacts, moveItem } = {}) {
+async function main(args, { env = process.env, runChild, cwd = process.cwd(), listItems, gatherFacts, moveItem, skipTerminalColumn = false } = {}) {
   // Resolve the board from .devloops when --project is absent. Idempotent (only
   // mutates when args.project === undefined), so callers that reach main()
   // directly (e.g. the loop-startup self-heal) still resolve the board.
@@ -181,10 +182,15 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd(), li
 
   const { columnNames } = loadStateColumnMap(cwd);
 
+  // Loop startup (skipTerminalColumn: true) skips Done items for speed. An
+  // explicit CLI run (default false) leaves doneColumn null so Done items are
+  // gathered and a reopened/re-linked artifact can be recovered out of Done.
+  const doneColumn = skipTerminalColumn ? columnNames[LOGICAL_COLUMN.DONE] : null;
+
   const factsByItemId = await (gatherFacts ?? ((its, repo, o) => gatherLiveFacts(its, repo, o)))(
     items,
     args.repo,
-    { env, runChild, doneColumn: columnNames[LOGICAL_COLUMN.DONE] },
+    { env, runChild, doneColumn },
   );
 
   const { moves, unchanged } = planReconcile(items, factsByItemId, columnNames);
