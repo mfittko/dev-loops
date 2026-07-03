@@ -28,6 +28,7 @@ export const LINKED_ISSUE_PR_QUERY = [
   "          }",
   "          ... on CrossReferencedEvent {",
   "            createdAt",
+  "            willCloseTarget",
   "            source {",
   "              __typename",
   "              ... on PullRequest {",
@@ -162,6 +163,13 @@ function normalizeLinkedPrNode(node) {
     };
   }
   if (node.__typename === "CrossReferencedEvent") {
+    // Only a cross-reference that will CLOSE this issue owns its board status.
+    // A bare body-mention (willCloseTarget:false, e.g. "part of #X") must not
+    // create board-ownership linkage — otherwise every sibling a PR mentions
+    // gets dragged to In Progress and the resolver fails closed (#1130).
+    if (node.willCloseTarget !== true) {
+      return null;
+    }
     return {
       eventType: "CROSS_REFERENCED_EVENT",
       eventCreatedAt: node.createdAt,

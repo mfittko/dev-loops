@@ -112,6 +112,69 @@ describe("reconcile-queue main (#1069)", () => {
     assert.ok(calls.every((c) => !c.argv.includes("1")));
   });
 
+  it("#1128-shaped: a PR that only body-mentions a sibling issue does NOT link it (no move) [#1130]", async () => {
+    // Live shape of the regression: open PR #1128 closes issue A but merely
+    // body-mentions siblings B/C. gatherLiveFacts must resolve B as having NO
+    // linked open PR, so it derives null and is left untouched — otherwise the
+    // resolver sees multiple in-progress and fails closed.
+    const prViewCalls = [];
+    const runChild = async (cmd, argv) => {
+      if (argv.includes("graphql")) {
+        // detectLinkedIssuePr timeline query: only a bare body-mention xref
+        // (willCloseTarget:false) references this sibling issue.
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  timelineItems: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      {
+                        __typename: "CrossReferencedEvent",
+                        createdAt: "2026-05-12T10:00:00Z",
+                        willCloseTarget: false,
+                        source: {
+                          __typename: "PullRequest",
+                          number: 1128,
+                          state: "OPEN",
+                          url: "https://github.com/o/r/pull/1128",
+                          repository: { nameWithOwner: "o/r" },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (argv.includes("pr") && argv.includes("view")) {
+        prViewCalls.push(argv);
+        return { code: 0, stdout: JSON.stringify({ state: "OPEN", isDraft: false, mergedAt: null }), stderr: "" };
+      }
+      // issue view --json state
+      return { code: 0, stdout: JSON.stringify({ state: "OPEN" }), stderr: "" };
+    };
+
+    const items = [{ itemId: "I_B", issueNumber: 1084, prNumber: null, status: "Backlog" }];
+    const facts = await gatherLiveFacts(items, "o/r", { env: {}, runChild });
+
+    // Body-mention only → not linked → inert facts → deriveReconcileColumn yields null.
+    assert.deepEqual(facts.get("I_B"), { itemKind: "issue", issueState: "OPEN", prState: null, prIsDraft: null });
+    // The mentioning PR must never be fetched as an owning link.
+    assert.equal(prViewCalls.length, 0);
+
+    // End-to-end through main(): the sibling stays put (zero moves).
+    const moveCalls = [];
+    const result = await run({ items, facts: [...facts], moveCalls });
+    assert.equal(result.moved, 0);
+    assert.equal(moveCalls.length, 0);
+  });
+
   it("gatherLiveFacts WITHOUT doneColumn gathers a Done-status item (explicit-run recovery)", async () => {
     const calls = [];
     const runChild = async (cmd, argv) => {
