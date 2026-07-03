@@ -379,6 +379,40 @@ test("rationaleFromResolver tolerates null/empty resolver output", () => {
   assert.deepEqual(rationale, []);
 });
 
+test("rationaleFromResolver marks addedAngles entries as 'added' with their addedReasons, not 'kept' (#1048)", () => {
+  const { resolvedAngles, rationale } = rationaleFromResolver({
+    recommendedAngles: ["gate-evidence", "docs", "ci-guard"],
+    skippedAngles: ["coverage"],
+    reasons: { coverage: "DOCS_ONLY" },
+    addedAngles: ["ci-guard"],
+    addedReasons: { "ci-guard": "Added: triggered by change category CI_ONLY" },
+    dynamicAnglesActive: true,
+  });
+  assert.deepEqual(resolvedAngles, ["gate-evidence", "docs", "ci-guard"]);
+  assert.deepEqual(rationale.find((r) => r.angle === "ci-guard"), {
+    angle: "ci-guard", action: "added", reason: "Added: triggered by change category CI_ONLY",
+  });
+  // Not also recorded as kept
+  assert.equal(rationale.filter((r) => r.angle === "ci-guard").length, 1);
+  assert.deepEqual(rationale.find((r) => r.angle === "gate-evidence"), {
+    angle: "gate-evidence", action: "kept", reason: "selected by dynamic angle resolver",
+  });
+});
+
+test("rationaleFromResolver falls back to a sane default reason for an added angle with no addedReasons entry", () => {
+  const { rationale } = rationaleFromResolver({
+    recommendedAngles: ["ci-guard"],
+    skippedAngles: [],
+    reasons: {},
+    addedAngles: ["ci-guard"],
+    addedReasons: {},
+    dynamicAnglesActive: true,
+  });
+  assert.deepEqual(rationale, [
+    { angle: "ci-guard", action: "added", reason: "added by dynamic angle resolver (catalog addition)" },
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // buildGateContext — integration with the canonical resolver
 // ---------------------------------------------------------------------------

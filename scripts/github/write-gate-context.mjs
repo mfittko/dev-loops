@@ -17,7 +17,9 @@
  * This module maps that resolver's output into the persisted artifact:
  *   resolvedAngles  = resolver.recommendedAngles
  *   rationale       = resolver.skippedAngles (action 'dropped', reason from
- *                     resolver.reasons) + the rest as action 'kept'
+ *                     resolver.reasons) + the rest as action 'kept', except
+ *                     entries present in resolver.addedAngles are recorded as
+ *                     action 'added' (reason from resolver.addedReasons) — see #1048
  *
  * The artifact records the resolved angle set + rationale + change scope
  * (branch, head SHA, touched files, acceptance-criteria pointer, validation
@@ -52,8 +54,12 @@ export function mapGateToConfigKey(gate) {
  * Map a resolveGateAnglesDynamic result into the persisted artifact fields.
  * Does NOT re-derive angles — it only reshapes the resolver's output.
  *
- * @param {{ recommendedAngles: string[]|null, skippedAngles?: string[], reasons?: Record<string,string> }} resolverResult
- * @returns {{ resolvedAngles: string[], rationale: Array<{angle: string, action: "kept"|"dropped", reason: string}> }}
+ * Angles present in `resolverResult.addedAngles` (additive selection, #1048)
+ * are recorded with action 'added' (reason from `resolverResult.addedReasons`)
+ * instead of 'kept'.
+ *
+ * @param {{ recommendedAngles: string[]|null, skippedAngles?: string[], reasons?: Record<string,string>, addedAngles?: string[], addedReasons?: Record<string,string> }} resolverResult
+ * @returns {{ resolvedAngles: string[], rationale: Array<{angle: string, action: "kept"|"added"|"dropped", reason: string}> }}
  */
 export function rationaleFromResolver(resolverResult) {
   const recommended = Array.isArray(resolverResult?.recommendedAngles)
@@ -63,6 +69,8 @@ export function rationaleFromResolver(resolverResult) {
     ? resolverResult.skippedAngles
     : [];
   const reasons = resolverResult?.reasons ?? {};
+  const added = new Set(Array.isArray(resolverResult?.addedAngles) ? resolverResult.addedAngles : []);
+  const addedReasons = resolverResult?.addedReasons ?? {};
   const dynamicActive = resolverResult?.dynamicAnglesActive === true;
   const keptReason = dynamicActive
     ? "selected by dynamic angle resolver"
@@ -70,6 +78,16 @@ export function rationaleFromResolver(resolverResult) {
 
   const rationale = [];
   for (const angle of recommended) {
+    if (added.has(angle)) {
+      rationale.push({
+        angle,
+        action: "added",
+        reason: typeof addedReasons[angle] === "string" && addedReasons[angle].length > 0
+          ? addedReasons[angle]
+          : "added by dynamic angle resolver (catalog addition)",
+      });
+      continue;
+    }
     rationale.push({ angle, action: "kept", reason: keptReason });
   }
   for (const angle of skipped) {

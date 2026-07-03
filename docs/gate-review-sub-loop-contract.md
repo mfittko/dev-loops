@@ -81,7 +81,16 @@ on an isolated checkout:
   recorded as rationale. Angles in `gates.<gate>.mandatoryAngles` form a floor and are
   always included after dynamic selection (filtered only by `excludeAngles`); they are
   never dropped. When `dynamicAngles` is off (or no diff is available), the configured
-  static pool is used unchanged.
+  static pool is used unchanged. Symmetrically, when `gates.<gate>.additiveAngles` is
+  enabled (default **off**), the resolver may also ADD catalog angles that
+  change-category heuristics recommend but that are not already in the gate's
+  configured pool, drawn from the global lens catalog (the explicit `gates.anglePool`
+  override, or the built-in persona registry's angle union when `anglePool` is not
+  set). `excludeAngles` remains a hard ceiling on additions — an excluded angle is
+  never added, even if the change categories would otherwise recommend it. Additions
+  are recorded in the rationale with action `"added"` naming the triggering change
+  category. This additive path is off by default, so existing configured angle pools
+  are unaffected unless a gate explicitly opts in.
 - the preamble produces one or more review handoff artifacts (branch, head SHA, PR/issue
   scope, acceptance criteria, touched files, validation posture). The resolved angle set
   and its rationale are written as a deterministic handoff artifact under
