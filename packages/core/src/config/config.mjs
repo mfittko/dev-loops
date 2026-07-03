@@ -1185,7 +1185,17 @@ export async function resolveGateAnglesDynamic(config, gate, { diff } = {}) {
   // Merge: mandatory always included (filtered by excludeAngles) + dynamically-selected
   // candidates + additively-selected catalog angles (#1048)
   const filteredMandatory = gateConfig.mandatoryAngles.filter(a => !excluded.has(a));
-  const recommendedAngles = [...new Set([...filteredMandatory, ...dynamicResult.recommendedAngles, ...(dynamicResult.addedAngles ?? [])])];
+
+  // An angle that is both mandatory AND additively recommended must stay
+  // attributed to the mandatory floor, not be reported as "added" — the
+  // resolver has no concept of "mandatory", so the caller (this function,
+  // which already owns the mandatory Set) filters its output.
+  const addedAngles = (dynamicResult.addedAngles ?? []).filter(a => !mandatory.has(a));
+  const addedReasons = Object.fromEntries(
+    Object.entries(dynamicResult.addedReasons ?? {}).filter(([a]) => !mandatory.has(a))
+  );
+
+  const recommendedAngles = [...new Set([...filteredMandatory, ...dynamicResult.recommendedAngles, ...addedAngles])];
 
   return {
     recommendedAngles,
@@ -1193,8 +1203,8 @@ export async function resolveGateAnglesDynamic(config, gate, { diff } = {}) {
     reasons: dynamicResult.reasons,
     fallbackToAll: dynamicResult.fallbackToAll,
     dynamicAnglesActive: true,
-    addedAngles: dynamicResult.addedAngles ?? [],
-    addedReasons: dynamicResult.addedReasons ?? {},
+    addedAngles,
+    addedReasons,
   };
 }
 

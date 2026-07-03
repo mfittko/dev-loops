@@ -2956,6 +2956,31 @@ describe("resolveGateAnglesDynamic", () => {
     assert.ok(result.recommendedAngles.includes("gate-evidence"));
   });
 
+  test("additiveAngles: true excludes a mandatory angle from addedAngles/addedReasons even when it also appears in anglePool", async () => {
+    // Regression (#1136 gate-review): renderer-security is both mandatory AND
+    // in the always-include catalog set, so the additive resolver would
+    // otherwise recommend it as "added" — corrupting the audit rationale for
+    // an angle that actually runs unconditionally as the mandatory floor.
+    const config = {
+      version: 1,
+      gates: {
+        anglePool: ["scope", "correctness", "contract-surface", "docs", "renderer-security"],
+        preApproval: {
+          angles: ["scope"],
+          mandatoryAngles: ["renderer-security"],
+          dynamicAngles: true,
+          additiveAngles: true,
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "preApproval", {
+      diff: { nameStatusOutput: "M\tsrc/main.mjs" },
+    });
+    assert.ok(result.recommendedAngles.includes("renderer-security")); // mandatory floor still works
+    assert.ok(!result.addedAngles.includes("renderer-security")); // not misattributed as "added"
+    assert.equal(result.addedReasons["renderer-security"], undefined); // no fabricated rationale
+  });
+
   test("additiveAngles: true with no gates.anglePool falls back to the built-in persona registry catalog", async () => {
     // contract-surface is a LOGIC_CHANGE core-subset angle AND a built-in persona
     // (see BUILTIN_PERSONAS), so it's a valid fallback-catalog addition target.
