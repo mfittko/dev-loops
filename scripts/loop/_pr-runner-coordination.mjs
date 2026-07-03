@@ -644,6 +644,7 @@ export async function releaseAsyncRunnerOwnership({
       pr: normalizePr(pr),
       runId: null,
       activeRun: null,
+      exitSignals: [],
       filePath,
     };
   }
@@ -659,6 +660,7 @@ export async function releaseAsyncRunnerOwnership({
       pr: released.pr ?? normalizePr(pr),
       runId,
       activeRun: released.activeRun ?? null,
+      exitSignals: released.exitSignals ?? [],
       skippedReason: released.error,
       message: released.message,
       filePath: released.filePath ?? filePath,
@@ -671,6 +673,7 @@ export async function releaseAsyncRunnerOwnership({
       pr: normalizePr(pr),
       runId,
       activeRun: null,
+      exitSignals: [],
       skippedReason: "release_threw",
       message: error instanceof Error ? error.message : String(error),
       filePath,

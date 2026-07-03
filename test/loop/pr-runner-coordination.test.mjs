@@ -136,6 +136,7 @@ test("releaseAsyncRunnerOwnership is a no-op when no async run id (Claude Code p
     const result = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {}, cwd: tempDir });
     assert.equal(result.ok, true);
     assert.equal(result.status, "skipped_no_async_run_id");
+    assert.deepEqual(result.exitSignals, []);
 
     const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
     assert.equal(loaded.state.activeRun.runId, "run-1");
@@ -179,6 +180,7 @@ test("releaseAsyncRunnerOwnership is best-effort/non-fatal when another run owns
     assert.equal(result.ok, true);
     assert.equal(result.status, "release_skipped");
     assert.equal(result.skippedReason, "ownership_lost");
+    assert.ok(Array.isArray(result.exitSignals));
 
     const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
     assert.equal(loaded.state.activeRun.runId, "run-active");
@@ -406,6 +408,7 @@ test("releaseAsyncRunnerOwnership is non-fatal (release_error) when the coordina
     assert.equal(result.status, "release_error");
     assert.equal(result.skippedReason, "release_threw");
     assert.equal(result.runId, "run-1");
+    assert.deepEqual(result.exitSignals, []);
     assert.ok(typeof result.message === "string" && result.message.length > 0);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
