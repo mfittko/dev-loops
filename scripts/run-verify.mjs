@@ -4,8 +4,9 @@
 // Output is buffered per-job and printed under fixed headers so the
 // failure-summary reporter stays intact and non-interleaved.
 import { spawn } from "node:child_process";
+import { globSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPORTER_MARKER = "--test-reporter ./test/failure-summary-reporter.mjs ";
 const PLAIN_SCRIPTS = ["test:assets", "test:scripts", "test:core", "test:dev-loop"];
@@ -23,6 +24,23 @@ export function derivePlainSpecs(pkg) {
     for (const arg of tail.split(/\s+/)) if (arg) specs.push(arg);
   }
   return specs;
+}
+
+// Resolve the plain spec patterns to an explicit, deterministic file list.
+// Globs are expanded here (not left to `node --test`) so the "nothing dropped"
+// guarantee is provable: any glob that matches zero files fails closed.
+export function resolvePlainFiles(pkg, cwd) {
+  const files = new Set();
+  for (const pattern of derivePlainSpecs(pkg)) {
+    if (pattern.includes("*")) {
+      const matches = globSync(pattern, { cwd });
+      if (matches.length === 0) throw new Error(`glob pattern matched no files: ${pattern}`);
+      for (const m of matches) files.add(m);
+    } else {
+      files.add(pattern);
+    }
+  }
+  return [...files].sort();
 }
 
 // Exit code: 0 iff every job exited 0, otherwise 1.
@@ -62,11 +80,12 @@ function runJob(label, command, args, options = {}) {
 async function main() {
   const pkgUrl = new URL("../package.json", import.meta.url);
   const pkg = JSON.parse(await readFile(pkgUrl, "utf8"));
-  const specs = derivePlainSpecs(pkg);
+  const cwd = fileURLToPath(new URL(".", pkgUrl));
+  const files = resolvePlainFiles(pkg, cwd);
   const env = buildJobEnv(process.env);
 
   const jobs = await Promise.all([
-    runJob("plain", process.execPath, ["--test", "--test-reporter", "./test/failure-summary-reporter.mjs", ...specs], { env }),
+    runJob("plain", process.execPath, ["--test", "--test-reporter", "./test/failure-summary-reporter.mjs", ...files], { cwd, env }),
     runJob("extension", "npm", ["run", "test:extension"], { shell: true, env }),
     runJob("docs", "npm", ["run", "test:docs"], { shell: true, env }),
   ]);

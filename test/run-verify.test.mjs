@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { readFile } from "node:fs/promises";
-import { derivePlainSpecs, aggregateExit, buildJobEnv } from "../scripts/run-verify.mjs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { derivePlainSpecs, resolvePlainFiles, aggregateExit, buildJobEnv } from "../scripts/run-verify.mjs";
 
 const REPORTER_MARKER = "--test-reporter ./test/failure-summary-reporter.mjs ";
 const PLAIN_SCRIPTS = ["test:assets", "test:scripts", "test:core", "test:dev-loop"];
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 async function loadPkg() {
   return JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -35,6 +39,60 @@ test("derivePlainSpecs throws when a script omits the reporter marker", () => {
   assert.throws(
     () => derivePlainSpecs({ scripts }),
     /script test:assets does not use the failure-summary reporter/,
+  );
+});
+
+// Coverage proof: the resolved file set is complete, non-empty, and every
+// entry is a real .test.mjs on disk. Per-directory floors make a silent drop
+// fail here rather than shipping a smaller-than-expected pool.
+test("resolvePlainFiles resolves a complete, on-disk file set", async () => {
+  const pkg = await loadPkg();
+  const files = resolvePlainFiles(pkg, repoRoot);
+  assert.ok(files.length > 0, "resolved file set must be non-empty");
+  for (const f of files) {
+    assert.ok(f.endsWith(".test.mjs"), `not a .test.mjs file: ${f}`);
+    assert.ok(fs.existsSync(path.join(repoRoot, f)), `missing on disk: ${f}`);
+  }
+
+  // Sorted + deduped.
+  assert.deepEqual(files, [...new Set(files)].sort());
+
+  const countUnder = (prefix) => files.filter((f) => f.startsWith(prefix)).length;
+  assert.ok(countUnder("test/github/") >= 31, `test/github floor: ${countUnder("test/github/")}`);
+  assert.ok(countUnder("test/loop/") >= 60, `test/loop floor: ${countUnder("test/loop/")}`);
+  assert.ok(countUnder("test/pages/") >= 1, `test/pages floor: ${countUnder("test/pages/")}`);
+  assert.ok(countUnder("packages/core/test/") >= 1, `core floor: ${countUnder("packages/core/test/")}`);
+
+  // The 3 explicit dev-loop files are literal (non-glob) and must survive.
+  for (const f of [
+    "skills/dev-loop/scripts/dev-mode-context.test.mjs",
+    "skills/dev-loop/scripts/render-template.test.mjs",
+    "skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs",
+  ]) {
+    assert.ok(files.includes(f), `missing dev-loop file: ${f}`);
+  }
+
+  // Every pattern from the plain scripts is covered by >=1 resolved real file.
+  for (const pattern of derivePlainSpecs(pkg)) {
+    if (pattern.includes("*")) {
+      const dir = pattern.slice(0, pattern.lastIndexOf("/") + 1);
+      assert.ok(countUnder(dir) >= 1, `pattern ${pattern} covered no files`);
+    } else {
+      assert.ok(files.includes(pattern), `literal pattern dropped: ${pattern}`);
+    }
+  }
+});
+
+test("resolvePlainFiles throws when a glob matches nothing (fail-closed)", () => {
+  const scripts = {};
+  for (const name of PLAIN_SCRIPTS) {
+    scripts[name] = `node --test ${REPORTER_MARKER}real.test.mjs`;
+  }
+  scripts["test:scripts"] =
+    `node --test ${REPORTER_MARKER}test/__nonexistent__/*.test.mjs`;
+  assert.throws(
+    () => resolvePlainFiles({ scripts }, repoRoot),
+    /glob pattern matched no files: test\/__nonexistent__\/\*\.test\.mjs/,
   );
 });
 
