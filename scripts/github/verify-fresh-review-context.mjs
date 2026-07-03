@@ -3,7 +3,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
-const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--round <token>]
+const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>]
 Verify that the current scoped-reviewer session has fresh context.
 
 "Fresh" means the reviewer's context is the neutral gate-context builder
@@ -17,31 +17,18 @@ existing sentinel for the same round fails closed. Seeding a reviewer with the
 neutral bundle (a path/prompt, not a sentinel) never creates a sentinel, so it
 never false-positives as contaminated.
 
-Sentinels are per review ROUND, keyed by the head SHA. The round defaults to
-the current HEAD; a commit SHA (the auto default, or a short/full SHA passed via
-\`--round\`) is canonicalized to its full 40-char commit SHA, so every spelling
-of the same head maps to ONE key — a same-scope + same-head re-entry still fails
-closed regardless of how the head is spelled. A retry at a new head naturally
-gets a fresh sentinel (no manual clear step). An explicit \`--round\` token that
-does not resolve to a commit is used verbatim; when git is unavailable the
-sentinel is keyed by scope only (legacy behavior).
+Sentinels are per review ROUND, keyed by the current head SHA (\`git rev-parse
+HEAD\`). A retry at a new head naturally gets a fresh sentinel (no manual clear
+step), while a same-scope + same-head re-entry still fails closed. When git is
+unavailable the sentinel is keyed by scope only (legacy behavior).
 Options:
   --scope <name>  Unique reviewer scope (e.g. "draft-gate-coverage").
                   Must be non-empty, containing only alphanumeric
                   characters and hyphens. When provided, the sentinel
                   is scoped so parallel reviewers in the same working
                   directory do not trigger false contamination.
-  --round <token> Review-round key (e.g. the head SHA). Alphanumeric and
-                  hyphens only (same validator as --scope), so the token is
-                  path-safe; rev syntaxes with other characters (\`HEAD~1\`,
-                  \`v1.0.0\`, \`refs/tags/...\`) are rejected. Defaults to the
-                  current HEAD. A token that resolves to a commit (e.g. a short
-                  or full SHA) is canonicalized to its full commit SHA
-                  (length-stable across short/full spellings); a token that does
-                  not resolve is used verbatim. Omitted from the key when unset
-                  and git is unavailable.
 Output (stdout, JSON):
-  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<token|null>" }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>" }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
   On error (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
@@ -51,8 +38,8 @@ Exit codes:
   2  Usage or internal error`.trim();
 const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const parseError = buildParseError(USAGE);
-function resolveFlag(argv, flag) {
-  const idx = argv.indexOf(flag);
+function resolveScope(argv) {
+  const idx = argv.indexOf("--scope");
   if (idx === -1) return null;
   const val = argv[idx + 1];
   if (val === undefined || val === "" || (val.length > 0 && val[0] === "-")) {
@@ -61,7 +48,7 @@ function resolveFlag(argv, flag) {
   return val;
 }
 function resolveValidatedScope(argv) {
-  const raw = resolveFlag(argv, "--scope");
+  const raw = resolveScope(argv);
   if (raw === null) return null;
   if (raw === "" || !VALID_SCOPE_RE.test(raw)) {
     process.stderr.write(`${formatCliError(
@@ -71,38 +58,22 @@ function resolveValidatedScope(argv) {
   }
   return raw;
 }
-// null => auto-resolve from git HEAD; undefined => invalid; string => explicit round
-function resolveValidatedRound(argv) {
-  const raw = resolveFlag(argv, "--round");
-  if (raw === null) return null;
-  if (raw === "" || !VALID_SCOPE_RE.test(raw)) {
-    process.stderr.write(`${formatCliError(
-      parseError(`Invalid --round value "${raw}": must be non-empty and contain only alphanumeric characters and hyphens.`)
-    )}\n`);
-    return undefined; // signals invalid
-  }
-  return raw;
-}
-// Canonicalize the round token to a length-stable key: resolve any git rev
-// (the auto default HEAD, or an explicit short/full SHA) to its full 40-char
-// commit SHA so every spelling of the same head maps to ONE sentinel key.
-// Otherwise a same-head re-entry spelled differently (auto vs a pinned --round
-// of another length) would get a distinct key and the contamination guard would
-// fail OPEN. A non-rev explicit token is used verbatim; auto without git => null
-// (legacy scope-only key).
-function resolveRoundKey(roundArg, cwd = process.cwd()) {
-  const rev = roundArg ?? "HEAD"; // null => auto-resolve the current head
+// Round = the current head SHA, so a retry on a new head gets a fresh key while
+// a same-head re-entry collides and fails closed. `git rev-parse HEAD` yields the
+// same full SHA on every invocation for a given head, so the key is deterministic
+// with no user input to spell it inconsistently. Returns null when git is
+// unavailable (falls back to the legacy scope-only key).
+function resolveHeadRound(cwd = process.cwd()) {
   try {
-    const sha = execFileSync("git", ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], {
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    if (VALID_SCOPE_RE.test(sha)) return sha;
+    return VALID_SCOPE_RE.test(sha) ? sha : null;
   } catch {
-    // not a git rev / git unavailable
+    return null; // not a git repo / git unavailable
   }
-  return roundArg;
 }
 function sentinelRelative(scope, round) {
   const scopeSuffix = scope ? `-${scope}` : "";
@@ -135,9 +106,7 @@ async function main(argv = process.argv.slice(2)) {
   }
   const scope = resolveValidatedScope(argv);
   if (scope === undefined) return 2;
-  const roundArg = resolveValidatedRound(argv);
-  if (roundArg === undefined) return 2;
-  const round = resolveRoundKey(roundArg);
+  const round = resolveHeadRound();
   const sentinelPath = path.resolve(process.cwd(), sentinelRelative(scope, round));
   try {
     await mkdir(path.dirname(sentinelPath), { recursive: true });
