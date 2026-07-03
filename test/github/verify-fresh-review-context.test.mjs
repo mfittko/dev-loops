@@ -204,3 +204,82 @@ test("verify-fresh-review-context --scope with missing value fails closed", asyn
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+// ---------------------------------------------------------------------------
+// Head-keyed review rounds (#1095, closes #1108): sentinels are per review
+// ROUND, keyed by the current head SHA (git rev-parse HEAD). A retry at a new
+// head gets a fresh sentinel with no manual clear; a same-head re-entry still
+// fails closed. When git is unavailable the key falls back to scope-only.
+// ---------------------------------------------------------------------------
+
+function makeGit(tmpDir) {
+  // Scrub inherited global/system git config so commit signing, hooks, or
+  // templates on the host cannot make these tests flaky (determinism review).
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  return (args) => {
+    const r = spawnSync("git", args, { cwd: tmpDir, encoding: "utf8", env: gitEnv });
+    assert.equal(r.status, 0, r.stderr);
+    return r;
+  };
+}
+
+test("head round: same scope across commits passes on each new head, fails closed on same head", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const git = makeGit(tmpDir);
+  try {
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+
+    // Round auto-resolves to HEAD; first run fresh, keyed by the full head SHA.
+    const r1 = runScript(["--scope", "correctness"], { cwd: tmpDir });
+    assert.equal(r1.status, 0, r1.stderr);
+    const out1 = JSON.parse(r1.stdout.trim());
+    assert.equal(out1.fresh, true);
+    assert.equal(out1.round, git(["rev-parse", "HEAD"]).stdout.trim());
+
+    // Same head, same scope -> contamination fail-closed.
+    const r1b = runScript(["--scope", "correctness"], { cwd: tmpDir });
+    assert.equal(r1b.status, 1, r1b.stderr);
+    assert.equal(JSON.parse(r1b.stdout.trim()).fresh, false);
+
+    // New commit -> new head -> fresh again, no manual clear step.
+    await writeFile(path.join(tmpDir, "a.txt"), "2", "utf8");
+    git(["commit", "-qam", "c2"]);
+    const r2 = runScript(["--scope", "correctness"], { cwd: tmpDir });
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.equal(JSON.parse(r2.stdout.trim()).fresh, true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("head round: a stale pre-round (scope-only) sentinel does NOT block a new head (#1108)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const git = makeGit(tmpDir);
+  try {
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    // Old-format sentinel from before head-keying — must not collide with the
+    // head-keyed round (the #1108 stale-sentinel false positive).
+    await writeFile(
+      path.join(tmpDir, "tmp", "checkpoint-context-sentinel-correctness.json"),
+      JSON.stringify({ createdAt: "2026-01-01T00:00:00.000Z", pid: 1, scope: "correctness" }) + "\n",
+      "utf8"
+    );
+    const result = runScript(["--scope", "correctness"], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout.trim()).fresh, true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
