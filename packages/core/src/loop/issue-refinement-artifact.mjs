@@ -103,9 +103,8 @@ function findSectionByPatterns(sections, patterns) {
  * (`- [ ]` / `- [x]` with no trailing text) are skipped, not counted, so a
  * section of only unfilled placeholders reports as unrefined. Returns the
  * trimmed item text for each matching line. The checkbox state (checked vs
- * unchecked) is
- * intentionally not preserved: callers only need the item text to satisfy
- * the refinement-artifact contract.
+ * unchecked) is intentionally not preserved: callers only need the item
+ * text to satisfy the refinement-artifact contract.
  *
  * This is only ever called on the body of an already-recognized AC/DoD
  * section (see `detectIssueRefinementArtifact`), so counting plain bullets
