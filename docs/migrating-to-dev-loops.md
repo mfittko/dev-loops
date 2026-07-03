@@ -23,7 +23,7 @@ Update `package.json` dependencies and any `npx`/import references:
 ```
 
 ```bash
-npx dev-loops --help        # was: npx pi-dev-loops --help
+npx dev-loops@<version> --help   # was: npx pi-dev-loops@<version> --help
 ```
 
 ## 2. Repository slug

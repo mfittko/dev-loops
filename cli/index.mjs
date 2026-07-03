@@ -244,7 +244,8 @@ function buildCliHelpLines() {
     "Use `dev-loops <category> <subcommand> --help` for per-subcommand usage.",
     "",
     "`/dev-loops hide` remains an extension-only Pi command.",
-    "Run via `npx dev-loops` (or `npm install -g dev-loops` for the shell command); see the",
+    "Run via `npx dev-loops@<version>` pinned to your plugin/extension version (a global",
+    "`npm install -g dev-loops` can drift and is not the supported invocation path); see the",
     "README for Pi-extension and Claude Code plugin setup.",
   ];
 }
@@ -267,7 +268,7 @@ function orderedCliSetupSteps(checks) {
   return [
     "1. Use `/dev-loop` (Claude Code) or `/skill:dev-loop` (Pi) to start or continue a dev loop — the single public entry.",
     "2. Run `dev-loops status` whenever you want a concise readiness snapshot.",
-    "3. Run via `npx dev-loops` (or `npm install -g dev-loops` for the shell command); see the README for Pi-extension and Claude Code plugin setup.",
+    "3. Run via `npx dev-loops@<version>` pinned to your plugin/extension version (a global `npm install -g dev-loops` can drift and is not the supported invocation path); see the README for Pi-extension and Claude Code plugin setup.",
   ];
 }
 

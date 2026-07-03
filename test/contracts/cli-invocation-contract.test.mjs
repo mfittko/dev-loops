@@ -71,3 +71,35 @@ test("generated Claude skill/agent pin `npx dev-loops@<version>` and drop the pa
     );
   }
 });
+
+// #1036: the consumer-facing invocation surface (docs, README, CLI help/usage strings) must
+// also pin `npx dev-loops@<version>` — never the bare, ambiguous `npx dev-loops` that resolves
+// a possibly-stale global/cached copy. `<version>` is the documented placeholder; concrete
+// majors stay enforced by docs-identity-contract.
+function collectMarkdown(dir) {
+  const out = [];
+  const abs = path.join(repoRoot, dir);
+  if (!fs.existsSync(abs)) return out;
+  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+    const rel = path.posix.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...collectMarkdown(rel));
+    else if (entry.name.endsWith(".md")) out.push(rel);
+  }
+  return out;
+}
+
+test("no unversioned `npx dev-loops` in the consumer-facing docs/CLI surface (#1036)", () => {
+  const surface = [
+    "README.md",
+    "cli/index.mjs",
+    "scripts/loop/build-handoff-envelope.mjs",
+    ...collectMarkdown("docs"),
+    ...collectMarkdown("extension"),
+  ];
+  const offenders = [];
+  for (const rel of surface) {
+    const raw = fs.readFileSync(path.join(repoRoot, rel), "utf8");
+    if ((raw.match(/npx dev-loops(?!@)/g) ?? []).length > 0) offenders.push(rel);
+  }
+  assert.deepEqual(offenders, [], `consumer surface must pin npx dev-loops@<version>: ${offenders.join(", ")}`);
+});
