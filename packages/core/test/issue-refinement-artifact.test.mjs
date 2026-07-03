@@ -131,6 +131,35 @@ test("detectIssueRefinementArtifact rejects AC section without checkboxes", () =
   assert.equal(result.finding, "missing_refinement_artifact");
 });
 
+test("detectIssueRefinementArtifact rejects an AC section of only empty checkbox placeholders", () => {
+  // The canonical not-yet-refined template: `- [ ]` placeholders with no
+  // text must NOT satisfy the gate (#1075 regression guard).
+  const unchecked = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ]\n- [ ]\n" });
+  assert.equal(unchecked.hasACs, false);
+  assert.equal(unchecked.source, REFINEMENT_SOURCE.MISSING);
+  assert.equal(unchecked.finding, "missing_refinement_artifact");
+
+  const checked = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [x]\n- [x]\n" });
+  assert.equal(checked.hasACs, false);
+  assert.equal(checked.source, REFINEMENT_SOURCE.MISSING);
+  assert.equal(checked.finding, "missing_refinement_artifact");
+});
+
+test("detectIssueRefinementArtifact drops empty checkbox placeholders but keeps filled ones", () => {
+  const result = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] real ac\n- [ ]\n",
+  });
+  assert.equal(result.hasACs, true);
+  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
+  assert.deepEqual(result.acItems, ["real ac"]);
+});
+
+test("detectIssueRefinementArtifact rejects an AC section of only a horizontal rule", () => {
+  const result = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n---\n" });
+  assert.equal(result.hasACs, false);
+  assert.equal(result.finding, "missing_refinement_artifact");
+});
+
 test("detectIssueRefinementArtifact returns finding for empty body", () => {
   const result = detectIssueRefinementArtifact({ body: "" });
   assert.equal(result.hasACs, false);

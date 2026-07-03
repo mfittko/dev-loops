@@ -99,8 +99,11 @@ function findSectionByPatterns(sections, patterns) {
 /**
  * Extract bullet items from a section body. Counts both `- [ ]`/`- [x]`
  * checklist items and top-level plain `- ` bullets (dash at column 0, so
- * nested/indented sub-bullets are not counted). Returns the trimmed item
- * text for each matching line. The checkbox state (checked vs unchecked) is
+ * nested/indented sub-bullets are not counted). Empty checkbox placeholders
+ * (`- [ ]` / `- [x]` with no trailing text) are skipped, not counted, so a
+ * section of only unfilled placeholders reports as unrefined. Returns the
+ * trimmed item text for each matching line. The checkbox state (checked vs
+ * unchecked) is
  * intentionally not preserved: callers only need the item text to satisfy
  * the refinement-artifact contract.
  *
@@ -117,9 +120,12 @@ export function extractChecklistItems(sectionBody) {
   const lines = sectionBody.split(/\r?\n/u);
 
   for (const line of lines) {
-    const checkboxMatch = /^\s*-\s+\[(?:[ xX])\]\s+(.+?)\s*$/u.exec(line);
+    // Checklist item: `- [ ]` / `- [x]` (leading indentation tolerated).
+    // Consume ANY checkbox-marker line here; push only when it carries text,
+    // so empty placeholders (`- [ ]`) are skipped rather than counted.
+    const checkboxMatch = /^\s*-\s+\[(?:[ xX])\](?:\s+(.+?))?\s*$/u.exec(line);
     if (checkboxMatch) {
-      const text = checkboxMatch[1].trim();
+      const text = (checkboxMatch[1] ?? "").trim();
       if (text.length > 0) {
         items.push(text);
       }
