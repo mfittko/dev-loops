@@ -72,6 +72,26 @@ test("CLI exits 0 on the real in-lockstep manifest", () => {
   assert.match(res.stdout, /in lockstep with release/);
 });
 
+test("CLI exits 2 on an unreadable or invalid-JSON manifest (usage/parse error)", async () => {
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const os = await import("node:os");
+
+  const missing = spawnSync("node", [scriptPath, "--manifest", "does-not-exist.json"], { encoding: "utf8" });
+  assert.equal(missing.status, 2, missing.stderr);
+  assert.match(missing.stderr, /cannot read or parse manifest/);
+
+  const dir = await mkdtemp(path.join(os.tmpdir(), "core-dep-bad-"));
+  const bad = path.join(dir, "package.json");
+  await writeFile(bad, "{ not valid json");
+  try {
+    const res = spawnSync("node", [scriptPath, "--manifest", bad], { encoding: "utf8" });
+    assert.equal(res.status, 2, res.stderr);
+    assert.match(res.stderr, /cannot read or parse manifest/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI exits 2 on a usage error (unknown arg or a flag missing its value)", () => {
   const unknown = spawnSync("node", [scriptPath, "--nope"], { encoding: "utf8", cwd: repoRoot });
   assert.equal(unknown.status, 2, unknown.stderr);

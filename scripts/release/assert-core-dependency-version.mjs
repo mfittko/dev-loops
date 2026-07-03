@@ -97,7 +97,14 @@ function parseArgs(argv) {
 
 async function main(argv) {
   const { manifest, releaseVersion } = parseArgs(argv);
-  const pkg = JSON.parse(await readFile(manifest, "utf8"));
+  // An unreadable or invalid manifest is a usage/parse error (exit 2), not a
+  // lockstep mismatch (exit 1) — matches the header contract and extract-changelog-section.mjs.
+  let pkg;
+  try {
+    pkg = JSON.parse(await readFile(manifest, "utf8"));
+  } catch (err) {
+    throw usageError(`cannot read or parse manifest "${manifest}": ${err.message}`);
+  }
   const coreRange = pkg.dependencies?.[CORE_DEP];
   const result = assertCoreDependencyInLockstep({
     releaseVersion: releaseVersion ?? pkg.version,
