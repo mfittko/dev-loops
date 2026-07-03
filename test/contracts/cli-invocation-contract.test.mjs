@@ -17,6 +17,11 @@ const currentVersion = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.j
 
 const PI_TOKEN = "node <dev-loops-package-root>/cli/index.mjs";
 
+// `npx dev-loops` (any whitespace: space, tab, or newline) NOT immediately followed by `@`
+// is the unversioned, ambiguous form we ban across both the runtime source (#801/#833) and the
+// consumer-facing surface (#1036). Single source so the test and the enforced intent never drift.
+const UNVERSIONED_NPX = /npx\s+dev-loops(?!@)/g;
+
 /** Every runtime source skill/agent file (the files Pi consumes directly). */
 function runtimeSourceFiles() {
   const files = [];
@@ -36,8 +41,7 @@ function runtimeSourceFiles() {
 test("no unversioned `npx dev-loops` remains in the runtime source skills/agents (#801, #833)", () => {
   for (const rel of runtimeSourceFiles()) {
     const raw = fs.readFileSync(path.join(repoRoot, rel), "utf8");
-    // `npx dev-loops` not immediately followed by `@` is the unversioned, ambiguous form we ban.
-    const unversioned = raw.match(/npx dev-loops(?!@)/g) ?? [];
+    const unversioned = raw.match(UNVERSIONED_NPX) ?? [];
     assert.deepEqual(unversioned, [], `${rel} must not contain unversioned \`npx dev-loops\``);
   }
 });
@@ -102,7 +106,7 @@ test("no unversioned `npx dev-loops` in the consumer-facing docs/CLI/tooling sur
   const offenders = [];
   for (const rel of surface) {
     const raw = fs.readFileSync(path.join(repoRoot, rel), "utf8");
-    if ((raw.match(/npx dev-loops(?!@)/g) ?? []).length > 0) offenders.push(rel);
+    if ((raw.match(UNVERSIONED_NPX) ?? []).length > 0) offenders.push(rel);
   }
   assert.deepEqual(offenders, [], `consumer surface must pin npx dev-loops@<version>: ${offenders.join(", ")}`);
 });

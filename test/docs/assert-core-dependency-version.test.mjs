@@ -93,7 +93,7 @@ test("CLI fails closed (exit 1) on a synthetic #1033 manifest", async () => {
   );
   try {
     const res = spawnSync("node", [scriptPath, "--manifest", manifest], { encoding: "utf8" });
-    assert.equal(res.status, 1, res.stdout);
+    assert.equal(res.status, 1, res.stderr);
     assert.match(res.stderr, /::error::/);
     assert.match(res.stderr, /does not match the release version/);
   } finally {
