@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { main } from "../../scripts/projects/reconcile-queue.mjs";
+import { main, gatherLiveFacts } from "../../scripts/projects/reconcile-queue.mjs";
 
 // Facts consumed by planReconcile via deriveReconcileColumn. A ready open
 // non-draft linked PR on an open issue derives → In Progress.
@@ -88,6 +88,28 @@ describe("reconcile-queue main (#1069)", () => {
     assert.equal(result.moved, 0);
     assert.equal(result.unchanged, 1);
     assert.equal(moveCalls.length, 0);
+  });
+
+  it("gatherLiveFacts skips a Done-status item (zero gh calls) but still gathers a non-Done item", async () => {
+    const calls = [];
+    const runChild = async (cmd, argv) => {
+      calls.push({ cmd, argv });
+      // Minimal shape for `issue view --json state` on the non-Done item.
+      return { code: 0, stdout: JSON.stringify({ state: "CLOSED" }), stderr: "" };
+    };
+    const items = [
+      { itemId: "I_done", issueNumber: 1, prNumber: null, status: "Done" },
+      { itemId: "I_backlog", issueNumber: 2, prNumber: null, status: "Backlog" },
+    ];
+    const facts = await gatherLiveFacts(items, "o/r", { env: {}, runChild, doneColumn: "Done" });
+    // Done item never fetched → absent from the facts Map (planReconcile leaves it in place).
+    assert.equal(facts.has("I_done"), false);
+    // Non-Done item still gathered.
+    assert.equal(facts.has("I_backlog"), true);
+    // Every gh call was for the non-Done issue #2, none for the Done item #1.
+    assert.ok(calls.length > 0);
+    assert.ok(calls.every((c) => c.argv.includes("2")));
+    assert.ok(calls.every((c) => !c.argv.includes("1")));
   });
 
   it("resolves .devloops boardTitle when --project is omitted and forwards projectTitle to list/move", async () => {

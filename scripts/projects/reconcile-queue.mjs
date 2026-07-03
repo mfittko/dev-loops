@@ -12,7 +12,7 @@ import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
 import { main as moveQueueItem } from "./move-queue-item.mjs";
 import { detectLinkedIssuePr } from "../github/detect-linked-issue-pr.mjs";
-import { planReconcile, loadStateColumnMap } from "@dev-loops/core/loop/queue-board-sync";
+import { planReconcile, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 
 const USAGE = `Usage: dev-loops queue reconcile --repo <owner/name> [--project <number|id|board-uri>]
@@ -118,11 +118,16 @@ async function ghJson(argv, { env, runChild }) {
 // share a number (repo-A PR #5 vs repo-B issue #5) cannot collide. Per-item gh
 // failures are swallowed (best-effort): the item records all-null PR fields →
 // derives null → untouched.
-export async function gatherLiveFacts(items, repo, { env, runChild } = {}) {
+export async function gatherLiveFacts(items, repo, { env, runChild, doneColumn } = {}) {
   const byItemId = new Map();
   for (const item of items) {
     const number = item.prNumber != null ? item.prNumber : item.issueNumber;
     if (number == null || item.itemId == null) continue;
+    // Done is terminal for reconcile; items already in Done are left untouched
+    // (planReconcile treats a missing fact as unchanged). Skip the gh calls
+    // entirely. A rare reopened/re-linked artifact stuck in Done can still be
+    // recovered via an explicit `dev-loops queue reconcile` run.
+    if (doneColumn != null && item.status === doneColumn) continue;
     try {
       if (item.prNumber != null) {
         const pr = await ghJson(["pr", "view", String(item.prNumber), "--repo", repo, "--json", "state,isDraft,mergedAt"], { env, runChild });
@@ -174,13 +179,14 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd(), li
   );
   const items = list.items ?? [];
 
+  const { columnNames } = loadStateColumnMap(cwd);
+
   const factsByItemId = await (gatherFacts ?? ((its, repo, o) => gatherLiveFacts(its, repo, o)))(
     items,
     args.repo,
-    { env, runChild },
+    { env, runChild, doneColumn: columnNames[LOGICAL_COLUMN.DONE] },
   );
 
-  const { columnNames } = loadStateColumnMap(cwd);
   const { moves, unchanged } = planReconcile(items, factsByItemId, columnNames);
 
   const move = moveItem ?? ((a, o) => moveQueueItem(a, o));

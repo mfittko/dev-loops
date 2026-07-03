@@ -59,6 +59,9 @@ Required (exactly one):
 Exit codes:
   0  Success
   1  Argument error, runtime failure, or async-start contract rejection`.trim();
+// Upper bound on the awaited best-effort startup reconcile so a slow or hung gh
+// can never delay startup completion.
+const STARTUP_RECONCILE_BUDGET_MS = 20000;
 const SHARED_PUBLIC_CONTRACT = "skills/docs/public-dev-loop-contract.md";
 const SHARED_RETROSPECTIVE_CONTRACT = "skills/docs/retrospective-checkpoint-contract.md";
 const STRATEGY_REQUIRED_READS = {
@@ -734,7 +737,13 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     } catch { /* fall back to sessionCwd */ }
     if (loadBoardConfig(reconcileRoot).enabled === true) {
       try {
-        await reconcileQueue({ repo: detectRepoSlug(reconcileRoot) }, { env: adapter.getEnv(), cwd: reconcileRoot });
+        // The budget bounds startup latency; reconcile is best-effort and the
+        // board self-heals on the next entry if it doesn't finish. The timer is
+        // unref'd so it never keeps the event loop alive on its own.
+        await Promise.race([
+          reconcileQueue({ repo: detectRepoSlug(reconcileRoot) }, { env: adapter.getEnv(), cwd: reconcileRoot }),
+          new Promise((resolve) => { const t = setTimeout(resolve, STARTUP_RECONCILE_BUDGET_MS); t.unref?.(); }),
+        ]);
       } catch { /* best-effort */ }
     }
   }
