@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -119,7 +120,32 @@ test("editPr: --body-file reads the body from a real file", async () => {
     { run },
   );
   assert.deepEqual(result.edited, ["body"]);
-  assert.deepEqual(calls[0], ["pr", "edit", "5", "--repo", "o/n", "--body", "Body from file\nsecond line"]);
+  assert.deepEqual(calls[0], ["pr", "edit", "5", "--repo", "o/n", "--body-file", bodyPath]);
+});
+
+test("editPr: --body-file - reads stdin and passes it inline as --body (never re-emits exhausted fd 0)", () => {
+  // resolveBody consumes fd 0 to validate the body; re-emitting `--body-file -`
+  // would make gh re-read an already-drained stdin and clear the PR body. So the
+  // resolved stdin content must be passed inline via --body. Exercised in a child
+  // process because resolveBody reads the real fd 0 (stdin).
+  const modUrl = new URL("../../scripts/github/edit-pr.mjs", import.meta.url).href;
+  const dir = mkdtempSync(join(tmpdir(), "edit-pr-stdin-"));
+  const driver = join(dir, "driver.mjs");
+  writeFileSync(
+    driver,
+    `import { editPr } from ${JSON.stringify(modUrl)};\n` +
+      "const calls = [];\n" +
+      "await editPr(\n" +
+      "  { repo: \"o/n\", pr: 17, bodyFile: \"-\", addAssignees: [], removeAssignees: [] },\n" +
+      "  { run: async (_cmd, args) => { calls.push(args); return { code: 0, stdout: \"\", stderr: \"\" }; } },\n" +
+      ");\n" +
+      "process.stdout.write(JSON.stringify(calls[0]));\n",
+  );
+  const res = spawnSync(process.execPath, [driver], { input: "Body from stdin\n", encoding: "utf8" });
+  assert.equal(res.status, 0, res.stderr);
+  const args = JSON.parse(res.stdout);
+  assert.deepEqual(args, ["pr", "edit", "17", "--repo", "o/n", "--body", "Body from stdin\n"]);
+  assert.ok(!args.includes("--body-file"), "must not re-emit --body-file - for an exhausted stdin");
 });
 
 test("editPr: --remove-assignee builds gh args and reports the edited field", async () => {
