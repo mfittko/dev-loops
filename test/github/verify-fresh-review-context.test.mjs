@@ -273,8 +273,11 @@ test("--round rejects values with slashes (path-traversal guard)", async () => {
 
 test("auto round: same scope across commits passes on each new head, fails closed on same head", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  // Scrub inherited global/system git config so commit signing, hooks, or
+  // templates on the host cannot make this test flaky (determinism review).
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
   const git = (args) => {
-    const r = spawnSync("git", args, { cwd: tmpDir, encoding: "utf8" });
+    const r = spawnSync("git", args, { cwd: tmpDir, encoding: "utf8", env: gitEnv });
     assert.equal(r.status, 0, r.stderr);
   };
   try {
@@ -301,6 +304,38 @@ test("auto round: same scope across commits passes on each new head, fails close
     const r2 = runScript(["--scope", "correctness"], { cwd: tmpDir });
     assert.equal(r2.status, 0, r2.stderr);
     assert.equal(JSON.parse(r2.stdout.trim()).fresh, true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("round canonicalization: auto and an explicit short-SHA --round for the SAME head share one key (no fail-open)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  const git = (args) => {
+    const r = spawnSync("git", args, { cwd: tmpDir, encoding: "utf8", env: gitEnv });
+    assert.equal(r.status, 0, r.stderr);
+    return r;
+  };
+  try {
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const shortSha = git(["rev-parse", "--short", "HEAD"]).stdout.trim();
+
+    // First reviewer pins the round with an abbreviated SHA...
+    const r1 = runScript(["--scope", "correctness", "--round", shortSha], { cwd: tmpDir });
+    assert.equal(r1.status, 0, r1.stderr);
+
+    // ...a same-head re-entry that auto-resolves (different spelling) must STILL
+    // fail closed — both canonicalize to the full commit SHA (one key).
+    const r2 = runScript(["--scope", "correctness"], { cwd: tmpDir });
+    assert.equal(r2.status, 1, r2.stderr);
+    assert.equal(JSON.parse(r2.stdout.trim()).fresh, false);
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }

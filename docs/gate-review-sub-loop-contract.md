@@ -104,7 +104,7 @@ on an isolated checkout:
 
 Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../agents/review.agent.md)), spawned once per resolved angle via the plain Agent tool. Reviewers are **independent and seeded with the identical neutral context bundle verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the loaded context of, the main agent or a sibling reviewer. Parallelism is capped at `gates.maxFanoutReviewers` (default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
 
-- starts in fresh context. **Mandatory:** run `scripts/github/verify-fresh-review-context.mjs --scope <angle>` at startup; refuse to proceed on contamination. Use `--scope` so parallel reviewers in the same working directory do not trigger false contamination from each other's sentinels. The sentinel is keyed per review ROUND by the head SHA (auto-resolved from `git rev-parse --short HEAD`; pin explicitly with `--round <headSha>`), so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle, and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
+- starts in fresh context. **Mandatory:** run `scripts/github/verify-fresh-review-context.mjs --scope <angle>` at startup; refuse to proceed on contamination. Use `--scope` so parallel reviewers in the same working directory do not trigger false contamination from each other's sentinels. The sentinel is keyed per review ROUND by the head SHA (auto-resolved from the current HEAD; pin explicitly with `--round <headSha>`), so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle, and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
 - is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when its single angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph
 - is scoped to exactly one review angle
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
@@ -126,10 +126,13 @@ The fresh-context sentinel (`tmp/checkpoint-context-sentinel-<scope>-<headSha>.j
 written by `verify-fresh-review-context.mjs`) is scoped **per review round**, keyed by
 the head SHA. This makes the lifecycle mechanical rather than a manual chore:
 
-- The round key defaults to `git rev-parse --short HEAD`; reviewers keep invoking the
-  guard as `--scope <angle>` and get head-keyed isolation for free. Pass `--round <headSha>`
-  to pin the round explicitly (e.g. the gate-context head SHA). When git is unavailable the
-  key falls back to scope-only (legacy behavior).
+- The round key defaults to the current HEAD; reviewers keep invoking the guard as
+  `--scope <angle>` and get head-keyed isolation for free. Pass `--round <headSha>` to pin
+  the round explicitly (e.g. the gate-context head SHA). Any git rev (the auto default or a
+  short/full SHA) is canonicalized to its full commit SHA, so auto and pinned invocations for
+  the same head resolve to one key — the same-head fail-closed guard cannot be defeated by
+  spelling the head differently. When git is unavailable the key falls back to scope-only
+  (legacy behavior).
 - **A retry at a new head is never blocked by a prior round's sentinel** — a new head SHA
   produces a new key, so a re-fan-out after a fix commit passes `fresh: true` with **no
   manual clear step**.
