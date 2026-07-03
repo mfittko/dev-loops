@@ -7,11 +7,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { editPr } from "./edit-pr.mjs";
+import { viewPr } from "./view-pr.mjs";
 
 const USAGE = `Usage: tick-verified-checkboxes.mjs --repo <owner/name> --pr <number> --verified <label> [--verified <label>...] [--dry-run]
 Tick verified acceptance-criteria checkboxes in a PR body. Mirrors the issue-body
@@ -145,21 +146,16 @@ export function parseTickVerifiedCliArgs(argv) {
   return options;
 }
 
-async function fetchPrBody({ repo, pr }, { env, ghCommand, run }) {
-  const result = await run(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "body"], env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh pr view failed: ${detail}`);
-  }
-  const payload = parseJsonText(result.stdout, { label: `gh pr view ${pr}` });
-  return typeof payload?.body === "string" ? payload.body : "";
-}
-
 export async function tickCheckboxes(
   options,
   { env = process.env, ghCommand = "gh", run = runChild, editPr: edit = editPr } = {},
 ) {
-  const currentBody = await fetchPrBody(options, { env, ghCommand, run });
+  // Reuse view-pr.mjs rather than re-implementing `gh pr view --json body`.
+  const { pr } = await viewPr(
+    { repo: options.repo, pr: options.pr, fields: "body" },
+    { env, ghCommand, run },
+  );
+  const currentBody = typeof pr.body === "string" ? pr.body : "";
   const { body: nextBody, flipped, unmatched } = tickVerifiedCheckboxes(currentBody, options.verified);
   if (flipped.length === 0 || options.dryRun) {
     return { ok: true, pr: options.pr, flipped, unmatched, edited: false };

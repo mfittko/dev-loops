@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -173,8 +174,11 @@ export function parseEditPrCliArgs(argv) {
 
 async function resolveBody(options) {
   if (options.bodyFile === undefined) return options.body;
-  const source = options.bodyFile === "-" ? 0 : options.bodyFile;
-  const body = await readFile(source, "utf8");
+  // Stdin (fd 0): the fs/promises readFile does NOT accept an integer fd, so read
+  // it synchronously via the callback-style API (which does). A real path stays on
+  // the async promise read.
+  const body =
+    options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
   // Fail closed on an empty / whitespace-only file so a blank --body-file cannot
   // silently clear the PR body (USAGE promises --body/--title reject empties).
   if (body.trim().length === 0) {
@@ -193,11 +197,14 @@ async function buildEditArgs(options) {
     edited.push("title");
   }
   // resolveBody still runs for validation (reads the file, throws on empty /
-  // whitespace-only). When --body-file was given, hand the path straight to gh
-  // so large bodies avoid command-length limits instead of inlining the string.
+  // whitespace-only). A REAL --body-file path is handed straight to gh so large
+  // bodies avoid command-length limits. But `--body-file -` (stdin) was already
+  // consumed by resolveBody reading fd 0; re-emitting `--body-file -` makes gh
+  // re-read an exhausted stdin and clear the body, so pass the resolved string
+  // inline via --body instead.
   const body = await resolveBody(options);
   if (body !== undefined) {
-    if (options.bodyFile !== undefined) {
+    if (options.bodyFile !== undefined && options.bodyFile !== "-") {
       args.push("--body-file", options.bodyFile);
     } else {
       args.push("--body", body);
