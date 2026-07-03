@@ -2,7 +2,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
-import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, parseNonNegativeInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
@@ -15,13 +15,18 @@ import {
 const WATCH_HEARTBEAT_MS = 45_000; // 45 seconds
 const REMOVED_FLAGS = new Set([
   "--poll-interval-ms",
-  "--timeout-ms",
 ]);
-const USAGE = `Usage: probe-copilot-review.mjs --repo <owner/name> --pr <number>
+const USAGE = `Usage: probe-copilot-review.mjs --repo <owner/name> --pr <number> [--timeout-ms <n>]
 Poll for fresh Copilot review activity on a GitHub pull request.
 Required:
   --repo <owner/name>           Repository slug (e.g. owner/repo)
   --pr <number>                 Pull request number
+Options:
+  --timeout-ms <n>              Total watch budget in ms (default ${COPILOT_REVIEW_WAIT_TIMEOUT_MS}, i.e. ${COPILOT_REVIEW_WAIT_TIMEOUT_MS / 60_000} min;
+                                0 = single immediate check, no wait — returns "idle" if
+                                no fresh activity). For a quick non-watch thread/state
+                                read without entering the watch loop, pass 0 here or use
+                                'dev-loops gate capture-threads'.
 Output (stdout, JSON):
   { "ok": true, "status": "changed"|"timeout"|"idle", "repo": "...", "pr": N, "attempts": N,
     "newComments": [...], "newReviews": [...], "newIssueComments": [...] }
@@ -32,10 +37,14 @@ ${JQ_OUTPUT_USAGE}
 Activity statuses:
   changed    Fresh Copilot review activity found (check newComments/newReviews/newIssueComments)
   timeout    Watch period elapsed with no fresh Copilot activity
-  idle       Zero-timeout single check found no change
+  idle       Zero-timeout (--timeout-ms 0) single check found no change
 Diagnostic output (stderr):
-  Progress/heartbeat (during watch):
+  Progress/heartbeat (during watch, --timeout-ms > 0):
     { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
+  Heartbeat contract: watch-shaped runs (--timeout-ms > 0) emit watch_heartbeat lines to
+    stderr roughly every 45s as a liveness signal. Agents MUST NOT suppress stderr
+    (e.g. 2>/dev/null) on watch-shaped invocations — suppressing heartbeats makes a
+    legitimate watch look like a stall. Use --timeout-ms 0 for a non-watch single check.
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
@@ -100,6 +109,7 @@ export function parseWatchCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       pr: { type: "string" },
+      "timeout-ms": { type: "string" },
       concise: { type: "boolean" },
       summary: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -138,6 +148,10 @@ export function parseWatchCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError);
+      continue;
+    }
+    if (token.name === "timeout-ms") {
+      options.timeoutMs = parseNonNegativeInteger(requireTokenValue(token, parseError), "--timeout-ms", parseError);
       continue;
     }
     if (token.name === "concise" || token.name === "summary") {
