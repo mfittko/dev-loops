@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { derivePlainSpecs, aggregateExit } from "../scripts/run-verify.mjs";
+import { derivePlainSpecs, aggregateExit, buildJobEnv } from "../scripts/run-verify.mjs";
 
 const REPORTER_MARKER = "--test-reporter ./test/failure-summary-reporter.mjs ";
 const PLAIN_SCRIPTS = ["test:assets", "test:scripts", "test:core", "test:dev-loop"];
@@ -20,6 +20,19 @@ test("derivePlainSpecs equals the union of the plain scripts' spec args", async 
     for (const arg of tail.split(/\s+/)) if (arg) expected.push(arg);
   }
   assert.deepEqual(derivePlainSpecs(pkg), expected);
+});
+
+test("buildJobEnv disables git fsync when GIT_CONFIG_COUNT is unset", () => {
+  const env = buildJobEnv({ PATH: "/bin" });
+  assert.equal(env.PATH, "/bin");
+  assert.equal(env.GIT_CONFIG_COUNT, "2");
+  assert.equal(env.GIT_CONFIG_KEY_0, "core.fsync");
+  assert.equal(env.GIT_CONFIG_VALUE_0, "none");
+});
+
+test("buildJobEnv leaves a caller's existing GIT_CONFIG untouched", () => {
+  const base = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "x" };
+  assert.deepEqual(buildJobEnv(base), base);
 });
 
 test("aggregateExit is 0 only when every job exits 0", () => {

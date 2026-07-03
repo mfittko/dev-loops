@@ -29,6 +29,24 @@ export function aggregateExit(codes) {
   return codes.every((code) => code === 0) ? 0 : 1;
 }
 
+// ponytail: disable git fsync for the ephemeral test repos — this is the real
+// verify bottleneck (~6.5x: test:scripts 374.6s→57.2s). Durability is irrelevant
+// in tests; git's functional behavior is unchanged. Remove if a test ever asserts
+// on-disk fsync durability. Injected via GIT_CONFIG_COUNT so it reaches every git
+// invocation without touching any real gitconfig. If the caller already set
+// GIT_CONFIG_COUNT we skip injection and let their config win (don't clobber it).
+export function buildJobEnv(baseEnv) {
+  if (baseEnv.GIT_CONFIG_COUNT != null) return { ...baseEnv };
+  return {
+    ...baseEnv,
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "core.fsync",
+    GIT_CONFIG_VALUE_0: "none",
+    GIT_CONFIG_KEY_1: "core.fsyncObjectFiles",
+    GIT_CONFIG_VALUE_1: "false",
+  };
+}
+
 function runJob(label, command, args, options = {}) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -44,11 +62,12 @@ async function main() {
   const pkgUrl = new URL("../package.json", import.meta.url);
   const pkg = JSON.parse(await readFile(pkgUrl, "utf8"));
   const specs = derivePlainSpecs(pkg);
+  const env = buildJobEnv(process.env);
 
   const jobs = await Promise.all([
-    runJob("plain", process.execPath, ["--test", "--test-reporter", "./test/failure-summary-reporter.mjs", ...specs]),
-    runJob("extension", "npm", ["run", "test:extension"], { shell: true }),
-    runJob("docs", "npm", ["run", "test:docs"], { shell: true }),
+    runJob("plain", process.execPath, ["--test", "--test-reporter", "./test/failure-summary-reporter.mjs", ...specs], { env }),
+    runJob("extension", "npm", ["run", "test:extension"], { shell: true, env }),
+    runJob("docs", "npm", ["run", "test:docs"], { shell: true, env }),
   ]);
 
   const order = ["plain", "extension", "docs"];
