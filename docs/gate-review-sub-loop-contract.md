@@ -128,11 +128,13 @@ the head SHA. This makes the lifecycle mechanical rather than a manual chore:
 
 - The round key defaults to the current HEAD; reviewers keep invoking the guard as
   `--scope <angle>` and get head-keyed isolation for free. Pass `--round <headSha>` to pin
-  the round explicitly (e.g. the gate-context head SHA). Any git rev (the auto default or a
-  short/full SHA) is canonicalized to its full commit SHA, so auto and pinned invocations for
-  the same head resolve to one key — the same-head fail-closed guard cannot be defeated by
-  spelling the head differently. When git is unavailable the key falls back to scope-only
-  (legacy behavior).
+  the round explicitly (e.g. the gate-context head SHA). A commit SHA (the auto default or a
+  short/full SHA passed via `--round`) is canonicalized to its full commit SHA, so auto and
+  pinned invocations for the same head resolve to one key — the same-head fail-closed guard
+  cannot be defeated by spelling the head differently. The `--round` token is validated with
+  the same alphanumeric+hyphen rule as `--scope` (keeping the sentinel filename path-safe), so
+  rev syntaxes like `HEAD~1`, `v1.0.0`, or `refs/tags/...` are rejected rather than accepted.
+  When git is unavailable the key falls back to scope-only (legacy behavior).
 - **A retry at a new head is never blocked by a prior round's sentinel** — a new head SHA
   produces a new key, so a re-fan-out after a fix commit passes `fresh: true` with **no
   manual clear step**.

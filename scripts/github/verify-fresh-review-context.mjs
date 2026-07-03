@@ -18,13 +18,13 @@ neutral bundle (a path/prompt, not a sentinel) never creates a sentinel, so it
 never false-positives as contaminated.
 
 Sentinels are per review ROUND, keyed by the head SHA. The round defaults to
-the current HEAD; any git rev (the auto default, or a short/full SHA passed via
+the current HEAD; a commit SHA (the auto default, or a short/full SHA passed via
 \`--round\`) is canonicalized to its full 40-char commit SHA, so every spelling
 of the same head maps to ONE key — a same-scope + same-head re-entry still fails
 closed regardless of how the head is spelled. A retry at a new head naturally
-gets a fresh sentinel (no manual clear step). A non-rev \`--round\` token is used
-verbatim; when git is unavailable the sentinel is keyed by scope only (legacy
-behavior).
+gets a fresh sentinel (no manual clear step). An explicit \`--round\` token that
+does not resolve to a commit is used verbatim; when git is unavailable the
+sentinel is keyed by scope only (legacy behavior).
 Options:
   --scope <name>  Unique reviewer scope (e.g. "draft-gate-coverage").
                   Must be non-empty, containing only alphanumeric
@@ -32,11 +32,14 @@ Options:
                   is scoped so parallel reviewers in the same working
                   directory do not trigger false contamination.
   --round <token> Review-round key (e.g. the head SHA). Alphanumeric and
-                  hyphens only. Defaults to the current HEAD. A value that
-                  resolves as a git rev is canonicalized to its full commit SHA
-                  (length-stable across short/full/HEAD spellings); a non-rev
-                  token is used verbatim. Omitted from the key when unset and
-                  git is unavailable.
+                  hyphens only (same validator as --scope), so the token is
+                  path-safe; rev syntaxes with other characters (\`HEAD~1\`,
+                  \`v1.0.0\`, \`refs/tags/...\`) are rejected. Defaults to the
+                  current HEAD. A token that resolves to a commit (e.g. a short
+                  or full SHA) is canonicalized to its full commit SHA
+                  (length-stable across short/full spellings); a token that does
+                  not resolve is used verbatim. Omitted from the key when unset
+                  and git is unavailable.
 Output (stdout, JSON):
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<token|null>" }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
