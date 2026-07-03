@@ -46,10 +46,11 @@ function connectedNode({ createdAt, number, state = "OPEN", repo = "owner/repo",
   };
 }
 
-function crossNode({ createdAt, number, state = "OPEN", repo = "owner/repo", url }) {
+function crossNode({ createdAt, number, state = "OPEN", repo = "owner/repo", url, willCloseTarget = false }) {
   return {
     __typename: "CrossReferencedEvent",
     createdAt,
+    willCloseTarget,
     source: {
       __typename: "PullRequest",
       number,
@@ -455,4 +456,118 @@ test("runNode rejects deterministically when the child process cannot spawn", as
     runNode(["--help"], { execPath: path.join(os.tmpdir(), "missing-node-binary") }),
     /ENOENT/,
   );
+});
+
+
+// --- #1130: body-mention cross-references are not board-ownership links ---
+// A CrossReferencedEvent fires on ANY body mention of the issue ("part of #X").
+// Only a reference that will CLOSE the issue (willCloseTarget) may own its board
+// status; a bare mention must NOT be reported as a linked open PR. (Subsumes the
+// missing gatherLiveFacts bridge coverage tracked by #1124.)
+
+test("detect-linked-issue-pr: body-mention-only cross-reference (willCloseTarget:false) is not a linked PR", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-mention-only-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "graphql", "-F", "issue=85", "owner=owner", "name=repo"],
+        stdout: graphqlPayload({
+          hasNextPage: false,
+          endCursor: null,
+          nodes: [
+            // Open same-repo PR that merely body-mentions this issue.
+            crossNode({ createdAt: "2026-05-12T10:00:00Z", number: 128, willCloseTarget: false }),
+          ],
+        }),
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--issue", "85"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(JSON.parse(result.stdout), {
+      ok: true,
+      repo: "owner/repo",
+      issue: 85,
+      hasOpenLinkedPr: false,
+      prNumber: null,
+      prUrl: null,
+      hasPriorClosedUnmergedPr: false,
+      priorClosedUnmergedPrNumber: null,
+      priorClosedUnmergedPrUrl: null,
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-linked-issue-pr: cross-reference with willCloseTarget:true is a linked PR", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-closing-xref-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "graphql", "-F", "issue=85", "owner=owner", "name=repo"],
+        stdout: graphqlPayload({
+          hasNextPage: false,
+          endCursor: null,
+          nodes: [
+            crossNode({ createdAt: "2026-05-12T10:00:00Z", number: 90, willCloseTarget: true }),
+          ],
+        }),
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--issue", "85"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(JSON.parse(result.stdout), {
+      ok: true,
+      repo: "owner/repo",
+      issue: 85,
+      hasOpenLinkedPr: true,
+      prNumber: 90,
+      prUrl: "https://github.com/owner/repo/pull/90",
+      selection: {
+        eventType: "CROSS_REFERENCED_EVENT",
+        eventCreatedAt: "2026-05-12T10:00:00Z",
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-linked-issue-pr: a genuine ConnectedEvent is still a linked PR (semantics unchanged)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-linked-pr-connected-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "graphql", "-F", "issue=85", "owner=owner", "name=repo"],
+        stdout: graphqlPayload({
+          hasNextPage: false,
+          endCursor: null,
+          nodes: [
+            connectedNode({ createdAt: "2026-05-12T10:00:00Z", number: 90 }),
+            // A body-mention xref alongside the ConnectedEvent must not perturb the result.
+            crossNode({ createdAt: "2026-05-13T10:00:00Z", number: 128, willCloseTarget: false }),
+          ],
+        }),
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--issue", "85"], { env });
+
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.hasOpenLinkedPr, true);
+    assert.equal(parsed.prNumber, 90);
+    assert.equal(parsed.selection.eventType, "CONNECTED_EVENT");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
