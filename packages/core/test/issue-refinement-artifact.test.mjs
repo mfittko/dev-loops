@@ -118,7 +118,7 @@ test("detectIssueRefinementArtifact rejects a Refinement section without explici
   assert.equal(result.finding, "missing_refinement_artifact");
 });
 
-test("detectIssueRefinementArtifact rejects AC section without checkboxes", () => {
+test("detectIssueRefinementArtifact rejects a prose-only AC section (no bullets or checkboxes)", () => {
   // Per #532 review feedback: prose-only AC/DoD sections must not satisfy
   // the refinement artifact; the section must contain at least one checklist
   // item OR a top-level plain `- ` bullet. Plain prose lines (no `- `) still
