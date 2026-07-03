@@ -5,7 +5,7 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
-import { syncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number>\nWrapper around gh pr ready that enforces gate-evidence validation.`;
 const parseError = buildParseError(USAGE);
@@ -77,7 +77,7 @@ async function fetchGateEvidence({ repo, pr, headSha }, { env, ghCommand }) {
   return { draftGate: dg, draftGateMarker: dm, currentHeadClean: chc, cleanEvidenceExists: cee, effectiveHeadClean: chc || cphm };
 }
 
-export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
+export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), syncBoardStatus = realSyncBoardStatus } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const requireCi = draftGateConfig?.requireCi !== false;

@@ -27,23 +27,43 @@ function run({ items, facts, moveCalls }) {
 }
 
 describe("reconcile-queue main (#1069)", () => {
-  it("#1057-shaped: Backlog issue with a ready linked PR → one move to In Progress", async () => {
+  it("#1057-shaped: Backlog issue with a ready linked PR → one move to In Progress by item node id", async () => {
     const moveCalls = [];
     const result = await run({
-      items: [{ issueNumber: 42, prNumber: null, status: "Backlog" }],
-      facts: [[42, READY_LINKED_PR]],
+      items: [{ itemId: "I_42", issueNumber: 42, prNumber: null, status: "Backlog" }],
+      facts: [["I_42", READY_LINKED_PR]],
       moveCalls,
     });
     assert.equal(result.ok, true);
     assert.equal(result.moved, 1);
     assert.equal(moveCalls.length, 1);
-    assert.deepEqual(moveCalls[0], { repo: "o/r", project: "7", projectTitle: undefined, item: "42", toColumn: "In Progress" });
+    // Move is applied by the stable node id, not the bare number.
+    assert.deepEqual(moveCalls[0], { repo: "o/r", project: "7", projectTitle: undefined, item: "I_42", toColumn: "In Progress" });
     assert.deepEqual(result.reconciled, [{ number: 42, from: "Backlog", to: "In Progress", ok: true }]);
   });
 
+  it("multi-repo number collision: two items share number 5 but each moves by its own itemId", async () => {
+    const moveCalls = [];
+    const result = await run({
+      items: [
+        { itemId: "I_prA", issueNumber: null, prNumber: 5, status: "Backlog" },
+        { itemId: "I_issB", issueNumber: 5, prNumber: null, status: "Backlog" },
+      ],
+      facts: [
+        ["I_prA", { itemKind: "pr", issueState: null, prState: "MERGED", prIsDraft: false }],
+        ["I_issB", READY_LINKED_PR],
+      ],
+      moveCalls,
+    });
+    assert.equal(result.moved, 2);
+    const byItem = new Map(moveCalls.map((c) => [c.item, c.toColumn]));
+    assert.equal(byItem.get("I_prA"), "Done");
+    assert.equal(byItem.get("I_issB"), "In Progress");
+  });
+
   it("idempotent: item already In Progress → no moves, and a second run also moves nothing", async () => {
-    const items = [{ issueNumber: 42, prNumber: null, status: "In Progress" }];
-    const facts = [[42, READY_LINKED_PR]];
+    const items = [{ itemId: "I_42", issueNumber: 42, prNumber: null, status: "In Progress" }];
+    const facts = [["I_42", READY_LINKED_PR]];
 
     const first = [];
     const r1 = await run({ items, facts, moveCalls: first });
@@ -61,8 +81,8 @@ describe("reconcile-queue main (#1069)", () => {
   it("Backlog/Next Up untouched: a Next Up item deriving null → no move", async () => {
     const moveCalls = [];
     const result = await run({
-      items: [{ issueNumber: 7, prNumber: null, status: "Next Up" }],
-      facts: [[7, UNTOUCHED]],
+      items: [{ itemId: "I_7", issueNumber: 7, prNumber: null, status: "Next Up" }],
+      facts: [["I_7", UNTOUCHED]],
       moveCalls,
     });
     assert.equal(result.moved, 0);
@@ -82,8 +102,8 @@ describe("reconcile-queue main (#1069)", () => {
         {
           env: {},
           cwd: dir,
-          listItems: async (a) => { listArgs.push(a); return { items: [{ issueNumber: 42, prNumber: null, status: "Backlog" }] }; },
-          gatherFacts: async () => new Map([[42, READY_LINKED_PR]]),
+          listItems: async (a) => { listArgs.push(a); return { items: [{ itemId: "I_42", issueNumber: 42, prNumber: null, status: "Backlog" }] }; },
+          gatherFacts: async () => new Map([["I_42", READY_LINKED_PR]]),
           moveItem: async (a) => { moveCalls.push(a); return { ok: true }; },
         },
       );

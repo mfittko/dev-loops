@@ -132,26 +132,32 @@ export function deriveReconcileColumn(facts = {}) {
 
 /**
  * Pure reconcile planner (#1069). Given listed board items, a map of live facts
- * keyed by the item's issue/PR number, and the resolved column display names,
- * return the set of moves needed to converge the board and a count of items left
- * unchanged. Idempotent: when every item already sits in its derived column, the
- * moves array is empty.
+ * keyed by the item's stable GraphQL node id (`item.itemId`), and the resolved
+ * column display names, return the set of moves needed to converge the board and
+ * a count of items left unchanged. Idempotent: when every item already sits in
+ * its derived column, the moves array is empty.
  *
- * items: [{ issueNumber, prNumber, status, ... }]  (from list-queue-items)
- * factsByNumber: Map<number, factsObject>   (facts as consumed by deriveReconcileColumn)
+ * Keying by the stable `itemId` (not the bare issue/PR number) keeps reconcile
+ * deterministic on a multi-repo GitHub Projects board, where two items can share
+ * a number (repo-A PR #5 vs repo-B issue #5) — number-keying would collide and
+ * make moves order-dependent.
+ *
+ * items: [{ itemId, issueNumber, prNumber, status, ... }]  (from list-queue-items)
+ * factsByItemId: Map<itemId, factsObject>   (facts as consumed by deriveReconcileColumn)
  * columnNames: { in_progress, done, ... }   (LOGICAL_COLUMN -> display name)
  */
-export function planReconcile(items = [], factsByNumber = new Map(), columnNames = {}) {
+export function planReconcile(items = [], factsByItemId = new Map(), columnNames = {}) {
   const moves = [];
   let unchanged = 0;
   for (const item of items) {
-    const number = item.prNumber != null ? item.prNumber : item.issueNumber;
-    const facts = factsByNumber.get(number);
+    const facts = factsByItemId.get(item.itemId);
     const logical = facts ? deriveReconcileColumn(facts) : null;
     if (logical == null) { unchanged += 1; continue; }
     const target = columnNames[logical];
     if (!target || item.status === target) { unchanged += 1; continue; }
-    moves.push({ number, from: item.status ?? null, to: target });
+    // `number` is kept only for reporting; the move is applied by node id.
+    const number = item.prNumber != null ? item.prNumber : item.issueNumber;
+    moves.push({ itemId: item.itemId, number, from: item.status ?? null, to: target });
   }
   return { moves, unchanged };
 }

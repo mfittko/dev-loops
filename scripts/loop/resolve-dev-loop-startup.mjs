@@ -717,6 +717,9 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     process.exitCode = 1;
     return;
   }
+  // Emit the deterministic bundle FIRST, before the best-effort self-heal below,
+  // so a slow or hung gh reconcile can never delay the startup result.
+  stdout.write(`${JSON.stringify(result)}\n`);
   // #1069: best-effort startup self-heal — converge the board from live GitHub
   // state so merged→Done / ready→In Progress land deterministically. Gated on a
   // configured board so it never shells out to gh in the no-.devloops unit tests;
@@ -735,7 +738,6 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       } catch { /* best-effort */ }
     }
   }
-  stdout.write(`${JSON.stringify(result)}\n`);
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

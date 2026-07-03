@@ -15,7 +15,8 @@ import { detectLinkedIssuePr } from "../github/detect-linked-issue-pr.mjs";
 import { planReconcile, loadStateColumnMap } from "@dev-loops/core/loop/queue-board-sync";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 
-const USAGE = `Usage: dev-loops queue reconcile --repo <owner/name> [--project <number|id>]
+const USAGE = `Usage: dev-loops queue reconcile --repo <owner/name> [--project <number|id|board-uri>]
+       (dev-loops project reconcile … is a back-compat alias)
 
 Reconcile board Status columns from live GitHub state. Derives each item's
 target column from live GitHub facts (merged PR or closed issue → Done; an open,
@@ -26,8 +27,9 @@ individual per-item failures are recorded but do not fail the run.
 
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
-  --project <number|id>   Project number (integer) or node ID. When omitted,
-                          resolved from .devloops queue.projectNumber /
+  --project <number|id|board-uri>
+                          Project number (integer), node ID, or board URI. When
+                          omitted, resolved from .devloops queue.projectNumber /
                           queue.boardTitle.
   --help, -h              Show this help.
 
@@ -111,17 +113,20 @@ async function ghJson(argv, { env, runChild }) {
 }
 
 // Real live-facts gatherer. For each item, resolve GitHub state into the fact
-// shape consumed by deriveReconcileColumn. Per-item gh failures are swallowed
-// (best-effort): the item records all-null PR fields → derives null → untouched.
+// shape consumed by deriveReconcileColumn. Keyed by the stable item node id
+// (item.itemId), not the bare number, so a multi-repo board where two items
+// share a number (repo-A PR #5 vs repo-B issue #5) cannot collide. Per-item gh
+// failures are swallowed (best-effort): the item records all-null PR fields →
+// derives null → untouched.
 export async function gatherLiveFacts(items, repo, { env, runChild } = {}) {
-  const byNumber = new Map();
+  const byItemId = new Map();
   for (const item of items) {
     const number = item.prNumber != null ? item.prNumber : item.issueNumber;
-    if (number == null) continue;
+    if (number == null || item.itemId == null) continue;
     try {
       if (item.prNumber != null) {
         const pr = await ghJson(["pr", "view", String(item.prNumber), "--repo", repo, "--json", "state,isDraft,mergedAt"], { env, runChild });
-        byNumber.set(number, {
+        byItemId.set(item.itemId, {
           itemKind: "pr",
           issueState: null,
           prState: pr?.mergedAt ? "MERGED" : String(pr?.state ?? "").toUpperCase(),
@@ -131,7 +136,7 @@ export async function gatherLiveFacts(items, repo, { env, runChild } = {}) {
         const issue = await ghJson(["issue", "view", String(item.issueNumber), "--repo", repo, "--json", "state"], { env, runChild });
         const issueState = String(issue?.state ?? "").toUpperCase();
         if (issueState === "CLOSED") {
-          byNumber.set(number, { itemKind: "issue", issueState: "CLOSED", prState: null, prIsDraft: null });
+          byItemId.set(item.itemId, { itemKind: "issue", issueState: "CLOSED", prState: null, prIsDraft: null });
           continue;
         }
         let prState = null;
@@ -142,11 +147,11 @@ export async function gatherLiveFacts(items, repo, { env, runChild } = {}) {
           prState = pr?.mergedAt ? "MERGED" : String(pr?.state ?? "").toUpperCase();
           prIsDraft = pr?.isDraft === true;
         }
-        byNumber.set(number, { itemKind: "issue", issueState: "OPEN", prState, prIsDraft });
+        byItemId.set(item.itemId, { itemKind: "issue", issueState: "OPEN", prState, prIsDraft });
       }
     } catch {
       // Best-effort: record inert facts so the item derives null (untouched).
-      byNumber.set(number, {
+      byItemId.set(item.itemId, {
         itemKind: item.prNumber != null ? "pr" : "issue",
         issueState: item.prNumber != null ? null : "OPEN",
         prState: null,
@@ -154,7 +159,7 @@ export async function gatherLiveFacts(items, repo, { env, runChild } = {}) {
       });
     }
   }
-  return byNumber;
+  return byItemId;
 }
 
 async function main(args, { env = process.env, runChild, cwd = process.cwd(), listItems, gatherFacts, moveItem } = {}) {
@@ -169,29 +174,32 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd(), li
   );
   const items = list.items ?? [];
 
-  const factsByNumber = await (gatherFacts ?? ((its, repo, o) => gatherLiveFacts(its, repo, o)))(
+  const factsByItemId = await (gatherFacts ?? ((its, repo, o) => gatherLiveFacts(its, repo, o)))(
     items,
     args.repo,
     { env, runChild },
   );
 
   const { columnNames } = loadStateColumnMap(cwd);
-  const { moves, unchanged } = planReconcile(items, factsByNumber, columnNames);
+  const { moves, unchanged } = planReconcile(items, factsByItemId, columnNames);
 
   const move = moveItem ?? ((a, o) => moveQueueItem(a, o));
   const reconciled = [];
   let moved = 0;
   for (const m of moves) {
     try {
+      // Move by the stable item node id (move-queue-item accepts a node id per
+      // its `--item <number|node-id>` contract) so a multi-repo number collision
+      // can never target the wrong item.
       await move(
-        { repo: args.repo, project: args.project, projectTitle: args.projectTitle, item: String(m.number), toColumn: m.to },
+        { repo: args.repo, project: args.project, projectTitle: args.projectTitle, item: m.itemId, toColumn: m.to },
         { env, runChild },
       );
-      reconciled.push({ ...m, ok: true });
+      reconciled.push({ number: m.number, from: m.from, to: m.to, ok: true });
       moved += 1;
     } catch (err) {
       // Best-effort: a single failed move does not abort the reconcile loop.
-      reconciled.push({ ...m, ok: false, error: err?.message ?? "move failed" });
+      reconciled.push({ number: m.number, from: m.from, to: m.to, ok: false, error: err?.message ?? "move failed" });
     }
   }
 
