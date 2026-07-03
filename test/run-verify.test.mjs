@@ -22,6 +22,22 @@ test("derivePlainSpecs equals the union of the plain scripts' spec args", async 
   assert.deepEqual(derivePlainSpecs(pkg), expected);
 });
 
+test("derivePlainSpecs throws when a plain script is missing", () => {
+  assert.throws(
+    () => derivePlainSpecs({ scripts: {} }),
+    /missing script test:assets in package\.json/,
+  );
+});
+
+test("derivePlainSpecs throws when a script omits the reporter marker", () => {
+  const scripts = {};
+  for (const name of PLAIN_SCRIPTS) scripts[name] = "node --test some.test.mjs";
+  assert.throws(
+    () => derivePlainSpecs({ scripts }),
+    /script test:assets does not use the failure-summary reporter/,
+  );
+});
+
 test("buildJobEnv disables git fsync when GIT_CONFIG_COUNT is unset", () => {
   const env = buildJobEnv({ PATH: "/bin" });
   assert.equal(env.PATH, "/bin");
