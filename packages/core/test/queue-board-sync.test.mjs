@@ -12,6 +12,8 @@ import {
   loadStateColumnMap,
   LOGICAL_COLUMN,
   DEFAULT_STATE_COLUMN_NAMES,
+  deriveReconcileColumn,
+  planReconcile,
 } from "../src/loop/queue-board-sync.mjs";
 
 async function makeRepo(configYaml) {
@@ -507,4 +509,72 @@ test("syncBoardStatus resolves boardTitle to project number and moves item", asy
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// ── deriveReconcileColumn / planReconcile (#1069) ─────────────────────────
+
+test("deriveReconcileColumn: ready open non-draft PR → In Progress", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "pr", issueState: null, prState: "OPEN", prIsDraft: false }),
+    LOGICAL_COLUMN.IN_PROGRESS,
+  );
+});
+
+test("deriveReconcileColumn: merged PR → Done", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "pr", issueState: null, prState: "MERGED", prIsDraft: false }),
+    LOGICAL_COLUMN.DONE,
+  );
+});
+
+test("deriveReconcileColumn: closed issue → Done", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "issue", issueState: "CLOSED", prState: null, prIsDraft: null }),
+    LOGICAL_COLUMN.DONE,
+  );
+});
+
+test("deriveReconcileColumn: open issue with open non-draft linked PR → In Progress", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: false }),
+    LOGICAL_COLUMN.IN_PROGRESS,
+  );
+});
+
+test("deriveReconcileColumn: open issue with draft linked PR → null (untouched)", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: true }),
+    null,
+  );
+});
+
+test("deriveReconcileColumn: open issue with no linked PR → null (#1057-shape, untouched)", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "issue", issueState: "OPEN", prState: null, prIsDraft: null }),
+    null,
+  );
+});
+
+test("planReconcile: idempotent — items already in derived column produce no moves", () => {
+  const items = [
+    { issueNumber: 1, prNumber: null, status: "In Progress" },
+    { issueNumber: null, prNumber: 2, status: "Done" },
+  ];
+  const facts = new Map([
+    [1, { itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: false }],
+    [2, { itemKind: "pr", issueState: null, prState: "MERGED", prIsDraft: false }],
+  ]);
+  const { moves, unchanged } = planReconcile(items, facts, DEFAULT_STATE_COLUMN_NAMES);
+  assert.deepEqual(moves, []);
+  assert.equal(unchanged, items.length);
+});
+
+test("planReconcile: #1057-shaped miss — Backlog issue with a ready linked PR reconciles in one move", () => {
+  const items = [{ issueNumber: 42, prNumber: null, status: "Backlog" }];
+  const facts = new Map([
+    [42, { itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: false }],
+  ]);
+  const { moves, unchanged } = planReconcile(items, facts, DEFAULT_STATE_COLUMN_NAMES);
+  assert.equal(unchanged, 0);
+  assert.deepEqual(moves, [{ number: 42, from: "Backlog", to: "In Progress" }]);
 });

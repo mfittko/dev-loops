@@ -34,6 +34,8 @@ import {
   PLAN_FILE_REFINEMENT_SECTIONS,
 } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-contract";
+import { loadBoardConfig } from "@dev-loops/core/loop/queue-board-sync";
+import { main as reconcileQueue } from "../projects/reconcile-queue.mjs";
 import { parseArgs } from "node:util";
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
@@ -714,6 +716,24 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     stderr.write(`${JSON.stringify(result)}\n`);
     process.exitCode = 1;
     return;
+  }
+  // #1069: best-effort startup self-heal — converge the board from live GitHub
+  // state so merged→Done / ready→In Progress land deterministically. Gated on a
+  // configured board so it never shells out to gh in the no-.devloops unit tests;
+  // never writes stdout, never changes exit code, never throws. Skips
+  // --input/--plan-file/--spike modes.
+  if (options.issue !== undefined || options.pr !== undefined) {
+    let reconcileRoot = sessionCwd;
+    try {
+      reconcileRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: sessionCwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    } catch { /* fall back to sessionCwd */ }
+    if (loadBoardConfig(reconcileRoot).enabled === true) {
+      try {
+        await reconcileQueue({ repo: detectRepoSlug(reconcileRoot) }, { env: adapter.getEnv(), cwd: reconcileRoot });
+      } catch { /* best-effort */ }
+    }
   }
   stdout.write(`${JSON.stringify(result)}\n`);
 }

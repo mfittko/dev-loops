@@ -425,6 +425,67 @@ test.skip("--skip-gate-check allows transition without gate evidence", async () 
   }
 });
 
+test("built-in In-Progress board sync runs after gh pr ready and is NON-FATAL (#1069)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-board-sync-"));
+
+  try {
+    // No .devloops in tempDir → board not configured → syncBoardStatus is a
+    // clean fail-open skip. Running with cwd: tempDir keeps the board sync from
+    // shelling out to gh, but proves the tail runs and marking ready still wins.
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                id: "PR_abc123",
+                isDraft: true,
+                headRefOid: "abc123def456",
+                state: "OPEN",
+                mergeStateStatus: "CLEAN",
+                closingIssuesReferences: { nodes: [{ number: 55 }] },
+              },
+            },
+          },
+        }),
+      },
+      { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+      {
+        stdout: JSON.stringify([
+          {
+            body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
+            id: 101,
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
+            created_at: "2026-06-05T00:00:00Z",
+            updated_at: "2026-06-05T00:00:00Z",
+          },
+        ]),
+      },
+      { stdout: "" }, // gh pr ready
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.action, "marked_ready");
+    // Board sync tail ran and, with no board configured, reported a skip.
+    assert.ok(Array.isArray(output.boardSync), "boardSync should be present");
+    assert.ok(output.boardSync.length >= 1);
+    assert.ok(output.boardSync.every((r) => r.ok === true && r.skipped === true));
+
+    // The closingIssuesReferences selection is issued as part of the PR view query.
+    const calls = await readGhCalls(ghLogPath);
+    const closingQuery = calls.find(
+      (c) => Array.isArray(c) && c.some((a) => typeof a === "string" && a.includes("closingIssuesReferences")),
+    );
+    assert.ok(closingQuery, `PR view query should request closingIssuesReferences. Calls: ${JSON.stringify(calls)}`);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("fails when draft_gate marker does not match current head SHA", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-mismatch-head-"));
 

@@ -5,10 +5,11 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
+import { syncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number>\nWrapper around gh pr ready that enforces gate-evidence validation.`;
 const parseError = buildParseError(USAGE);
-const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, state, mergeStateStatus, title } } }`;
+const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, state, mergeStateStatus, title, closingIssuesReferences(first:10){ nodes{ number } } } } }`;
 
 export function parseReadyForReviewCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -43,7 +44,10 @@ async function fetchPrState({ repo, pr }, { env, ghCommand }) {
   const r = await runGhJson(["api", "graphql", "-f", `query=${PR_VIEW_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${pr}`], { env, ghCommand });
   const d = r?.data?.repository?.pullRequest;
   if (!d) throw new Error(`Could not fetch PR #${pr}`);
-  return { id: d.id, isDraft: d.isDraft === true, headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null, state: typeof d.state === "string" ? d.state.trim() : null, mergeStateStatus: typeof d.mergeStateStatus === "string" ? d.mergeStateStatus.trim() : null, title: typeof d.title === "string" ? d.title : null };
+  const closingIssues = (d.closingIssuesReferences?.nodes ?? [])
+    .map((n) => n?.number)
+    .filter((n) => Number.isInteger(n) && n > 0);
+  return { id: d.id, isDraft: d.isDraft === true, headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null, state: typeof d.state === "string" ? d.state.trim() : null, mergeStateStatus: typeof d.mergeStateStatus === "string" ? d.mergeStateStatus.trim() : null, title: typeof d.title === "string" ? d.title : null, closingIssues };
 }
 
 async function fetchCiStatus({ repo, pr }, { env, ghCommand }) {
@@ -89,7 +93,20 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   if (!gate.effectiveHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }
   const readyResult = await runChild(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);
   if (readyResult.code !== 0) throw new Error(`gh pr ready failed`);
-  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean };
+  // #1069: couple the In-Progress board move to the ready transition. Best-effort
+  // and NON-FATAL — a board failure must NEVER block or fail marking ready.
+  let boardSync;
+  try {
+    const inProgressColumn = loadStateColumnMap(repoRoot).columnNames[LOGICAL_COLUMN.IN_PROGRESS];
+    const targets = prState.closingIssues.length > 0 ? prState.closingIssues : [options.pr];
+    boardSync = [];
+    for (const target of targets) {
+      boardSync.push(await syncBoardStatus(options.repo, repoRoot, target, inProgressColumn, env, {}));
+    }
+  } catch (err) {
+    boardSync = [{ ok: true, skipped: true, reason: err?.message ?? "board sync failed" }];
+  }
+  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean, boardSync };
 }
 
 export async function main(argv = process.argv.slice(2), runtime = {}) {

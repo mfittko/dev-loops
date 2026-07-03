@@ -310,11 +310,7 @@ The canonical checkpoint verdict comment contract is [Gate Review Comment Contra
 - **CI prerequisite:** resolve the draft gate config first (`resolveGateConfig(config, "draft")`). When `requireCi=true` (default), wait for green current-head CI before entering `draft_gate`. When `requireCi=false`, the draft gate may proceed without green CI. This draft-only override does **not** relax `pre_approval_gate`; final approval and merge readiness still require green current-head CI.
 - **Pass criteria:** all configured draft gate angles pass; all findings at severities in `blockCleanOnFindingSeverities` are addressed; validation passes; no unrelated files are included.
 - **Next step after passing:** mark the PR ready for review.
-- **Board status sync (best-effort, after ready-for-review):** once the PR is created/marked ready for review, sync the linked issue's board item to "In Progress" so the queue board reflects active work without a manual `dev-loops queue sync-status --to-column <col>`:
-  ```sh
-  node <resolved-skill-scripts>/projects/sync-item-status.mjs --repo <owner/name> --item <linked-issue> --to-column "In Progress"
-  ```
-  Best-effort and NON-FATAL: it uses local `gh` auth (no CI/PAT), exits 0 when the board is not configured / the item is not on the board / the API fails, and never blocks marking the PR ready.
+- **Board status sync (built-in, after ready-for-review):** the In-Progress board move is now performed automatically as a deterministic tail of `ready-for-review.mjs` — marking the PR ready couples the board move to the ready transition (#1069), so no separate `sync-item-status` step is needed. It stays best-effort and NON-FATAL: it uses local `gh` auth (no CI/PAT), exits 0 when the board is not configured / the item is not on the board / the API fails, and never blocks marking the PR ready.
 - **Non-substitution rule:** a clean `draft_gate` comment only authorizes the draft → ready-for-review transition for that head SHA. It does **not** satisfy `pre_approval_gate`, final-approval readiness, or merge-ready requirements.
 - **Required PR comment:** post a visible checkpoint verdict comment using the mandatory [Gate comment command](#mandatory-gate-comment-command-contract). Keep validation reporting concise: include command names with pass/fail status. Do **not** paste raw passing test output into the visible gate comment. If you include a failing validation excerpt, keep it focused and truncate it to a deterministic retained-prefix length before posting the comment. See [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md). Do not run `gh pr ready` unless a visible `clean` `draft_gate` checkpoint verdict comment exists for the current head SHA. A checkpoint verdict comment for an older head SHA does not satisfy this requirement for the current head. If findings exist, the PR stays draft and needs fixes before retry. If fixes advance the head SHA while still draft, post a new checkpoint verdict comment for the new head. If the checkpoint verdict comment cannot be posted, fail closed and do not run `gh pr ready`.
 
@@ -398,7 +394,7 @@ node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name
 
 Board and threshold resolve from `.devloops` (`queue.projectNumber`/`queue.boardTitle`, `queue.archiveOlderThanDays`, default 7d), using local `gh` auth — no CI, cron, or PAT. This step is best-effort and NON-FATAL: ignore any failure and never let it block the merge or the retrospective.
 
-Alongside the archive step, sync the linked issue's board item to "Done" so the queue board reflects the merge without a manual `dev-loops queue sync-status --to-column <col>`:
+The deterministic mechanism that converges merged→Done is `dev-loops queue reconcile` — idempotent, run best-effort at loop startup — so the merge lands on the "Done" column without a remembered manual step. The manual sync below is now an optional fallback (e.g. to converge immediately without waiting for the next startup reconcile):
 
 ```sh
 node <resolved-skill-scripts>/projects/sync-item-status.mjs --repo <owner/name> --item <linked-issue> --to-column "Done"

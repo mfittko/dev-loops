@@ -107,6 +107,55 @@ export function boardColumnForLoopState(loopState, mapping = {}) {
   return columnNames[logical] ?? columnNames[DEFAULT_LOGICAL_COLUMN];
 }
 
+/**
+ * Derive the board's target LOGICAL column for a queue item from live GitHub
+ * facts (#1069). Returns LOGICAL_COLUMN.DONE, LOGICAL_COLUMN.IN_PROGRESS, or
+ * null when the item should be left where it is (Backlog/Next Up untouched).
+ *
+ * facts: {
+ *   itemKind: "issue" | "pr",
+ *   issueState: "OPEN" | "CLOSED" | null,   // for issue items
+ *   prState:    "OPEN" | "CLOSED" | "MERGED" | null, // item PR, or the issue's linked PR
+ *   prIsDraft:  boolean | null,
+ * }
+ */
+export function deriveReconcileColumn(facts = {}) {
+  const { itemKind, issueState, prState, prIsDraft } = facts;
+  // Merged PR (item is a PR, or issue's linked PR merged) => Done.
+  if (prState === "MERGED") return LOGICAL_COLUMN.DONE;
+  if (itemKind === "issue" && issueState === "CLOSED") return LOGICAL_COLUMN.DONE;
+  // Open, ready (non-draft) PR => In Progress.
+  if (prState === "OPEN" && prIsDraft === false) return LOGICAL_COLUMN.IN_PROGRESS;
+  // Otherwise leave the item untouched (Backlog / Next Up ordering preserved).
+  return null;
+}
+
+/**
+ * Pure reconcile planner (#1069). Given listed board items, a map of live facts
+ * keyed by the item's issue/PR number, and the resolved column display names,
+ * return the set of moves needed to converge the board and a count of items left
+ * unchanged. Idempotent: when every item already sits in its derived column, the
+ * moves array is empty.
+ *
+ * items: [{ issueNumber, prNumber, status, ... }]  (from list-queue-items)
+ * factsByNumber: Map<number, factsObject>   (facts as consumed by deriveReconcileColumn)
+ * columnNames: { in_progress, done, ... }   (LOGICAL_COLUMN -> display name)
+ */
+export function planReconcile(items = [], factsByNumber = new Map(), columnNames = {}) {
+  const moves = [];
+  let unchanged = 0;
+  for (const item of items) {
+    const number = item.prNumber != null ? item.prNumber : item.issueNumber;
+    const facts = factsByNumber.get(number);
+    const logical = facts ? deriveReconcileColumn(facts) : null;
+    if (logical == null) { unchanged += 1; continue; }
+    const target = columnNames[logical];
+    if (!target || item.status === target) { unchanged += 1; continue; }
+    moves.push({ number, from: item.status ?? null, to: target });
+  }
+  return { moves, unchanged };
+}
+
 // ── Local config loader ─────────────────────────────────────────────────
 
 function readDevloopsSettings(repoRoot) {
