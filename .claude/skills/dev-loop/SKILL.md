@@ -151,3 +151,4 @@ All PRs must pass the full gate pipeline before merge. No scope is exempt: docs-
 - Before any state-changing action, get explicit confirmation unless already authorized.
 - A question requires an answer, not an action.
 - Stop and ask rather than guessing when facts don't agree.
+- Cross-harness regression contract: [Cross-Harness Regression Contract](../docs/cross-harness-regression-contract.md).
