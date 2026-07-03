@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -385,4 +385,29 @@ test("CLI without --jq/--silent leaves JSON shape unchanged", async () => {
   assert.equal(parsed.ok, true);
   assert.equal(parsed.command, "status");
   assert.equal(parsed.pr, 17);
+});
+
+test("releaseAsyncRunnerOwnership is non-fatal (release_error) when the coordination file is corrupt", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    // Write malformed JSON at the exact coordination path so releaseRunnerOwnership's
+    // read/parse throws — the swallow must fold it into ok:true/release_error, never rethrow.
+    const filePath = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, tempDir);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, "{ this is not valid json", "utf8");
+
+    const result = await releaseAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      env: { DEVLOOPS_RUN_ID: "run-1" },
+      cwd: tempDir,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "release_error");
+    assert.equal(result.skippedReason, "release_threw");
+    assert.equal(result.runId, "run-1");
+    assert.ok(typeof result.message === "string" && result.message.length > 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

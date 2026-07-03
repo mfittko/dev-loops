@@ -622,6 +622,11 @@ export async function ensureAsyncRunnerOwnership({
  * can never block a stop/checkpoint. Fail-closed competitor semantics are
  * preserved — {@link releaseRunnerOwnership} only clears a claim THIS run owns, so
  * a genuinely active competing run's claim is left intact.
+ *
+ * Resolves to one of `skipped_no_async_run_id` (no run id present),
+ * `release_skipped` (release conflict swallowed), `release_error` (release threw),
+ * or the passthrough `releaseRunnerOwnership` result — `released` when this run's
+ * claim was cleared, or `release_noop` when the target has no coordination record.
  */
 export async function releaseAsyncRunnerOwnership({
   repo,
