@@ -38,8 +38,10 @@ Exit codes:
 const parseError = buildParseError(USAGE);
 
 // GFM checklist line: optional indentation, a `-`/`*`/`+` bullet, a `[ ]`/`[x]`
-// box, then the label. Capture indent + bullet so we preserve them on flip.
-const CHECKBOX_RE = /^(\s*)([-*+])\s+\[([ xX])\]\s+(.*)$/;
+// box, then the label. Capture indent + bullet so we preserve them on flip, and
+// an optional trailing `\r` so CRLF bodies (as returned by `gh pr view`) round-
+// trip byte-for-byte instead of silently failing to match.
+const CHECKBOX_RE = /^(\s*)([-*+])\s+\[([ xX])\]\s+(.*?)(\r?)$/;
 
 // PURE: flip only unchecked checklist lines whose trimmed label EXACTLY equals a
 // verified label. Never unchecks. Never touches non-checkbox text. Idempotent:
@@ -56,13 +58,13 @@ export function tickVerifiedCheckboxes(body, verifiedLabels) {
   const nextLines = lines.map((line) => {
     const m = line.match(CHECKBOX_RE);
     if (!m) return line;
-    const [, indent, bullet, mark, rest] = m;
+    const [, indent, bullet, mark, rest, cr] = m;
     const label = rest.trim();
     if (!verified.has(label)) return line;
     found.add(label);
     if (mark !== " ") return line; // already checked — leave it, idempotent
-    flipped.push(label);
-    return `${indent}${bullet} [x] ${rest}`;
+    if (!flipped.includes(label)) flipped.push(label); // duplicate lines: report once
+    return `${indent}${bullet} [x] ${rest}${cr}`;
   });
   const unmatched = [...verified].filter((label) => !found.has(label));
   return { body: nextLines.join("\n"), flipped, unmatched };

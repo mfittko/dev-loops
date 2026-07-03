@@ -103,6 +103,21 @@ test("tickVerifiedCheckboxes: matches label ignoring surrounding whitespace on t
   assert.deepEqual(out.flipped, ["Alpha"]);
 });
 
+test("tickVerifiedCheckboxes: preserves CRLF line endings when flipping", () => {
+  const body = "- [ ] Alpha\r\n- [ ] Beta\r\n";
+  const out = tickVerifiedCheckboxes(body, ["Alpha"]);
+  assert.deepEqual(out.flipped, ["Alpha"]);
+  assert.ok(out.body.includes("- [x] Alpha\r\n"), `expected CRLF-preserved flip, got: ${JSON.stringify(out.body)}`);
+  assert.ok(out.body.includes("- [ ] Beta\r\n"), "Beta should be untouched with its CRLF intact");
+});
+
+test("tickVerifiedCheckboxes: duplicate identical labels flip every line but report once", () => {
+  const body = "- [ ] Alpha\n- [ ] Alpha\n";
+  const out = tickVerifiedCheckboxes(body, ["Alpha"]);
+  assert.equal(out.body, "- [x] Alpha\n- [x] Alpha\n");
+  assert.deepEqual(out.flipped, ["Alpha"]);
+});
+
 // --- CLI parse ---
 
 test("parseTickVerifiedCliArgs: requires --repo and --pr", () => {
@@ -118,6 +133,19 @@ test("parseTickVerifiedCliArgs: collects repeated --verified labels", () => {
   const out = parseTickVerifiedCliArgs(["--repo", "o/n", "--pr", "1", "--verified", "Alpha", "--verified", "Beta"]);
   assert.deepEqual(out.verified, ["Alpha", "Beta"]);
   assert.equal(out.dryRun, false);
+});
+
+test("parseTickVerifiedCliArgs: rejects empty and whitespace-only --verified labels", () => {
+  // Empty string is rejected upstream by requireTokenValue ("Missing value");
+  // whitespace-only survives that check and is caught by the non-empty guard.
+  assert.throws(
+    () => parseTickVerifiedCliArgs(["--repo", "o/n", "--pr", "1", "--verified", ""]),
+    /must be a non-empty label|Missing value for --verified/,
+  );
+  assert.throws(
+    () => parseTickVerifiedCliArgs(["--repo", "o/n", "--pr", "1", "--verified", "   "]),
+    /must be a non-empty label/,
+  );
 });
 
 // --- CLI flow (stubbed gh) ---
@@ -172,6 +200,17 @@ test("runCli: gh pr view failure returns exit 1", async () => {
   const code = await runCli(["--repo", "o/n", "--pr", "17", "--verified", "Alpha"], { run, stderr, stdout: captureStream() });
   assert.equal(code, 1);
   assert.match(stderr.get(), /gh pr view failed: no such PR/);
+});
+
+test("runCli: gh pr edit failure returns exit 1 with stderr JSON", async () => {
+  const { run } = stubGh([
+    bodyJson("- [ ] Alpha\n"),
+    { code: 1, stderr: "permission denied" },
+  ]);
+  const stderr = captureStream();
+  const code = await runCli(["--repo", "o/n", "--pr", "17", "--verified", "Alpha"], { run, stderr, stdout: captureStream() });
+  assert.equal(code, 1);
+  assert.match(stderr.get(), /gh pr edit failed/);
 });
 
 test("runCli: --silent maps success to exit 0 with no stdout", async () => {
