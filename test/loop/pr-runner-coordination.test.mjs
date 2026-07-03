@@ -11,6 +11,7 @@ import {
   defaultRunnerCoordinationFilePathForTarget,
   ensureAsyncRunnerOwnership,
   loadRunnerCoordinationState,
+  releaseAsyncRunnerOwnership,
   releaseRunnerOwnership,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
@@ -122,6 +123,109 @@ test("runner coordination release clears active owner", async () => {
 
     const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
     assert.equal(loaded.state.activeRun, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseAsyncRunnerOwnership is a no-op when no async run id (Claude Code path)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });
+    const result = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {}, cwd: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "skipped_no_async_run_id");
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-1");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseAsyncRunnerOwnership releases the claim it owns on completion", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });
+    const result = await releaseAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      env: { DEVLOOPS_RUN_ID: "run-1" },
+      cwd: tempDir,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseAsyncRunnerOwnership is best-effort/non-fatal when another run owns the claim (fail-closed competitor preserved)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-active", cwd: tempDir });
+    const result = await releaseAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      env: { DEVLOOPS_RUN_ID: "run-other" },
+      cwd: tempDir,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "release_skipped");
+    assert.equal(result.skippedReason, "ownership_lost");
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-active");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("completed parent releases so a fresh merge run inherits ownership cleanly", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-parent", cwd: tempDir });
+    await releaseAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      env: { DEVLOOPS_RUN_ID: "run-parent" },
+      cwd: tempDir,
+    });
+    const claimed = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-merge",
+      cwd: tempDir,
+      mode: "claim",
+    });
+    assert.equal(claimed.ok, true);
+    assert.equal(claimed.status, "claimed_new");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("a completed parent that did NOT release can be cleanly taken over by the merge run", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-parent", cwd: tempDir });
+    const takeover = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-merge",
+      cwd: tempDir,
+      mode: "takeover",
+    });
+    assert.equal(takeover.status, "taken_over");
+    assert.equal(takeover.previousRun.runId, "run-parent");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -610,3 +610,65 @@ export async function ensureAsyncRunnerOwnership({
   }
   return claimRunnerOwnership({ repo, pr, runId, cwd, mode: "claim" });
 }
+/**
+ * Env-aware, best-effort release for the run-completion/stop path (issue #1109).
+ *
+ * Mirrors {@link ensureAsyncRunnerOwnership}: a no-op when no async run id is
+ * present, so it is harness-agnostic — Claude Code with no DEVLOOPS_RUN_ID yields
+ * `skipped_no_async_run_id` and never touches the coordination file.
+ *
+ * Non-fatal by contract: a release conflict (the claim is owned by another run,
+ * or no record remains) is swallowed into an `ok:true` result so a failed release
+ * can never block a stop/checkpoint. Fail-closed competitor semantics are
+ * preserved — {@link releaseRunnerOwnership} only clears a claim THIS run owns, so
+ * a genuinely active competing run's claim is left intact.
+ */
+export async function releaseAsyncRunnerOwnership({
+  repo,
+  pr,
+  env = process.env,
+  cwd = process.cwd(),
+} = {}) {
+  const filePath = defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd);
+  const runId = normalizeRunId(resolveRunId(env));
+  if (runId === null) {
+    return {
+      ok: true,
+      status: "skipped_no_async_run_id",
+      repo: normalizeRepoSlug(repo),
+      pr: normalizePr(pr),
+      runId: null,
+      activeRun: null,
+      filePath,
+    };
+  }
+  try {
+    const released = await releaseRunnerOwnership({ repo, pr, runId, cwd });
+    if (released.ok) {
+      return released;
+    }
+    return {
+      ok: true,
+      status: "release_skipped",
+      repo: released.repo ?? normalizeRepoSlug(repo),
+      pr: released.pr ?? normalizePr(pr),
+      runId,
+      activeRun: released.activeRun ?? null,
+      skippedReason: released.error,
+      message: released.message,
+      filePath: released.filePath ?? filePath,
+    };
+  } catch (error) {
+    return {
+      ok: true,
+      status: "release_error",
+      repo: normalizeRepoSlug(repo),
+      pr: normalizePr(pr),
+      runId,
+      activeRun: null,
+      skippedReason: "release_threw",
+      message: error instanceof Error ? error.message : String(error),
+      filePath,
+    };
+  }
+}

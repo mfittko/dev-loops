@@ -368,6 +368,21 @@ node <resolved-skill-scripts>/github/detect-checkpoint-evidence.mjs \
 
 This helper is always-on: it uses `gh api` to fetch visible PR issue comments and fails closed unless both required gate comments exist: a clean `draft_gate` comment for the one-time draft boundary and a clean current-head `pre_approval_gate` comment. Do not run `gh pr merge` if this command exits non-zero. There is no opt-out flag. Resolved threads, green CI, clean Copilot rereview, or local notes do not substitute for this successful helper output. If a final approval or merge boundary sees `gh pr merge` without a same-boundary successful check, treat that as a workflow violation and stop.
 
+### Stale runner-coordination lock held by a completed run
+
+The pre-merge gate evidence check fails closed on the PR's runner-coordination claim (`.pi/runner-coordination/<owner>/<name>/pr-<n>.json`): a fresh merge re-dispatch (new run id) is refused with `ownership_lost`, or `stale_runner` once the claim ages past the max-age window.
+
+The auto-loop now releases its claim best-effort when a run reaches a terminal stop (clean-converged, blocked, or done — including the stop at the human approval checkpoint), so a merge-authorized re-dispatch normally inherits a cleared claim and proceeds. The release is non-fatal: it never blocks the stop, and it never clears a claim owned by a genuinely active competing run.
+
+If a stale claim still blocks the merge because the completing run could not release (crash, killed process, or a pre-#1109 run), the sanctioned recovery for a lock held by a COMPLETED run is an explicit takeover by the merge run:
+
+```sh
+node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
+  --repo <owner/name> --pr <number>
+```
+
+`takeover` seizes ownership for the current run id and records the displaced run under `previousRun`. Only take over when the prior owner is genuinely completed/dead. A genuinely active (non-stale) run must still be allowed to block — do not take over to race a live run.
+
 ### Mandatory post-merge retrospective checkpoint write
 
 After a merge succeeds (or an explicit retrospective skip is authorized), write the durable retrospective checkpoint before exiting the subagent session:
