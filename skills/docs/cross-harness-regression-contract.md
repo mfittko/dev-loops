@@ -35,7 +35,7 @@ Definitions:
 When a change targets a Claude-Code-specific seam, the following suites are the baseline that MUST stay green, and are the first place to add coverage for a Pi-originated change that must not regress Claude Code:
 
 - `npm run test:assets` — runs `test/contracts/*.test.mjs`, including `test/contracts/claude-assets-reproducible.test.mjs`, `test/contracts/claude-headless-smoke.test.mjs`, `test/contracts/claude-plugin-manifest.test.mjs`, `test/contracts/claude-plugin-marketplace.test.mjs`, `test/contracts/claude-hooks-settings.test.mjs`, and `test/contracts/cli-harness-agnostic.test.mjs`
-- `npm run smoke:headless` — runs `scripts/claude/headless-info-smoke.mjs`
+- `npm run smoke:headless` — runs `scripts/claude/headless-info-smoke.mjs`; this is a manual/local-only check, not part of `npm test` or `npm run verify` and not run by CI — run it directly when a change touches Claude Code headless-info behavior
 - `npm run test:core` — runs `packages/core/test/*.test.mjs`, including `packages/core/test/claude-headless-entry.test.mjs`, `packages/core/test/claude-hook-decisions.test.mjs`, `packages/core/test/run-context.test.mjs`, `packages/core/test/async-start-contract.test.mjs`
 
 Symmetrically, for a change targeting the Claude-Code-specific seam that must not regress Pi, `npm run test:extension` (which runs `test/extension-*.test.mjs`, including `test/extension-pi-adapter.test.mjs`, the Pi-side adapter inventory) is the baseline suite to check and extend.
@@ -49,7 +49,7 @@ Symmetrically, for a change targeting the Claude-Code-specific seam that must no
 
 ## Non-goals
 
-- No new or expanded CI matrix: `npm run verify` already runs the full suite (`npm test` plus `npm run test:dev-loop`) on every pull request, and `npm test` already includes every suite named above.
+- No new or expanded CI matrix: `npm run verify` (which CI runs on every pull request) already covers `test:assets`, `test:extension`, `test:scripts`, `test:core`, `test:docs`, and `test:dev-loop` — every suite named above except `npm run smoke:headless`, which is manual/local-only by design (see the test inventory above).
 - No bespoke cross-harness enforcement script: naming the required suites here, combined with CI already running them on every pull request, satisfies the coverage bar.
 - No rewriting of existing harness-specific code as part of adopting this contract.
 
