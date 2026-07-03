@@ -122,15 +122,19 @@ don't need re-review unless their angle's scope overlaps with the fix changes.
 
 #### Sentinel lifecycle
 
-The fresh-context sentinel (`tmp/checkpoint-context-sentinel-<scope>-<headSha>.json`,
-written by `verify-fresh-review-context.mjs`) is scoped **per review round**, keyed by
-the head SHA. This makes the lifecycle mechanical rather than a manual chore:
+The fresh-context sentinel, written by `verify-fresh-review-context.mjs`, is scoped **per
+review round**, keyed by the head SHA. This makes the lifecycle mechanical rather than a
+manual chore:
 
 - The round key is the current head SHA (`git rev-parse HEAD`); reviewers keep invoking the
   guard as `--scope <angle>` and get head-keyed isolation for free — no flag to pass. `git
   rev-parse HEAD` yields the same full SHA on every invocation for a given head, so the key is
-  deterministic and the same-head guard cannot be defeated by an inconsistent spelling. When
-  git is unavailable the key falls back to scope-only (legacy behavior).
+  deterministic and the same-head guard cannot be defeated by an inconsistent spelling. The
+  sentinel filename is therefore `tmp/checkpoint-context-sentinel-<scope>-<headSha>.json` in a
+  git worktree. When git is unavailable (non-git worktree, no commits), the head component is
+  omitted and the key falls back to the scope-only filename
+  `tmp/checkpoint-context-sentinel-<scope>.json` (legacy behavior) — there is no `-<headSha>`
+  file in that case.
 - **A retry at a new head is never blocked by a prior round's sentinel** — a new head SHA
   produces a new key, so a re-fan-out after a fix commit passes `fresh: true` with **no
   manual clear step**.
