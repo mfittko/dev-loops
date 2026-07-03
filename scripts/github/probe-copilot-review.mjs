@@ -22,7 +22,7 @@ Required:
   --repo <owner/name>           Repository slug (e.g. owner/repo)
   --pr <number>                 Pull request number
 Options:
-  --timeout-ms <n>              Total watch budget in ms (default 1800000, i.e. 30 min;
+  --timeout-ms <n>              Total watch budget in ms (default ${COPILOT_REVIEW_WAIT_TIMEOUT_MS}, i.e. ${COPILOT_REVIEW_WAIT_TIMEOUT_MS / 60_000} min;
                                 0 = single immediate check, no wait — returns "idle" if
                                 no fresh activity). For a quick non-watch thread/state
                                 read without entering the watch loop, pass 0 here or use
