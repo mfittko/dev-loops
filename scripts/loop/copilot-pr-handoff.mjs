@@ -8,7 +8,7 @@ import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
 import { detectInternalOnly as detectPrInternalOnly } from "./detect-internal-only-pr.mjs";
 import { applyConfirmedReviewRequest, interpretLoopState, NEXT_ACTIONS, STATE, summarizeLoopInterpretation, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
-import { ensureAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
+import { ensureAsyncRunnerOwnership, releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 
@@ -358,6 +358,12 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
   const TERMINAL_STATES = new Set([STATE.NO_PR, STATE.DONE, STATE.BLOCKED_NEEDS_USER_DECISION]);
   const humanCommentUnavailable = humanCommentCheck.error && !humanCommentCheck.paused;
   if ((humanCommentCheck.paused || humanCommentUnavailable) && !TERMINAL_STATES.has(interpretation.state)) {
+    const runnerRelease = await releaseAsyncRunnerOwnership({
+      repo: options.repo,
+      pr: options.pr,
+      env,
+      cwd: resolveRepoRoot(process.cwd()),
+    });
     return {
       ok: true,
       action: "stop",
@@ -373,6 +379,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
       terminal: true,
       snapshot,
       runnerOwnership,
+      ...(runnerRelease.status !== "skipped_no_async_run_id" ? { runnerRelease } : {}),
       humanCommentPause: {
         reason: humanCommentCheck.paused ? "human_comment_detected" : "human_comment_check_unavailable",
         error: humanCommentCheck.error || undefined,
@@ -517,6 +524,17 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
     requestStatus: normalizedRequestStatus,
     watchArgs: result.watchArgs,
   });
+  if (result.terminal === true) {
+    const runnerRelease = await releaseAsyncRunnerOwnership({
+      repo: options.repo,
+      pr: options.pr,
+      env,
+      cwd: resolveRepoRoot(process.cwd()),
+    });
+    if (runnerRelease.status !== "skipped_no_async_run_id") {
+      result.runnerRelease = runnerRelease;
+    }
+  }
   return result;
 }
 export async function runCli(

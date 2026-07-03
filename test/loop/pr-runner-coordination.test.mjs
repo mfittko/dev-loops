@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ import {
   defaultRunnerCoordinationFilePathForTarget,
   ensureAsyncRunnerOwnership,
   loadRunnerCoordinationState,
+  releaseAsyncRunnerOwnership,
   releaseRunnerOwnership,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
@@ -122,6 +123,92 @@ test("runner coordination release clears active owner", async () => {
 
     const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
     assert.equal(loaded.state.activeRun, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseAsyncRunnerOwnership is a no-op when no async run id (Claude Code path)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });
+    const result = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {}, cwd: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "skipped_no_async_run_id");
+    assert.deepEqual(result.exitSignals, []);
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-1");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseAsyncRunnerOwnership releases the claim it owns on completion", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });
+    const result = await releaseAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      env: { DEVLOOPS_RUN_ID: "run-1" },
+      cwd: tempDir,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseAsyncRunnerOwnership is best-effort/non-fatal when another run owns the claim (fail-closed competitor preserved)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-active", cwd: tempDir });
+    const result = await releaseAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      env: { DEVLOOPS_RUN_ID: "run-other" },
+      cwd: tempDir,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "release_skipped");
+    assert.equal(result.skippedReason, "ownership_lost");
+    assert.ok(Array.isArray(result.exitSignals));
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-active");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("completed parent releases so a fresh merge run inherits ownership cleanly", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-parent", cwd: tempDir });
+    await releaseAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      env: { DEVLOOPS_RUN_ID: "run-parent" },
+      cwd: tempDir,
+    });
+    const claimed = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-merge",
+      cwd: tempDir,
+      mode: "claim",
+    });
+    assert.equal(claimed.ok, true);
+    assert.equal(claimed.status, "claimed_new");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -281,4 +368,30 @@ test("CLI without --jq/--silent leaves JSON shape unchanged", async () => {
   assert.equal(parsed.ok, true);
   assert.equal(parsed.command, "status");
   assert.equal(parsed.pr, 17);
+});
+
+test("releaseAsyncRunnerOwnership is non-fatal (release_error) when the coordination file is corrupt", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    // Write malformed JSON at the exact coordination path so releaseRunnerOwnership's
+    // read/parse throws — the swallow must fold it into ok:true/release_error, never rethrow.
+    const filePath = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, tempDir);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, "{ this is not valid json", "utf8");
+
+    const result = await releaseAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      env: { DEVLOOPS_RUN_ID: "run-1" },
+      cwd: tempDir,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "release_error");
+    assert.equal(result.skippedReason, "release_threw");
+    assert.equal(result.runId, "run-1");
+    assert.deepEqual(result.exitSignals, []);
+    assert.ok(typeof result.message === "string" && result.message.length > 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

@@ -9,7 +9,7 @@ import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson a
 
 import { parseHandoffCliArgs } from "../../scripts/loop/copilot-pr-handoff.mjs";
 import { STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
-import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "../../packages/core/src/loop/timeout-policy.mjs";
 
 const scriptPath = path.resolve("scripts/loop/copilot-pr-handoff.mjs");
@@ -2073,6 +2073,62 @@ test("copilot-pr-handoff runs human comment check when DEVLOOPS_RUN_ID is set", 
     assert.equal(output.humanCommentPause.reason, "human_comment_detected");
     assert.equal(output.humanCommentPause.humanComments.length, 1);
     assert.equal(output.humanCommentPause.humanComments[0].author, "human-dev");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copilot-pr-handoff releases runner ownership at the terminal human-checkpoint stop", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-release-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-owner", cwd: tempDir });
+
+    const HUMAN_COMMENT = JSON.stringify({
+      id: 200,
+      body: "Please stop and reconsider the approach.",
+      user: { login: "human-dev", type: "User" },
+      created_at: "2026-06-07T10:00:00Z",
+    });
+    const BOT_COMMENT = JSON.stringify({
+      id: 199,
+      body: "**draft_gate** verdict=clean",
+      user: { login: "copilot-pull-request-reviewer[bot]", type: "Bot" },
+      created_at: "2026-06-07T09:00:00Z",
+    });
+
+    const { env } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: OPEN_PR + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: EMPTY_THREADS + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
+        stdout: BOT_COMMENT + "\n" + HUMAN_COMMENT + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], {
+      cwd: tempDir,
+      env: { ...env, DEVLOOPS_RUN_ID: "run-owner" },
+    });
+
+    assert.equal(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.terminal, true);
+    assert.equal(output.loopDisposition, "blocked");
+    assert.equal(output.runnerRelease.status, "released");
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun, null);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
