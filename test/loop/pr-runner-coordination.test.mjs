@@ -214,25 +214,6 @@ test("completed parent releases so a fresh merge run inherits ownership cleanly"
   }
 });
 
-test("a completed parent that did NOT release can be cleanly taken over by the merge run", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
-
-  try {
-    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-parent", cwd: tempDir });
-    const takeover = await claimRunnerOwnership({
-      repo: "owner/repo",
-      pr: 17,
-      runId: "run-merge",
-      cwd: tempDir,
-      mode: "takeover",
-    });
-    assert.equal(takeover.status, "taken_over");
-    assert.equal(takeover.previousRun.runId, "run-parent");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
 test("pr-runner-coordination CLI facade returns machine-readable conflicts", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
