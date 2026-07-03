@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parseIssueNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 export const LINKED_ISSUE_PR_QUERY = [
   "query($owner:String!, $name:String!, $issue:Int!, $after:String) {",
@@ -253,7 +253,7 @@ export function selectLinkedIssuePr(candidates) {
   });
   return sorted[0] ?? null;
 }
-export async function detectLinkedIssuePr({ repo, issue }, { env = process.env, ghCommand = "gh" } = {}) {
+export async function detectLinkedIssuePr({ repo, issue }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const { owner, name } = parseRepoSlug(repo);
   const candidates = [];
   const closedUnmergedCandidates = [];

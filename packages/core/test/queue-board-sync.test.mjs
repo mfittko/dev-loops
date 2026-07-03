@@ -12,6 +12,8 @@ import {
   loadStateColumnMap,
   LOGICAL_COLUMN,
   DEFAULT_STATE_COLUMN_NAMES,
+  deriveReconcileColumn,
+  planReconcile,
 } from "../src/loop/queue-board-sync.mjs";
 
 async function makeRepo(configYaml) {
@@ -507,4 +509,105 @@ test("syncBoardStatus resolves boardTitle to project number and moves item", asy
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// ── deriveReconcileColumn / planReconcile (#1069) ─────────────────────────
+
+test("deriveReconcileColumn: ready open non-draft PR → In Progress", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "pr", issueState: null, prState: "OPEN", prIsDraft: false }),
+    LOGICAL_COLUMN.IN_PROGRESS,
+  );
+});
+
+test("deriveReconcileColumn: merged PR → Done", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "pr", issueState: null, prState: "MERGED", prIsDraft: false }),
+    LOGICAL_COLUMN.DONE,
+  );
+});
+
+test("deriveReconcileColumn: closed issue → Done", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "issue", issueState: "CLOSED", prState: null, prIsDraft: null }),
+    LOGICAL_COLUMN.DONE,
+  );
+});
+
+test("deriveReconcileColumn: open issue with open non-draft linked PR → In Progress", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: false }),
+    LOGICAL_COLUMN.IN_PROGRESS,
+  );
+});
+
+test("deriveReconcileColumn: open issue with draft linked PR → null (untouched)", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: true }),
+    null,
+  );
+});
+
+test("deriveReconcileColumn: open issue with no linked PR → null (#1057-shape, untouched)", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "issue", issueState: "OPEN", prState: null, prIsDraft: null }),
+    null,
+  );
+});
+
+test("deriveReconcileColumn: closed-unmerged PR → null (untouched)", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "pr", issueState: null, prState: "CLOSED", prIsDraft: false }),
+    null,
+  );
+});
+
+test("deriveReconcileColumn: open issue with a MERGED linked PR → Done", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "issue", issueState: "OPEN", prState: "MERGED", prIsDraft: false }),
+    LOGICAL_COLUMN.DONE,
+  );
+});
+
+test("planReconcile: idempotent — items already in derived column produce no moves", () => {
+  const items = [
+    { itemId: "I_a", issueNumber: 1, prNumber: null, status: "In Progress" },
+    { itemId: "I_b", issueNumber: null, prNumber: 2, status: "Done" },
+  ];
+  const facts = new Map([
+    ["I_a", { itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: false }],
+    ["I_b", { itemKind: "pr", issueState: null, prState: "MERGED", prIsDraft: false }],
+  ]);
+  const { moves, unchanged } = planReconcile(items, facts, DEFAULT_STATE_COLUMN_NAMES);
+  assert.deepEqual(moves, []);
+  assert.equal(unchanged, items.length);
+});
+
+test("planReconcile: #1057-shaped miss — Backlog issue with a ready linked PR reconciles in one move", () => {
+  const items = [{ itemId: "I_42", issueNumber: 42, prNumber: null, status: "Backlog" }];
+  const facts = new Map([
+    ["I_42", { itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: false }],
+  ]);
+  const { moves, unchanged } = planReconcile(items, facts, DEFAULT_STATE_COLUMN_NAMES);
+  assert.equal(unchanged, 0);
+  assert.deepEqual(moves, [{ itemId: "I_42", number: 42, from: "Backlog", to: "In Progress" }]);
+});
+
+test("planReconcile: multi-repo number collision — two items share a number but keyed by itemId each get their own move (order-independent)", () => {
+  // repo-A PR #5 (merged → Done) and repo-B issue #5 (open, ready linked PR →
+  // In Progress) share the bare number 5. Keying by itemId keeps them distinct.
+  const items = [
+    { itemId: "I_prA", issueNumber: null, prNumber: 5, status: "Backlog" },
+    { itemId: "I_issB", issueNumber: 5, prNumber: null, status: "Backlog" },
+  ];
+  const facts = new Map([
+    ["I_prA", { itemKind: "pr", issueState: null, prState: "MERGED", prIsDraft: false }],
+    ["I_issB", { itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: false }],
+  ]);
+  const { moves } = planReconcile(items, facts, DEFAULT_STATE_COLUMN_NAMES);
+  // Each item gets its own correct move regardless of iteration order.
+  const byItemId = new Map(moves.map((m) => [m.itemId, m]));
+  assert.deepEqual(byItemId.get("I_prA"), { itemId: "I_prA", number: 5, from: "Backlog", to: "Done" });
+  assert.deepEqual(byItemId.get("I_issB"), { itemId: "I_issB", number: 5, from: "Backlog", to: "In Progress" });
+  assert.equal(moves.length, 2);
 });

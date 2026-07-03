@@ -28,6 +28,7 @@ const QUEUE_ROUTES = {
   "sync-status": "scripts/projects/sync-item-status.mjs",
   ensure:  "scripts/projects/ensure-queue-board.mjs",
   "resolve-active": "scripts/projects/resolve-active-board-item.mjs",
+  reconcile: "scripts/projects/reconcile-queue.mjs",
 };
 const { run: _queueRunRoute, ...PROJECT_ROUTES } = QUEUE_ROUTES;
 
@@ -40,6 +41,7 @@ const QUEUE_DESCRIPTIONS = {
   "archive-done": "Archive closed Done items older than a duration",
   "sync-status": "Sync a queued issue/PR's board Status column (best-effort)",
   ensure: "Create/repair queue board bootstrap surface",
+  reconcile: "Reconcile board Status columns from live GitHub state (idempotent)",
 };
 const { run: _queueRunDescription, ...PROJECT_DESCRIPTIONS } = QUEUE_DESCRIPTIONS;
 

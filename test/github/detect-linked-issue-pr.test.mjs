@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
-import { selectLinkedIssuePr } from "../../scripts/github/detect-linked-issue-pr.mjs";
+import { detectLinkedIssuePr, selectLinkedIssuePr } from "../../scripts/github/detect-linked-issue-pr.mjs";
 
 const scriptPath = path.resolve("scripts/github/detect-linked-issue-pr.mjs");
 
@@ -406,6 +406,28 @@ test("selectLinkedIssuePr uses locale-independent url fallback ordering", () => 
   ]);
 
   assert.equal(winner?.prUrl, "https://github.com/owner/repo/pull/90?a=1");
+});
+
+test("detectLinkedIssuePr uses the injected runChild (no real gh)", async () => {
+  const calls = [];
+  const runChild = async (cmd, argv) => {
+    calls.push({ cmd, argv });
+    return {
+      code: 0,
+      stdout: graphqlPayload({
+        hasNextPage: false,
+        endCursor: null,
+        nodes: [connectedNode({ createdAt: "2026-05-12T10:00:00Z", number: 90 })],
+      }),
+      stderr: "",
+    };
+  };
+  const result = await detectLinkedIssuePr({ repo: "owner/repo", issue: 85 }, { env: {}, runChild });
+  assert.equal(result.hasOpenLinkedPr, true);
+  assert.equal(result.prNumber, 90);
+  // The injected runner was used; no fallback to the module-level (real gh) runner.
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, "gh");
 });
 
 test("detect-linked-issue-pr rejects malformed arguments deterministically", async () => {

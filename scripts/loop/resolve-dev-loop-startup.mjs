@@ -34,6 +34,8 @@ import {
   PLAN_FILE_REFINEMENT_SECTIONS,
 } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-contract";
+import { loadBoardConfig } from "@dev-loops/core/loop/queue-board-sync";
+import { main as reconcileQueue } from "../projects/reconcile-queue.mjs";
 import { parseArgs } from "node:util";
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
@@ -57,6 +59,9 @@ Required (exactly one):
 Exit codes:
   0  Success
   1  Argument error, runtime failure, or async-start contract rejection`.trim();
+// Upper bound on the awaited best-effort startup reconcile so a slow or hung gh
+// can never delay startup completion.
+const STARTUP_RECONCILE_BUDGET_MS = 20000;
 const SHARED_PUBLIC_CONTRACT = "skills/docs/public-dev-loop-contract.md";
 const SHARED_RETROSPECTIVE_CONTRACT = "skills/docs/retrospective-checkpoint-contract.md";
 const STRATEGY_REQUIRED_READS = {
@@ -715,7 +720,33 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     process.exitCode = 1;
     return;
   }
+  // Emit the deterministic bundle FIRST, before the best-effort self-heal below,
+  // so a slow or hung gh reconcile can never delay the startup result.
   stdout.write(`${JSON.stringify(result)}\n`);
+  // #1069: best-effort startup self-heal — converge the board from live GitHub
+  // state so merged→Done / ready→In Progress land deterministically. Gated on a
+  // configured board so it never shells out to gh in the no-.devloops unit tests;
+  // never writes stdout, never changes exit code, never throws. Skips
+  // --input/--plan-file/--spike modes.
+  if (options.issue !== undefined || options.pr !== undefined) {
+    let reconcileRoot = sessionCwd;
+    try {
+      reconcileRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: sessionCwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    } catch { /* fall back to sessionCwd */ }
+    if (loadBoardConfig(reconcileRoot).enabled === true) {
+      try {
+        // The budget bounds startup latency; reconcile is best-effort and the
+        // board self-heals on the next entry if it doesn't finish. The timer is
+        // unref'd so it never keeps the event loop alive on its own.
+        await Promise.race([
+          reconcileQueue({ repo: detectRepoSlug(reconcileRoot) }, { env: adapter.getEnv(), cwd: reconcileRoot, skipTerminalColumn: true }),
+          new Promise((resolve) => { const t = setTimeout(resolve, STARTUP_RECONCILE_BUDGET_MS); t.unref?.(); }),
+        ]);
+      } catch { /* best-effort */ }
+    }
+  }
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

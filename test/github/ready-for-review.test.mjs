@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
-import { parseReadyForReviewCliArgs } from "../../scripts/github/ready-for-review.mjs";
+import { parseReadyForReviewCliArgs, readyForReview } from "../../scripts/github/ready-for-review.mjs";
 
 const scriptPath = path.resolve("scripts/github/ready-for-review.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
@@ -420,6 +420,171 @@ test.skip("--skip-gate-check allows transition without gate evidence", async () 
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.gateCheckSkipped, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("built-in In-Progress board sync runs after gh pr ready and is NON-FATAL (#1069)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-board-sync-"));
+
+  try {
+    // No .devloops in tempDir → board not configured → syncBoardStatus is a
+    // clean fail-open skip. Running with cwd: tempDir keeps the board sync from
+    // shelling out to gh, but proves the tail runs and marking ready still wins.
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                id: "PR_abc123",
+                isDraft: true,
+                headRefOid: "abc123def456",
+                state: "OPEN",
+                mergeStateStatus: "CLEAN",
+                closingIssuesReferences: { nodes: [{ number: 55 }] },
+              },
+            },
+          },
+        }),
+      },
+      { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+      {
+        stdout: JSON.stringify([
+          {
+            body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
+            id: 101,
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
+            created_at: "2026-06-05T00:00:00Z",
+            updated_at: "2026-06-05T00:00:00Z",
+          },
+        ]),
+      },
+      { stdout: "" }, // gh pr ready
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.action, "marked_ready");
+    // Board sync tail ran and, with no board configured, reported a skip.
+    assert.ok(Array.isArray(output.boardSync), "boardSync should be present");
+    assert.ok(output.boardSync.length >= 1);
+    assert.ok(output.boardSync.every((r) => r.ok === true && r.skipped === true));
+
+    // The closingIssuesReferences selection is issued as part of the PR view query.
+    const calls = await readGhCalls(ghLogPath);
+    const closingQuery = calls.find(
+      (c) => Array.isArray(c) && c.some((a) => typeof a === "string" && a.includes("closingIssuesReferences")),
+    );
+    assert.ok(closingQuery, `PR view query should request closingIssuesReferences. Calls: ${JSON.stringify(calls)}`);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// --- readyForReview board-sync tail: injected syncBoardStatus (#1069) ---
+//
+// Drive readyForReview directly with the gh stub (via injected env/ghCommand)
+// plus an injected fake syncBoardStatus so the board tail is observable: the
+// move target (closing issue vs PR) and the NON-FATAL swallow are verified.
+function preReadyGhStub(tempDir, { closingIssueNodes = [] } = {}) {
+  return writeGhStub(tempDir, [
+    {
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              id: "PR_abc123",
+              isDraft: true,
+              headRefOid: "abc123def456",
+              state: "OPEN",
+              mergeStateStatus: "CLEAN",
+              title: "Add feature",
+              closingIssuesReferences: { nodes: closingIssueNodes },
+            },
+          },
+        },
+      }),
+    },
+    { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+    {
+      stdout: JSON.stringify([
+        {
+          body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
+          id: 101,
+          html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
+          created_at: "2026-06-05T00:00:00Z",
+          updated_at: "2026-06-05T00:00:00Z",
+        },
+      ]),
+    },
+    { stdout: "" }, // gh pr ready
+  ]);
+}
+
+test("board tail targets the closing issue (not the PR) when closingIssues present (#1069)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-board-target-"));
+  try {
+    const { env } = await preReadyGhStub(tempDir, { closingIssueNodes: [{ number: 55 }] });
+    const syncCalls = [];
+    const fakeSync = async (repo, repoRoot, target, column) => {
+      syncCalls.push({ repo, target, column });
+      return { ok: true, skipped: false };
+    };
+    const result = await readyForReview(
+      { repo: "owner/repo", pr: 17 },
+      { env, repoRoot: tempDir, syncBoardStatus: fakeSync },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "marked_ready");
+    assert.equal(syncCalls.length, 1);
+    assert.equal(syncCalls[0].target, 55, "board move should target the closing issue #55, not the PR");
+    assert.equal(syncCalls[0].column, "In Progress");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("board tail falls back to the PR number when closingIssues is empty (#1069)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-board-fallback-"));
+  try {
+    const { env } = await preReadyGhStub(tempDir, { closingIssueNodes: [] });
+    const syncCalls = [];
+    const fakeSync = async (repo, repoRoot, target, column) => {
+      syncCalls.push({ target, column });
+      return { ok: true, skipped: false };
+    };
+    const result = await readyForReview(
+      { repo: "owner/repo", pr: 17 },
+      { env, repoRoot: tempDir, syncBoardStatus: fakeSync },
+    );
+    assert.equal(result.action, "marked_ready");
+    assert.equal(syncCalls.length, 1);
+    assert.equal(syncCalls[0].target, 17, "with no closing issue the board move targets the PR number");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("board tail is NON-FATAL: a throwing syncBoardStatus never fails marking ready (#1069)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-board-throws-"));
+  try {
+    const { env } = await preReadyGhStub(tempDir, { closingIssueNodes: [{ number: 55 }] });
+    const fakeSync = async () => { throw new Error("board exploded"); };
+    const result = await readyForReview(
+      { repo: "owner/repo", pr: 17 },
+      { env, repoRoot: tempDir, syncBoardStatus: fakeSync },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "marked_ready");
+    // The throw is swallowed and recorded as a skip/failure entry.
+    assert.ok(Array.isArray(result.boardSync));
+    assert.ok(result.boardSync.length >= 1);
+    assert.ok(result.boardSync.some((r) => r.skipped === true && /board exploded/.test(r.reason ?? "")));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
