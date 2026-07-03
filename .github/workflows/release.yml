@@ -39,6 +39,15 @@ jobs:
             exit 1
           fi
 
+      # Root cause of #1033: fail the release if root `dev-loops` ships an
+      # `@dev-loops/core` dependency whose major.minor differs from the version
+      # being released (e.g. dev-loops@0.6.2 carrying @dev-loops/core@^0.2.6).
+      # node-builtins-only, so it runs without `npm ci`.
+      - name: Assert @dev-loops/core dependency is in lockstep with the release
+        run: |
+          node scripts/release/assert-core-dependency-version.mjs \
+            --release-version "${{ steps.version.outputs.version }}"
+
       - name: Skip if release already exists (idempotent)
         id: exists
         env:

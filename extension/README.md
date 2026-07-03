@@ -9,6 +9,8 @@ Installing the package exposes two thin wrappers over one shared deterministic c
 
 Installing the package with `pi install git:github.com/mfittko/dev-loops` exposes the packaged skills through `package.json` `pi.skills`, and the extension syncs packaged agent files (`agents/*.agent.md`) into `~/.agents/` on `session_start`.
 
+**Version pinning (no global-install skew).** The extension resolves both the CLI and `@dev-loops/core` from the installed, pinned package (module imports, not a global `dev-loops` binary), and updates itself via the pinned `pi update git:github.com/mfittko/dev-loops` seam above. It never depends on a separately-updated global install, so it stays in lockstep with the installed version by construction (#1036).
+
 ## Command surface
 
 - `/dev-loops`

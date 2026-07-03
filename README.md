@@ -49,16 +49,16 @@ The same entrypoints are also available as direct named commands — thin wrappe
 
 ### CLI only
 
-```bash
-npm install -g dev-loops        # global install
-dev-loops --help                # verify
-```
-
-Or run directly without installing:
+Run the CLI **version-pinned** to the plugin/extension you have installed. The pin is the
+single source of truth (`<version>` = your installed `dev-loops` version) and cannot drift:
 
 ```bash
-npx dev-loops --help
+npx dev-loops@<version> --help
 ```
+
+A global `npm install -g dev-loops` is **not** the supported invocation path: the global
+binary updates independently of the plugin/extension and silently drifts out of version
+(#833/#1036). Install it only as an optional bare shell convenience.
 
 ### Claude Code plugin
 
@@ -202,7 +202,7 @@ Phase 8 is the active durable phase; Phase 7 second-repo pilot is deferred. See 
 Gate review angles, refinement settings, persona mappings, and workflow defaults are config-driven via `.pi/dev-loop/defaults.yaml`. Consumer repos override values in `.devloops` at repo root (legacy `.pi/dev-loop/settings.yaml` still loads with a deprecation warning). The loader also accepts `.yml` and `.json` extensions and legacy `overrides.*` files as fallback formats. See [Extension Documentation](./extension/README.md) for details.
 
 ```bash
-npx dev-loops gates   # see what reviewers will check
+npx dev-loops@<version> gates   # see what reviewers will check
 ```
 
 Key surfaces:
@@ -264,7 +264,7 @@ The `/dev-loops` command surface covers the direct dev-loop entrypoints plus rea
 npx dev-loops@<version> gates
 ```
 
-Use `npm install -g dev-loops` only if you want the shell command available outside Pi.
+Use `npm install -g dev-loops` only as a bare shell convenience outside Pi; it is not version-pinned, can drift against the plugin/extension, and is not the supported invocation path (prefer `npx dev-loops@<version>`).
 
 The package exposes the `/dev-loops` extension command surface, the `dev-loops` shell CLI, and packaged skills from `package.json` `pi.skills`.
 

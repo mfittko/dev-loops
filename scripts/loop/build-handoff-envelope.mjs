@@ -12,7 +12,7 @@
  *   dev-loops loop build-envelope --input resolver-output.json
  *
  * Or via npx:
- *   npx dev-loops loop build-envelope --input resolver-output.json
+ *   npx dev-loops@<version> loop build-envelope --input resolver-output.json
  */
 import { readFile } from "node:fs/promises";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
