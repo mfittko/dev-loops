@@ -72,6 +72,16 @@ test("CLI exits 0 on the real in-lockstep manifest", () => {
   assert.match(res.stdout, /in lockstep with release/);
 });
 
+test("CLI exits 2 on a usage error (unknown arg or a flag missing its value)", () => {
+  const unknown = spawnSync("node", [scriptPath, "--nope"], { encoding: "utf8", cwd: repoRoot });
+  assert.equal(unknown.status, 2, unknown.stderr);
+  assert.match(unknown.stderr, /unknown argument/);
+
+  const bareFlag = spawnSync("node", [scriptPath, "--release-version"], { encoding: "utf8", cwd: repoRoot });
+  assert.equal(bareFlag.status, 2, bareFlag.stderr);
+  assert.match(bareFlag.stderr, /requires a value/);
+});
+
 test("CLI fails closed (exit 1) on a synthetic #1033 manifest", async () => {
   const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
   const os = await import("node:os");

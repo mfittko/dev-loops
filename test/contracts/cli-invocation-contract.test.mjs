@@ -76,25 +76,28 @@ test("generated Claude skill/agent pin `npx dev-loops@<version>` and drop the pa
 // also pin `npx dev-loops@<version>` — never the bare, ambiguous `npx dev-loops` that resolves
 // a possibly-stale global/cached copy. `<version>` is the documented placeholder; concrete
 // majors stay enforced by docs-identity-contract.
-function collectMarkdown(dir) {
+function collectFiles(dir, exts) {
   const out = [];
   const abs = path.join(repoRoot, dir);
   if (!fs.existsSync(abs)) return out;
   for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
     const rel = path.posix.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...collectMarkdown(rel));
-    else if (entry.name.endsWith(".md")) out.push(rel);
+    if (entry.isDirectory()) out.push(...collectFiles(rel, exts));
+    else if (exts.some((ext) => entry.name.endsWith(ext))) out.push(rel);
   }
   return out;
 }
 
-test("no unversioned `npx dev-loops` in the consumer-facing docs/CLI surface (#1036)", () => {
+test("no unversioned `npx dev-loops` in the consumer-facing docs/CLI/tooling surface (#1036)", () => {
+  // Glob the whole doc + CLI + script tree instead of hardcoding files, so a bare
+  // `npx dev-loops` added anywhere later is caught. Internal tooling should invoke
+  // the package-local `node .../cli/index.mjs` form, never bare npx.
   const surface = [
     "README.md",
-    "cli/index.mjs",
-    "scripts/loop/build-handoff-envelope.mjs",
-    ...collectMarkdown("docs"),
-    ...collectMarkdown("extension"),
+    ...collectFiles("docs", [".md"]),
+    ...collectFiles("extension", [".md"]),
+    ...collectFiles("cli", [".mjs"]),
+    ...collectFiles("scripts", [".mjs"]),
   ];
   const offenders = [];
   for (const rel of surface) {

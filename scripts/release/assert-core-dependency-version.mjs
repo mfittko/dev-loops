@@ -71,13 +71,26 @@ export function assertCoreDependencyInLockstep({ releaseVersion, coreRange } = {
   return { releaseVersion, coreRange, majorMinor: releaseMajorMinor };
 }
 
+function usageError(message) {
+  const err = new Error(message);
+  err.usage = true;
+  return err;
+}
+
 function parseArgs(argv) {
   const out = { manifest: "package.json", releaseVersion: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--release-version") out.releaseVersion = argv[++i];
-    else if (arg === "--manifest") out.manifest = argv[++i];
-    else throw new Error(`unknown argument: ${arg}`);
+    if (arg === "--release-version" || arg === "--manifest") {
+      const value = argv[++i];
+      // Fail closed like extract-changelog-section.mjs: a flag missing its value
+      // is a usage error (exit 2), not a silent fallback that defeats the guard.
+      if (value === undefined) throw usageError(`${arg} requires a value`);
+      if (arg === "--release-version") out.releaseVersion = value;
+      else out.manifest = value;
+    } else {
+      throw usageError(`unknown argument: ${arg}`);
+    }
   }
   return out;
 }
@@ -98,6 +111,6 @@ async function main(argv) {
 if (isDirectCliRun(import.meta.url)) {
   main(process.argv.slice(2)).catch((err) => {
     process.stderr.write(`::error::${err.message}\n`);
-    process.exit(err.message.startsWith("unknown argument") ? 2 : 1);
+    process.exit(err.usage ? 2 : 1);
   });
 }
