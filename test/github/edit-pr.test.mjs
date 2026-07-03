@@ -119,7 +119,7 @@ test("editPr: --body-file reads the body from a real file", async () => {
     { run },
   );
   assert.deepEqual(result.edited, ["body"]);
-  assert.deepEqual(calls[0], ["pr", "edit", "5", "--repo", "o/n", "--body", "Body from file\nsecond line"]);
+  assert.deepEqual(calls[0], ["pr", "edit", "5", "--repo", "o/n", "--body-file", bodyPath]);
 });
 
 test("editPr: --remove-assignee builds gh args and reports the edited field", async () => {

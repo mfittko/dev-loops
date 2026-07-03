@@ -192,9 +192,16 @@ async function buildEditArgs(options) {
     args.push("--title", options.title);
     edited.push("title");
   }
+  // resolveBody still runs for validation (reads the file, throws on empty /
+  // whitespace-only). When --body-file was given, hand the path straight to gh
+  // so large bodies avoid command-length limits instead of inlining the string.
   const body = await resolveBody(options);
   if (body !== undefined) {
-    args.push("--body", body);
+    if (options.bodyFile !== undefined) {
+      args.push("--body-file", options.bodyFile);
+    } else {
+      args.push("--body", body);
+    }
     edited.push("body");
   }
   for (const u of options.addAssignees) {

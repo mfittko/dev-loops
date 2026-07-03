@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -162,8 +163,9 @@ test("runCli: fetches body then issues one gh pr edit with the flipped body", as
   assert.deepEqual(calls[0], ["pr", "view", "17", "--repo", "o/n", "--json", "body"]);
   assert.equal(calls[1][0], "pr");
   assert.equal(calls[1][1], "edit");
-  const bodyIdx = calls[1].indexOf("--body");
-  assert.equal(calls[1][bodyIdx + 1], "- [x] Alpha\n- [ ] Beta\n");
+  const bodyFileIdx = calls[1].indexOf("--body-file");
+  assert.notEqual(bodyFileIdx, -1);
+  assert.equal(readFileSync(calls[1][bodyFileIdx + 1], "utf8"), "- [x] Alpha\n- [ ] Beta\n");
   assert.match(stdout.get(), /"edited":true/);
 });
 
