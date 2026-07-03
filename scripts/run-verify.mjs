@@ -5,6 +5,7 @@
 // failure-summary reporter stays intact and non-interleaved.
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 const REPORTER_MARKER = "--test-reporter ./test/failure-summary-reporter.mjs ";
 const PLAIN_SCRIPTS = ["test:assets", "test:scripts", "test:core", "test:dev-loop"];
@@ -84,7 +85,7 @@ async function main() {
   process.exit(aggregateExit(order.map((label) => byLabel.get(label).code)));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     console.error(err);
     process.exit(1);
