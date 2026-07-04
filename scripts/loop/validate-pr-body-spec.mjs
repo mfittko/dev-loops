@@ -28,6 +28,8 @@ Definition of done, Open questions/risks).
 Required (exactly one):
   --repo <owner/name> --pr <number>   Fetch the PR body via gh and validate it
   --input <path>                      Path to a JSON file with { "body": "..." }
+                                      (optional "repo" and "pr" fields are echoed
+                                      back in the result when present)
 Success output (stdout, JSON):
   {
     "ok": true | false,
@@ -100,8 +102,14 @@ export function parseValidatePrBodySpecCliArgs(argv) {
     return options;
   }
   const hasInput = typeof options.input === "string" && options.input.length > 0;
-  const hasRemote = typeof options.repo === "string" && options.repo.length > 0 && Number.isInteger(options.pr);
-  if (hasInput === hasRemote) {
+  const hasAnyRemote = (typeof options.repo === "string" && options.repo.length > 0) || Number.isInteger(options.pr);
+  const hasRemotePair = typeof options.repo === "string" && options.repo.length > 0 && Number.isInteger(options.pr);
+  // --input and the remote mode are mutually exclusive input sources: a stray
+  // --repo/--pr alongside --input must fail closed, not be silently ignored.
+  if (hasInput && hasAnyRemote) {
+    throw parseError("--input is mutually exclusive with --repo/--pr; provide exactly one input mode");
+  }
+  if (hasInput === hasRemotePair) {
     throw parseError("Provide exactly one of --input <path> or --repo <owner/name> --pr <number>");
   }
   return options;

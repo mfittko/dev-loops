@@ -51,6 +51,13 @@ test("parseValidatePrBodySpecCliArgs rejects a zero --pr", () => {
   assert.throws(() => parseValidatePrBodySpecCliArgs(["--repo", "owner/name", "--pr", "0"]), /positive/i);
 });
 
+test("parseValidatePrBodySpecCliArgs rejects --input combined with a stray --repo (no --pr)", () => {
+  assert.throws(
+    () => parseValidatePrBodySpecCliArgs(["--input", "/tmp/x.json", "--repo", "owner/name"]),
+    /mutually exclusive/i,
+  );
+});
+
 test("validatePrBodySpecFromOptions --input: complete body is ok", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pr-body-spec-"));
   try {
