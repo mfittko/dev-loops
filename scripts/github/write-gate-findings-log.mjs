@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> --findings <json> [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
@@ -96,8 +97,12 @@ function parseFindingsJson(raw) {
 /**
  * Validate + normalize the fan-out provenance object. Records how many distinct
  * reviewer agents were dispatched (distinctReviewers) and per-angle dispatch
- * provenance (perAngle). Throws on malformed shape so a caller cannot forge a
- * satisfying-but-empty provenance blob. Returns the normalized object.
+ * provenance (perAngle). Rejects MALFORMED or self-INCONSISTENT provenance (bad
+ * shape, or a distinctReviewers claim not backed by recorded dispatch entries).
+ * This raises the bar; it does NOT make provenance un-forgeable — a determined
+ * single agent can still write an internally-consistent blob. Un-forgeable
+ * recording is the Pi-harness bridge (subagent tool at child depth). Returns the
+ * normalized object.
  */
 export function parseProvenanceJson(raw) {
   let parsed;
@@ -133,7 +138,14 @@ export function parseProvenanceJson(raw) {
     }
     return entry;
   });
-  return { distinctReviewers: parsed.distinctReviewers, perAngle };
+  const normalized = { distinctReviewers: parsed.distinctReviewers, perAngle };
+  // Internal-consistency gate: a distinctReviewers claim must be backed by that
+  // many distinct recorded reviewer identities (closes the {n, perAngle:[]} loophole).
+  const consistencyError = provenanceConsistencyError(normalized);
+  if (consistencyError) {
+    throw parseError(`--${consistencyError}`);
+  }
+  return normalized;
 }
 export function parseWriteGateFindingsLogCliArgs(argv) {
   const { tokens } = parseArgs({

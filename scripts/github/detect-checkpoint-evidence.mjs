@@ -15,7 +15,7 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, loadDevLoopConfig, resolveGateConfig, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
-import { FANOUT_UNAVAILABLE_MESSAGE } from "@dev-loops/core/loop/gate-fanin";
+import { FANOUT_UNAVAILABLE_MESSAGE, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
@@ -271,12 +271,18 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
       // Opt-in provenance enforcement (gates.requireFanoutProvenance), layered on
       // top of fan-out evidence. When off (default) requireProvenance is falsy so
       // NO new failure is added — behavior is byte-identical to today. When on, a
-      // fanout_fanin ledger must record distinctReviewers >= the floor, proving
-      // independent parallel review rather than a single self-producing agent.
+      // fanout_fanin ledger must record INTERNALLY-CONSISTENT provenance (checked
+      // the same way the write path validates it — a hand-edited or shadow ledger
+      // is re-validated here, not trusted) with distinctReviewers >= the floor.
       if (fanoutEnforcement.requireProvenance) {
         const prov = gate.provenance;
-        const reviewers = prov && typeof prov.distinctReviewers === "number" ? prov.distinctReviewers : null;
-        if (reviewers === null || reviewers < FANOUT_PROVENANCE_MIN_REVIEWERS) {
+        const consistencyErr = provenanceConsistencyError(prov);
+        const reviewers = prov && Number.isInteger(prov.distinctReviewers) ? prov.distinctReviewers : null;
+        if (consistencyErr) {
+          failures.push(
+            `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (${consistencyErr}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
+          );
+        } else if (reviewers === null || reviewers < FANOUT_PROVENANCE_MIN_REVIEWERS) {
           failures.push(
             `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${FANOUT_PROVENANCE_MIN_REVIEWERS}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
           );
@@ -323,19 +329,23 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
   return false;
 }
 /**
- * Read the recorded fan-out `provenance` object from the first existing ledger
- * across the enumerated checkouts. Returns the provenance object, or null when
- * no ledger is found / it is unreadable / it carries no provenance. Only called
- * when requireFanoutProvenance is enabled so the default path pays no extra I/O.
+ * Read the recorded fan-out `provenance` object from a ledger across the
+ * enumerated checkouts. Mirrors ledgerExistsInAny's all-checkout semantics:
+ * returns the FIRST NON-NULL provenance found and only null after exhausting
+ * every checkout. This prevents a stale/provenance-less ledger for the same head
+ * in an earlier-enumerated checkout from SHADOWING a valid provenance-bearing
+ * ledger in the PR worktree (which would otherwise falsely fail closed). Only
+ * called when requireFanoutProvenance is enabled so the default path pays no I/O.
  */
 async function readLedgerProvenanceInAny(checkouts, ledgerPath) {
   for (const root of checkouts) {
     const full = path.resolve(root, ledgerPath);
     try {
       const parsed = JSON.parse(await readFile(full, "utf8"));
-      if (parsed && typeof parsed === "object") {
-        return parsed.provenance ?? null;
+      if (parsed && typeof parsed === "object" && parsed.provenance != null) {
+        return parsed.provenance;
       }
+      // Ledger present but carries no provenance — keep scanning other checkouts.
     } catch {
       // Missing/unreadable/malformed ledger in this checkout — try the next.
     }

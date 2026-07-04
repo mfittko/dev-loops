@@ -321,16 +321,30 @@ findings-log ledger can additionally record **fan-out provenance**:
 ```
 
 Provenance is written via `write-gate-findings-log.mjs --provenance <json>` (validated
-on write; malformed provenance fails the write). It is **optional and additive** — when
-omitted, the ledger is byte-identical to before and no enforcement changes.
+on write; malformed OR self-inconsistent provenance fails the write). It is **optional
+and additive** — when omitted, the ledger is byte-identical to before and no enforcement
+changes. **Internal-consistency rule** (enforced on both the write path and the
+enforcement read path): `perAngle` must be non-empty when `distinctReviewers > 0`, and
+`distinctReviewers` must be `<=` the count of DISTINCT reviewer identities actually
+recorded in `perAngle` (distinct by `reviewer`, else `dispatchId`; a bare `{angle}` is
+not a countable reviewer). You cannot claim more reviewers than you recorded dispatch
+entries for — this closes the `{distinctReviewers: 2, perAngle: []}` loophole.
 
 Enforcement is opt-in via **`gates.requireFanoutProvenance`** (default **false**). When
 enabled, it layers ON TOP of `requireFanoutEvidence` (it only takes effect while fan-out
 evidence enforcement is active): each required `fanout_fanin` gate's ledger must record
-`provenance.distinctReviewers >= 2`. A floor of **2** is the smallest count that proves
-the review was not produced by a single self-producing agent. When the flag is off,
-behavior is byte-identical to today (no new failures) — the Claude-Code path, which
-already honors child fan-out, is a validated no-op.
+internally-consistent provenance with `provenance.distinctReviewers >= 2` (a floor of
+**2** is the smallest count that is not a single agent). When the flag is off, behavior is
+byte-identical to today (no new failures) — the Claude-Code path, which already honors
+child fan-out, is a validated no-op.
+
+**Honest caveat (this is NOT un-forgeable):** recorded provenance is self-reported — it is
+written by the same agent whose independence it claims — so a determined single agent can
+still forge an internally-consistent blob. This enforcement raises the bar (rejects
+malformed/inconsistent provenance and requires distinct recorded dispatch entries) but
+does NOT claim un-forgeable enforcement. Un-forgeable recording (the harness attesting who
+actually ran each per-angle review) is the Pi-harness bridge — the subagent tool honored
+at child depth (see #1084).
 
 ### Fail-closed: fan-out unavailable → route to conductor
 

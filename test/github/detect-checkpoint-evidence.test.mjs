@@ -903,7 +903,7 @@ test("buildPreMergeGateCheck with requireProvenance ON passes when ledger record
     required: true,
     requireProvenance: true,
     gates: [
-      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true, provenance: { distinctReviewers: 2, perAngle: [] } },
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true, provenance: { distinctReviewers: 2, perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-b" }] } },
     ],
   });
   assert.equal(result.ok, true);
@@ -930,7 +930,7 @@ test("buildPreMergeGateCheck with requireProvenance ON fails closed when distinc
     required: true,
     requireProvenance: true,
     gates: [
-      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true, provenance: { distinctReviewers: 1, perAngle: [] } },
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true, provenance: { distinctReviewers: 1, perAngle: [{ angle: "scope", reviewer: "review-a" }] } },
     ],
   });
   assert.equal(result.ok, false);
@@ -961,6 +961,51 @@ test("buildPreMergeGateCheck with requireProvenance OFF (default) adds NO new fa
   });
   assert.equal(explicitOff.ok, true);
   assert.deepEqual(explicitOff.failures, []);
+});
+
+test("buildPreMergeGateCheck with requireProvenance ON fails closed on the {n, perAngle:[]} loophole (internal inconsistency)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true, provenance: { distinctReviewers: 2, perAngle: [] } },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("perAngle must be non-empty") && f.includes("route to conductor")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck with requireProvenance ON fails closed when distinctReviewers exceeds recorded identities", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true, provenance: { distinctReviewers: 3, perAngle: [{ angle: "scope", reviewer: "review-a" }] } },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("exceeds distinct recorded reviewer identities")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck with requireProvenance ON fails closed on a non-integer distinctReviewers (hand-edited ledger)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true, provenance: { distinctReviewers: 2.5, perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-b" }] } },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("distinctReviewers must be a non-negative integer")),
+    JSON.stringify(result.failures),
+  );
 });
 
 test("detect-checkpoint-evidence fails pre-merge with unresolved human review threads", async () => {

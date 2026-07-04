@@ -50,6 +50,73 @@ export function fanoutUnavailableError(detail) {
 }
 
 /**
+ * Count DISTINCT reviewer identities actually recorded in a `perAngle` array.
+ * An entry contributes an identity via `reviewer` (preferred) or `dispatchId`;
+ * entries carrying neither are not countable reviewers (a bare `{angle}` proves
+ * nothing about who reviewed it). Pure.
+ *
+ * @param {unknown} perAngle
+ * @returns {number}
+ */
+export function countDistinctReviewers(perAngle) {
+  if (!Array.isArray(perAngle)) return 0;
+  const ids = new Set();
+  for (const e of perAngle) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    const id = typeof e.reviewer === "string" && e.reviewer.trim().length > 0
+      ? e.reviewer.trim()
+      : typeof e.dispatchId === "string" && e.dispatchId.trim().length > 0
+        ? e.dispatchId.trim()
+        : null;
+    if (id) ids.add(id);
+  }
+  return ids.size;
+}
+
+/**
+ * Validate INTERNAL CONSISTENCY of a fan-out provenance object. Returns an error
+ * string when the provenance is malformed or self-inconsistent, or null when it
+ * is well-formed and consistent. Shared by the write path (write-gate-findings-log)
+ * and the enforcement read path (buildPreMergeGateCheck) so both agree.
+ *
+ * Consistency rule (documented in docs/gate-review-sub-loop-contract.md):
+ *   - `distinctReviewers` must be a non-negative integer.
+ *   - `perAngle` must be an array, and non-empty when `distinctReviewers > 0`.
+ *   - `distinctReviewers` must be <= the count of DISTINCT reviewer identities
+ *     actually recorded in `perAngle` — you cannot claim more reviewers than you
+ *     recorded dispatch entries for.
+ *
+ * HONEST CAVEAT: this makes recorded provenance internally consistent and raises
+ * the bar, but the provenance is self-reported (written by the same agent whose
+ * independence it claims), so it remains forgeable by a determined single agent.
+ * Un-forgeable recording is the Pi-harness bridge (subagent tool at child depth).
+ *
+ * @param {unknown} prov
+ * @returns {string|null}
+ */
+export function provenanceConsistencyError(prov) {
+  if (!prov || typeof prov !== "object" || Array.isArray(prov)) {
+    return "provenance must be an object";
+  }
+  const p = /** @type {Record<string, unknown>} */ (prov);
+  if (!Number.isInteger(p.distinctReviewers) || /** @type {number} */ (p.distinctReviewers) < 0) {
+    return "provenance.distinctReviewers must be a non-negative integer";
+  }
+  if (!Array.isArray(p.perAngle)) {
+    return "provenance.perAngle must be an array";
+  }
+  const claimed = /** @type {number} */ (p.distinctReviewers);
+  if (claimed > 0 && p.perAngle.length === 0) {
+    return "provenance.perAngle must be non-empty when distinctReviewers > 0";
+  }
+  const recorded = countDistinctReviewers(p.perAngle);
+  if (claimed > recorded) {
+    return `provenance.distinctReviewers (${claimed}) exceeds distinct recorded reviewer identities (${recorded})`;
+  }
+  return null;
+}
+
+/**
  * Default cap on parallel fan-out reviewers when a caller does not supply one.
  * Mirrors the config default (gates.maxFanoutReviewers).
  */

@@ -8,6 +8,8 @@ import {
   DEFAULT_MAX_FANOUT_REVIEWERS,
   FANOUT_UNAVAILABLE_MESSAGE,
   fanoutUnavailableError,
+  countDistinctReviewers,
+  provenanceConsistencyError,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -209,5 +211,27 @@ describe("fanoutUnavailableError / route-to-conductor contract (AC4)", () => {
     assert.ok(err.message.startsWith(FANOUT_UNAVAILABLE_MESSAGE));
     assert.ok(err.message.includes("subagent tool not honored"));
     assert.equal(err.routeToConductor, true);
+  });
+});
+
+describe("provenance consistency (closes the self-produced loophole)", () => {
+  test("countDistinctReviewers counts distinct reviewer/dispatchId identities only", () => {
+    assert.equal(countDistinctReviewers([]), 0);
+    assert.equal(countDistinctReviewers([{ angle: "a" }]), 0); // no identity
+    assert.equal(countDistinctReviewers([{ angle: "a", reviewer: "x" }, { angle: "b", reviewer: "x" }]), 1); // dup
+    assert.equal(countDistinctReviewers([{ angle: "a", reviewer: "x" }, { angle: "b", dispatchId: "y" }]), 2);
+    assert.equal(countDistinctReviewers("nope"), 0);
+  });
+
+  test("provenanceConsistencyError accepts consistent provenance", () => {
+    assert.equal(provenanceConsistencyError({ distinctReviewers: 0, perAngle: [] }), null);
+    assert.equal(provenanceConsistencyError({ distinctReviewers: 2, perAngle: [{ angle: "a", reviewer: "x" }, { angle: "b", reviewer: "y" }] }), null);
+  });
+
+  test("provenanceConsistencyError rejects the {n, perAngle:[]} loophole and over-claims", () => {
+    assert.match(provenanceConsistencyError(null), /must be an object/);
+    assert.match(provenanceConsistencyError({ distinctReviewers: 1.5, perAngle: [] }), /non-negative integer/);
+    assert.match(provenanceConsistencyError({ distinctReviewers: 2, perAngle: [] }), /perAngle must be non-empty/);
+    assert.match(provenanceConsistencyError({ distinctReviewers: 2, perAngle: [{ angle: "a", reviewer: "x" }] }), /exceeds distinct recorded reviewer identities/);
   });
 });

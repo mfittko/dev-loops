@@ -389,13 +389,13 @@ test("writeGateFindingsLog rejects empty-string resolvedIn", async () => {
 
 test("parseProvenanceJson accepts a well-formed provenance object", () => {
   const prov = parseProvenanceJson(JSON.stringify({
-    distinctReviewers: 3,
+    distinctReviewers: 2,
     perAngle: [
       { angle: "scope", reviewer: "review-a", dispatchId: "d1", model: "m1" },
       { angle: "safety", reviewer: "review-b" },
     ],
   }));
-  assert.equal(prov.distinctReviewers, 3);
+  assert.equal(prov.distinctReviewers, 2);
   assert.equal(prov.perAngle.length, 2);
   assert.deepEqual(prov.perAngle[0], { angle: "scope", reviewer: "review-a", dispatchId: "d1", model: "m1" });
   assert.deepEqual(prov.perAngle[1], { angle: "safety", reviewer: "review-b" });
@@ -409,6 +409,31 @@ test("parseProvenanceJson rejects malformed provenance (invalid JSON, non-object
   assert.throws(() => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2 })), /perAngle must be an array/);
   assert.throws(() => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [{}] })), /perAngle\[0\]\.angle is required/);
   assert.throws(() => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "scope", reviewer: "" }] })), /reviewer must be a non-empty string/);
+  assert.throws(() => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [null] })), /perAngle\[0\] must be an object/);
+});
+
+test("parseProvenanceJson rejects INTERNALLY-INCONSISTENT provenance (closes the {n, perAngle:[]} loophole)", () => {
+  // The crux loophole: claim N reviewers with zero dispatch records.
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [] })),
+    /perAngle must be non-empty when distinctReviewers > 0/,
+  );
+  // Claim more reviewers than distinct recorded identities.
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "scope", reviewer: "review-a" }] })),
+    /distinctReviewers \(2\) exceeds distinct recorded reviewer identities \(1\)/,
+  );
+  // A perAngle entry with no reviewer/dispatchId is not a countable reviewer.
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "scope" }] })),
+    /distinctReviewers \(1\) exceeds distinct recorded reviewer identities \(0\)/,
+  );
+  // dispatchId also counts as an identity; two distinct dispatchIds satisfy 2.
+  const ok = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 2,
+    perAngle: [{ angle: "scope", dispatchId: "d1" }, { angle: "safety", dispatchId: "d2" }],
+  }));
+  assert.equal(ok.distinctReviewers, 2);
 });
 
 test("writeGateFindingsLog records provenance in the ledger when passed", async () => {
@@ -421,13 +446,13 @@ test("writeGateFindingsLog records provenance in the ledger when passed", async 
       headSha: "abc1234567890abcdef",
       verdict: "clean",
       findings: "[]",
-      provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "scope", reviewer: "review-a" }] }),
+      provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-b" }, { angle: "perf", reviewer: "review-c" }] }),
       tmpRoot: tmpDir,
     });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "pre_approval_gate-abc1234567890abcdef.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
     assert.equal(parsed.provenance.distinctReviewers, 3);
-    assert.deepEqual(parsed.provenance.perAngle, [{ angle: "scope", reviewer: "review-a" }]);
+    assert.equal(parsed.provenance.perAngle.length, 3);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
