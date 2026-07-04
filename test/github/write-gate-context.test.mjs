@@ -379,6 +379,79 @@ test("rationaleFromResolver tolerates null/empty resolver output", () => {
   assert.deepEqual(rationale, []);
 });
 
+test("rationaleFromResolver marks addedAngles entries as 'added' with their addedReasons, not 'kept' (#1048)", () => {
+  const { resolvedAngles, rationale } = rationaleFromResolver({
+    recommendedAngles: ["gate-evidence", "docs", "ci-guard"],
+    skippedAngles: ["coverage"],
+    reasons: { coverage: "DOCS_ONLY" },
+    addedAngles: ["ci-guard"],
+    addedReasons: { "ci-guard": "Added: triggered by change category CI_ONLY" },
+    dynamicAnglesActive: true,
+  });
+  assert.deepEqual(resolvedAngles, ["gate-evidence", "docs", "ci-guard"]);
+  assert.deepEqual(rationale.find((r) => r.angle === "ci-guard"), {
+    angle: "ci-guard", action: "added", reason: "Added: triggered by change category CI_ONLY",
+  });
+  // Not also recorded as kept
+  assert.equal(rationale.filter((r) => r.angle === "ci-guard").length, 1);
+  assert.deepEqual(rationale.find((r) => r.angle === "gate-evidence"), {
+    angle: "gate-evidence", action: "kept", reason: "selected by dynamic angle resolver",
+  });
+});
+
+test("rationaleFromResolver treats addedAngles entries as 'kept' when dynamicAnglesActive is not true (defensive guard)", () => {
+  // resolveGateAnglesDynamic never produces a non-empty addedAngles with
+  // dynamicAnglesActive false, but a hand-constructed/malformed resolverResult
+  // could. The "added" classification must stay gated on dynamicActive so
+  // rationale semantics remain internally consistent.
+  const { rationale } = rationaleFromResolver({
+    recommendedAngles: ["some-angle"],
+    skippedAngles: [],
+    reasons: {},
+    addedAngles: ["some-angle"],
+    addedReasons: { "some-angle": "Added: triggered by change category CI_ONLY" },
+    dynamicAnglesActive: false,
+  });
+  assert.deepEqual(rationale, [
+    { angle: "some-angle", action: "kept", reason: "static pool (dynamic angle resolution inactive)" },
+  ]);
+});
+
+test("rationaleFromResolver marks a mandatory angle absent from addedAngles as 'kept', not 'added' (#1136 regression)", () => {
+  // Mirrors resolveGateAnglesDynamic's fixed output shape: renderer-security is
+  // in recommendedAngles (mandatory floor) but excluded from addedAngles because
+  // it's mandatory, even though it also appears in the anglePool catalog.
+  const { resolvedAngles, rationale } = rationaleFromResolver({
+    recommendedAngles: ["renderer-security", "scope", "contract-surface"],
+    skippedAngles: [],
+    reasons: {},
+    addedAngles: ["contract-surface"],
+    addedReasons: { "contract-surface": "Added: triggered by change category LOGIC_CHANGE" },
+    dynamicAnglesActive: true,
+  });
+  assert.deepEqual(resolvedAngles, ["renderer-security", "scope", "contract-surface"]);
+  assert.deepEqual(rationale.find((r) => r.angle === "renderer-security"), {
+    angle: "renderer-security", action: "kept", reason: "selected by dynamic angle resolver",
+  });
+  assert.deepEqual(rationale.find((r) => r.angle === "contract-surface"), {
+    angle: "contract-surface", action: "added", reason: "Added: triggered by change category LOGIC_CHANGE",
+  });
+});
+
+test("rationaleFromResolver falls back to a sane default reason for an added angle with no addedReasons entry", () => {
+  const { rationale } = rationaleFromResolver({
+    recommendedAngles: ["ci-guard"],
+    skippedAngles: [],
+    reasons: {},
+    addedAngles: ["ci-guard"],
+    addedReasons: {},
+    dynamicAnglesActive: true,
+  });
+  assert.deepEqual(rationale, [
+    { angle: "ci-guard", action: "added", reason: "added by dynamic angle resolver (catalog addition)" },
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // buildGateContext — integration with the canonical resolver
 // ---------------------------------------------------------------------------

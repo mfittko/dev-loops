@@ -46,6 +46,13 @@ const GateConfig = z.strictObject({
     .min(1)
     .default(["must-fix"]),
   dynamicAngles: z.boolean().default(false),
+  // Additive counterpart to the subtractive dynamicAngles path (#1048): when
+  // true, the context-builder may also ADD catalog angles — from
+  // resolveAnglePool() (gates.anglePool, or else the union of the persona
+  // registry and this config's own configured angles) — that change-category
+  // heuristics recommend but that are not already in this gate's configured
+  // pool. Default false preserves today's subtractive-only behavior exactly.
+  additiveAngles: z.boolean().default(false),
 });
 
 const GatesConfig = z.strictObject({
@@ -75,6 +82,12 @@ const GatesConfig = z.strictObject({
   // suppresses the PR comment when explicitly false. See
   // docs/gate-review-sub-loop-contract.md.
   postFindingsComments: z.boolean().default(true),
+  // Explicit global lens catalog override for additive angle selection
+  // (gates.<gate>.additiveAngles, #1048). When absent, resolveAnglePool()
+  // falls back to the union of the built-in persona registry's angle names
+  // and every angle configured across this config's own draft/preApproval/
+  // spike gates (angles + mandatoryAngles).
+  anglePool: z.array(z.string().trim().min(1)).optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -168,6 +181,7 @@ const FileGatesConfig = z.strictObject({
   requireFanoutEvidence: z.boolean().optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).optional(),
   postFindingsComments: z.boolean().optional(),
+  anglePool: z.array(z.string().trim().min(1)).optional(),
 });
 
 // Partial persona entries for file-level config (allows omitting fields)
@@ -928,7 +942,7 @@ export function resolveRefinement(config) {
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
- * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean }}
+ * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean }}
  */
 export function resolveGateConfig(config, gate) {
   const gateConfig = config?.gates?.[gate];
@@ -945,6 +959,7 @@ export function resolveGateConfig(config, gate) {
     required: gateConfig?.required ?? true,
     requireCi: gateConfig?.requireCi ?? true,
     dynamicAngles: gateConfig?.dynamicAngles ?? false,
+    additiveAngles: gateConfig?.additiveAngles ?? false,
     blockCleanOnFindingSeverities: gateConfig?.blockCleanOnFindingSeverities && Array.isArray(gateConfig.blockCleanOnFindingSeverities)
       ? [...gateConfig.blockCleanOnFindingSeverities]
       : ["must-fix"],
@@ -1084,6 +1099,32 @@ export function resolveGateAngles(config, gate) {
 }
 
 /**
+ * Resolve the global lens catalog available for additive angle selection.
+ *
+ * Returns the explicit `gates.anglePool` override when configured (non-empty
+ * array of trimmed strings). Otherwise falls back to the union of all known
+ * review angles: the built-in persona registry's angle names, plus every
+ * angle actually configured across this config's own draft/preApproval/spike
+ * gates (angles + mandatoryAngles). The persona registry alone omits angles
+ * that ship in extension-defaults.yaml gate pools but have no dedicated
+ * persona (e.g. ci-guard, link-check) — see #1048.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {string[]}
+ */
+export function resolveAnglePool(config) {
+  const explicit = config?.gates?.anglePool;
+  if (Array.isArray(explicit) && explicit.length > 0) {
+    return [...new Set(explicit.map(a => (typeof a === "string" ? a.trim() : "")).filter(a => a.length > 0))];
+  }
+  const configured = ["draft", "preApproval", "spike"].flatMap((gate) => {
+    const gateConfig = resolveGateConfig(config, gate);
+    return [...(gateConfig.angles ?? []), ...gateConfig.mandatoryAngles];
+  });
+  return [...new Set([...Object.keys(BUILTIN_PERSONAS), ...configured])];
+}
+
+/**
  * Resolve gate angles dynamically when `dynamicAngles` is enabled in config.
  *
  * Uses diff analysis helpers (from ../analysis/*) to filter the
@@ -1092,17 +1133,23 @@ export function resolveGateAngles(config, gate) {
  * When `dynamicAngles` is disabled (default), returns the full configured
  * angle list (same as `resolveGateAngles`).
  *
+ * When `additiveAngles` is also enabled (default off, see #1048), catalog
+ * angles from `resolveAnglePool()` (`gates.anglePool`, or else the union of
+ * the persona registry and this config's own configured angles) recommended
+ * by change-category heuristics but absent from the gate's configured pool
+ * may also be added; `excludeAngles` remains a hard ceiling on additions.
+ *
  * @param {import("./types.js").DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} [options]
  * @param {{ nameStatusOutput: string, diffOutput?: string }} [options.diff]
- * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean }}
+ * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export async function resolveGateAnglesDynamic(config, gate, { diff } = {}) {
   const gateConfig = resolveGateConfig(config, gate);
   const staticAngles = resolveGateAngles(config, gate);
   if (staticAngles === null) {
-    return { recommendedAngles: null, skippedAngles: [], reasons: {}, fallbackToAll: false, dynamicAnglesActive: false };
+    return { recommendedAngles: null, skippedAngles: [], reasons: {}, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: [], addedReasons: {} };
   }
 
   if (!gateConfig.dynamicAngles || !diff) {
@@ -1112,6 +1159,8 @@ export async function resolveGateAnglesDynamic(config, gate, { diff } = {}) {
       reasons: {},
       fallbackToAll: false,
       dynamicAnglesActive: false,
+      addedAngles: [],
+      addedReasons: {},
     };
   }
 
@@ -1129,17 +1178,35 @@ export async function resolveGateAnglesDynamic(config, gate, { diff } = {}) {
 
   const categories = [...new Set(analysis.t1?.changeCategories ?? [])];
 
+  // excludeAngles is a hard ceiling: computed once and reused both to cap the
+  // additive anglePool and to filter mandatoryAngles below.
+  const excluded = new Set(gateConfig.excludeAngles);
+  const anglePool = gateConfig.additiveAngles
+    ? resolveAnglePool(config).filter(a => !excluded.has(a))
+    : undefined;
+
   const { resolveDynamicAngles: resolve } = await import("../analysis/change-classifier.mjs");
   const dynamicResult = resolve({
     configuredAngles: candidatePool,
     changeCategories: categories,
     ambiguous: analysis.ambiguous,
+    anglePool,
   });
 
-  // Merge: mandatory always included (filtered by excludeAngles) + dynamically-selected candidates
-  const excluded = new Set(gateConfig.excludeAngles);
+  // Merge: mandatory always included (filtered by excludeAngles) + dynamically-selected
+  // candidates + additively-selected catalog angles (#1048)
   const filteredMandatory = gateConfig.mandatoryAngles.filter(a => !excluded.has(a));
-  const recommendedAngles = [...new Set([...filteredMandatory, ...dynamicResult.recommendedAngles])];
+
+  // An angle that is both mandatory AND additively recommended must stay
+  // attributed to the mandatory floor, not be reported as "added" — the
+  // resolver has no concept of "mandatory", so the caller (this function,
+  // which already owns the mandatory Set) filters its output.
+  const addedAngles = (dynamicResult.addedAngles ?? []).filter(a => !mandatory.has(a));
+  const addedReasons = Object.fromEntries(
+    Object.entries(dynamicResult.addedReasons ?? {}).filter(([a]) => !mandatory.has(a))
+  );
+
+  const recommendedAngles = [...new Set([...filteredMandatory, ...dynamicResult.recommendedAngles, ...addedAngles])];
 
   return {
     recommendedAngles,
@@ -1147,6 +1214,8 @@ export async function resolveGateAnglesDynamic(config, gate, { diff } = {}) {
     reasons: dynamicResult.reasons,
     fallbackToAll: dynamicResult.fallbackToAll,
     dynamicAnglesActive: true,
+    addedAngles,
+    addedReasons,
   };
 }
 

@@ -164,3 +164,94 @@ test("resolveDynamicAngles: provides reasons for skipped angles", () => {
   assert.ok(Object.keys(result.reasons).length > 0);
   assert.equal(typeof result.reasons[result.skippedAngles[0]], "string");
 });
+
+// ---------------------------------------------------------------------------
+// Additive angle selection (#1048) — off by default, on when anglePool passed
+// ---------------------------------------------------------------------------
+
+const NARROW_ANGLES = DRAFT_ANGLES.filter((a) => a !== "ci-guard");
+
+test("resolveDynamicAngles: default (no anglePool) never adds angles", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: NARROW_ANGLES,
+    changeCategories: [ChangeCategory.CI_ONLY],
+  });
+  assert.deepEqual(result.addedAngles, []);
+  assert.deepEqual(result.addedReasons, {});
+  assert.ok(!result.recommendedAngles.includes("ci-guard"));
+});
+
+test("resolveDynamicAngles: additive mode adds a catalog angle triggered by change category", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: NARROW_ANGLES,
+    changeCategories: [ChangeCategory.CI_ONLY],
+    anglePool: [...NARROW_ANGLES, "ci-guard"],
+  });
+  // addedAngles reports the catalog addition; recommendedAngles itself is
+  // still scoped to configuredAngles — merging addedAngles in is the
+  // caller's (resolveGateAnglesDynamic) responsibility, not this function's.
+  assert.ok(result.addedAngles.includes("ci-guard"));
+  assert.ok(!result.recommendedAngles.includes("ci-guard"));
+  assert.equal(result.addedReasons["ci-guard"], "Added: triggered by change category CI_ONLY");
+});
+
+test("resolveDynamicAngles: additive mode addedAngles/addedReasons content and order unchanged with Set-based anglePool lookup", () => {
+  // Regression check for the anglePool.includes -> Set.has refactor: same
+  // scenario as the "adds a catalog angle" test above, asserted with exact
+  // deepEqual (not just .includes) to prove no content/order regression.
+  const result = resolveDynamicAngles({
+    configuredAngles: NARROW_ANGLES,
+    changeCategories: [ChangeCategory.CI_ONLY],
+    anglePool: [...NARROW_ANGLES, "ci-guard"],
+  });
+  assert.deepEqual(result.addedAngles, ["ci-guard"]);
+  assert.deepEqual(result.addedReasons, { "ci-guard": "Added: triggered by change category CI_ONLY" });
+});
+
+test("resolveDynamicAngles: additive mode does not re-add already-configured angles", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: [ChangeCategory.CI_ONLY],
+    anglePool: DRAFT_ANGLES,
+  });
+  assert.deepEqual(result.addedAngles, []);
+});
+
+test("resolveDynamicAngles: additive mode does not add angles outside anglePool", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: NARROW_ANGLES,
+    changeCategories: [ChangeCategory.CI_ONLY],
+    anglePool: NARROW_ANGLES, // ci-guard not in the catalog
+  });
+  assert.deepEqual(result.addedAngles, []);
+});
+
+test("resolveDynamicAngles: additive mode reports always-include trigger reason", () => {
+  const narrowPreapproval = PREAPPROVAL_ANGLES.filter((a) => a !== "renderer-security");
+  const result = resolveDynamicAngles({
+    configuredAngles: narrowPreapproval,
+    changeCategories: [ChangeCategory.RENAME_ONLY],
+    anglePool: PREAPPROVAL_ANGLES,
+  });
+  assert.ok(result.addedAngles.includes("renderer-security"));
+  assert.equal(result.addedReasons["renderer-security"], "Added: always-include lens not in the configured pool");
+});
+
+test("resolveDynamicAngles: additive is a no-op in ambiguous/no-category fallback branches", () => {
+  const ambiguousResult = resolveDynamicAngles({
+    configuredAngles: NARROW_ANGLES,
+    changeCategories: [ChangeCategory.CI_ONLY],
+    ambiguous: true,
+    anglePool: [...NARROW_ANGLES, "ci-guard"],
+  });
+  assert.deepEqual(ambiguousResult.addedAngles, []);
+  assert.deepEqual(ambiguousResult.addedReasons, {});
+
+  const noCategoriesResult = resolveDynamicAngles({
+    configuredAngles: NARROW_ANGLES,
+    changeCategories: [],
+    anglePool: [...NARROW_ANGLES, "ci-guard"],
+  });
+  assert.deepEqual(noCategoriesResult.addedAngles, []);
+  assert.deepEqual(noCategoriesResult.addedReasons, {});
+});

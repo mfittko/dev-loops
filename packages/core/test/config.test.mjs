@@ -21,6 +21,7 @@ import {
   resolveGateConfig,
   resolveGateAngles,
   resolveGateAnglesDynamic,
+  resolveAnglePool,
   resolveWorkflowConfig,
   resolveLightMode,
   resolveGateDispatchMode,
@@ -1736,6 +1737,7 @@ describe("role resolution", () => {
         required: true,
         requireCi: true,
         dynamicAngles: false,
+        additiveAngles: false,
         blockCleanOnFindingSeverities: ["must-fix"],
       });
     });
@@ -1754,6 +1756,7 @@ describe("role resolution", () => {
         required: false,
         requireCi: false,
         dynamicAngles: false,
+        additiveAngles: false,
         blockCleanOnFindingSeverities: ["must-fix"],
       });
       assert.deepEqual(config.gates.draft.angles, ["scope", "coverage"]);
@@ -2861,6 +2864,201 @@ describe("resolveGateAnglesDynamic", () => {
     });
     assert.ok(!result.recommendedAngles.includes("correctness"));
     assert.ok(result.recommendedAngles.includes("pr-description"));
+  });
+
+  // --------------------------------------------------------------------
+  // Additive angle selection (#1048) — off by default
+  // --------------------------------------------------------------------
+
+  test("additiveAngles: false (default) is a byte-identical no-op vs. today's subtractive-only path", async () => {
+    const baseGates = {
+      draft: {
+        angles: ["scope", "coverage", "docs"],
+        dynamicAngles: true,
+      },
+    };
+    const diff = { diff: { nameStatusOutput: "A\t.github/workflows/ci.yml" } };
+
+    const withoutAdditive = await resolveGateAnglesDynamic({ version: 1, gates: baseGates }, "draft", diff);
+    const withAdditiveUnset = await resolveGateAnglesDynamic(
+      { version: 1, gates: { draft: { ...baseGates.draft, additiveAngles: false } } },
+      "draft",
+      diff,
+    );
+    assert.deepEqual(withAdditiveUnset.recommendedAngles, withoutAdditive.recommendedAngles);
+    assert.deepEqual(withoutAdditive.addedAngles, []);
+    assert.deepEqual(withoutAdditive.addedReasons, {});
+    // recommendedAngles stays a subset of mandatoryAngles ∪ configured angles
+    const allowed = new Set(["scope", "coverage", "docs"]);
+    for (const a of withoutAdditive.recommendedAngles) {
+      assert.ok(allowed.has(a), `${a} should be a subset of configured angles when additive is off`);
+    }
+  });
+
+  test("additiveAngles: true adds a catalog angle recommended by change category but not in the configured pool", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "coverage", "docs"], // ci-guard deliberately omitted
+          dynamicAngles: true,
+          additiveAngles: true,
+        },
+        anglePool: ["scope", "coverage", "docs", "ci-guard", "config-drift"],
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "A\t.github/workflows/ci.yml" },
+    });
+    assert.ok(result.addedAngles.includes("ci-guard"));
+    assert.ok(result.recommendedAngles.includes("ci-guard"));
+    assert.ok(!config.gates.draft.angles.includes("ci-guard")); // sanity: not in original pool
+    assert.equal(result.addedReasons["ci-guard"], "Added: triggered by change category CI_ONLY");
+  });
+
+  test("additiveAngles: true, but excludeAngles ceiling still wins over addition", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "coverage", "docs"],
+          excludeAngles: ["ci-guard"],
+          dynamicAngles: true,
+          additiveAngles: true,
+        },
+        anglePool: ["scope", "coverage", "docs", "ci-guard", "config-drift"],
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "A\t.github/workflows/ci.yml" },
+    });
+    assert.ok(!result.addedAngles.includes("ci-guard"));
+    assert.ok(!result.recommendedAngles.includes("ci-guard"));
+  });
+
+  test("additiveAngles: true still keeps mandatoryAngles floor intact", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "coverage"],
+          mandatoryAngles: ["pr-description", "correctness", "gate-evidence"],
+          dynamicAngles: true,
+          additiveAngles: true,
+        },
+        anglePool: ["scope", "coverage", "ci-guard"],
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "A\t.github/workflows/ci.yml" },
+    });
+    assert.ok(result.recommendedAngles.includes("pr-description"));
+    assert.ok(result.recommendedAngles.includes("correctness"));
+    assert.ok(result.recommendedAngles.includes("gate-evidence"));
+  });
+
+  test("additiveAngles: true excludes a mandatory angle from addedAngles/addedReasons even when it also appears in anglePool", async () => {
+    // Regression (#1136 gate-review): renderer-security is both mandatory AND
+    // in the always-include catalog set, so the additive resolver would
+    // otherwise recommend it as "added" — corrupting the audit rationale for
+    // an angle that actually runs unconditionally as the mandatory floor.
+    const config = {
+      version: 1,
+      gates: {
+        anglePool: ["scope", "correctness", "contract-surface", "docs", "renderer-security"],
+        preApproval: {
+          angles: ["scope"],
+          mandatoryAngles: ["renderer-security"],
+          dynamicAngles: true,
+          additiveAngles: true,
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "preApproval", {
+      diff: { nameStatusOutput: "M\tsrc/main.mjs" },
+    });
+    assert.ok(result.recommendedAngles.includes("renderer-security")); // mandatory floor still works
+    assert.ok(!result.addedAngles.includes("renderer-security")); // not misattributed as "added"
+    assert.equal(result.addedReasons["renderer-security"], undefined); // no fabricated rationale
+  });
+
+  test("additiveAngles: true with no gates.anglePool falls back to the built-in persona registry catalog", async () => {
+    // contract-surface is a LOGIC_CHANGE core-subset angle AND a built-in persona
+    // (see BUILTIN_PERSONAS), so it's a valid fallback-catalog addition target.
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "coverage"], // contract-surface omitted; no explicit anglePool
+          dynamicAngles: true,
+          additiveAngles: true,
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tsrc/main.mjs" },
+    });
+    assert.ok(result.addedAngles.includes("contract-surface"));
+    assert.ok(result.recommendedAngles.includes("contract-surface"));
+  });
+
+  test("resolveAnglePool: with no explicit gates.anglePool, includes angles configured on gates.draft that are absent from BUILTIN_PERSONAS", () => {
+    // ci-guard has no entry in BUILTIN_PERSONAS (it resolves via the
+    // default-reviewer persona fallback at dispatch time), but it is a real,
+    // configured angle in this repo's own extension-defaults.yaml draft gate —
+    // the fallback catalog must include it, not just the persona registry.
+    const config = { version: 1, gates: { draft: { angles: ["scope", "ci-guard"] } } };
+    assert.ok(resolveAnglePool(config).includes("ci-guard"));
+  });
+
+  test("resolveAnglePool: with no explicit gates.anglePool, still includes BUILTIN_PERSONAS-only angles not configured on any gate", () => {
+    // renderer-security is in BUILTIN_PERSONAS but not referenced by any gate
+    // in this config — the persona-registry half of the union must still hold.
+    const config = { version: 1, gates: { draft: { angles: ["scope"] } } };
+    assert.ok(resolveAnglePool(config).includes("renderer-security"));
+  });
+
+  test("resolveAnglePool: explicit gates.anglePool override is unaffected by the broadened fallback", () => {
+    const config = {
+      version: 1,
+      gates: {
+        anglePool: [" scope ", "coverage", "scope"],
+        draft: { angles: ["ci-guard"] },
+      },
+    };
+    // Deduped/trimmed explicit list only — no ci-guard leaking in from draft.angles.
+    assert.deepEqual(resolveAnglePool(config), ["scope", "coverage"]);
+  });
+
+  test("additiveAngles: true with no gates.anglePool can additively select an angle configured elsewhere in this config's gates but absent from BUILTIN_PERSONAS", async () => {
+    // ci-guard is a real draft-gate angle in this repo's extension-defaults.yaml
+    // but has no BUILTIN_PERSONAS entry, so the old BUILTIN_PERSONAS-only
+    // fallback could never additively select it. Here the gate under test
+    // (draft) has a hypothetical narrower angle list that omits ci-guard, but
+    // ci-guard is configured on another gate (preApproval) in the same config —
+    // the broadened fallback catalog unions across all of this config's own
+    // gates, so it should still be additively reachable for draft.
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "coverage", "docs"], // ci-guard deliberately omitted here
+          dynamicAngles: true,
+          additiveAngles: true,
+        },
+        preApproval: { angles: ["ci-guard", "link-check"] },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "A\t.github/workflows/ci.yml" },
+    });
+    assert.ok(result.addedAngles.includes("ci-guard"));
+    assert.ok(result.recommendedAngles.includes("ci-guard"));
+  });
+
+  test("resolveGateConfig: additiveAngles defaults to false when unset (this repo's own gates are unaffected)", () => {
+    const config = { version: 1, gates: { draft: { angles: ["scope"], dynamicAngles: true } } };
+    assert.equal(resolveGateConfig(config, "draft").additiveAngles, false);
   });
 
 });
