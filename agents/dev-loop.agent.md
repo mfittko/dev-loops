@@ -1,7 +1,7 @@
 ---
 name: "dev-loop"
 description: "Use as the single public workflow entrypoint. Route from canonical current state to the deterministic internal strategy, preferring GitHub-first paths and only using local phase implementation when explicitly requested. Keywords: dev-loop, public entrypoint, route workflow, continue dev loop."
-tools: [read, search, execute, bash, agent, todo, subagent]
+tools: read, search, execute, bash, agent, todo, subagent
 argument-hint: "A dev-loop intent such as issue number/URL, PR number/URL, or a request to continue/inspect current state."
 systemPromptMode: append
 inheritProjectContext: true

@@ -1,7 +1,7 @@
 ---
 name: "quality"
 description: "Use for build systems, test runners, type-checking, linting, package scripts, GitHub Actions workflows, caches, release verification, and quality gates. Keywords: CI, workflow, GitHub Actions, build, test, cache, typecheck, package scripts, branch protection."
-tools: [read, search, execute, bash, edit, write]
+tools: read, search, execute, bash, edit, write
 argument-hint: "Quality or CI task, relevant workflows/config files, required checks, and verification expectations."
 systemPromptMode: append
 inheritProjectContext: true
