@@ -148,6 +148,30 @@ function isBlockedCiStatus(status) {
   return status === "failure";
 }
 
+/**
+ * Single source of truth for whether the Copilot review round cap has been
+ * reached (issue #1126). `copilot-pr-handoff.mjs` enforces the cap by calling
+ * `interpretLoopState`, which uses this predicate internally; every other
+ * caller that needs the same "cap reached" boolean (gate coordination,
+ * detect-pr-gate-coordination-state) MUST call this function too rather than
+ * re-deriving `copilotReviewRoundCount >= maxCopilotRounds` locally, so the
+ * two never disagree at the cap boundary.
+ *
+ * `copilotReviewRoundCount` counts COMPLETED rounds, so `>=` means every
+ * permitted round has already happened. `maxCopilotRounds` of `null`/`0`/
+ * non-number means the cap does not apply (unlimited or disabled).
+ *
+ * @param {object} params
+ * @param {number} params.copilotReviewRoundCount
+ * @param {number|null} [params.maxCopilotRounds]
+ * @returns {boolean}
+ */
+export function isCopilotRoundCapReached({ copilotReviewRoundCount, maxCopilotRounds }) {
+  return typeof maxCopilotRounds === "number" && maxCopilotRounds > 0
+    && typeof copilotReviewRoundCount === "number"
+    && copilotReviewRoundCount >= maxCopilotRounds;
+}
+
 export function normalizeCiStatus(rollup) {
   return normalizeStatusCheckRollupContract(rollup).overallStatus;
 }
@@ -375,8 +399,7 @@ export function interpretLoopState(snapshot, refinementConfig) {
   const maxRounds = refinementConfig?.maxCopilotRounds;
   const reviewInFlight = s.copilotReviewRequestStatus === "requested"
     || s.copilotReviewRequestStatus === "already-requested";
-  if (typeof maxRounds === "number" && maxRounds > 0
-      && s.copilotReviewRoundCount >= maxRounds
+  if (isCopilotRoundCapReached({ copilotReviewRoundCount: s.copilotReviewRoundCount, maxCopilotRounds: maxRounds })
       && state !== STATE.NO_PR && state !== STATE.DONE
       && state !== STATE.PR_DRAFT && state !== STATE.REVIEW_REQUEST_UNAVAILABLE
       && state !== STATE.BLOCKED_NEEDS_USER_DECISION) {

@@ -9,6 +9,7 @@ import {
   interpretLoopState,
   applyConfirmedReviewRequest,
   summarizeLoopInterpretation,
+  isCopilotRoundCapReached,
 } from "../src/loop/copilot-loop-state.mjs";
 
 // ---------------------------------------------------------------------------
@@ -1056,6 +1057,28 @@ test("interpretLoopState does not apply round cap when copilotReviewRoundCount i
   assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
   assert.equal(result.roundCapCleanEligible, false);
   assert.equal(result.autoRerequestEligible, true);
+});
+
+// isCopilotRoundCapReached (#1126): the single shared predicate that both
+// copilot-pr-handoff.mjs (via interpretLoopState) and
+// detect-pr-gate-coordination-state.mjs (via evaluatePrGateCoordination) must
+// consume so they cannot disagree at the cap boundary.
+test("isCopilotRoundCapReached is true when completed rounds equal the cap", () => {
+  assert.equal(isCopilotRoundCapReached({ copilotReviewRoundCount: 2, maxCopilotRounds: 2 }), true);
+});
+
+test("isCopilotRoundCapReached is true when completed rounds exceed the cap", () => {
+  assert.equal(isCopilotRoundCapReached({ copilotReviewRoundCount: 3, maxCopilotRounds: 2 }), true);
+});
+
+test("isCopilotRoundCapReached is false when completed rounds are below the cap", () => {
+  assert.equal(isCopilotRoundCapReached({ copilotReviewRoundCount: 1, maxCopilotRounds: 2 }), false);
+});
+
+test("isCopilotRoundCapReached is false when maxCopilotRounds is null, 0, or absent (cap disabled/unset)", () => {
+  assert.equal(isCopilotRoundCapReached({ copilotReviewRoundCount: 5, maxCopilotRounds: null }), false);
+  assert.equal(isCopilotRoundCapReached({ copilotReviewRoundCount: 5, maxCopilotRounds: 0 }), false);
+  assert.equal(isCopilotRoundCapReached({ copilotReviewRoundCount: 5, maxCopilotRounds: undefined }), false);
 });
 
 test("interpretLoopState does not apply round cap when maxCopilotRounds is not configured", () => {
