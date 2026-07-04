@@ -165,8 +165,9 @@ export function resolveDynamicAngles({
 
   // Additive: pull in recommended catalog angles not already configured (#1048)
   const configuredSet = new Set(configuredAngles);
-  const addedAngles = Array.isArray(anglePool)
-    ? [...recommended].filter((a) => anglePool.includes(a) && !configuredSet.has(a))
+  const anglePoolSet = Array.isArray(anglePool) ? new Set(anglePool) : null;
+  const addedAngles = anglePoolSet
+    ? [...recommended].filter((a) => anglePoolSet.has(a) && !configuredSet.has(a))
     : [];
   const addedReasons = {};
   for (const angle of addedAngles) {

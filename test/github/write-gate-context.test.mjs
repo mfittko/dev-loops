@@ -399,6 +399,24 @@ test("rationaleFromResolver marks addedAngles entries as 'added' with their adde
   });
 });
 
+test("rationaleFromResolver treats addedAngles entries as 'kept' when dynamicAnglesActive is not true (defensive guard)", () => {
+  // resolveGateAnglesDynamic never produces a non-empty addedAngles with
+  // dynamicAnglesActive false, but a hand-constructed/malformed resolverResult
+  // could. The "added" classification must stay gated on dynamicActive so
+  // rationale semantics remain internally consistent.
+  const { rationale } = rationaleFromResolver({
+    recommendedAngles: ["some-angle"],
+    skippedAngles: [],
+    reasons: {},
+    addedAngles: ["some-angle"],
+    addedReasons: { "some-angle": "Added: triggered by change category CI_ONLY" },
+    dynamicAnglesActive: false,
+  });
+  assert.deepEqual(rationale, [
+    { angle: "some-angle", action: "kept", reason: "static pool (dynamic angle resolution inactive)" },
+  ]);
+});
+
 test("rationaleFromResolver marks a mandatory angle absent from addedAngles as 'kept', not 'added' (#1136 regression)", () => {
   // Mirrors resolveGateAnglesDynamic's fixed output shape: renderer-security is
   // in recommendedAngles (mandatory floor) but excluded from addedAngles because

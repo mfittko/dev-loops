@@ -195,6 +195,19 @@ test("resolveDynamicAngles: additive mode adds a catalog angle triggered by chan
   assert.equal(result.addedReasons["ci-guard"], "Added: triggered by change category CI_ONLY");
 });
 
+test("resolveDynamicAngles: additive mode addedAngles/addedReasons content and order unchanged with Set-based anglePool lookup", () => {
+  // Regression check for the anglePool.includes -> Set.has refactor: same
+  // scenario as the "adds a catalog angle" test above, asserted with exact
+  // deepEqual (not just .includes) to prove no content/order regression.
+  const result = resolveDynamicAngles({
+    configuredAngles: NARROW_ANGLES,
+    changeCategories: [ChangeCategory.CI_ONLY],
+    anglePool: [...NARROW_ANGLES, "ci-guard"],
+  });
+  assert.deepEqual(result.addedAngles, ["ci-guard"]);
+  assert.deepEqual(result.addedReasons, { "ci-guard": "Added: triggered by change category CI_ONLY" });
+});
+
 test("resolveDynamicAngles: additive mode does not re-add already-configured angles", () => {
   const result = resolveDynamicAngles({
     configuredAngles: DRAFT_ANGLES,
