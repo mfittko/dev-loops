@@ -189,3 +189,38 @@ test("shadow-bug: a provenance-less ledger in an earlier checkout does NOT shado
     await rm(base, { recursive: true, force: true });
   }
 });
+
+test("residual shadow: a below-floor ledger in cwd checkout does NOT shadow a satisfying one elsewhere", async () => {
+  const { base, repoA, repoB } = await makeRepoWithWorktrees();
+  try {
+    // repoB (== cwd, enumerated FIRST) carries a consistent but BELOW-FLOOR ledger
+    // (distinctReviewers:1 — the write path allows it; it only checks consistency).
+    await writeGateFindingsLog(
+      {
+        repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
+        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "scope", reviewer: "review-a" }] }),
+      },
+      { repoRoot: repoB },
+    );
+    // repoA (enumerated later) carries the SATISFYING >=2 ledger.
+    await writeGateFindingsLog(
+      {
+        repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
+        provenance: JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-b" }] }),
+      },
+      { repoRoot: repoA },
+    );
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: "42", currentHeadSha: HEAD,
+      draftGateMarker: NO_DRAFT_MARKER, preApprovalGateMarker: PA_MARKER,
+      config: PROV_CONFIG, cwd: repoB,
+    });
+    const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.ok(pa && pa.provenance, "must read the satisfying provenance, not the below-floor shadow");
+    assert.equal(pa.provenance.distinctReviewers, 2, "satisfying ledger preferred over below-floor");
+    const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
+    assert.equal(check.ok, true, JSON.stringify(check.failures));
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});

@@ -330,27 +330,32 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
 }
 /**
  * Read the recorded fan-out `provenance` object from a ledger across the
- * enumerated checkouts. Mirrors ledgerExistsInAny's all-checkout semantics:
- * returns the FIRST NON-NULL provenance found and only null after exhausting
- * every checkout. This prevents a stale/provenance-less ledger for the same head
- * in an earlier-enumerated checkout from SHADOWING a valid provenance-bearing
- * ledger in the PR worktree (which would otherwise falsely fail closed). Only
+ * enumerated checkouts. Mirrors ledgerExistsInAny's "ANY checkout satisfies"
+ * semantics: prefers the FIRST checkout whose ledger provenance actually
+ * SATISFIES enforcement (internally consistent AND distinctReviewers >= floor),
+ * so a below-floor or provenance-less ledger in an earlier-enumerated checkout
+ * cannot SHADOW a valid one in the PR worktree (which would falsely fail closed).
+ * Falls back to the first non-null provenance (for a useful diagnostic message)
+ * only when NO checkout satisfies, and null only when none is present. Only
  * called when requireFanoutProvenance is enabled so the default path pays no I/O.
  */
 async function readLedgerProvenanceInAny(checkouts, ledgerPath) {
+  let firstNonNull = null;
   for (const root of checkouts) {
     const full = path.resolve(root, ledgerPath);
     try {
       const parsed = JSON.parse(await readFile(full, "utf8"));
-      if (parsed && typeof parsed === "object" && parsed.provenance != null) {
-        return parsed.provenance;
+      const prov = parsed && typeof parsed === "object" ? parsed.provenance : null;
+      if (prov == null) continue; // ledger present but no provenance — keep scanning.
+      if (provenanceConsistencyError(prov) === null && prov.distinctReviewers >= FANOUT_PROVENANCE_MIN_REVIEWERS) {
+        return prov; // satisfying ledger — prefer it over any earlier below-floor one.
       }
-      // Ledger present but carries no provenance — keep scanning other checkouts.
+      if (firstNonNull === null) firstNonNull = prov; // remember for diagnostics.
     } catch {
       // Missing/unreadable/malformed ledger in this checkout — try the next.
     }
   }
-  return null;
+  return firstNonNull;
 }
 /**
  * Build the fan-out evidence enforcement descriptor.

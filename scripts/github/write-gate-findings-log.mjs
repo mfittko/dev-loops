@@ -17,6 +17,7 @@ Required:
   --findings <json>              JSON array of finding objects with severity, disposition, angle, and summary
 Optional:
   --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model? }] }
+                                 distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}

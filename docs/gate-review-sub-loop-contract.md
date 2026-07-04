@@ -312,7 +312,7 @@ findings-log ledger can additionally record **fan-out provenance**:
 
 ```jsonc
 "provenance": {
-  "distinctReviewers": 3,               // count of distinct reviewer agents dispatched
+  "distinctReviewers": 2,               // count of distinct reviewer agents dispatched (<= distinct identities in perAngle)
   "perAngle": [                          // per-angle dispatch provenance
     { "angle": "scope",   "reviewer": "review-a", "dispatchId": "…", "model": "…" },
     { "angle": "safety",  "reviewer": "review-b" }
