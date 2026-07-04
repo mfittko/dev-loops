@@ -1,6 +1,6 @@
 // #1071: --jq/--silent is a BASE-CLI GUARANTEE for every JSON-emitting
 // dev-loops command, enforced via the single shared emit path in
-// scripts/lib/jq-output.mjs (emitResult/emitJson).
+// scripts/lib/jq-output.mjs (emitResult).
 //
 // This contract has two layers:
 //
@@ -36,12 +36,18 @@ import { runNode } from "../_helpers.mjs";
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const scriptsRoot = path.join(repoRoot, "scripts");
 
-// A file is a "direct-CLI-run" script if it guards its top-level side effect
-// behind one of the direct-run-detection idioms used across scripts/ (the
-// shared isDirectCliRun helper, or an equivalent inline
-// `process.argv[1] === ...` / `.includes(...)` check for older scripts).
+// A file is a "direct-CLI-run" script if it either guards its top-level side
+// effect behind a direct-run-detection idiom (the shared isDirectCliRun
+// helper, or an equivalent inline `process.argv[1] === ...` / `.includes(...)`
+// check for older scripts) OR invokes an entrypoint UNCONDITIONALLY at the top
+// level (`process.exit(main(...))`, `main().catch(...)`, `await main(...)`).
+// The unconditional forms have no guard to key on, so an earlier guard-only
+// heuristic silently missed them (#1071 draft-gate coverage finding: three
+// JSON-to-stdout CLIs — headless-dev-loop, headless-info-smoke, run-queue —
+// evaded discovery entirely). Under-inclusion is the real risk here (a
+// regression sailing through), so we match both shapes.
 const DIRECT_RUN_GUARD_RE =
-  /isDirectCliRun\(import\.meta\.url\)|process\.argv\[1\][^\n]*fileURLToPath\(import\.meta\.url\)|process\.argv\[1\][^\n]*\.includes\(/;
+  /isDirectCliRun\(import\.meta\.url\)|process\.argv\[1\][^\n]*fileURLToPath\(import\.meta\.url\)|process\.argv\[1\][^\n]*\.includes\(|process\.exit\(\s*main\(|^\s*(?:await\s+)?main\([^\n]*\)\s*\.\s*catch\(|^\s*(?:await\s+)?main\(process\.argv/m;
 
 // A file is "JSON-emitting" if it constructs a JSON.stringify payload
 // anywhere — broad and deliberately over-inclusive (a few false positives are
@@ -50,7 +56,7 @@ const DIRECT_RUN_GUARD_RE =
 const JSON_STRINGIFY_RE = /JSON\.stringify/;
 
 // Accepted "routes through the shared emit path" evidence: a direct import of
-// jq-output.mjs (emitResult/emitJson), or the refine checkers' shared
+// jq-output.mjs (emitResult), or the refine checkers' shared
 // _refine-helpers.mjs wrapper (which itself imports jq-output.mjs — verified
 // below as its own assertion so that indirection can't silently rot).
 const JQ_OUTPUT_REFERENCE_RE = /jq-output\.mjs/;
@@ -72,6 +78,18 @@ const EXCLUDED = new Map([
   [
     "repo-wiki.mjs",
     "Writes its JSON to a local stamp file (fs write), never to stdout — nothing for a caller to filter with --jq.",
+  ],
+  [
+    "claude/headless-dev-loop.mjs",
+    "Build/smoke harness for the Claude asset pipeline (dry-run command echo / spawn wrapper), not a dev-loop operator-facing command in the SKILL/agent verb set — same class as generate-claude-assets.mjs.",
+  ],
+  [
+    "claude/headless-info-smoke.mjs",
+    "CI smoke test that emits a single pass/fail status line for `dev-loops status`/`loop info`; not a loop-consumed 'read tool output' result surfaced via the skill.",
+  ],
+  [
+    "loop/run-queue.mjs",
+    "Dormant no-op queue adapter — the live pickup path is Next Up via resolve-active-board-item (see queue-pickup memory); its human-readable pretty-printed JSON is not a --jq-consumed tool result. Wire to emitResult if it is ever reactivated.",
   ],
 ]);
 
@@ -105,6 +123,18 @@ function routesThroughSharedEmitPath(source) {
   return JQ_OUTPUT_REFERENCE_RE.test(source) || REFINE_HELPERS_REFERENCE_RE.test(source);
 }
 
+test("discovery recognizes UNCONDITIONAL entrypoint idioms, not just guarded ones (#1071 coverage finding)", () => {
+  // Guarded idioms (already covered) must still match.
+  assert.match("if (isDirectCliRun(import.meta.url)) main();", DIRECT_RUN_GUARD_RE);
+  // Unconditional idioms: these have no guard to key on and were the blind spot.
+  assert.match("process.exit(main(process.argv.slice(2)));", DIRECT_RUN_GUARD_RE); // headless-*
+  assert.match("main().catch((err) => { process.exit(1); });", DIRECT_RUN_GUARD_RE); // run-queue
+  assert.match("await main(process.argv.slice(2));", DIRECT_RUN_GUARD_RE);
+  // A pure library (function defs, no top-level entrypoint) must NOT match, so
+  // the heuristic doesn't over-discover non-CLI modules.
+  assert.doesNotMatch("export function main(argv) { return 0; }\n", DIRECT_RUN_GUARD_RE);
+});
+
 test("_refine-helpers.mjs (the refine checkers' shared output wrapper) itself routes through jq-output.mjs", async () => {
   const helperSource = await readFile(
     path.join(scriptsRoot, "refine/_refine-helpers.mjs"),
@@ -134,7 +164,7 @@ test("every JSON-emitting direct-CLI script routes through the shared jq-output 
     [],
     `JSON-emitting direct-CLI script(s) do not route through scripts/lib/jq-output.mjs and are not in the` +
       ` EXCLUDED allowlist (with a reason) in this test:\n  ${missing.join("\n  ")}\n` +
-      `Fix: wire --jq/--silent via emitResult/emitJson (see scripts/projects/list-queue-items.mjs), or add a` +
+      `Fix: wire --jq/--silent via emitResult (see scripts/projects/list-queue-items.mjs), or add a` +
       ` reasoned EXCLUDED entry if this script is genuinely out of scope.`,
   );
 });
