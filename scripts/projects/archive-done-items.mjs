@@ -3,7 +3,7 @@ import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings, parseProjectRef, findProject } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: dev-loops queue archive-done --repo <owner/name> [--project <number|id|board-uri>] [--older-than <duration>] [--dry-run]
        (dev-loops project archive-done … is a back-compat alias)
@@ -91,14 +91,10 @@ function parseCliArgs(argv) {
         }
         args.dryRun = true;
         break;
-      case "jq":
-        args.jq = requireValue(token, "--jq requires a filter", "INVALID_ARGS");
-        break;
-      case "silent":
-        args.silent = true;
-        break;
-      default:
+      default: {
+        if (matchJqOutputToken(token, args, (t) => requireValue(t, "--jq requires a filter", "INVALID_ARGS"))) break;
         throw Object.assign(new Error(`Unknown flag: ${token.rawName}`), { code: "INVALID_ARGS", usage: USAGE });
+      }
     }
   }
   return args;

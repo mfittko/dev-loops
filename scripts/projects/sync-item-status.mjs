@@ -3,7 +3,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { syncBoardStatus } from "@dev-loops/core/loop/queue-board-sync";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: dev-loops queue sync-status --repo <owner/name> --item <number> --to-column <name>
        (dev-loops project sync-status … is a back-compat alias)
@@ -82,14 +82,10 @@ function parseCliArgs(argv) {
       case "to-column":
         args.toColumn = requireValue(token, "--to-column requires a value", "INVALID_COLUMN");
         break;
-      case "jq":
-        args.jq = requireValue(token, "--jq requires a filter", "INVALID_ARGS");
-        break;
-      case "silent":
-        args.silent = true;
-        break;
-      default:
+      default: {
+        if (matchJqOutputToken(token, args, (t) => requireValue(t, "--jq requires a filter", "INVALID_ARGS"))) break;
         throw Object.assign(new Error(`Unknown flag: ${token.rawName}`), { code: "INVALID_ARGS", usage: USAGE });
+      }
     }
   }
   return args;

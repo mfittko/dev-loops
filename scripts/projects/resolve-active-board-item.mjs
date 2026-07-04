@@ -16,7 +16,7 @@
 // this helper deliberately makes no further decisions.
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
 import { EMPTY_NEXT_UP_MESSAGE } from "@dev-loops/core/loop/queue-board-ordering";
 
@@ -106,14 +106,10 @@ function parseCliArgs(argv) {
       case "project":
         args.project = requireValue(token, "--project requires a value (number or node ID)");
         break;
-      case "jq":
-        args.jq = requireValue(token, "--jq requires a filter");
-        break;
-      case "silent":
-        args.silent = true;
-        break;
-      default:
+      default: {
+        if (matchJqOutputToken(token, args, (t) => requireValue(t, "--jq requires a filter"))) break;
         throw parseError(`Unknown flag: ${token.rawName}`);
+      }
     }
   }
   return args;

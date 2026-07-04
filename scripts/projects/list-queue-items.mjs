@@ -3,7 +3,7 @@ import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: dev-loops queue list --repo <owner/name> [--project <number|id>] [--column <name>] [--limit <n>]
        dev-loops queue list --repo <owner/name> [--project <number|id>] --summary [--done-limit <n>]
@@ -131,14 +131,10 @@ function parseCliArgs(argv) {
         args.doneLimit = val;
         break;
       }
-      case "jq":
-        args.jq = requireValue(token, "--jq requires a filter");
-        break;
-      case "silent":
-        args.silent = true;
-        break;
-      default:
+      default: {
+        if (matchJqOutputToken(token, args, (t) => requireValue(t, "--jq requires a filter"))) break;
         throw parseError(`Unknown flag: ${token.rawName}`);
+      }
     }
   }
   return args;

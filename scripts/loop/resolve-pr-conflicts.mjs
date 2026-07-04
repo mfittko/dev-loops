@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: resolve-pr-conflicts.mjs [--base <branch>] [--repo-root <dir>] [--no-verify] [--push] [--json]
 
@@ -108,14 +108,10 @@ export function parseResolvePrConflictsCliArgs(argv) {
       case "json":
         options.json = true;
         break;
-      case "jq":
-        options.jq = requireTokenValue(token, parseError);
-        break;
-      case "silent":
-        options.silent = true;
-        break;
-      default:
+      default: {
+        if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) break;
         throw parseError(`Unknown argument: ${token.rawName}`);
+      }
     }
   }
   return options;
