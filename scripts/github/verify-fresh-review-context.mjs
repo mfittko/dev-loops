@@ -31,10 +31,11 @@ Options:
                   reviewer must be reading from (the build-once bundle
                   written by write-gate-context.mjs, e.g.
                   tmp/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json).
-                  Must be a cwd-relative path that stays within the
-                  reviewer's working directory; an absolute or ..-escaping
-                  path (which could point at another worktree's bundle and
-                  defeat the worktree-locality guard) fails closed (exit 1).
+                  Must resolve to a path within the reviewer's working
+                  directory; a path that resolves OUTSIDE cwd (an absolute
+                  or ..-escaping path pointing at another worktree's bundle,
+                  which would defeat the worktree-locality guard) fails
+                  closed (exit 1).
                   When provided, also fails closed (exit 1) if the artifact
                   is missing (ENOENT) from the reviewer's cwd. Per-angle
                   gate reviewers must run in the PR's actual worktree/head
@@ -58,14 +59,20 @@ Exit codes:
   2  Usage or internal error`.trim();
 const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const parseError = buildParseError(USAGE);
-function resolveScope(argv) {
-  const idx = argv.indexOf("--scope");
+// Resolve a `--flag <value>` argument. Returns null when the flag is absent,
+// "" when it is present but the value is missing/empty/flag-like (a following
+// `-`-prefixed token, which must not be silently consumed), else the value.
+function resolveFlagValue(argv, flag) {
+  const idx = argv.indexOf(flag);
   if (idx === -1) return null;
   const val = argv[idx + 1];
   if (val === undefined || val === "" || (val.length > 0 && val[0] === "-")) {
     return ""; // provided but missing/empty/flag-like
   }
   return val;
+}
+function resolveScope(argv) {
+  return resolveFlagValue(argv, "--scope");
 }
 function resolveValidatedScope(argv) {
   const raw = resolveScope(argv);
@@ -79,13 +86,7 @@ function resolveValidatedScope(argv) {
   return raw;
 }
 function resolveContextPath(argv) {
-  const idx = argv.indexOf("--context-path");
-  if (idx === -1) return null;
-  const val = argv[idx + 1];
-  if (val === undefined || val === "" || (val.length > 0 && val[0] === "-")) {
-    return ""; // provided but missing/empty/flag-like
-  }
-  return val;
+  return resolveFlagValue(argv, "--context-path");
 }
 // Round = the current head SHA, so a retry on a new head gets a fresh key while
 // a same-head re-entry collides and fails closed. `git rev-parse HEAD` yields the
