@@ -16,11 +16,21 @@ import {
 
 const repoRootUrl = new URL("../../", import.meta.url);
 
-test("sanctioned-commands: every mapped wrapper exists on disk (fails closed)", async () => {
+test("sanctioned-commands: every mapped wrapper is well-shaped AND exists on disk (fails closed)", async () => {
   const paths = listSanctionedWrapperPaths();
   assert.ok(paths.length > 0, "map must name at least one wrapper path");
 
+  // listSanctionedWrapperPaths returns EVERY value across the path-bearing
+  // groups with no shape filtering, so a malformed/typo'd entry (wrong
+  // extension, non-scripts path, or a non-string) is caught here rather than
+  // silently skipped — the fail-OPEN hole this test must not have.
   for (const relPath of paths) {
+    assert.equal(typeof relPath, "string", `mapped wrapper value is not a string: ${JSON.stringify(relPath)}`);
+    assert.match(
+      relPath,
+      /^scripts\/.+\.mjs$/,
+      `mapped wrapper path is malformed (must be a repo-root-relative scripts/*.mjs path): ${relPath}`,
+    );
     const fileUrl = new URL(relPath, repoRootUrl);
     await assert.doesNotReject(
       access(fileUrl),
@@ -64,9 +74,11 @@ test("sanctioned-commands: the map is carried into the built handoff envelope", 
   const envelope = await buildHandoffEnvelopeCli({ inputPath }, { adapter });
 
   assert.ok(envelope.sanctionedCommands, "envelope must carry sanctionedCommands by default");
-  assert.equal(
-    envelope.sanctionedCommands.lifecycle["ready-for-review"],
-    "scripts/github/ready-for-review.mjs",
-    "envelope must carry the canonical map verbatim",
+  // Assert the WHOLE map is carried verbatim, not just one key — so a partial
+  // or mutated injection (e.g. a dropped group) fails the test.
+  assert.deepEqual(
+    envelope.sanctionedCommands,
+    SANCTIONED_COMMANDS,
+    "envelope must carry the canonical map verbatim (whole map, all groups)",
   );
 });

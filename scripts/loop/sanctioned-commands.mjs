@@ -38,7 +38,11 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "issue-comment": "scripts/github/comment-issue.mjs",
   }),
 
-  // Lifecycle mutations (state transitions on the PR / review / board).
+  // Lifecycle mutations a subagent MAY perform (state transitions on the PR /
+  // review). Board status transitions are deliberately NOT here — they are
+  // orchestratorOwned (see below): in the current batch model the orchestrator
+  // owns board moves, and a subagent's In-Progress move rides ready-for-review.mjs
+  // (#1069), so there is no standalone subagent-sanctioned board-sync op.
   lifecycle: Object.freeze({
     "ready-for-review": "scripts/github/ready-for-review.mjs",
     "pr-create": "scripts/github/create-pr.mjs",
@@ -46,7 +50,6 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "reply-resolve-thread": "scripts/github/reply-resolve-review-thread.mjs",
     "reply-resolve-threads": "scripts/github/reply-resolve-review-threads.mjs",
     "gate-verdict-comment": "scripts/github/upsert-checkpoint-verdict.mjs",
-    "board-status-sync": "scripts/projects/sync-item-status.mjs",
   }),
 
   // Never allowed for any operation above — the sanctioned wrapper is mandatory.
@@ -63,23 +66,36 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "sleep-poll loops",
   ]),
 
-  // Orchestrator-owned: a spawned dev-loop subagent must NEVER do these.
+  // Orchestrator-owned: a spawned dev-loop subagent must NEVER do these. Board
+  // status transitions live here (not in `lifecycle`) — the orchestrator owns
+  // move-queue-item/sync-item-status in the current batch model.
   orchestratorOwned: Object.freeze([
     "gh pr merge",
-    "board status transitions (current batch model)",
+    "board status transitions (move-queue-item / sync-item-status.mjs; current batch model)",
   ]),
 });
 
+// The wrapper-path-bearing groups are the object-valued groups (reads/edits/
+// lifecycle); `forbidden`/`orchestratorOwned` are string arrays, not path maps.
+const PATH_GROUP_KEYS = Object.freeze(
+  Object.keys(SANCTIONED_COMMANDS).filter(
+    (k) => !Array.isArray(SANCTIONED_COMMANDS[k]),
+  ),
+);
+
 /**
- * Flat list of every repo-root-relative wrapper path named in the map.
- * Shared by the existence contract test so the map cannot drift from disk.
+ * EVERY repo-root-relative value named across the path-bearing groups — with NO
+ * shape filtering, so a malformed/typo'd entry is RETURNED (and then fails the
+ * contract test's shape+existence assertions) rather than being silently
+ * skipped. Auto-includes any future path-bearing group. This is what keeps the
+ * map from drifting off disk (#1081).
  * @returns {string[]}
  */
 export function listSanctionedWrapperPaths() {
   const out = [];
-  for (const group of [SANCTIONED_COMMANDS.reads, SANCTIONED_COMMANDS.edits, SANCTIONED_COMMANDS.lifecycle]) {
-    for (const value of Object.values(group)) {
-      if (typeof value === "string" && /^scripts\/.+\.mjs$/.test(value)) out.push(value);
+  for (const key of PATH_GROUP_KEYS) {
+    for (const value of Object.values(SANCTIONED_COMMANDS[key])) {
+      out.push(value);
     }
   }
   return out;
