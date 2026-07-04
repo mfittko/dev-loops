@@ -1,4 +1,4 @@
-import { DISPOSITION, STATE } from "./copilot-loop-state.mjs";
+import { DISPOSITION, isCopilotRoundCapReached, STATE } from "./copilot-loop-state.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 
@@ -443,9 +443,7 @@ export function shouldGuardCopilotReviewRequest({
   //    CI) but Copilot has NOT reviewed THIS head (e.g. a post-cap commit). No further
   //    Copilot round is permitted, so forcing a formal request would dead-end the loop;
   //    the pre_approval_gate reviews the post-cap head instead (per #848).
-  const roundCapReached = maxCopilotRounds !== null
-    && typeof copilotReviewRoundCount === "number"
-    && copilotReviewRoundCount >= maxCopilotRounds;
+  const roundCapReached = isCopilotRoundCapReached({ copilotReviewRoundCount, maxCopilotRounds });
   if (
     roundCapReached
     && (sameHeadCleanConverged || roundCapCleanFallback)
@@ -537,7 +535,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const draftGateRequireCi = input.draftGateRequireCi !== false;
   const copilotReviewRoundCount = normalizeNonNegativeInteger(input.copilotReviewRoundCount);
   const maxCopilotRounds = normalizePositiveInteger(input.maxCopilotRounds);
-  const roundCapReached = maxCopilotRounds !== null && copilotReviewRoundCount >= maxCopilotRounds;
+  const roundCapReached = isCopilotRoundCapReached({ copilotReviewRoundCount, maxCopilotRounds });
   const postConvergenceSignificantChange = input.postConvergenceSignificantChange === true;
   const roundCapNewCycleRequired = roundCapReached && copilotReviewRoundCount > 0 && postConvergenceSignificantChange;
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";

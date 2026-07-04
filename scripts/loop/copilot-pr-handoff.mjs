@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, normalizeTimestamp } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, normalizeTimestamp, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
@@ -293,6 +294,26 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
   }
 }
 
+// Facts needed by the round-cap escape-hatch significant-change detector
+// (#1103, #1126): the current head, the Copilot reviews (to find the last
+// reviewed head), and the PR's changed files. Fetched only when the interpreter
+// already resolved ROUND_CAP_CLEAN_FALLBACK, so this extra call is off the hot path.
+async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+  const result = await runChild(
+    ghCommand,
+    ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,reviews,files"],
+    env,
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  try {
+    return parseJsonText(result.stdout, { label: "gh pr view reopen-cycle facts" });
+  } catch {
+    return null;
+  }
+}
+
 export async function runHandoff(options, { env = process.env, ghCommand = "gh" } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
@@ -438,6 +459,44 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
     }
   }
 
+  // Round-cap escape hatch (#1103, #1126): the interpreter resolves
+  // ROUND_CAP_CLEAN_FALLBACK (stop, no re-request) at the cap. But when a
+  // SIGNIFICANT post-convergence change (new product/test-logic since the last
+  // Copilot review — not doc/comment-only) has landed, a new Copilot cycle is
+  // owed. Reopen it here via the SAME shared detector detect-pr-gate-coordination-state
+  // uses, so the two agree: both offer a re-request iff (cap reached AND
+  // significant post-convergence change). A doc-only change stays at the clean
+  // fallback (stop), unchanged.
+  let reopenedCapCycle = false;
+  if (!internalOnlySkipCopilot
+      && options.watchStatus === undefined
+      && interpretation.state === STATE.ROUND_CAP_CLEAN_FALLBACK) {
+    const reopenFacts = await fetchReopenCycleFacts(options, { env, ghCommand });
+    const significant = await detectPostConvergenceSignificantChange(
+      {
+        repo: options.repo,
+        pr: options.pr,
+        currentHeadSha: typeof reopenFacts?.headRefOid === "string" ? reopenFacts.headRefOid.trim() : null,
+        reviews: reopenFacts?.reviews,
+        changedFiles: reopenFacts?.files,
+        roundCapReached: true,
+        regularCopilotRounds: (snapshot.copilotReviewRoundCount ?? 0) > 0,
+      },
+      { env, ghCommand },
+    );
+    if (significant) {
+      reopenedCapCycle = true;
+      interpretation = {
+        ...interpretation,
+        state: STATE.READY_TO_REREQUEST_REVIEW,
+        nextAction: NEXT_ACTIONS[STATE.READY_TO_REREQUEST_REVIEW],
+        allowedTransitions: [...(TRANSITIONS[STATE.READY_TO_REREQUEST_REVIEW] || [])],
+        autoRerequestEligible: true,
+        roundCapCleanEligible: false,
+      };
+    }
+  }
+
   let reviewRequestStatus;
   const shouldRequestReview = !internalOnlySkipCopilot && options.watchStatus === undefined
     && (interpretation.state === STATE.PR_READY_NO_FEEDBACK
@@ -449,12 +508,31 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
         repo: options.repo,
         pr: options.pr,
         sameHeadCleanConverged: interpretation.sameHeadCleanConverged,
+        // A reopened cap cycle was decided via the shared significant-change
+        // detector; tell the requester to honor it. performCopilotReviewRequest
+        // still refuses unless the head actually advanced past the last review
+        // (its hasNewCommits guard), so this cannot force an over-cap same-head request.
+        forceRerequestReview: reopenedCapCycle,
       },
       { env, ghCommand },
     );
     reviewRequestStatus = requestResult.status;
     snapshot = applyConfirmedReviewRequest(snapshot, reviewRequestStatus);
     interpretation = interpretLoopState(snapshot, refinementConfig);
+    // The re-interpretation re-hits the round cap (rounds still >= max) and would
+    // flip a reopened cycle back to ROUND_CAP_CLEAN_FALLBACK. A confirmed request
+    // for a significant new change is a genuine new wait cycle, so map it to the
+    // honest WAITING_FOR_COPILOT_REVIEW state (what a below-cap re-request yields).
+    if (reopenedCapCycle
+        && (reviewRequestStatus === "requested" || reviewRequestStatus === "already-requested")) {
+      interpretation = {
+        ...interpretation,
+        state: STATE.WAITING_FOR_COPILOT_REVIEW,
+        nextAction: NEXT_ACTIONS[STATE.WAITING_FOR_COPILOT_REVIEW],
+        allowedTransitions: [...(TRANSITIONS[STATE.WAITING_FOR_COPILOT_REVIEW] || [])],
+        roundCapCleanEligible: false,
+      };
+    }
   }
   const interpretationSummary = summarizeLoopInterpretation(interpretation, refinementConfig);
   const effectiveReviewRequestStatus = reviewRequestStatus

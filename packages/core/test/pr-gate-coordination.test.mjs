@@ -7,7 +7,7 @@ import {
   PR_CHECKPOINT,
   shouldGuardCopilotReviewRequest,
 } from "../src/loop/pr-gate-coordination.mjs";
-import { DISPOSITION, STATE } from "../src/loop/copilot-loop-state.mjs";
+import { DISPOSITION, interpretLoopState, STATE } from "../src/loop/copilot-loop-state.mjs";
 
 function gate({ visible = false, headSha = null, verdict = null, contractComplete = false } = {}) {
   return {
@@ -474,6 +474,145 @@ test("guard still fires at the cap without a clean-fallback signal (#896 backwar
     roundCapCleanFallback: false,
     gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
   }), true);
+});
+
+// Parity (#1126): copilot-pr-handoff.mjs enforces the round cap by calling
+// interpretLoopState; detect-pr-gate-coordination-state.mjs enforces it by
+// calling evaluatePrGateCoordination. Both must reach the shared
+// isCopilotRoundCapReached predicate (via copilot-loop-state.mjs) for the same
+// PR facts and agree on whether a Copilot re-request may be offered — the
+// coordination-state detector must never advertise `rerequest_copilot_review`
+// once the handoff would refuse it.
+test("interpretLoopState (handoff) and evaluatePrGateCoordination (coordination-state) agree at the round-cap boundary — no rerequest offered (#1126)", () => {
+  const refinementConfig = { maxCopilotRounds: 2 };
+  const snapshot = {
+    prExists: true,
+    prNumber: 500,
+    copilotReviewRequestStatus: "none",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 2, // == maxCopilotRounds: exactly at the cap
+    ciStatus: "success",
+  };
+
+  // copilot-pr-handoff.mjs's path.
+  const handoffInterpretation = interpretLoopState(snapshot, refinementConfig);
+  assert.equal(handoffInterpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.equal(handoffInterpretation.roundCapCleanEligible, true);
+
+  // detect-pr-gate-coordination-state.mjs's path, fed the same lifecycle state
+  // and round-count/cap inputs it would derive from the same PR facts.
+  const gateResult = evaluatePrGateCoordination({
+    pr: 500,
+    currentHeadSha: "deadbeefcafe",
+    prDraft: false,
+    lifecycleState: handoffInterpretation.state,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: handoffInterpretation.sameHeadCleanConverged,
+    ciStatus: snapshot.ciStatus,
+    copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+    maxCopilotRounds: refinementConfig.maxCopilotRounds,
+    draftGate: gate({ visible: true, headSha: "deadbeef", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "deadbeef", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.notEqual(gateResult.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  assert(!gateResult.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  assert(gateResult.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+});
+
+test("interpretLoopState (handoff) and evaluatePrGateCoordination (coordination-state) agree below the round cap — rerequest_copilot_review is still allowed (#1126, no regression)", () => {
+  const refinementConfig = { maxCopilotRounds: 2 };
+  const snapshot = {
+    prExists: true,
+    prNumber: 501,
+    copilotReviewRequestStatus: "none",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 1, // below maxCopilotRounds: cap not reached
+    ciStatus: "success",
+  };
+
+  const handoffInterpretation = interpretLoopState(snapshot, refinementConfig);
+  assert.equal(handoffInterpretation.state, STATE.READY_TO_REREQUEST_REVIEW);
+  assert.equal(handoffInterpretation.autoRerequestEligible, true);
+
+  const gateResult = evaluatePrGateCoordination({
+    pr: 501,
+    currentHeadSha: "cafedeadbeef",
+    prDraft: false,
+    lifecycleState: handoffInterpretation.state,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    sameHeadCleanConverged: handoffInterpretation.sameHeadCleanConverged,
+    ciStatus: snapshot.ciStatus,
+    copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+    maxCopilotRounds: refinementConfig.maxCopilotRounds,
+    draftGate: gate({ visible: true, headSha: "cafedead", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "cafedead", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(gateResult.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  assert(gateResult.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  assert(!gateResult.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+});
+
+// Full parity (#1103, #1126): at the cap WITH a significant post-convergence
+// change, both detectors reopen the Copilot cycle. The significance boolean is
+// computed by the SHARED detectPostConvergenceSignificantChange (scripts/loop/
+// _post-convergence-change.mjs) — exercised end-to-end from both consumers by
+// the handoff integration tests (doc-only stops / significant re-requests) and
+// detect's #1103 integration test. Here we assert the core decision each path
+// makes once that shared boolean is true: interpretLoopState resolves the
+// clean-fallback baseline that both scripts start from, and
+// evaluatePrGateCoordination (detect's path) offers the re-request; the handoff
+// script flips the same baseline to a re-request via the shared detector.
+test("interpretLoopState (handoff baseline) and evaluatePrGateCoordination (detect) reopen the cycle at the cap WITH a significant post-convergence change (#1103, #1126)", () => {
+  const refinementConfig = { maxCopilotRounds: 2 };
+  const snapshot = {
+    prExists: true,
+    prNumber: 502,
+    copilotReviewRequestStatus: "none",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 2, // == cap
+    ciStatus: "success",
+  };
+
+  // Same clean-fallback baseline both scripts derive from the snapshot.
+  const handoffInterpretation = interpretLoopState(snapshot, refinementConfig);
+  assert.equal(handoffInterpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+
+  // detect's path with the shared significant-change signal = true.
+  const gateResult = evaluatePrGateCoordination({
+    pr: 502,
+    currentHeadSha: "beefcafedead",
+    prDraft: false,
+    lifecycleState: handoffInterpretation.state,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: handoffInterpretation.sameHeadCleanConverged,
+    ciStatus: snapshot.ciStatus,
+    copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+    maxCopilotRounds: refinementConfig.maxCopilotRounds,
+    postConvergenceSignificantChange: true,
+    draftGate: gate({ visible: true, headSha: "beefcafe", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "beefcafe", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(gateResult.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  assert(gateResult.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  assert(gateResult.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
 test("missing ciStatus fails closed to wait_for_ci instead of reopening gate progression", () => {
