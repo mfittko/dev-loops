@@ -228,15 +228,30 @@ function normalizeSubIssue(raw) {
   return { id, number, title, state };
 }
 
+function extractEndpoint(args) {
+  return args.find((a) => typeof a === "string" && a.startsWith("repos/")) ?? "unknown endpoint";
+}
+function extractHttpStatus(output) {
+  const match = /^HTTP\/\S+\s+(\d{3})/m.exec(output ?? "");
+  return match ? match[1] : null;
+}
 /**
  * Call gh api with optional JSON parsing.
  * @param {boolean} [expectJson=true] - When false, skip JSON parsing (for empty-body responses like PATCH reorder).
  */
 async function ghApi(ghCommand, args, env, expectJson = true) {
-  const result = await runChild(ghCommand, ["api", ...args], env);
+  // Non-JSON calls (POST/PATCH with empty bodies) pass -i so a non-2xx response
+  // still surfaces its HTTP status even when the body is empty. JSON calls are
+  // left untouched since -i would break body parsing.
+  const captureStatus = !expectJson;
+  const apiArgs = captureStatus ? ["-i", ...args] : args;
+  const result = await runChild(ghCommand, ["api", ...apiArgs], env);
   if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh api command failed: ${detail}`);
+    const endpoint = extractEndpoint(args);
+    const status = captureStatus ? extractHttpStatus(result.stdout) : null;
+    const detail = result.stderr.trim() || "empty response body";
+    const statusPart = status ? ` (HTTP ${status})` : "";
+    throw new Error(`gh api command failed${statusPart} for ${endpoint}: ${detail}`);
   }
   if (!expectJson) {
     return null;
@@ -301,12 +316,26 @@ export async function runReorder({ repo, issue, order }, { env = process.env, gh
     }
   }
   const reorderPath = buildSubIssueReorderPath(owner, name, issue);
-  let afterId = 0;
-  for (const n of order) {
-    const subIssueId = idByNumber.get(n);
+  // GitHub's priority endpoint rejects after_id=0 (the "no predecessor" cursor)
+  // with an HTTP 500. To place the first requested item at the head, move it
+  // before the current head instead — or skip the call entirely if it's
+  // already there.
+  const currentHeadId = subIssues[0]?.id;
+  let afterId;
+  for (let index = 0; index < order.length; index += 1) {
+    const subIssueId = idByNumber.get(order[index]);
+    if (index === 0) {
+      afterId = subIssueId;
+      if (subIssueId === currentHeadId) {
+        continue; // already at the head; no call needed
+      }
+      const fieldArgs = ["-F", `sub_issue_id=${subIssueId}`, "-F", `before_id=${currentHeadId}`];
+      await ghApi(ghCommand, ["-X", "PATCH", reorderPath, ...fieldArgs], env, false);
+      continue;
+    }
     const fieldArgs = ["-F", `sub_issue_id=${subIssueId}`, "-F", `after_id=${afterId}`];
-    await ghApi(ghCommand, ["-X", "PATCH", reorderPath, ...fieldArgs], env, false);
     afterId = subIssueId;
+    await ghApi(ghCommand, ["-X", "PATCH", reorderPath, ...fieldArgs], env, false);
   }
   return {
     ok: true,
