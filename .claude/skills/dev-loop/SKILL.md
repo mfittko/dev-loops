@@ -9,7 +9,7 @@ user-invocable: true
 
 **No-implicit-start rule:** Never start implementation without explicit instruction.
 
-**Work-origin rule:** All work must originate from a tracked artifact: a GitHub issue (tracker-first) or a persisted markdown plan file (local-planning). See [Artifact Authority Contract](../docs/artifact-authority-contract.md) for canonical mode definitions and settings. No work may originate from a PR or direct local change unless explicitly requested.
+**Work-origin rule:** All work must originate from a tracked artifact: a GitHub issue (tracker-first), a persisted markdown plan file (local-planning), or — on the sanctioned lightweight path — the PR description itself as the spec-of-record (`--lightweight`, `canonicalSpecSource: pr_body`; no committed plan artifact). See [Artifact Authority Contract](../docs/artifact-authority-contract.md) for canonical mode definitions and settings. No work may originate from a PR (other than the sanctioned lightweight PR-body-as-spec path) or a direct local change unless explicitly requested.
 
 # Unified Dev Loop
 

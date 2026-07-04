@@ -43,10 +43,11 @@ Treat missing optional files as normal bootstrap conditions, not errors.
 
 ### Tracker-backed local implementation
 
-Local implementation supports two durable spec inputs:
+Local implementation supports these durable spec inputs:
 
 - phase-doc-backed local sessions ([Phase Plan](../../docs/phases/phase-x.md) is canonical)
 - tracker-backed local sessions (the tracker issue is canonical)
+- lightweight PR-body-as-spec sessions (`--lightweight`; the PR description is canonical — `canonicalSpecSource: pr_body`; no phase/plan doc minted or committed). Same gate sequence as the phase-doc path; only the backing artifact differs. See [Artifact Authority Contract](../docs/artifact-authority-contract.md) "Lightweight (PR-body-as-spec)".
 
 Tracker-backed local implementation stays inside the existing `local_implementation` path. For sub-issue tree decomposition, see [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md) (this is a source-repo reference; it is not part of the bundled `../docs/` runtime contract surface for installed skill copies). It does not introduce a new routing mode.
 
@@ -263,6 +264,10 @@ If the state file is ambiguous, resolve ambiguity conservatively:
 For the **current phase only**, run this loop before implementation.
 
 ### 1. Create or update the durable phase doc and tmp scaffold
+
+**Lightweight (PR-body-as-spec) exception:** when the session is lightweight — the resolver output / handoff envelope carries `canonicalSpecSource: pr_body` (started via `resolve-dev-loop-startup.mjs --issue <n> --lightweight`) — SKIP the durable phase-doc mint entirely. The PR description is the spec-of-record; do NOT create or commit any `docs/phases/*.md` for this session. The ephemeral `tmp/phases/` scaffold may still be used for local execution state. All other steps (read prior learning, plan, implement) proceed unchanged, and the gate sequence (draft → pre-approval fanout → detect-evidence → human merge) is identical. See [Artifact Authority Contract](../docs/artifact-authority-contract.md) "Lightweight (PR-body-as-spec)".
+
+Otherwise (default phase-doc path), create or update the durable phase doc.
 
 Use paths like:
 - `docs/phases/phase-0.md`

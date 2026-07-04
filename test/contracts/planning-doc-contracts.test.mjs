@@ -124,9 +124,10 @@ test("local workflow docs define tracker-backed local canonicality and no-dup ru
   ], "docs/IMPLEMENTATION_WORKFLOW.md");
 
   assertMatchesAll(localImplSkill, [
-    /Local implementation supports two durable spec inputs/i,
+    /Local implementation supports these durable spec inputs/i,
     /phase-doc-backed local sessions/i,
     /tracker-backed local sessions/i,
+    /lightweight PR-body-as-spec sessions/i,
     /do not create or read \[Phase Plan\]\(\.\.\/\.\.\/docs\/phases\/phase-x\.md\) for that same tracker-backed session/i,
     /keep `tmp\/` as temporary local execution state only/i,
   ], "skills/local-implementation/SKILL.md");
