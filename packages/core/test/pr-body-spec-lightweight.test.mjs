@@ -83,6 +83,22 @@ test("validatePrBodySpec: an AC section with only an empty placeholder is not te
   assert.ok(result.errors.some((e) => e.code === "missing_acceptance_criteria"));
 });
 
+test("validatePrBodySpec: headings buried inside a fenced code block do NOT satisfy the gate (no spoof)", () => {
+  // Every invariant heading is real-looking but lives inside a ``` fence.
+  const body = "Here is what a good body looks like:\n\n```md\n" + COMPLETE_BODY + "\n```\n";
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, false);
+  const codes = result.errors.map((e) => e.code).sort();
+  assert.deepEqual(codes, [
+    "missing_acceptance_criteria",
+    "missing_definition_of_done",
+    "missing_explicit_non_goals",
+    "missing_in_scope",
+    "missing_objective",
+    "missing_open_questions",
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // Shared envelope fixtures
 // ---------------------------------------------------------------------------
@@ -147,6 +163,20 @@ test("validateHandoffEnvelope: rejects an unknown specSource", () => {
 
 test("validateHandoffEnvelope: accepts the explicit phase_doc value", () => {
   const env = { ...buildEnvelope(), specSource: CANONICAL_SPEC_SOURCE.PHASE_DOC };
+  assert.equal(validateHandoffEnvelope(env).ok, true);
+});
+
+test("deriveSpecSource coerces the tracker-backed value to null (no self-rejecting envelope)", () => {
+  // "tracker_issue" is carried by the same field name in tracker-backed mode but
+  // is outside the envelope's local-first subset — it must not leak into specSource.
+  const env = buildDevLoopHandoffEnvelope(
+    { bundle: { ...LOCAL_BUNDLE, canonicalSpecSource: "tracker_issue" }, requiredReads: ["x"] },
+    {},
+    {},
+    {},
+    new Date("2026-07-04T00:00:00.000Z"),
+  );
+  assert.equal("specSource" in env, false);
   assert.equal(validateHandoffEnvelope(env).ok, true);
 });
 

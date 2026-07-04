@@ -273,7 +273,13 @@ function deriveRequiredReads(bundle, resolverOutput) {
 // specSource derivation (issue #1025 — lightweight PR-body-as-spec)
 // ---------------------------------------------------------------------------
 
-/** Canonical spec-of-record sources (reuses resolve-tracker-local-spec vocabulary). */
+/**
+ * The LOCAL-FIRST spec-source subset the envelope distinguishes: phase_doc vs
+ * pr_body. This is NOT the full `canonicalSpecSource` value space — the same
+ * field name also carries "tracker_issue" in the tracker-backed mode
+ * (scripts/github/resolve-tracker-local-spec.mjs), which the envelope does not
+ * model (deriveSpecSource coerces it to null).
+ */
 export const CANONICAL_SPEC_SOURCE = Object.freeze({
   PHASE_DOC: "phase_doc",
   PR_BODY: "pr_body",
@@ -283,12 +289,15 @@ export const CANONICAL_SPEC_SOURCE = Object.freeze({
  * Derive the canonical spec source. Prefer the resolver-output-level field,
  * fall back to bundle-level (mirrors deriveRequiredReads). Returns null when
  * absent so the default (phase-doc) path carries no specSource field and stays
- * byte-identical.
+ * byte-identical. Any value outside the local-first subset {phase_doc, pr_body}
+ * — e.g. the tracker-backed "tracker_issue" carried by the same field name — is
+ * coerced to null so the envelope can never set a specSource that
+ * validateHandoffEnvelope would then reject.
  */
 function deriveSpecSource(bundle, resolverOutput) {
-  const top = normalizeStringOrNull(resolverOutput?.canonicalSpecSource);
-  if (top) return top;
-  return normalizeStringOrNull(bundle?.canonicalSpecSource);
+  const raw = normalizeStringOrNull(resolverOutput?.canonicalSpecSource)
+    ?? normalizeStringOrNull(bundle?.canonicalSpecSource);
+  return raw === CANONICAL_SPEC_SOURCE.PHASE_DOC || raw === CANONICAL_SPEC_SOURCE.PR_BODY ? raw : null;
 }
 
 /**
@@ -298,6 +307,10 @@ function deriveSpecSource(bundle, resolverOutput) {
  * so the phase-doc template text stays identical.
  */
 function applySpecSourceVariant(criteria, specSource) {
+  // ponytail: free-text substring retarget is a no-op for any strategy whose
+  // criteria lack the phase-doc phrase — fine while lightweight only composes
+  // with local_implementation; make it a structured criterion-id lookup if
+  // lightweight is ever extended to another strategy.
   if (specSource !== CANONICAL_SPEC_SOURCE.PR_BODY) return [...criteria];
   return criteria.map((c) => ({
     ...c,

@@ -50,6 +50,10 @@ const DOD_SECTION_PATTERNS = Object.freeze([
 /**
  * Extract `## ...` heading boundaries from a Markdown body.
  * Returns a sorted array of { level, name, bodyLines } records.
+ *
+ * Headings inside a fenced code span (``` or ~~~) are NOT treated as headings —
+ * otherwise a body could spoof the refinement/spec gate with real-looking
+ * headings that carry no real spec (gate integrity, issue #1025).
  */
 export function parseMarkdownSections(body) {
   if (typeof body !== "string" || body.length === 0) {
@@ -59,8 +63,24 @@ export function parseMarkdownSections(body) {
   const lines = body.split(/\r?\n/u);
   const sections = [];
   let current = null;
+  let fence = null; // the open fence marker (``` or ~~~) while inside a code span
 
   for (const line of lines) {
+    const fenceMatch = /^\s*(`{3,}|~{3,})/u.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      if (fence === null) {
+        fence = marker;
+      } else if (fence === marker) {
+        fence = null;
+      }
+      if (current) current.bodyLines.push(line);
+      continue;
+    }
+    if (fence !== null) {
+      if (current) current.bodyLines.push(line);
+      continue;
+    }
     const match = /^(#{1,6})\s+(.+?)\s*$/u.exec(line);
     if (match) {
       if (current) {
