@@ -258,6 +258,63 @@ test("head round: same scope across commits passes on each new head, fails close
   }
 });
 
+// ---------------------------------------------------------------------------
+// #1135: per-angle gate reviewers must not run in an isolated worktree that
+// lacks the seeded gate-context bundle. --context-path makes that check
+// mechanical: fail closed when the seeded artifact isn't present at the
+// reviewer's cwd (which is exactly what an isolated worktree checked out
+// from stale main would look like, since tmp/ is gitignored and
+// worktree-local).
+// ---------------------------------------------------------------------------
+
+test("verify-fresh-review-context --context-path fails closed when the gate-context artifact is missing", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const result = runScript(
+      ["--scope", "coverage", "--context-path", "tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.json"],
+      { cwd: tmpDir }
+    );
+    assert.equal(result.status, 1, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.ok, true);
+    assert.equal(output.fresh, false);
+    assert.equal(output.gateContextPresent, false);
+    assert.ok(output.reason.includes("gate-context artifact missing"));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-fresh-review-context --context-path passes through when the gate-context artifact is present", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    const ctxDir = path.join(tmpDir, "tmp", "gate-context", "owner-repo", "pr-1");
+    await mkdir(ctxDir, { recursive: true });
+    const ctxRelPath = "tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.json";
+    await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ adjacentCode: { files: [] } }) + "\n", "utf8");
+    const result = runScript(["--scope", "coverage", "--context-path", ctxRelPath], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.fresh, true);
+    assert.equal(output.gateContextPresent, true);
+    assert.equal(output.gateContextPath, ctxRelPath);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-fresh-review-context --context-path with missing value fails closed", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const result = runScript(["--context-path"], { cwd: tmpDir });
+    assert.equal(result.status, 2, result.stderr);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("head round: a stale pre-round (scope-only) sentinel does NOT block a new head (#1108)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   const git = makeGit(tmpDir);

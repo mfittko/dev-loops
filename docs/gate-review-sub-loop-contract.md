@@ -70,9 +70,13 @@ but the execution phases are identical.
 Before fanning out reviewers, run a preamble pass that produces review handoff context
 on an isolated checkout:
 
-- the context-builder runs in fresh context and emits a NEUTRAL artifact; that artifact (never the parent session's chat history or state) is what each downstream reviewer subagent is later seeded with. **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs` at startup and refuse to proceed on contamination. Use `--scope <angle>` so each reviewer writes its own sentinel.
-- `worktree: true` recommended per reviewer/subagent for filesystem isolation; prescribe it but
-  do not fail closed if worktrees are unavailable in the current environment
+- the context-builder runs in fresh context and emits a NEUTRAL artifact; that artifact (never the parent session's chat history or state) is what each downstream reviewer subagent is later seeded with. **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs --scope <angle> --context-path <path>` at startup and refuse to proceed on contamination or a missing gate-context artifact. Use `--scope <angle>` so each reviewer writes its own sentinel, and `--context-path` to the artifact this phase writes below.
+- **Worktree isolation is PROHIBITED for per-angle gate reviewers.** They are read-only
+  (they never mutate files), so filesystem isolation buys nothing and actively breaks the
+  "build once, seed many" contract: a fresh worktree is checked out from `main`, not the
+  PR head, and has no access to the gitignored, worktree-local `tmp/gate-context` bundle
+  this phase writes (#1135). Reviewers run in the PR's actual worktree/head — the same
+  checkout the preamble ran in.
 - the preamble resolves the gate's review angle set: it starts from the configured
   angle pool (`gates.<gate>.angles`) and, when `gates.<gate>.dynamicAngles` is enabled,
   narrows it to the angles relevant to the change at hand (configured pool → resolved
@@ -120,7 +124,11 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
 - is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when its single angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph
 - is scoped to exactly one review angle
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
-- runs in an isolated worktree when worktrees are available
+- runs in the PR's actual worktree/head — **never an isolated worktree** (see the
+  prohibition in Phase 1: isolation would both lose the seeded gate-context bundle and
+  risk silently reviewing a stale tree). `verify-fresh-review-context.mjs --context-path`
+  enforces this mechanically: it fails closed if the seeded artifact isn't present at the
+  reviewer's cwd.
 - produces a focused findings artifact with verdict (clean/findings_present) and file references
 - **completion is detected via the harness completion notification, or by the presence of the reviewer's findings artifact at its deterministic output path — never by reading the reviewer's transcript.** The orchestrator awaits fan-in on those artifact paths (or the completion notification) and joins via `consolidateFanin` (Phase 3); it must not tail/parse a reviewer's JSONL transcript, use `node -e`/`python3` to parse tool JSON, or `sleep`-poll a shell loop for completion (forbidden — see [anti-patterns](../skills/docs/anti-patterns.md)).
 
@@ -250,7 +258,7 @@ The sub-loop execution shape can be referenced programmatically via these fields
 |---|---|---|
 | `subLoopPhases` | `[preamble, fanout, fanin, fix, repeat]` | Ordered sub-loop phases |
 | `contextBuilderRequired` | `true` | Preamble phase must include fresh-context context-builder |
-| `worktreeRecommended` | `true` | Worktree isolation recommended but not hard-required |
+| `worktreeIsolationProhibited` | `true` | Per-angle reviewers must run in the PR's actual worktree/head, never an isolated worktree (#1135) |
 | `fixRetryUntilClean` | `true` | Blocking-severity findings trigger fix → retry until synthesis is clean |
 | `separateChains` | `true` | Each gate runs an independent chain with its own disposition ledger |
 

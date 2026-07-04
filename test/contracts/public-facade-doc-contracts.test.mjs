@@ -313,14 +313,18 @@ test("checkpoint review chain contract exists and is referenced by both gates", 
   // References pi-subagents parallel context-build technique
   assert.match(subLoopContract, /parallel context-build/i);
 
-  // Worktree prescribed but not hard-required
-  assert.match(subLoopContract, /worktree.*recommended/i);
-  assert.match(subLoopContract, /do not fail closed if worktrees are unavailable/i);
+  // Worktree isolation is PROHIBITED for per-angle reviewers (#1135): they are
+  // read-only, and isolation both loses the seeded gate-context bundle (gitignored,
+  // worktree-local) and risks reviewing a stale tree checked out from main instead
+  // of the PR head.
+  assert.match(subLoopContract, /worktree isolation is prohibited/i);
+  assert.match(subLoopContract, /--context-path/);
+  assert.match(subLoopContract, /never an isolated worktree/i);
 
   // Machine-parseable fields
   assert.match(subLoopContract, /subLoopPhases/i);
   assert.match(subLoopContract, /contextBuilderRequired/i);
-  assert.match(subLoopContract, /worktreeRecommended/i);
+  assert.match(subLoopContract, /worktreeIsolationProhibited/i);
   assert.match(subLoopContract, /fixRetryUntilClean/i);
 
   // Draft gate references the sub-loop contract
