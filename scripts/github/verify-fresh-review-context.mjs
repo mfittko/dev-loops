@@ -32,7 +32,7 @@ Options:
                   written by write-gate-context.mjs, e.g.
                   tmp/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json).
                   When provided, fails closed (exit 1) if the artifact is
-                  missing/unreadable from the reviewer's cwd. Per-angle
+                  missing (ENOENT) from the reviewer's cwd. Per-angle
                   gate reviewers must run in the PR's actual worktree/head
                   (never an isolated worktree) so this gitignored,
                   worktree-local artifact is present; a missing artifact
@@ -41,8 +41,9 @@ Options:
                   rather than silently reviewing without seeded context.
 Output (stdout, JSON):
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>" }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "gateContextPath": "...", "gateContextPresent": true }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
-  { "ok": true, "fresh": false, "sentinelCreated": false, "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
+  { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
   On error (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
 Exit codes:

@@ -281,6 +281,21 @@ test("verify-fresh-review-context --context-path fails closed when the gate-cont
     assert.equal(output.fresh, false);
     assert.equal(output.gateContextPresent, false);
     assert.ok(output.reason.includes("gate-context artifact missing"));
+
+    // The context-path check runs BEFORE sentinel creation, so a fail-closed
+    // run must NOT burn the scope sentinel: a retry from the corrected
+    // worktree/head (artifact now present, same cwd+scope+round) still passes
+    // fresh. Reordering the checks (sentinel-first) would leave a sentinel
+    // behind and falsely flag the corrected retry as contaminated.
+    assert.equal(output.sentinelCreated, false);
+    const ctxRelPath = "tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.json";
+    await mkdir(path.join(tmpDir, "tmp", "gate-context", "owner-repo", "pr-1"), { recursive: true });
+    await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ adjacentCode: { files: [] } }) + "\n", "utf8");
+    const retry = runScript(["--scope", "coverage", "--context-path", ctxRelPath], { cwd: tmpDir });
+    assert.equal(retry.status, 0, retry.stderr);
+    const retryOutput = JSON.parse(retry.stdout.trim());
+    assert.equal(retryOutput.fresh, true);
+    assert.equal(retryOutput.gateContextPresent, true);
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -310,6 +325,20 @@ test("verify-fresh-review-context --context-path with missing value fails closed
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
     const result = runScript(["--context-path"], { cwd: tmpDir });
     assert.equal(result.status, 2, result.stderr);
+    // Bind the assertion to the intended cause, not just any exit-2 parse error.
+    assert.ok(result.stderr.includes("context-path"), result.stderr);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-fresh-review-context --context-path with a flag-like value fails closed (does not consume the next flag)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const result = runScript(["--context-path", "--scope", "coverage"], { cwd: tmpDir });
+    assert.equal(result.status, 2, result.stderr);
+    assert.ok(result.stderr.includes("context-path"), result.stderr);
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
