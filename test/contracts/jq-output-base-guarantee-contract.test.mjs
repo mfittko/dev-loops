@@ -89,7 +89,7 @@ const EXCLUDED = new Map([
   ],
   [
     "loop/run-queue.mjs",
-    "Dormant no-op queue adapter — the live pickup path is Next Up via resolve-active-board-item (see queue-pickup memory); its human-readable pretty-printed JSON is not a --jq-consumed tool result. Wire to emitResult if it is ever reactivated.",
+    "Dormant no-op queue adapter: its runQueue() driver is not on any live pickup path (the active path is `scripts/projects/resolve-active-board-item.mjs`, wired into `loop-continue`), and its pretty-printed JSON is a human-readable dump, not a --jq-consumed tool result. Wire to emitResult if it is ever reactivated.",
   ],
 ]);
 
