@@ -2912,7 +2912,7 @@ describe("resolveGateAnglesDynamic", () => {
     });
     assert.ok(result.addedAngles.includes("ci-guard"));
     assert.ok(result.recommendedAngles.includes("ci-guard"));
-    assert.ok(!["scope", "coverage", "docs"].includes("ci-guard")); // sanity: not in original pool
+    assert.ok(!config.gates.draft.angles.includes("ci-guard")); // sanity: not in original pool
     assert.equal(result.addedReasons["ci-guard"], "Added: triggered by change category CI_ONLY");
   });
 
