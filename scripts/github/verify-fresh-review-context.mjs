@@ -3,7 +3,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
-const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>]
+const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
 Verify that the current scoped-reviewer session has fresh context.
 
 "Fresh" means the reviewer's context is the neutral gate-context builder
@@ -27,25 +27,52 @@ Options:
                   characters and hyphens. When provided, the sentinel
                   is scoped so parallel reviewers in the same working
                   directory do not trigger false contamination.
+  --context-path <path>  Path to the seeded gate-context artifact this
+                  reviewer must be reading from (the build-once bundle
+                  written by write-gate-context.mjs, e.g.
+                  tmp/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json).
+                  Must resolve to a path within the reviewer's working
+                  directory; a path that resolves OUTSIDE cwd (an absolute
+                  or ..-escaping path pointing at another worktree's bundle,
+                  which would defeat the worktree-locality guard) fails
+                  closed (exit 1).
+                  When provided, also fails closed (exit 1) if the artifact
+                  is missing (ENOENT) from the reviewer's cwd. Per-angle
+                  gate reviewers must run in the PR's actual worktree/head
+                  (never an isolated worktree) so this gitignored,
+                  worktree-local artifact is present; a missing artifact
+                  means either a stale/isolated checkout or a skipped
+                  preamble, and the reviewer must refuse to proceed
+                  rather than silently reviewing without seeded context.
 Output (stdout, JSON):
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>" }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "gateContextPath": "...", "gateContextPresent": true }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
+  { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
   On error (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
 Exit codes:
   0  Clean (first run)
-  1  Contaminated (prior session detected)
+  1  Refuse to review: contaminated (prior session detected), OR (with
+     --context-path) the seeded gate-context artifact is missing or resolves
+     outside the reviewer's working directory
   2  Usage or internal error`.trim();
 const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const parseError = buildParseError(USAGE);
-function resolveScope(argv) {
-  const idx = argv.indexOf("--scope");
+// Resolve a `--flag <value>` argument. Returns null when the flag is absent,
+// "" when it is present but the value is missing/empty/flag-like (a following
+// `-`-prefixed token, which must not be silently consumed), else the value.
+function resolveFlagValue(argv, flag) {
+  const idx = argv.indexOf(flag);
   if (idx === -1) return null;
   const val = argv[idx + 1];
   if (val === undefined || val === "" || (val.length > 0 && val[0] === "-")) {
     return ""; // provided but missing/empty/flag-like
   }
   return val;
+}
+function resolveScope(argv) {
+  return resolveFlagValue(argv, "--scope");
 }
 function resolveValidatedScope(argv) {
   const raw = resolveScope(argv);
@@ -57,6 +84,9 @@ function resolveValidatedScope(argv) {
     return undefined; // signals invalid
   }
   return raw;
+}
+function resolveContextPath(argv) {
+  return resolveFlagValue(argv, "--context-path");
 }
 // Round = the current head SHA, so a retry on a new head gets a fresh key while
 // a same-head re-entry collides and fails closed. `git rev-parse HEAD` yields the
@@ -106,7 +136,51 @@ async function main(argv = process.argv.slice(2)) {
   }
   const scope = resolveValidatedScope(argv);
   if (scope === undefined) return 2;
+  const contextPathArg = resolveContextPath(argv);
+  if (contextPathArg === "") {
+    process.stderr.write(`${formatCliError(
+      parseError("Invalid --context-path value: must be non-empty.")
+    )}\n`);
+    return 2;
+  }
   const round = resolveHeadRound();
+  if (contextPathArg !== null) {
+    const cwd = process.cwd();
+    const resolvedContextPath = path.resolve(cwd, contextPathArg);
+    // The guard proves the reviewer is in the working tree where the gitignored
+    // tmp/gate-context bundle was written. An absolute or ..-escaping path could
+    // stat the real bundle in ANOTHER (stale/isolated) worktree and pass — so a
+    // path resolving outside cwd fails closed, defeating that bypass.
+    const withinCwd =
+      resolvedContextPath === cwd || resolvedContextPath.startsWith(cwd + path.sep);
+    if (!withinCwd) {
+      process.stdout.write(JSON.stringify({
+        ok: true,
+        fresh: false,
+        sentinelCreated: false,
+        round: round ?? null,
+        gateContextPath: contextPathArg,
+        gateContextPresent: false,
+        reason: `Seeded gate-context artifact path "${contextPathArg}" resolves outside the reviewer's working directory — refusing. --context-path must be a cwd-relative path to the worktree-local bundle; an absolute or ..-escaping path could point at another (stale/isolated) worktree's bundle and defeat the worktree-locality guard.`,
+      }) + "\n");
+      return 1;
+    }
+    try {
+      await stat(resolvedContextPath);
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+      process.stdout.write(JSON.stringify({
+        ok: true,
+        fresh: false,
+        sentinelCreated: false,
+        round: round ?? null,
+        gateContextPath: contextPathArg,
+        gateContextPresent: false,
+        reason: `Seeded gate-context artifact missing at "${contextPathArg}" — refusing to review without the build-once neutral context bundle. Per-angle gate reviewers must run in the PR's actual worktree/head (never an isolated worktree checked out from stale main), which is where the context-builder preamble wrote this gitignored artifact.`,
+      }) + "\n");
+      return 1;
+    }
+  }
   const sentinelPath = path.resolve(process.cwd(), sentinelRelative(scope, round));
   try {
     await mkdir(path.dirname(sentinelPath), { recursive: true });
@@ -155,6 +229,7 @@ async function main(argv = process.argv.slice(2)) {
     fresh: true,
     sentinelCreated: true,
     round: round ?? null,
+    ...(contextPathArg !== null ? { gateContextPath: contextPathArg, gateContextPresent: true } : {}),
   }) + "\n");
   return 0;
 }
