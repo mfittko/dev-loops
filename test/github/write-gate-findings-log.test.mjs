@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  parseProvenanceJson,
   parseWriteGateFindingsLogCliArgs,
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
@@ -382,4 +383,111 @@ test("writeGateFindingsLog rejects empty-string resolvedIn", async () => {
       findings: JSON.stringify([{ severity: "must-fix", angle: "scope", summary: "x", resolvedIn: "" }]),
     });
   }, /resolvedIn must be a non-empty string/);
+});
+
+// --- Fan-out provenance (AC1) ---
+
+test("parseProvenanceJson accepts a well-formed provenance object", () => {
+  const prov = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 2,
+    perAngle: [
+      { angle: "scope", reviewer: "review-a", dispatchId: "d1", model: "m1" },
+      { angle: "safety", reviewer: "review-b" },
+    ],
+  }));
+  assert.equal(prov.distinctReviewers, 2);
+  assert.equal(prov.perAngle.length, 2);
+  assert.deepEqual(prov.perAngle[0], { angle: "scope", reviewer: "review-a", dispatchId: "d1", model: "m1" });
+  assert.deepEqual(prov.perAngle[1], { angle: "safety", reviewer: "review-b" });
+});
+
+test("parseProvenanceJson rejects malformed provenance (invalid JSON, non-object, bad shape)", () => {
+  assert.throws(() => parseProvenanceJson("{not json"), /must be valid JSON/);
+  assert.throws(() => parseProvenanceJson("[]"), /must be a JSON object/);
+  assert.throws(() => parseProvenanceJson(JSON.stringify({ perAngle: [] })), /distinctReviewers must be a non-negative integer/);
+  assert.throws(() => parseProvenanceJson(JSON.stringify({ distinctReviewers: 1.5, perAngle: [] })), /distinctReviewers must be a non-negative integer/);
+  assert.throws(() => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2 })), /perAngle must be an array/);
+  assert.throws(() => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [{}] })), /perAngle\[0\]\.angle is required/);
+  assert.throws(() => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "scope", reviewer: "" }] })), /reviewer must be a non-empty string/);
+  assert.throws(() => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [null] })), /perAngle\[0\] must be an object/);
+});
+
+test("parseProvenanceJson rejects INTERNALLY-INCONSISTENT provenance (closes the {n, perAngle:[]} loophole)", () => {
+  // The crux loophole: claim N reviewers with zero dispatch records.
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [] })),
+    /perAngle must be non-empty when distinctReviewers > 0/,
+  );
+  // Claim more reviewers than distinct recorded identities.
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "scope", reviewer: "review-a" }] })),
+    /distinctReviewers \(2\) exceeds distinct recorded reviewer identities \(1\)/,
+  );
+  // A perAngle entry with no reviewer/dispatchId is not a countable reviewer.
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "scope" }] })),
+    /distinctReviewers \(1\) exceeds distinct recorded reviewer identities \(0\)/,
+  );
+  // dispatchId also counts as an identity; two distinct dispatchIds satisfy 2.
+  const ok = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 2,
+    perAngle: [{ angle: "scope", dispatchId: "d1" }, { angle: "safety", dispatchId: "d2" }],
+  }));
+  assert.equal(ok.distinctReviewers, 2);
+});
+
+test("writeGateFindingsLog records provenance in the ledger when passed", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-test-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 7,
+      gate: "pre_approval_gate",
+      headSha: "abc1234567890abcdef",
+      verdict: "clean",
+      findings: "[]",
+      provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-b" }, { angle: "perf", reviewer: "review-c" }] }),
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "pre_approval_gate-abc1234567890abcdef.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.provenance.distinctReviewers, 3);
+    assert.equal(parsed.provenance.perAngle.length, 3);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog omits provenance key entirely when absent (byte-identical to before)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-test-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 8,
+      gate: "draft_gate",
+      headSha: "abc1234567890abcdef",
+      verdict: "clean",
+      findings: "[]",
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-8", "draft_gate-abc1234567890abcdef.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal("provenance" in parsed, false);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog rejects malformed provenance", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc12345",
+      verdict: "clean",
+      findings: "[]",
+      provenance: JSON.stringify({ distinctReviewers: -1, perAngle: [] }),
+    });
+  }, /distinctReviewers must be a non-negative integer/);
 });

@@ -302,6 +302,67 @@ resolved-in SHA (for findings resolved in a later pass).
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
 default `inline_single_agent`) via the [Gate comment command](../skills/copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the inline_single_agent fallback only. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA, and the pre-merge evidence check fails closed for a required gate otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
 
+### Fan-out provenance (closing the self-produced-artifact loophole)
+
+`requireFanoutEvidence` is artifact-based: it only proves a `fanout_fanin` verdict
+carries a findings-log ledger. A single agent could self-produce every per-angle
+artifact + the ledger and label the verdict `fanout_fanin`, satisfying the letter
+of the gate while defeating independent parallel review. To close this, the
+findings-log ledger can additionally record **fan-out provenance**:
+
+```jsonc
+"provenance": {
+  "distinctReviewers": 2,               // count of distinct reviewer agents dispatched (<= distinct identities in perAngle)
+  "perAngle": [                          // per-angle dispatch provenance
+    { "angle": "scope",   "reviewer": "review-a", "dispatchId": "…", "model": "…" },
+    { "angle": "safety",  "reviewer": "review-b" }
+  ]
+}
+```
+
+Provenance is written via `write-gate-findings-log.mjs --provenance <json>` (validated
+on write; malformed OR self-inconsistent provenance fails the write). It is **optional
+and additive** — when omitted, the ledger is byte-identical to before and no enforcement
+changes. **Internal-consistency rule** (enforced on both the write path and the
+enforcement read path): `perAngle` must be non-empty when `distinctReviewers > 0`, and
+`distinctReviewers` must be `<=` the count of DISTINCT reviewer identities actually
+recorded in `perAngle` (distinct by `reviewer`, else `dispatchId`; a bare `{angle}` is
+not a countable reviewer). You cannot claim more reviewers than you recorded dispatch
+entries for — this closes the `{distinctReviewers: 2, perAngle: []}` loophole.
+
+Enforcement is opt-in via **`gates.requireFanoutProvenance`** (default **false**). When
+enabled, it layers ON TOP of `requireFanoutEvidence` (it only takes effect while fan-out
+evidence enforcement is active): each required `fanout_fanin` gate's ledger must record
+internally-consistent provenance with `provenance.distinctReviewers >= 2` (a floor of
+**2** is the smallest count that is not a single agent). When the flag is off, behavior is
+byte-identical to today (no new failures) — the Claude-Code path, which already honors
+child fan-out, is a validated no-op.
+
+**Honest caveat (this is NOT un-forgeable):** recorded provenance is self-reported — it is
+written by the same agent whose independence it claims — so a determined single agent can
+still forge an internally-consistent blob. This enforcement raises the bar (rejects
+malformed/inconsistent provenance and requires distinct recorded dispatch entries) but
+does NOT claim un-forgeable enforcement. Un-forgeable recording (the harness attesting who
+actually ran each per-angle review) is the Pi-harness bridge — the subagent tool honored
+at child depth (see #1084).
+
+### Fail-closed: fan-out unavailable → route to conductor
+
+When a child/agent **cannot** perform real parallel fan-out (e.g. a harness that does not
+honor the subagent tool at child depth), the flow MUST fail closed rather than silently
+degrade to a single-agent inline review. The canonical, matchable signal is the exported
+constant `FANOUT_UNAVAILABLE_MESSAGE` (`@dev-loops/core/loop/gate-fanin`):
+
+> **fan-out unavailable — route to conductor**
+
+`fanoutUnavailableError(detail)` builds an `Error` carrying this prefix plus
+`{ routeToConductor: true, code: "FANOUT_UNAVAILABLE" }`. Callers throw it (or check
+`err.routeToConductor === true`) to hand the gate review up to the conductor. The
+`requireFanoutProvenance` pre-merge failure message references this same contract string.
+The full end-to-end driving command that dispatches per-angle review subagents at child
+depth is provided by the Pi-harness child (the bridge); this contract specifies only the
+recording + enforcement + fail-closed signal that land independently.
+
 ## See also
 
 - [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md) — visible PR comment evidence format

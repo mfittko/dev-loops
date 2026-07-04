@@ -72,6 +72,16 @@ const GatesConfig = z.strictObject({
   // true (opt-out): a clean gate verdict requires fan-out/fan-in evidence
   // unless explicitly disabled. See docs/gate-review-sub-loop-contract.md.
   requireFanoutEvidence: z.boolean().default(true),
+  // Fail-closed enforcement that a fanout_fanin gate verdict carries recorded,
+  // internally-consistent fan-out *provenance* (distinct reviewer count +
+  // per-angle dispatch). This RAISES THE BAR against a single agent self-producing
+  // every artifact but does NOT prove independence — provenance is self-reported,
+  // so it remains forgeable; un-forgeable recording is the Pi-harness bridge (see
+  // the honest caveat in docs/gate-review-sub-loop-contract.md). Layered ON TOP of
+  // requireFanoutEvidence — only takes effect when fan-out evidence enforcement
+  // is active. Default false (opt-in): closing this loophole is additive and
+  // does not change behavior for existing ledgers that carry no provenance.
+  requireFanoutProvenance: z.boolean().default(false),
   // Cap on how many scoped `review` reviewers the gate fan-out spawns in
   // parallel. When the resolved angle set exceeds this cap, the overflow runs
   // in sequential batches and the degradation is recorded in the gate evidence.
@@ -179,6 +189,7 @@ const FileGatesConfig = z.strictObject({
   preApproval: FileGateConfig.optional(),
   spike: FileGateConfig.optional(),
   requireFanoutEvidence: z.boolean().optional(),
+  requireFanoutProvenance: z.boolean().optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).optional(),
   postFindingsComments: z.boolean().optional(),
   anglePool: z.array(z.string().trim().min(1)).optional(),
@@ -982,6 +993,32 @@ export function resolveGateConfig(config, gate) {
  */
 export function resolveRequireFanoutEvidence(config) {
   return config?.gates?.requireFanoutEvidence !== false;
+}
+
+/**
+ * Minimum distinct reviewer count for a fanout_fanin ledger to satisfy
+ * requireFanoutProvenance. A floor of 2 is the smallest count that is not a
+ * single agent; it raises the bar but does not prove independence (provenance
+ * is self-reported — see the honest caveat in
+ * docs/gate-review-sub-loop-contract.md).
+ */
+export const FANOUT_PROVENANCE_MIN_REVIEWERS = 2;
+
+/**
+ * Resolve whether fan-out *provenance* is required for a fanout_fanin gate
+ * verdict (distinct reviewer count + per-angle dispatch recorded in the ledger).
+ *
+ * Default-OFF (opt-in): unlike resolveRequireFanoutEvidence, this uses a strict
+ * `=== true` test so behavior is byte-identical to today unless a repo
+ * explicitly opts in via `gates.requireFanoutProvenance: true`. Layered on top
+ * of fan-out evidence enforcement (see buildFanoutEnforcement). See
+ * docs/gate-review-sub-loop-contract.md.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {boolean}
+ */
+export function resolveRequireFanoutProvenance(config) {
+  return config?.gates?.requireFanoutProvenance === true;
 }
 
 /**

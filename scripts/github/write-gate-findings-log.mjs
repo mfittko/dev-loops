@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> --findings <json> [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
@@ -15,6 +16,8 @@ Required:
   --verdict <clean|findings_present|blocked>
   --findings <json>              JSON array of finding objects with severity, disposition, angle, and summary
 Optional:
+  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model? }] }
+                                 distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -92,6 +95,59 @@ function parseFindingsJson(raw) {
     return entry;
   });
 }
+/**
+ * Validate + normalize the fan-out provenance object. Records how many distinct
+ * reviewer agents were dispatched (distinctReviewers) and per-angle dispatch
+ * provenance (perAngle). Rejects MALFORMED or self-INCONSISTENT provenance (bad
+ * shape, or a distinctReviewers claim not backed by recorded dispatch entries).
+ * This raises the bar; it does NOT make provenance un-forgeable — a determined
+ * single agent can still write an internally-consistent blob. Un-forgeable
+ * recording is the Pi-harness bridge (subagent tool at child depth). Returns the
+ * normalized object.
+ */
+export function parseProvenanceJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw parseError("--provenance must be valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw parseError("--provenance must be a JSON object");
+  }
+  if (!Number.isInteger(parsed.distinctReviewers) || parsed.distinctReviewers < 0) {
+    throw parseError("--provenance.distinctReviewers must be a non-negative integer");
+  }
+  if (!Array.isArray(parsed.perAngle)) {
+    throw parseError("--provenance.perAngle must be an array");
+  }
+  const perAngle = parsed.perAngle.map((a, i) => {
+    if (!a || typeof a !== "object" || Array.isArray(a)) {
+      throw parseError(`--provenance.perAngle[${i}] must be an object`);
+    }
+    if (typeof a.angle !== "string" || a.angle.trim().length === 0) {
+      throw parseError(`--provenance.perAngle[${i}].angle is required`);
+    }
+    const entry = { angle: a.angle.trim() };
+    for (const key of ["reviewer", "dispatchId", "model"]) {
+      if (key in a) {
+        if (typeof a[key] !== "string" || a[key].trim().length === 0) {
+          throw parseError(`--provenance.perAngle[${i}].${key} must be a non-empty string`);
+        }
+        entry[key] = a[key].trim();
+      }
+    }
+    return entry;
+  });
+  const normalized = { distinctReviewers: parsed.distinctReviewers, perAngle };
+  // Internal-consistency gate: a distinctReviewers claim must be backed by that
+  // many distinct recorded reviewer identities (closes the {n, perAngle:[]} loophole).
+  const consistencyError = provenanceConsistencyError(normalized);
+  if (consistencyError) {
+    throw parseError(`--${consistencyError}`);
+  }
+  return normalized;
+}
 export function parseWriteGateFindingsLogCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
@@ -103,6 +159,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       "head-sha": { type: "string" },
       verdict: { type: "string" },
       findings: { type: "string" },
+      provenance: { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -159,6 +216,10 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.findings = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "provenance") {
+      options.provenance = requireTokenValue(token, parseError);
+      continue;
+    }
     if (token.name === "tmp-root") {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
@@ -188,6 +249,7 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   const findings = parseFindingsJson(options.findings);
+  const provenance = options.provenance === undefined ? undefined : parseProvenanceJson(options.provenance);
   const logPath = buildLogPath({
     repo: options.repo,
     pr: options.pr,
@@ -205,6 +267,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     loggedAt: new Date().toISOString(),
     findings,
   };
+  // Provenance is optional and additive: when absent the ledger writes exactly
+  // as before (no provenance key), preserving byte-identical output for the
+  // default / Claude-Code path. When present it records fan-out provenance for
+  // gates.requireFanoutProvenance enforcement.
+  if (provenance !== undefined) {
+    log.provenance = provenance;
+  }
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(log, null, 2) + "\n", "utf8");
   return { ok: true, path: logPath, log };
