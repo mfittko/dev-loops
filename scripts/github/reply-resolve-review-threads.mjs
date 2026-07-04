@@ -12,7 +12,7 @@ import {
   replyAndMaybeResolve,
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] [--message <text>] [--resolve]
 Reply to all matching unresolved review threads on one PR and optionally resolve them.
 Required:
@@ -92,14 +92,7 @@ export function parseReplyResolveThreadsCliArgs(argv) {
       options.resolve = true;
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {

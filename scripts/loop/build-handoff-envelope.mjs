@@ -23,7 +23,7 @@ import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelo
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: build-handoff-envelope.mjs --input <path>
 Build a deterministic handoff envelope from startup resolver output and settings.
@@ -109,14 +109,7 @@ export function parseBuildHandoffEnvelopeCliArgs(argv) {
       options.repo = requireTokenValue(token, parseError);
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
 

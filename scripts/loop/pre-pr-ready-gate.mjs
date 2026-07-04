@@ -10,7 +10,7 @@ import {
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   pre-pr-ready-gate.mjs --repo <owner/name> --pr <number>
@@ -64,8 +64,7 @@ export function parsePrePrReadyGateCliArgs(argv) {
     if (token.name === "help") { options.help = true; return options; }
     if (token.name === "repo") { options.repo = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "pr") { options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError); continue; }
-    if (token.name === "jq") { options.jq = requireTokenValue(token, parseError); continue; }
-    if (token.name === "silent") { options.silent = true; continue; }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {

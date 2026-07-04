@@ -21,7 +21,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { loadDevLoopConfig, resolveWorktreeConfig } from "@dev-loops/core/config";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   provision-worktree.mjs --worktree-path <p> --repo-root <p>
@@ -70,14 +70,7 @@ export function parseProvisionWorktreeCliArgs(argv) {
       options.repoRoot = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!options.worktreePath) throw parseError("Missing required --worktree-path");

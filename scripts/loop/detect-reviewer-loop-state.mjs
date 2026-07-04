@@ -8,7 +8,7 @@ import {
   interpretReviewerLoopState,
   normalizeReviewerSnapshot,
 } from "@dev-loops/core/loop/reviewer-loop-state";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const HELP = `Usage: detect-reviewer-loop-state.mjs [--input <path> | --repo <owner/name> --pr <number>] [--review-requested <true|false>] [--local-state <path>]
 Detect reviewer loop state for a pull request.
 Modes:
@@ -89,14 +89,7 @@ export function parseDetectReviewerCliArgs(argv) {
       options.localStatePath = requireTokenValue(token);
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t))) continue;
     throw new Error(`Unknown argument: ${token.rawName}`);
   }
   if (options.inputPath !== undefined) {

@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
 Detect change scope from git diff for light-mode eligibility.
@@ -51,13 +51,7 @@ function parseCliArgs(argv) {
         opts.head = token.value ?? null;
         continue;
       }
-      if (token.name === "jq") {
-        opts.jq = token.value;
-        continue;
-      }
-      if (token.name === "silent") {
-        opts.silent = true;
-      }
+      if (matchJqOutputToken(token, opts)) continue;
     }
   }
   return opts;

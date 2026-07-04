@@ -34,7 +34,7 @@ import {
 import { formatCliError } from "../_core-helpers.mjs";
 import { requireTokenValue as readSharedTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const SUBMIT_USAGE = `Usage:
   steer-loop.mjs submit --repo <owner/name> --pr <number>
     --kind stop_at_next_safe_gate --directive <text> --seq <n>
@@ -258,14 +258,7 @@ export function parseSubmitCliArgs(argv) {
       options.reviewerInputPath = readRequiredOptionValue(token, SUBMIT_USAGE);
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = readRequiredOptionValue(token, SUBMIT_USAGE);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => readRequiredOptionValue(t, SUBMIT_USAGE))) continue;
     throw usageError(`Unknown argument: ${token.rawName}`, SUBMIT_USAGE);
   }
   if (!options.help) {
@@ -341,14 +334,7 @@ export function parseStatusCliArgs(argv) {
       options.stateFile = readRequiredOptionValue(token, STATUS_USAGE);
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = readRequiredOptionValue(token, STATUS_USAGE);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => readRequiredOptionValue(t, STATUS_USAGE))) continue;
     throw usageError(`Unknown argument: ${token.rawName}`, STATUS_USAGE);
   }
   if (!options.help) {
@@ -425,14 +411,7 @@ export function parsePromoteCliArgs(argv) {
       options.loopState = val;
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = readRequiredOptionValue(token, PROMOTE_USAGE);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => readRequiredOptionValue(t, PROMOTE_USAGE))) continue;
     throw usageError(`Unknown argument: ${token.rawName}`, PROMOTE_USAGE);
   }
   if (!options.help) {

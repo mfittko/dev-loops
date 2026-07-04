@@ -3,7 +3,7 @@ import process from "node:process";
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { interpretTrackerLoopState } from "@dev-loops/core/loop/tracker-first-loop-state";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 function showHelp() {
   process.stdout.write(`Usage: detect-tracker-first-loop-state.mjs --repo <owner/name> --issue <number>
@@ -54,13 +54,7 @@ function parseCliArgs(argv) {
         opts.issue = token.value ?? null;
         continue;
       }
-      if (token.name === "jq") {
-        opts.jq = token.value;
-        continue;
-      }
-      if (token.name === "silent") {
-        opts.silent = true;
-      }
+      if (matchJqOutputToken(token, opts)) continue;
     }
   }
   return opts;

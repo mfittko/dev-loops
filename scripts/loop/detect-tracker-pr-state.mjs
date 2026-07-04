@@ -9,7 +9,7 @@ import {
   interpretTrackerPrState,
   normalizeTrackerPrSnapshot,
 } from "@dev-loops/core/loop/tracker-pr-state";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage:
   detect-tracker-pr-state.mjs --input <path>
 Interpret a pre-built tracker-PR snapshot JSON and emit the current lifecycle
@@ -85,14 +85,7 @@ export function parseDetectTrackerPrCliArgs(argv) {
       options.inputPath = requireTokenValue(token, parseError);
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.inputPath === undefined) {

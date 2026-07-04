@@ -6,7 +6,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
 import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number>\nWrapper around gh pr ready that enforces gate-evidence validation.\n\n${JQ_OUTPUT_USAGE}`;
 const parseError = buildParseError(USAGE);
@@ -27,8 +27,7 @@ export function parseReadyForReviewCliArgs(argv) {
     if (token.name === "help") { opts.help = true; return opts; }
     if (token.name === "repo") { opts.repo = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "pr") { opts.pr = parsePrNumber(requireTokenValue(token, parseError), parseError); continue; }
-    if (token.name === "jq") { opts.jq = requireTokenValue(token, parseError); continue; }
-    if (token.name === "silent") { opts.silent = true; continue; }
+    if (matchJqOutputToken(token, opts, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!opts.repo || opts.pr === undefined) throw parseError("ready-for-review requires --repo and --pr");

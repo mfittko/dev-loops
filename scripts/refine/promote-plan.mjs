@@ -17,7 +17,7 @@ import {
   writeLinkedPrNumber,
   PLAN_FILE_PROMOTE_ACTION,
 } from "@dev-loops/core/loop/plan-file-promote-contract";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const CREATE_PR_PATH = fileURLToPath(new URL("../github/create-pr.mjs", import.meta.url));
 
@@ -95,14 +95,7 @@ export function parsePromotePlanCliArgs(argv) {
       options.json = true;
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (typeof options.planFile !== "string" || options.planFile.trim().length === 0) {

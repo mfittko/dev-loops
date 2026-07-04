@@ -17,7 +17,7 @@ import {
   SPIKE_EXIT_ACTION,
   SPIKE_EXIT_DISPOSITION,
 } from "@dev-loops/core/loop/spike-exit-contract";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   exit-spike.mjs --spike-file <path> --disposition <discard|graduate> [--plan-file <path>] [--json]
@@ -94,14 +94,7 @@ export function parseExitSpikeCliArgs(argv) {
       options.json = true;
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (typeof options.spikeFile !== "string" || options.spikeFile.trim().length === 0) {

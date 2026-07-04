@@ -4,6 +4,7 @@ import {
   JqFilterError,
   evaluateJqFilter,
   emitResult,
+  matchJqOutputToken,
 } from "../../scripts/lib/jq-output.mjs";
 
 function sink() {
@@ -132,4 +133,23 @@ test("emitResult: invalid --jq fails closed (exit 2 + stderr), distinct from pre
   assert.equal(emitResult(sample, { jq: "bogus", silent: true, stdout: out, stderr: err }), 2);
   assert.equal(out.get(), "");
   assert.match(err.get(), /--jq/);
+});
+
+test("matchJqOutputToken: consumes --jq/--silent tokens into options, ignores others", () => {
+  // --jq <value>: uses the default value-getter (token.value) and consumes it.
+  const a = {};
+  assert.equal(matchJqOutputToken({ name: "jq", value: ".ok" }, a), true);
+  assert.equal(a.jq, ".ok");
+  // --silent (and -s, which parseArgs normalizes to name "silent"): boolean.
+  const b = {};
+  assert.equal(matchJqOutputToken({ name: "silent", value: undefined }, b), true);
+  assert.equal(b.silent, true);
+  // A non-jq/silent token is not consumed and leaves options untouched.
+  const c = {};
+  assert.equal(matchJqOutputToken({ name: "repo", value: "o/n" }, c), false);
+  assert.deepEqual(c, {});
+  // Custom value-getter (e.g. requireTokenValue) is honored for --jq.
+  const d = {};
+  assert.equal(matchJqOutputToken({ name: "jq", value: ".x" }, d, (t) => t.value.toUpperCase()), true);
+  assert.equal(d.jq, ".X");
 });

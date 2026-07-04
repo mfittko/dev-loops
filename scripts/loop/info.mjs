@@ -7,7 +7,7 @@ import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs"
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { runContextEnv } from "@dev-loops/core/loop/run-context";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 // REPO_ROOT resolves to the git repo root (scripts/loop/info.mjs → scripts/ → repo/)
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)), "..");
@@ -61,8 +61,7 @@ function parseCliArgs(argv) {
     if (token.name === "issue") { opts.issue = parsePositiveInteger(requireTokenValue(token, parseError), "--issue", parseError); continue; }
     if (token.name === "pr") { opts.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError); continue; }
     if (token.name === "repo") { opts.repo = requireTokenValue(token, parseError); continue; }
-    if (token.name === "jq") { opts.jq = requireTokenValue(token, parseError); continue; }
-    if (token.name === "silent") { opts.silent = true; continue; }
+    if (matchJqOutputToken(token, opts, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const modes = [opts.issue, opts.pr].filter(v => v !== undefined).length;

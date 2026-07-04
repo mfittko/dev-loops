@@ -12,7 +12,7 @@ import {
   isListedWorktree,
   detectSubagentAvailability,
 } from "@dev-loops/core/loop/worktree-guard";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const DEVLOOPS_PREFLIGHT_BYPASS_VAR = "DEVLOOPS_PREFLIGHT_BYPASS";
 const USAGE = `Usage:
   pre-flight-gate.mjs [--expected-branch <name>] [--check-subagents]
@@ -70,14 +70,7 @@ export function parsePreFlightGateCliArgs(argv) {
       options.checkSubagents = true;
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   return options;

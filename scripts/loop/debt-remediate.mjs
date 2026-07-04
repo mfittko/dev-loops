@@ -24,7 +24,7 @@ import { DebtSignalSchema } from "@dev-loops/core/debt/signal";
 import { clusterSignalsEnriched } from "@dev-loops/core/debt/cluster";
 import { shapeFindings } from "@dev-loops/core/debt/shape";
 import { createRemediationIssue } from "@dev-loops/core/debt/remediation-to-issue";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -193,14 +193,7 @@ export async function runCli(argv) {
       options.dryRun = true;
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown flag: ${token.rawName}`);
   }
 

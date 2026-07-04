@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue, runCommand } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const DEFAULT_MAX_LINES = 1000;
 const DEFAULT_DUPLICATE_WINDOW_LINES = 4;
 const DEFAULT_BRANCH_THRESHOLD = 25;
@@ -131,14 +131,7 @@ export function parseRefinementAuditCliArgs(argv) {
       options.output = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.paths !== undefined && options.pathsFile !== undefined) {

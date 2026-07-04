@@ -26,7 +26,7 @@ import {
 } from "@dev-loops/core/loop/async-start-contract";
 import { loadDevLoopConfig, resolveConductorModel, resolveAutonomyStopAt, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: outer-loop.mjs --repo <owner/name> --pr <number>
 Thin outer-loop wrapper for the Copilot PR remediation loop.
 Detects current PR state from both the Copilot inner loop and the reviewer
@@ -146,14 +146,7 @@ export function parseOuterLoopCliArgs(argv) {
       options.reviewerInputPath = requireTokenValue(token, parseError);
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!options.help) {

@@ -2,7 +2,7 @@
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runCommand } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: pre-write-remote-freshness-guard.mjs --branch <name>\nRefresh remote branch state before starting local file writes.\n\n${JQ_OUTPUT_USAGE}`;
 const parseError = buildParseError(USAGE);
@@ -29,8 +29,7 @@ export function parseRemoteFreshnessGuardCliArgs(argv) {
     }
     if (token.name === "help") { options.help = true; return options; }
     if (token.name === "branch") { options.branch = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
-    if (token.name === "jq") { options.jq = requireTokenValue(token, parseError); continue; }
-    if (token.name === "silent") { options.silent = true; continue; }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.branch === undefined) throw parseError("--branch <name> is required");

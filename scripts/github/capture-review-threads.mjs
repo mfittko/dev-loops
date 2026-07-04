@@ -11,7 +11,7 @@ import {
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 export const REVIEW_THREADS_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!) {",
   "  repository(owner: $owner, name: $name) {",
@@ -103,14 +103,7 @@ export function parseCaptureCliArgs(argv) {
       options.pr = parsePrNumber(requireTokenValue(token));
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t))) continue;
     throw new Error(`Unknown argument: ${token.rawName}`);
   }
   const hasLiveArgs = options.repo !== undefined || options.pr !== undefined;

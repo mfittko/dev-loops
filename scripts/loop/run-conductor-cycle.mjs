@@ -15,7 +15,7 @@ import {
 } from "./_handoff-contract.mjs";
 import { listOpenPrs } from "./_loop-pr-aggregation.mjs";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 export { listOpenPrs };
 const USAGE = `Usage: run-conductor-cycle.mjs --repo <owner/name>
 Poll all open PRs, detect state, and output an ordered action queue.
@@ -102,14 +102,7 @@ export function parseCliArgs(argv) {
       options.repo = requireTokenValue(token, parseError).trim();
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined) {
