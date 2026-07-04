@@ -39,11 +39,16 @@ Treat missing optional files as normal bootstrap conditions, not errors.
 
 ### Tracker-backed local implementation
 
-Local implementation supports these durable spec inputs:
+Local implementation supports these spec-of-record inputs. The first two are durable/committed artifacts; the third is a spec-of-record that is NOT a durable committed artifact:
+
+Durable/committed spec artifacts:
 
 - phase-doc-backed local sessions ([Phase Plan](../../docs/phases/phase-x.md) is canonical)
 - tracker-backed local sessions (the tracker issue is canonical)
-- lightweight PR-body-as-spec sessions (`--lightweight`; the PR description is canonical — the resolver output carries `canonicalSpecSource: pr_body` and the derived handoff envelope carries `specSource: pr_body`; no phase/plan doc minted or committed). Same gate sequence as the phase-doc path; only the backing artifact differs. See [Artifact Authority Contract](../docs/artifact-authority-contract.md) "Lightweight (PR-body-as-spec)".
+
+Non-durable spec-of-record (no committed plan artifact):
+
+- lightweight PR-body-as-spec sessions (`--lightweight`; the PR description is the canonical spec-of-record but NOT a durable committed artifact — the resolver output carries `canonicalSpecSource: pr_body` and the derived handoff envelope carries `specSource: pr_body`; no phase/plan doc minted or committed). Same gate sequence as the phase-doc path; only the backing artifact differs. See [Artifact Authority Contract](../docs/artifact-authority-contract.md) "Lightweight (PR-body-as-spec)".
 
 Tracker-backed local implementation stays inside the existing `local_implementation` path. For sub-issue tree decomposition, see [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md) (this is a source-repo reference; it is not part of the bundled `../docs/` runtime contract surface for installed skill copies). It does not introduce a new routing mode.
 

@@ -355,7 +355,19 @@ export const PR_BODY_SPEC_NARRATIVE_SECTIONS = Object.freeze({
 });
 
 function sectionHasBody(section) {
-  return Boolean(section) && section.bodyLines.some((line) => line.trim().length > 0);
+  // A real body needs >=1 non-whitespace line OUTSIDE any fenced code span —
+  // a section whose only content is a ```fenced``` block is treated as empty so
+  // it cannot spoof the narrative-invariant gate (issue #1025, same stepFence as
+  // parseMarkdownSections + extractChecklistItems).
+  if (!section) return false;
+  let fence = null;
+  for (const line of section.bodyLines) {
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) continue;
+    if (line.trim().length > 0) return true;
+  }
+  return false;
 }
 
 /**

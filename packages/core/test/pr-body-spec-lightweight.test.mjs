@@ -163,6 +163,49 @@ x
   assert.deepEqual(result.dodItems, []);
 });
 
+test("validatePrBodySpec: a narrative section whose body is ONLY a fenced block is treated as empty (fails closed)", () => {
+  const body = `## Objective
+\`\`\`
+just a code block, no real objective prose
+\`\`\`
+## In scope
+- a
+## Explicit non-goals
+- b
+## Acceptance criteria
+- [ ] c
+## Definition of done
+- [ ] d
+## Open questions / risks
+- none
+`;
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors.map((e) => e.code), ["missing_objective"]);
+});
+
+test("validatePrBodySpec: real prose plus an ADDITIONAL fenced example still counts as a non-empty section", () => {
+  const body = `## Objective
+We ship the lightweight path. Example config:
+\`\`\`
+key: value
+\`\`\`
+## In scope
+- a
+## Explicit non-goals
+- b
+## Acceptance criteria
+- [ ] c
+## Definition of done
+- [ ] d
+## Open questions / risks
+- none
+`;
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+});
+
 test("validatePrBodySpec: a mix of fenced and real checkboxes counts ONLY the real ones", () => {
   const body = `## Objective
 x
