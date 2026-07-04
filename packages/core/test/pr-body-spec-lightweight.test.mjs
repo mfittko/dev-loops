@@ -137,6 +137,55 @@ test("parseMarkdownSections: a mixed-marker line (```~~~) does NOT close a backt
   assert.deepEqual(names, ["Real"]);
 });
 
+test("validatePrBodySpec: AC/DoD checkboxes that live ONLY inside a code fence do NOT count (fails closed)", () => {
+  const body = `## Objective
+x
+## In scope
+- a
+## Explicit non-goals
+- b
+## Acceptance criteria
+\`\`\`
+- [ ] fenced fake criterion
+\`\`\`
+## Definition of done
+\`\`\`
+- [ ] fenced fake dod
+\`\`\`
+## Open questions / risks
+- none
+`;
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, false);
+  const codes = result.errors.map((e) => e.code).sort();
+  assert.deepEqual(codes, ["missing_acceptance_criteria", "missing_definition_of_done"]);
+  assert.deepEqual(result.acItems, []);
+  assert.deepEqual(result.dodItems, []);
+});
+
+test("validatePrBodySpec: a mix of fenced and real checkboxes counts ONLY the real ones", () => {
+  const body = `## Objective
+x
+## In scope
+- a
+## Explicit non-goals
+- b
+## Acceptance criteria
+\`\`\`
+- [ ] fenced fake criterion
+\`\`\`
+- [ ] real criterion
+## Definition of done
+- [ ] real dod
+## Open questions / risks
+- none
+`;
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.acItems, ["real criterion"]);
+  assert.deepEqual(result.dodItems, ["real dod"]);
+});
+
 // ---------------------------------------------------------------------------
 // Shared envelope fixtures
 // ---------------------------------------------------------------------------

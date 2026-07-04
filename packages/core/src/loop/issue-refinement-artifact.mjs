@@ -48,6 +48,38 @@ const DOD_SECTION_PATTERNS = Object.freeze([
 ]);
 
 /**
+ * Fenced-code-span tracker. Given the previous fence state and the current
+ * line, returns { fence, isFenceLine, insideFence } where:
+ *   - `fence` is the next state ({ char, len } while open, else null)
+ *   - `isFenceLine` is true when the line is itself a fence open/close marker
+ *   - `insideFence` is true when the line's CONTENT is inside a code span
+ *     (i.e. a fence line, or a line between an open and its close)
+ *
+ * CommonMark: an N-marker fence (``` or ~~~) closes only on a line of >= N
+ * markers of the SAME char with no info string. This is the single source of
+ * truth shared by parseMarkdownSections (headings) and extractChecklistItems
+ * (checkboxes) so the two anti-spoof layers cannot drift (issue #1025).
+ */
+function stepFence(fence, line) {
+  const openMatch = /^\s*(`{3,}|~{3,})/u.exec(line);
+  if (openMatch) {
+    const char = openMatch[1][0];
+    const len = openMatch[1].length;
+    // A closing fence is a bare run of >= N markers of ONLY the opening char
+    // (CommonMark: no mixed markers, no info string).
+    const isBareRun = new RegExp(`^\\s*${char}+\\s*$`, "u").test(line);
+    if (fence === null) {
+      return { fence: { char, len }, isFenceLine: true, insideFence: true };
+    }
+    if (fence.char === char && len >= fence.len && isBareRun) {
+      return { fence: null, isFenceLine: true, insideFence: true };
+    }
+    return { fence, isFenceLine: true, insideFence: true };
+  }
+  return { fence, isFenceLine: false, insideFence: fence !== null };
+}
+
+/**
  * Extract `## ...` heading boundaries from a Markdown body.
  * Returns a sorted array of { level, name, bodyLines } records.
  *
@@ -63,29 +95,12 @@ export function parseMarkdownSections(body) {
   const lines = body.split(/\r?\n/u);
   const sections = [];
   let current = null;
-  // While inside a code span, holds { char, len } of the opening fence.
-  // CommonMark: an N-marker fence closes only on a line of >= N SAME-char
-  // markers, so a 4-backtick fence is NOT closed by a 3-backtick line inside it.
   let fence = null;
 
   for (const line of lines) {
-    const openMatch = /^\s*(`{3,}|~{3,})/u.exec(line);
-    if (openMatch) {
-      const marker = openMatch[1];
-      const char = marker[0];
-      const len = marker.length;
-      // A closing fence is a bare run of >= N markers of ONLY the opening char
-      // (CommonMark: no mixed markers, no info string).
-      const isBareRun = new RegExp(`^\\s*${char}+\\s*$`, "u").test(line);
-      if (fence === null) {
-        fence = { char, len };
-      } else if (fence.char === char && len >= fence.len && isBareRun) {
-        fence = null;
-      }
-      if (current) current.bodyLines.push(line);
-      continue;
-    }
-    if (fence !== null) {
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) {
       if (current) current.bodyLines.push(line);
       continue;
     }
@@ -145,8 +160,17 @@ export function extractChecklistItems(sectionBody) {
 
   const items = [];
   const lines = sectionBody.split(/\r?\n/u);
+  let fence = null;
 
   for (const line of lines) {
+    // Checkboxes/bullets inside a fenced code span are non-interactive text, not
+    // real items — skip them so a body cannot spoof the AC/DoD gate with
+    // code-fenced checkboxes (issue #1025). Same fence logic as parseMarkdownSections.
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) {
+      continue;
+    }
     // Checklist item: `- [ ]` / `- [x]` (leading indentation tolerated).
     // Consume ANY checkbox-marker line here; push only when it carries text,
     // so empty placeholders (`- [ ]`) are skipped rather than counted.
