@@ -156,10 +156,17 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(ciWorkflow, /verify:[\s\S]*npm run verify/i);
 
   // All THREE smoke jobs must route through the shared composite action, so a
-  // future edit can't silently reintroduce the duplication in deck/article
+  // future edit can't silently reintroduce the duplication in any of them
   // (#1058 dedup guard — the whole point is all three share one setup).
-  assert.match(ciWorkflow, /deck-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
-  assert.match(ciWorkflow, /article-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
+  // Count-based, not per-job `job:[\s\S]*uses:` regexes: those are greedy and
+  // match across job boundaries (a `deck-smoke:` header is "satisfied" by
+  // article-smoke's later `uses:` line), so they'd pass even if deck lost its
+  // reference. Asserting exactly 3 occurrences catches any job dropping it.
+  assert.equal(
+    (ciWorkflow.match(/uses:\s*\.\/\.github\/actions\/playwright-webkit/gi) || []).length,
+    3,
+    "all three smoke jobs (viewer/deck/article) must reference the composite action exactly once",
+  );
 
   // Shared Playwright WebKit setup lives in the composite action; assert its
   // cache/env wiring AND its Node setup stayed intact after the dedup (#1058).
