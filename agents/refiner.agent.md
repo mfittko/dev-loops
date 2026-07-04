@@ -1,7 +1,7 @@
 ---
 name: "refiner"
 description: "Use for refining one approved implementation phase at a time into a complete, testable plan with acceptance criteria, definition of done, risks, non-goals, unresolved questions, and RFC escalation notes. Keywords: refiner, phase refinement, acceptance criteria, definition of done, RFC escalation, merged plan."
-tools: [read, search, execute, bash, edit, write]
+tools: read, search, execute, bash, edit, write
 argument-hint: "Active phase doc or rough plan, phase boundary, known constraints, and any prior planning artifacts to refine."
 systemPromptMode: append
 inheritProjectContext: true

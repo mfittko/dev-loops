@@ -1,7 +1,7 @@
 ---
 name: "review"
 description: "Use for pull request review from a product and engineering perspective: check the implementation against the PR description, relevant plan, acceptance criteria, definition of done, non-goals, coding best practices, security expectations, and merge readiness. Keywords: review, PR review, acceptance criteria review, DoD review, security review, plan compliance."
-tools: [read, search, execute, bash, edit, write]
+tools: read, search, execute, bash, edit, write
 argument-hint: "PR number or branch, relevant plan files, and any specific review focus areas or constraints."
 systemPromptMode: append
 inheritProjectContext: true

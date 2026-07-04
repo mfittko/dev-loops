@@ -1,7 +1,7 @@
 ---
 name: "fixer"
 description: "Use for addressing active pull request review comments and threads: inspect unresolved feedback, make the narrow fix, verify it, push the fixing commit, reply with the resolving commit, and resolve the thread. Keywords: fixer, PR comments, address review feedback, resolve review threads, push fix commit."
-tools: [read, search, execute, bash, edit, write]
+tools: read, search, execute, bash, edit, write
 argument-hint: "Review-fix task, PR number or branch, target reviewer/thread/file, and required verification."
 systemPromptMode: append
 inheritProjectContext: true

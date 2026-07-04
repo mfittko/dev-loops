@@ -1,7 +1,7 @@
 ---
 name: "dev-loop"
 description: "Use as the single public workflow entrypoint. Route from canonical current state to the deterministic internal strategy, preferring GitHub-first paths and only using local phase implementation when explicitly requested. Keywords: dev-loop, public entrypoint, route workflow, continue dev loop."
-tools: [read, search, execute, bash, agent, todo, subagent]
+tools: read, search, execute, bash, agent, todo, subagent
 argument-hint: "A dev-loop intent such as issue number/URL, PR number/URL, or a request to continue/inspect current state."
 systemPromptMode: append
 inheritProjectContext: true
@@ -71,7 +71,7 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 ## Subagent delegation
 
 <!-- pi-only -->
-This agent has `tools: [subagent]` and `maxSubagentDepth: 3` to allow orchestrating parallel review, chains, and staged fix passes.
+This agent's frontmatter `tools:` comma-token scalar includes `subagent` (single-line comma form, no brackets — see #1111) and it sets `maxSubagentDepth: 3` to allow orchestrating parallel review, chains, and staged fix passes.
 <!-- /pi-only -->
 
 All delegation must originate from the handoff envelope: the envelope's `nextAction`, `requiredReads`, `stopRules`, and `acceptance` define the bounded task. The envelope is passed to child subagents as their primary handoff artifact.

@@ -1,6 +1,8 @@
 import {
+  assert,
   assertMatchesAll,
   readRepo,
+  readdir,
   test,
 } from "../imported-assets-helpers.mjs";
 
@@ -19,3 +21,53 @@ for (const agent of ["developer", "fixer"]) {
     ], `agents/${agent}.agent.md`);
   });
 }
+
+// #1111: the `tools:` frontmatter MUST be a single-line, comma-separated token
+// list (`tools: read, search, ...`, or a single token). pi-subagents parses
+// that line with a naive comma split (not real YAML), so any other shape breaks
+// it and can silently drop `subagent` at child depth:
+//   - flow-sequence `[a, b]`          → `[read` / `subagent]` keep their brackets
+//   - block sequence (bare `tools:`)  → empty tool list
+//   - space-separated `a b`           → one invalid token `"a b"`
+//   - trailing inline comment `a # x` → last token polluted with `" # x"`
+// The comma-token scalar parses cleanly on pi and regenerates a byte-identical
+// `.claude/` mirror (normalizeToolList already accepts a string). This fence
+// asserts the canonical shape positively, so any pi-hostile form fails.
+const TOOLS_CANONICAL = /^tools: [a-z][\w-]*(,\s*[a-z][\w-]*)*$/;
+
+// Extract the leading YAML frontmatter block so the fence checks the real
+// frontmatter `tools:` key — not an unrelated body line that happens to start
+// with `tools:`, which could otherwise bypass the guard.
+function frontmatterOf(content, file) {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  assert.ok(match, `agents/${file} must have a leading YAML frontmatter block`);
+  return match[1];
+}
+
+test("every agent `tools:` frontmatter is a pi-safe comma-token scalar (#1111)", async () => {
+  const files = (await readdir(new URL("../../agents/", import.meta.url)))
+    .filter((name) => name.endsWith(".agent.md"));
+  assert.ok(files.length >= 7, `expected the canonical agent set, got ${files.length}`);
+
+  for (const file of files) {
+    const frontmatter = frontmatterOf(await readRepo(`agents/${file}`), file);
+    const line = frontmatter.split("\n").find((l) => /^tools:/.test(l));
+    assert.ok(line, `agents/${file} frontmatter must declare a tools: line`);
+    assert.match(
+      line,
+      TOOLS_CANONICAL,
+      `agents/${file} tools: must be a single-line comma-separated token list (\`tools: read, search, ...\`) — any bracketed, block-sequence, space-separated, or trailing-content shape breaks pi's naive comma split and can drop subagent (#1111): ${line}`,
+    );
+  }
+});
+
+// Self-test: pin TOOLS_CANONICAL against every pi-hostile shape so the guard
+// above cannot go vacuously green if the regex is ever loosened (#1111).
+test("the #1111 tools: fence accepts only the pi-safe comma-token scalar", () => {
+  assert.match("tools: read, search, subagent", TOOLS_CANONICAL, "canonical comma list");
+  assert.match("tools: read", TOOLS_CANONICAL, "single token");
+  assert.doesNotMatch("tools: [read, subagent]", TOOLS_CANONICAL, "flow-sequence brackets");
+  assert.doesNotMatch("tools:", TOOLS_CANONICAL, "bare block-sequence header");
+  assert.doesNotMatch("tools: read search", TOOLS_CANONICAL, "space-separated → single invalid token");
+  assert.doesNotMatch("tools: read, subagent # note", TOOLS_CANONICAL, "trailing inline comment pollutes last token");
+});
