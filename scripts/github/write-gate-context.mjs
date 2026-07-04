@@ -58,7 +58,7 @@ export function mapGateToConfigKey(gate) {
  * are recorded with action 'added' (reason from `resolverResult.addedReasons`)
  * instead of 'kept'.
  *
- * @param {{ recommendedAngles: string[]|null, skippedAngles?: string[], reasons?: Record<string,string>, addedAngles?: string[], addedReasons?: Record<string,string> }} resolverResult
+ * @param {{ recommendedAngles: string[]|null, skippedAngles?: string[], reasons?: Record<string,string>, addedAngles?: string[], addedReasons?: Record<string,string>, dynamicAnglesActive?: boolean }} resolverResult
  * @returns {{ resolvedAngles: string[], rationale: Array<{angle: string, action: "kept"|"added"|"dropped", reason: string}> }}
  */
 export function rationaleFromResolver(resolverResult) {

@@ -85,8 +85,10 @@ on an isolated checkout:
   enabled (default **off**), the resolver may also ADD catalog angles that
   change-category heuristics recommend but that are not already in the gate's
   configured pool, drawn from the global lens catalog (the explicit `gates.anglePool`
-  override, or the built-in persona registry's angle union when `anglePool` is not
-  set). `excludeAngles` remains a hard ceiling on additions — an excluded angle is
+  override, or — when `anglePool` is not set — the union of the built-in persona
+  registry's angle names and every angle actually configured across this config's
+  own `gates.draft`/`gates.preApproval`/`gates.spike` `angles`/`mandatoryAngles`).
+  `excludeAngles` remains a hard ceiling on additions — an excluded angle is
   never added, even if the change categories would otherwise recommend it. Additions
   are recorded in the rationale with action `"added"` naming the triggering change
   category. This additive path is off by default, so existing configured angle pools
