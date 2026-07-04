@@ -155,8 +155,19 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*npm run test:playwright:viewer/i);
   assert.match(ciWorkflow, /verify:[\s\S]*npm run verify/i);
 
+  // All THREE smoke jobs must route through the shared composite action, so a
+  // future edit can't silently reintroduce the duplication in deck/article
+  // (#1058 dedup guard — the whole point is all three share one setup).
+  assert.match(ciWorkflow, /deck-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
+  assert.match(ciWorkflow, /article-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
+
   // Shared Playwright WebKit setup lives in the composite action; assert its
-  // cache/env wiring stayed intact after the dedup (issue #1058).
+  // cache/env wiring AND its Node setup stayed intact after the dedup (#1058).
+  // (The ciWorkflow node-version:24 assertion above is satisfied by the
+  // changes/verify jobs, so assert the ACTION's own Node setup here or a
+  // regression in the shared action's Node would go uncaught.)
+  assert.match(playwrightWebkitAction, /actions\/setup-node@v5/i);
+  assert.match(playwrightWebkitAction, /node-version:\s*24/i);
   assert.match(playwrightWebkitAction, /actions\/cache@v5/i);
   assert.match(playwrightWebkitAction, /path:\s*\$\{\{\s*env\.PLAYWRIGHT_BROWSERS_PATH\s*\}\}/i);
   assert.match(playwrightWebkitAction, /PLAYWRIGHT_BROWSERS_PATH=\$\{\{\s*github\.workspace\s*\}\}\/\.cache\/ms-playwright/i);
