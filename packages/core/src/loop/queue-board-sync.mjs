@@ -224,7 +224,7 @@ export function loadBoardConfig(repoRoot) {
  *     cannot pollute Object.prototype.
  */
 export function loadStateColumnMap(repoRoot) {
-  const { settings: queue } = readDevloopsSettings(repoRoot);
+  const { settings: queue, error } = readDevloopsSettings(repoRoot);
   // Null-prototype objects: untrusted keys can never reach Object.prototype.
   const columnNames = Object.assign(Object.create(null), DEFAULT_STATE_COLUMN_NAMES);
   const stateColumnMap = Object.create(null);
@@ -255,7 +255,11 @@ export function loadStateColumnMap(repoRoot) {
     }
   }
 
-  return { columnNames, stateColumnMap };
+  // Surface a non-ENOENT read/parse error (mirrors loadBoardConfig). Callers on
+  // the fail-closed next_up pickup path MUST honor it rather than silently
+  // querying the default literal column against a stale/renamed board (#1098).
+  // Existing `.columnNames`-only callers ignore this field and behave unchanged.
+  return { columnNames, stateColumnMap, error: error ?? null };
 }
 
 // ── Minimal project lookup (read-only, no create/repair) ────────────────

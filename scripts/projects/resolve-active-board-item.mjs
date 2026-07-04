@@ -155,7 +155,18 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
   // board-sync uses (#1098): a repo that renamed Next Up (e.g. to "Todo") gets
   // its configured column queried, not the literal default. Pickup SEMANTICS
   // (position-ascending HEAD, fail-closed on empty, never Backlog) are unchanged.
-  const nextUpColumn = loadStateColumnMap(cwd).columnNames[LOGICAL_COLUMN.NEXT_UP];
+  const { columnNames, error: configError } = loadStateColumnMap(cwd);
+  if (configError) {
+    // A malformed `.devloops` must fail CLOSED — never silently fall back to the
+    // literal "Next Up" and risk selecting the wrong item from a stale/renamed
+    // column (#1098). Throw so the CLI surfaces it (exit 2), mirroring a Next Up
+    // query error's "propagate, no fallback" contract.
+    throw Object.assign(
+      new Error(`could not resolve next_up column (config read/parse error: ${configError})`),
+      { code: "CONFIG_ERROR" },
+    );
+  }
+  const nextUpColumn = columnNames[LOGICAL_COLUMN.NEXT_UP];
   const listed = await listQueueItems(
     { repo: args.repo, project: args.project, column: nextUpColumn },
     { env, runChild },

@@ -295,6 +295,31 @@ test("loadStateColumnMap reads queue.statusColumns overrides (AC3)", async () =>
   }
 });
 
+test("loadStateColumnMap surfaces a non-ENOENT read/parse error (fail-closed contract, #1098)", async () => {
+  // Un-parseable `.devloops` (mapping then sequence at root) → YAMLParseError.
+  const dir = await makeRepo("queue: renamed\n- broken\n");
+  try {
+    const mapping = loadStateColumnMap(dir);
+    // Error is surfaced (not swallowed) so next_up pickup consumers fail closed
+    // instead of silently querying the default literal column.
+    assert.ok(mapping.error, "expected a config read/parse error to be surfaced");
+    // Backward compatible: columnNames still present (defaults) for the 4
+    // existing .columnNames-only callers that ignore `error`.
+    assert.equal(mapping.columnNames[LOGICAL_COLUMN.NEXT_UP], "Next Up");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadStateColumnMap returns error:null for a clean/missing config (#1098)", async () => {
+  const dir = await makeRepo(null);
+  try {
+    assert.equal(loadStateColumnMap(dir).error, null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("loadStateColumnMap reads queue.stateColumnMap per-state overrides (AC3)", async () => {
   const dir = await makeRepo(
     "queue:\n  projectNumber: 5\n  stateColumnMap:\n    final_approval_ready: ready_for_review\n  statusColumns:\n    ready_for_review: \"Ready for Review\"\n",

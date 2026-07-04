@@ -692,22 +692,54 @@ describe("add-queue-item", () => {
       });
     });
 
-    it("main() without a cwd override still resolves --next-up to the default \"Next Up\"", async () => {
-      const responses = [
-        { payload: userPayload() },
-        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-        { payload: getFieldsResponse([STATUS_FIELD]) },
-        { payload: emptyItemsResponse() },
-        { payload: resolveIssueResponse("I_kwDO_10") },
-        { payload: addItemResponse("PVTI_new") },
-        { payload: updateFieldResponse() },
-      ];
-      const result = await main(
-        { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
-        { env: {}, runChild: mockRunChild(responses) },
-      );
-      assert.equal(result.ok, true);
-      assert.equal(result.item.status, "Next Up");
+    it("main() rejects --next-up + the OLD literal --column \"Next Up\" once next_up is renamed to \"Todo\"", async () => {
+      await withTempCwd('queue:\n  projectNumber: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+        await assert.rejects(
+          () =>
+            main(
+              { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, column: "Next Up" },
+              { env: {}, runChild: mockRunChild([]), cwd },
+            ),
+          /Conflicting --next-up and --column\/--status/,
+        );
+      });
+    });
+
+    it("main() fails CLOSED on a malformed .devloops when --next-up drives the target (no literal fallback)", async () => {
+      // Genuinely un-parseable YAML → loadStateColumnMap surfaces an error;
+      // --next-up must throw rather than silently querying the literal "Next Up".
+      await withTempCwd("queue: renamed\n- broken\n", async (cwd) => {
+        await assert.rejects(
+          () =>
+            main(
+              { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+              { env: {}, runChild: mockRunChild([]), cwd },
+            ),
+          /config read\/parse error/,
+        );
+      });
+    });
+
+    it("main() with an override-free .devloops still resolves --next-up to the default \"Next Up\" (hermetic cwd)", async () => {
+      // Hermetic: explicit empty-config temp cwd so this can't break if the real
+      // repo's .devloops ever gains a next_up override.
+      await withTempCwd("queue:\n  projectNumber: 1\n", async (cwd) => {
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          { payload: emptyItemsResponse() },
+          { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: addItemResponse("PVTI_new") },
+          { payload: updateFieldResponse() },
+        ];
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+          { env: {}, runChild: mockRunChild(responses), cwd },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.item.status, "Next Up");
+      });
     });
   });
 

@@ -56,7 +56,14 @@ export async function resolveNextUpOrder(
   // Resolve the logical next_up column through the SAME statusColumns mapping
   // board-sync uses (#1098), so a renamed Next Up column (e.g. "Todo") is
   // queried by its configured display name instead of the literal default.
-  const nextUpColumn = loadStateColumnMap(repoRoot).columnNames[LOGICAL_COLUMN.NEXT_UP];
+  const { columnNames, error: configError } = loadStateColumnMap(repoRoot);
+  if (configError) {
+    // Board IS configured but `.devloops` failed to parse: fail closed (query
+    // ERROR shape), never silently query the default literal against a possibly
+    // renamed column (#1098). Driver surfaces it and stops (no Backlog fallback).
+    return { ok: false, configured: true, order: [], reason: `config read/parse error: ${configError}` };
+  }
+  const nextUpColumn = columnNames[LOGICAL_COLUMN.NEXT_UP];
 
   const listItems = dependencies.listQueueItems ?? listQueueItemsMain;
   try {

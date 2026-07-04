@@ -219,4 +219,18 @@ describe("resolve-active-board-item resolves the configured next_up column (#109
       assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
     });
   });
+
+  it("malformed .devloops → pickup fails CLOSED (surfaces config error), never queries the literal \"Next Up\"", async () => {
+    // Zero In Progress → falls through to resolveNextUpHead, which must throw on
+    // an un-parseable config rather than silently querying the default column.
+    await withTempCwd("queue: renamed\n- broken\n", async (cwd) => {
+      const child = boardRunChild({
+        columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      });
+      await assert.rejects(
+        () => main({ repo: "o/r", project: "7" }, { runChild: child, cwd }),
+        /config read\/parse error/,
+      );
+    });
+  });
 });
