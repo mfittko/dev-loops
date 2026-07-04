@@ -4,6 +4,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import {
   summarizeHeadScopedCheckRunsSignal,
   normalizeHeadScopedCommitStatus,
@@ -53,9 +54,11 @@ No-checks rule (grace, race-safe):
 Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
   { "ok": false, "error": "...", "usage"?: "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or gh failure`.trim();
+  1  Argument error or gh failure
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 
 export function parseCiWatchCliArgs(argv) {
@@ -67,6 +70,7 @@ export function parseCiWatchCliArgs(argv) {
       pr: { type: "string" },
       "timeout-ms": { type: "string" },
       "poll-interval-ms": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -104,6 +108,14 @@ export function parseCiWatchCliArgs(argv) {
     }
     if (token.name === "poll-interval-ms") {
       options.pollIntervalMs = parsePositiveMs(requireTokenValue(token, parseError), "--poll-interval-ms");
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -447,6 +459,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
   } = {},
@@ -457,7 +470,7 @@ export async function runCli(
     return;
   }
   const result = await watchCiStatus(options, { env, ghCommand });
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {

@@ -28,6 +28,7 @@ import {
   normalizeHeadScopedCiContract,
 } from "@dev-loops/core/loop/copilot-ci-status";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage:
   detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>
   detect-copilot-loop-state.mjs --input <path>
@@ -53,9 +54,11 @@ Error output (stderr, JSON):
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
     { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error, gh failure, or indeterminate state`.trim();
+  1  Argument error, gh failure, or indeterminate state
+  2  Invalid --jq filter`.trim();
 const VALID_OVERRIDE_STATUSES = new Set(["requested", "already-requested", "unavailable", "none", "failed"]);
 const parseError = buildParseError(USAGE);
 export function parseDetectCliArgs(argv) {
@@ -72,6 +75,7 @@ export function parseDetectCliArgs(argv) {
       input: { type: "string" },
       repo: { type: "string" },
       pr: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -98,6 +102,14 @@ export function parseDetectCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -419,6 +431,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
   } = {},
@@ -451,7 +464,7 @@ export async function runCli(
     : resolveRefinement(config.config);
   interpretation = interpretLoopState(interpretationInput, refinementConfig);
   const interpretationSummary = summarizeLoopInterpretation(interpretation);
-  stdout.write(`${JSON.stringify({
+  process.exitCode = emitResult({
     ok: true,
     snapshot,
     state: interpretation.state,
@@ -461,7 +474,7 @@ export async function runCli(
     sameHeadCleanConverged: interpretation.sameHeadCleanConverged,
     loopDisposition: interpretationSummary.loopDisposition,
     terminal: interpretationSummary.terminal,
-  })}\n`);
+  }, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

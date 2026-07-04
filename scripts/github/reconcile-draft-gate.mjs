@@ -6,6 +6,7 @@ import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
 import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: reconcile-draft-gate.mjs --repo <owner/name> --pr <number>
 Optional/manual recovery tool for an already non-draft PR when you want to
 retroactively record clean \`draft_gate\` evidence.
@@ -32,14 +33,16 @@ Output (stdout, JSON):
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success — PR was reconciled and gate evidence posted
-  1  Argument error, gh failure, or unrecoverable state`.trim();
+  1  Argument error, gh failure, or unrecoverable state
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 export function parseReconcileDraftGateCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
-    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, pr: { type: "string" } },
+    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, pr: { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS },
     allowPositionals: true,
     strict: false,
     tokens: true,
@@ -66,6 +69,14 @@ export function parseReconcileDraftGateCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -327,7 +338,7 @@ async function main() {
   }
   try {
     const result = await reconcileDraftGate(options);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
     process.stderr.write(
       `${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`

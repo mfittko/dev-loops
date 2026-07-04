@@ -23,6 +23,7 @@ import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelo
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: build-handoff-envelope.mjs --input <path>
 Build a deterministic handoff envelope from startup resolver output and settings.
@@ -41,9 +42,11 @@ Error output (stderr, JSON):
     { "ok": false, "error": "...", "usage": "..." }
   Runtime failures:
     { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or runtime failure`.trim();
+  1  Argument error or runtime failure
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -73,6 +76,7 @@ export function parseBuildHandoffEnvelopeCliArgs(argv) {
       "gate-state": { type: "string" },
       overrides: { type: "string" },
       repo: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -103,6 +107,14 @@ export function parseBuildHandoffEnvelopeCliArgs(argv) {
     }
     if (token.name === "repo") {
       options.repo = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -186,7 +198,7 @@ export async function runCli(
 
   try {
     const envelope = await buildHandoffEnvelopeCli(options, { adapter });
-    stdout.write(`${JSON.stringify(envelope)}\n`);
+    process.exitCode = emitResult(envelope, { jq: options.jq, silent: options.silent, stdout, stderr });
   } catch (err) {
     const msg = formatCliError(err);
     stderr.write(`${msg}\n`);

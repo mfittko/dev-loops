@@ -5,6 +5,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 export const FORBIDDEN_PROSE_PATTERNS = [
   /Child of #/iu,
@@ -16,7 +17,12 @@ export const FORBIDDEN_PROSE_PATTERNS = [
 export const DEFAULT_USAGE_SUFFIX = `
 Output:
   Default output is human-readable text.
-  Add --json for machine-readable JSON.`.trim();
+  Add --json for machine-readable JSON.
+
+${JQ_OUTPUT_USAGE}
+(--jq/--silent only apply together with --json; the verdict is always in the
+payload, never the exit code — a parsed --json run always exits 0 unless
+--jq/--silent explicitly turns the verdict into the exit code.)`.trim();
 
 export function normalizeIssueNumber(value, label, parseError) {
   return parsePositiveInteger(value, label, parseError);
@@ -26,7 +32,12 @@ export function parseCheckerCliArgs(argv, usage, checkerName) {
   const parseError = buildParseError(usage);
   const { tokens } = parseArgs({
     args: [...argv],
-    options: { help: { type: "boolean", short: "h" }, input: { type: "string" }, json: { type: "boolean" } },
+    options: {
+      help: { type: "boolean", short: "h" },
+      input: { type: "string" },
+      json: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
+    },
     allowPositionals: true,
     strict: false,
     tokens: true,
@@ -49,6 +60,14 @@ export function parseCheckerCliArgs(argv, usage, checkerName) {
     }
     if (token.name === "json") {
       options.json = true;
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -262,10 +281,13 @@ export function normalizeScopeToken(value) {
     .replace(/\s+/gu, " ");
 }
 
-export function writeCheckerOutput(result, { stdout = process.stdout, json = false }) {
+// Returns the process exit code to use. Documented contract: the verdict lives
+// in the payload, not the exit code — a parsed --json run exits 0 even when
+// result.ok is false, unless --jq/--silent explicitly turns the verdict into
+// the exit code (predicate/--silent semantics from the shared jq-output contract).
+export function writeCheckerOutput(result, { stdout = process.stdout, stderr = process.stderr, json = false, jq, silent }) {
   if (json) {
-    stdout.write(`${JSON.stringify(result)}\n`);
-    return;
+    return emitResult(result, { jq, silent, stdout, stderr, ok: true });
   }
 
   const status = result.ok ? "PASS" : "FAIL";
@@ -279,6 +301,7 @@ export function writeCheckerOutput(result, { stdout = process.stdout, json = fal
     }
   }
   stdout.write(`${lines.join("\n")}\n`);
+  return 0;
 }
 
 

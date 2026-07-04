@@ -17,6 +17,7 @@ import {
   writeLinkedPrNumber,
   PLAN_FILE_PROMOTE_ACTION,
 } from "@dev-loops/core/loop/plan-file-promote-contract";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const CREATE_PR_PATH = fileURLToPath(new URL("../github/create-pr.mjs", import.meta.url));
 
@@ -42,9 +43,14 @@ Optional:
   --branch <name>     Branch name to commit the plan on (default: derived from the plan path)
   --json              Machine-readable JSON output
   --help              Show this help
+
+${JQ_OUTPUT_USAGE}
+(--jq/--silent only apply together with --json; the default text output is unaffected.)
+
 Exit codes:
   0  Promotion succeeded (or idempotent no-op for an already-linked plan)
-  1  Argument error, or fail-closed (plan not ready / git / PR-create failure); no issue ever created`.trim();
+  1  Argument error, or fail-closed (plan not ready / git / PR-create failure); no issue ever created
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -57,6 +63,7 @@ export function parsePromotePlanCliArgs(argv) {
       base: { type: "string" },
       branch: { type: "string" },
       json: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -86,6 +93,14 @@ export function parsePromotePlanCliArgs(argv) {
     }
     if (token.name === "json") {
       options.json = true;
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -123,11 +138,14 @@ function parsePrNumberFromGhOutput(text) {
   return match ? Number.parseInt(match[1], 10) : null;
 }
 
-function emit(stdout, json, summary, humanLines) {
-  if (json) {
-    stdout.write(`${JSON.stringify(summary)}\n`);
+// Sets process.exitCode from `summary.ok` (0/1), or the shared --jq/--silent
+// contract's exit code (0/1/2) when --json + --jq/--silent are in play.
+function emit(stdout, options, summary, humanLines) {
+  if (options.json) {
+    process.exitCode = emitResult(summary, { jq: options.jq, silent: options.silent, stdout });
   } else {
     stdout.write(`${humanLines.join("\n")}\n`);
+    process.exitCode = summary.ok ? 0 : 1;
   }
 }
 
@@ -161,8 +179,7 @@ export async function runCli(argv = process.argv.slice(2), {
   if (!decision.ok) {
     // Fail closed: no git, no gh, no issue — surface the reason and stop.
     const summary = { ok: false, reason: decision.reason, planFileIntakeState: decision.planFileIntakeState ?? null };
-    emit(stdout, options.json, summary, [`promote-plan: FAIL (${decision.reason})`]);
-    process.exitCode = 1;
+    emit(stdout, options, summary, [`promote-plan: FAIL (${decision.reason})`]);
     return summary;
   }
 
@@ -174,7 +191,7 @@ export async function runCli(argv = process.argv.slice(2), {
       planFile: planPath,
       prNumber: decision.existingPrNumber,
     };
-    emit(stdout, options.json, summary, [
+    emit(stdout, options, summary, [
       "promote-plan: PASS (already promoted)",
       `  plan: ${planPath}`,
       `  pr: #${decision.existingPrNumber} (existing; opened nothing)`,
@@ -207,8 +224,7 @@ export async function runCli(argv = process.argv.slice(2), {
 
   const fail = (reason, detail) => {
     const summary = { ok: false, reason, detail: detail ?? null, planFile: planPath };
-    emit(stdout, options.json, summary, [`promote-plan: FAIL (${reason})${detail ? `: ${detail}` : ""}`]);
-    process.exitCode = 1;
+    emit(stdout, options, summary, [`promote-plan: FAIL (${reason})${detail ? `: ${detail}` : ""}`]);
     return summary;
   };
 
@@ -294,11 +310,10 @@ export async function runCli(argv = process.argv.slice(2), {
       branch,
       recovery: `gh pr create failed, so no PR was opened, but the plan is committed and branch ${branch} is pushed. Re-run promote-plan to recover: the commit step is idempotent (skips when nothing is staged) and the push is idempotent, so a clean re-run will retry opening the PR.`,
     };
-    emit(stdout, options.json, summary, [
+    emit(stdout, options, summary, [
       `promote-plan: FAIL (pr_create_failed)${detail ? `: ${detail}` : ""}`,
       `  branch: ${branch} (committed and pushed; no PR opened — re-run promote-plan to recover, it is idempotent and will retry opening the PR)`,
     ]);
-    process.exitCode = 1;
     return summary;
   }
   const prNumber = parsePrNumberFromGhOutput(prCreate.stdout);
@@ -315,11 +330,10 @@ export async function runCli(argv = process.argv.slice(2), {
       branch,
       recovery: `A draft PR was opened on branch ${branch} but its number could not be parsed from gh output. Find it with: gh pr list --head "${branch}" --json number,url. Then record the link with: node scripts/refine/promote-plan.mjs is idempotent only once the front-matter prNumber is set, so add it manually (prNumber: <n>) and commit ${planDocRelPath}.`,
     };
-    emit(stdout, options.json, summary, [
+    emit(stdout, options, summary, [
       `promote-plan: FAIL (pr_number_unparseable)`,
       `  branch: ${branch} (a draft PR is open; its number could not be parsed — recover via 'gh pr list --head "${branch}"')`,
     ]);
-    process.exitCode = 1;
     return summary;
   }
 
@@ -340,11 +354,10 @@ export async function runCli(argv = process.argv.slice(2), {
       prNumber,
       recovery: `PR #${prNumber} is open but the plan->PR link commit failed. ${planDocRelPath} now carries prNumber: ${prNumber} in its front-matter; record the link with: git add -- "${planDocRelPath}" && git commit -m "docs(plan): link to PR #${prNumber}" && git push.`,
     };
-    emit(stdout, options.json, summary, [
+    emit(stdout, options, summary, [
       `promote-plan: FAIL (${reason})${detail ? `: ${detail}` : ""}`,
       `  pr: #${prNumber} (open; plan->PR link NOT committed — recover manually)`,
     ]);
-    process.exitCode = 1;
     return summary;
   };
   const linkedMarkdown = writeLinkedPrNumber(markdownText, prNumber);
@@ -370,7 +383,7 @@ export async function runCli(argv = process.argv.slice(2), {
     branch,
     prNumber,
   };
-  emit(stdout, options.json, summary, [
+  emit(stdout, options, summary, [
     "promote-plan: PASS",
     `  plan: ${planPath}`,
     `  branch: ${branch}`,

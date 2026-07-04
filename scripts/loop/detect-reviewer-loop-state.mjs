@@ -8,6 +8,7 @@ import {
   interpretReviewerLoopState,
   normalizeReviewerSnapshot,
 } from "@dev-loops/core/loop/reviewer-loop-state";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const HELP = `Usage: detect-reviewer-loop-state.mjs [--input <path> | --repo <owner/name> --pr <number>] [--review-requested <true|false>] [--local-state <path>]
 Detect reviewer loop state for a pull request.
 Modes:
@@ -17,9 +18,13 @@ Options (auto-detect mode only):
   --review-requested <bool>     Override review-requested detection (true/false)
   --local-state <path>          Path to local state file for snapshot merging
 Reviewer scope is auto-resolved from PR requested reviewers.
+
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0   Success
   1   Error
+  2   Invalid --jq filter
 `;
 function parseBool(value, flag) {
   if (value === "true") return true;
@@ -36,6 +41,7 @@ export function parseDetectReviewerCliArgs(argv) {
       pr: { type: "string" },
       "review-requested": { type: "string" },
       "local-state": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -81,6 +87,14 @@ export function parseDetectReviewerCliArgs(argv) {
     }
     if (token.name === "local-state") {
       options.localStatePath = requireTokenValue(token);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw new Error(`Unknown argument: ${token.rawName}`);
@@ -231,7 +245,7 @@ export async function autoDetectReviewerSnapshot(
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh" } = {},
 ) {
   const options = parseDetectReviewerCliArgs(argv);
   if (options.help) { stdout.write(HELP); return; }
@@ -243,7 +257,10 @@ export async function runCli(
     snapshot = await autoDetectReviewerSnapshot(options, { env, ghCommand });
   }
   const interpretation = interpretReviewerLoopState(snapshot);
-  stdout.write(`${JSON.stringify({ ok: true, snapshot, state: interpretation.state, allowedTransitions: interpretation.allowedTransitions, nextAction: interpretation.nextAction })}\n`);
+  process.exitCode = emitResult(
+    { ok: true, snapshot, state: interpretation.state, allowedTransitions: interpretation.allowedTransitions, nextAction: interpretation.nextAction },
+    { jq: options.jq, silent: options.silent, stdout, stderr },
+  );
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => { process.stderr.write(`${formatCliError(error)}\n`); process.exitCode = 1; });

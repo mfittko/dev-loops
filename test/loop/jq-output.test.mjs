@@ -4,6 +4,7 @@ import {
   JqFilterError,
   evaluateJqFilter,
   emitResult,
+  emitJson,
 } from "../../scripts/lib/jq-output.mjs";
 
 function sink() {
@@ -130,6 +131,34 @@ test("emitResult: invalid --jq fails closed (exit 2 + stderr), distinct from pre
   const out = sink();
   const err = sink();
   assert.equal(emitResult(sample, { jq: "bogus", silent: true, stdout: out, stderr: err }), 2);
+  assert.equal(out.get(), "");
+  assert.match(err.get(), /--jq/);
+});
+
+test("emitJson: parses --jq/--silent straight out of raw argv (ad-hoc-parsing CLIs)", () => {
+  const out = sink();
+  assert.equal(emitJson(sample, ["--repo", "o/n", "--jq", ".ciStatus"], { stdout: out }), 0);
+  assert.equal(out.get().trim(), "success");
+});
+
+test("emitJson: --silent maps to exit code only, ignoring interleaved unrecognized flags", () => {
+  const out = sink();
+  assert.equal(emitJson(sample, ["--pr", "5", "--silent", "--dry-run"], { stdout: out }), 0);
+  assert.equal(out.get(), "");
+  const out2 = sink();
+  assert.equal(emitJson({ ok: false }, ["--silent"], { stdout: out2 }), 1);
+});
+
+test("emitJson: no --jq/--silent in argv prints verbatim JSON, exit follows ok", () => {
+  const out = sink();
+  assert.equal(emitJson(sample, ["--repo", "o/n"], { stdout: out }), 0);
+  assert.deepEqual(JSON.parse(out.get()), sample);
+});
+
+test("emitJson: invalid --jq fails closed (exit 2 + stderr)", () => {
+  const out = sink();
+  const err = sink();
+  assert.equal(emitJson(sample, ["--jq", "bogus!!"], { stdout: out, stderr: err }), 2);
   assert.equal(out.get(), "");
   assert.match(err.get(), /--jq/);
 });

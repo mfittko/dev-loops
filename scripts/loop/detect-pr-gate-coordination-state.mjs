@@ -22,6 +22,7 @@ import { fetchGithubReviewThreadsPayload } from "../github/capture-review-thread
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const UNMERGED_GIT_STATUS_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 const USAGE = `Usage: detect-pr-gate-coordination-state.mjs --repo <owner/name> --pr <number>
 Determine which PR gate/transition is legal next for a pull request.
@@ -68,9 +69,11 @@ Output (stdout, JSON):
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or gh/runtime failure`.trim();
+  1  Argument error or gh/runtime failure
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectPrGateCoordinationCliArgs(argv) {
   const options = {
@@ -84,6 +87,7 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       pr: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -106,6 +110,14 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -748,7 +760,7 @@ async function main() {
   }
   try {
     const result = await detectPrGateCoordinationState(options);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: create-label.mjs --repo <owner/name> --name <label> [--color <hex>] [--description <text>] [--force]
 Create (or idempotently reuse) a GitHub label. Thin wrapper over \`gh label create\`
@@ -20,9 +21,11 @@ Output (stdout, JSON):
   { "ok": true, "created": false, "alreadyExists": true, "name": "gate:full" }
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage"?: "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (created or already exists)
-  1  Argument error or gh failure`.trim();
+  1  Argument error or gh failure
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 
 export function parseCreateLabelCliArgs(argv) {
@@ -35,6 +38,7 @@ export function parseCreateLabelCliArgs(argv) {
       color: { type: "string" },
       description: { type: "string" },
       force: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: false,
     strict: false,
@@ -62,6 +66,8 @@ export function parseCreateLabelCliArgs(argv) {
     color,
     description,
     force: values.force === true,
+    jq: values.jq,
+    silent: values.silent === true,
   };
 }
 
@@ -117,8 +123,7 @@ export function run(
     stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
     return 1;
   }
-  stdout.write(`${JSON.stringify(result)}\n`);
-  return 0;
+  return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 
 export const main = run;

@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
 Detect change scope from git diff for light-mode eligibility.
@@ -9,9 +10,13 @@ Options:
   --base <ref>   Override base ref (default: HEAD~1)
   --head <ref>   Override head ref; ignored unless --base is also set
   --help, -h     Show this help
+
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0   Success
   1   Error
+  2   Invalid --jq filter
 `;
 
 function parseCliArgs(argv) {
@@ -21,6 +26,7 @@ function parseCliArgs(argv) {
       base: { type: "string" },
       head: { type: "string" },
       help: { type: "boolean", short: "h" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -43,6 +49,14 @@ function parseCliArgs(argv) {
       }
       if (token.name === "head") {
         opts.head = token.value ?? null;
+        continue;
+      }
+      if (token.name === "jq") {
+        opts.jq = token.value;
+        continue;
+      }
+      if (token.name === "silent") {
+        opts.silent = true;
       }
     }
   }
@@ -108,12 +122,12 @@ async function main() {
     }
   } catch {
   }
-  process.stdout.write(
-    JSON.stringify({
-      ...scope,
-      eligibleForLightMode: eligible,
-      threshold,
-    }) + "\n"
+  // This tool always exits 0 on a parsed run (scope.ok:false only reflects a git
+  // diff failure inside the payload, never the process outcome) — force ok:true
+  // as emitResult's default so --jq/--silent compose without changing that.
+  process.exitCode = emitResult(
+    { ...scope, eligibleForLightMode: eligible, threshold },
+    { jq: opts.jq, silent: opts.silent, ok: true },
   );
 }
 const isDirectRun =

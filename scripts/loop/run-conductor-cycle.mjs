@@ -15,9 +15,12 @@ import {
 } from "./_handoff-contract.mjs";
 import { listOpenPrs } from "./_loop-pr-aggregation.mjs";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 export { listOpenPrs };
 const USAGE = `Usage: run-conductor-cycle.mjs --repo <owner/name>
-Poll all open PRs, detect state, and output an ordered action queue.`.trim();
+Poll all open PRs, detect state, and output an ordered action queue.
+
+${JQ_OUTPUT_USAGE}`.trim();
 export const CHECKPOINT_ACTION_TO_CONDUCTOR_ACTION = Object.freeze({
   [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK]: "fix_threads",
   [PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS]: "fix_threads",
@@ -78,6 +81,7 @@ export function parseCliArgs(argv) {
     options: {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -96,6 +100,14 @@ export function parseCliArgs(argv) {
     }
     if (token.name === "repo") {
       options.repo = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -280,6 +292,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
     cwd = process.cwd(),
@@ -295,7 +308,7 @@ export async function runCli(
     ghCommand,
     repoRoot: cwd,
   });
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

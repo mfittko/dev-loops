@@ -17,6 +17,7 @@ import {
   SPIKE_EXIT_ACTION,
   SPIKE_EXIT_DISPOSITION,
 } from "@dev-loops/core/loop/spike-exit-contract";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   exit-spike.mjs --spike-file <path> --disposition <discard|graduate> [--plan-file <path>] [--json]
@@ -41,9 +42,14 @@ Optional:
   --plan-file <path>     Output plan-file path (required for graduate)
   --json                 Machine-readable JSON output
   --help                 Show this help
+
+${JQ_OUTPUT_USAGE}
+(--jq/--silent only apply together with --json; the default text output is unaffected.)
+
 Exit codes:
   0  Exit succeeded (discard recorded; or plan file written for graduate)
-  1  Argument error, or fail-closed (not ready / unknown disposition)`.trim();
+  1  Argument error, or fail-closed (not ready / unknown disposition)
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -56,6 +62,7 @@ export function parseExitSpikeCliArgs(argv) {
       disposition: { type: "string" },
       "plan-file": { type: "string" },
       json: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -87,6 +94,14 @@ export function parseExitSpikeCliArgs(argv) {
       options.json = true;
       continue;
     }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
+      continue;
+    }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (typeof options.spikeFile !== "string" || options.spikeFile.trim().length === 0) {
@@ -104,11 +119,14 @@ export function parseExitSpikeCliArgs(argv) {
   return options;
 }
 
-function emit(stdout, json, summary, humanLines) {
-  if (json) {
-    stdout.write(`${JSON.stringify(summary)}\n`);
+// Sets process.exitCode from `summary.ok` (0/1), or the shared --jq/--silent
+// contract's exit code (0/1/2) when --json + --jq/--silent are in play.
+function emit(stdout, options, summary, humanLines) {
+  if (options.json) {
+    process.exitCode = emitResult(summary, { jq: options.jq, silent: options.silent, stdout });
   } else {
     stdout.write(`${humanLines.join("\n")}\n`);
+    process.exitCode = summary.ok ? 0 : 1;
   }
 }
 
@@ -136,15 +154,14 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   if (!decision.ok) {
     // Fail closed: no tracker artifact, no plan file — surface the reason.
     const summary = { ok: false, reason: decision.reason, spikeIntakeState: decision.spikeIntakeState ?? spikeIntakeState };
-    emit(stdout, options.json, summary, [`exit-spike: FAIL (${decision.reason})`]);
-    process.exitCode = 1;
+    emit(stdout, options, summary, [`exit-spike: FAIL (${decision.reason})`]);
     return summary;
   }
 
   // DISCARD: zero artifacts. The findings doc on disk is the whole record.
   if (decision.action === SPIKE_EXIT_ACTION.DISCARD) {
     const summary = { ok: true, action: SPIKE_EXIT_ACTION.DISCARD, spikeFile: spikePath };
-    emit(stdout, options.json, summary, [
+    emit(stdout, options, summary, [
       "exit-spike: PASS (discard)",
       `  spike: ${spikePath}`,
       "  no tracker artifact created (findings doc is the record)",
@@ -170,7 +187,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     spikeFile: spikePath,
     planFile: planPath,
   };
-  emit(stdout, options.json, summary, [
+  emit(stdout, options, summary, [
     "exit-spike: PASS (graduate)",
     `  spike: ${spikePath}`,
     `  plan:  ${planPath} (local-first; promote with scripts/refine/promote-plan.mjs)`,

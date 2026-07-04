@@ -19,6 +19,7 @@ import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
@@ -85,9 +86,11 @@ Output (stdout, JSON; always includes preMergeGateCheck):
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (gate evidence is valid)
-  1  Argument error, gh failure, malformed gh JSON, or missing required pre-merge gate evidence.`.trim();
+  1  Argument error, gh failure, malformed gh JSON, or missing required pre-merge gate evidence.
+  2  Invalid --jq filter.`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectCheckpointEvidenceCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -97,6 +100,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       "require-before-merge": { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -124,6 +128,14 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     if (token.name === "require-before-merge") {
@@ -472,7 +484,7 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    process.stdout.write(`${JSON.stringify(output)}\n`);
+    process.exitCode = emitResult(output, { jq: options.jq, silent: options.silent });
   } catch (error) {
     if (error && typeof error === "object" && "staleRunner" in error && error.staleRunner) {
       const staleRunnerCheck = {

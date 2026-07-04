@@ -6,15 +6,16 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
 import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number>\nWrapper around gh pr ready that enforces gate-evidence validation.`;
+const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number>\nWrapper around gh pr ready that enforces gate-evidence validation.\n\n${JQ_OUTPUT_USAGE}`;
 const parseError = buildParseError(USAGE);
 const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, state, mergeStateStatus, title, closingIssuesReferences(first:10){ nodes{ number } } } } }`;
 
 export function parseReadyForReviewCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
-    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, pr: { type: "string" } },
+    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, pr: { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS },
     allowPositionals: true,
     strict: false,
     tokens: true,
@@ -26,6 +27,8 @@ export function parseReadyForReviewCliArgs(argv) {
     if (token.name === "help") { opts.help = true; return opts; }
     if (token.name === "repo") { opts.repo = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "pr") { opts.pr = parsePrNumber(requireTokenValue(token, parseError), parseError); continue; }
+    if (token.name === "jq") { opts.jq = requireTokenValue(token, parseError); continue; }
+    if (token.name === "silent") { opts.silent = true; continue; }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!opts.repo || opts.pr === undefined) throw parseError("ready-for-review requires --repo and --pr");
@@ -113,8 +116,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   const options = parseReadyForReviewCliArgs(argv);
   if (options.help) { process.stdout.write(`${USAGE}\n`); return 0; }
   const result = await readyForReview(options, runtime);
-  process.stdout.write(`${JSON.stringify(result)}\n`);
-  return 0;
+  return emitResult(result, { jq: options.jq, silent: options.silent });
 }
 
 if (isDirectCliRun(import.meta.url)) {

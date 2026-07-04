@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: manage-sub-issues.mjs <command> --repo <owner/name> --issue <number> [options]
 Deterministic helper for reading, linking, ordering, and verifying GitHub sub-issue trees.
 Commands:
@@ -37,7 +38,8 @@ Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
-    { "ok": false, "error": "..." }`.trim();
+    { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
 function parseIssueList(value) {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -87,6 +89,7 @@ export function parseManageSubIssuesCliArgs(argv) {
       order: { type: "string" },
       expected: { type: "string" },
       ordered: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -125,6 +128,14 @@ export function parseManageSubIssuesCliArgs(argv) {
     }
     if (token.name === "ordered") {
       options.ordered = true;
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -387,7 +398,7 @@ export async function runVerify(
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh" } = {},
 ) {
   const options = parseManageSubIssuesCliArgs(argv);
   if (options.help) {
@@ -405,7 +416,7 @@ export async function runCli(
   } else if (command === "verify") {
     result = await runVerify({ repo, issue, expected, ordered }, { env, ghCommand });
   }
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

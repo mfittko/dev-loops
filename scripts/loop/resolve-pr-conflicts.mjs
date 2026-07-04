@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: resolve-pr-conflicts.mjs [--base <branch>] [--repo-root <dir>] [--no-verify] [--push] [--json]
 
@@ -36,9 +37,14 @@ Output (stdout, JSON with --json):
 Error output:
   { "ok": false, "error": "...", "conflictFiles": ["..."] }
 
+${JQ_OUTPUT_USAGE}
+(--jq/--silent apply to the JSON error output always, and to the success output
+with --json; the default non-JSON success summary is unaffected.)
+
 Exit codes:
   0  Clean merge (incl. already up to date) or auto-resolved CHANGELOG
-  1  Argument error, git failure, or UNRESOLVABLE conflict (fail closed)`.trim();
+  1  Argument error, git failure, or UNRESOLVABLE conflict (fail closed)
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -70,6 +76,7 @@ export function parseResolvePrConflictsCliArgs(argv) {
       "no-verify": { type: "boolean" },
       push: { type: "boolean" },
       json: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -100,6 +107,12 @@ export function parseResolvePrConflictsCliArgs(argv) {
         break;
       case "json":
         options.json = true;
+        break;
+      case "jq":
+        options.jq = requireTokenValue(token, parseError);
+        break;
+      case "silent":
+        options.silent = true;
         break;
       default:
         throw parseError(`Unknown argument: ${token.rawName}`);
@@ -337,18 +350,16 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
   try {
     const result = await resolvePrConflicts(options, { env });
     if (options.json) {
-      stdout.write(`${JSON.stringify(result)}\n`);
-    } else {
-      stdout.write(`${result.action} (base ${result.base}${result.resolvedFiles.length ? `, resolved ${result.resolvedFiles.join(", ")}` : ""}${result.pushed ? ", pushed" : ""})\n`);
+      return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
     }
+    stdout.write(`${result.action} (base ${result.base}${result.resolvedFiles.length ? `, resolved ${result.resolvedFiles.join(", ")}` : ""}${result.pushed ? ", pushed" : ""})\n`);
     return 0;
   } catch (error) {
     const payload = { ok: false, error: error instanceof Error ? error.message : String(error) };
     if (Array.isArray(error?.conflictFiles)) {
       payload.conflictFiles = error.conflictFiles;
     }
-    stderr.write(`${JSON.stringify(payload)}\n`);
-    return 1;
+    return emitResult(payload, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });
   }
 }
 

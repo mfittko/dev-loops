@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 export const LINKED_ISSUE_PR_QUERY = [
   "query($owner:String!, $name:String!, $issue:Int!, $after:String) {",
   "  repository(owner:$owner, name:$name) {",
@@ -74,12 +75,18 @@ Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
-    { "ok": false, "error": "..." }`.trim();
+    { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectLinkedIssuePrCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
-    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, issue: { type: "string" } },
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      issue: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
+    },
     allowPositionals: true,
     strict: false,
     tokens: true,
@@ -106,6 +113,14 @@ export function parseDetectLinkedIssuePrCliArgs(argv) {
     }
     if (token.name === "issue") {
       options.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -330,7 +345,7 @@ export async function detectLinkedIssuePr({ repo, issue }, { env = process.env, 
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh" } = {},
 ) {
   const options = parseDetectLinkedIssuePrCliArgs(argv);
   if (options.help) {
@@ -341,7 +356,7 @@ export async function runCli(
     { repo: options.repo, issue: options.issue },
     { env, ghCommand },
   );
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

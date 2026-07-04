@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildDraftReviewPayload } from "@dev-loops/core/loop/reviewer-loop-state";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const HELP = `Usage: stage-reviewer-draft.mjs --repo <owner/name> --pr <number> --review-file <path> [--local-state-output <path>]
 Stage a pending draft review on a GitHub pull request.
 Options:
@@ -15,9 +16,13 @@ Options:
   --review-file <path>      Path to JSON file containing review payload (required)
   --local-state-output <path>  Path to write local state snapshot (optional)
   --help, -h                Show this help
+
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0   Success
   1   Error
+  2   Invalid --jq filter
 `;
 export function parseStageDraftCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -28,6 +33,7 @@ export function parseStageDraftCliArgs(argv) {
       pr: { type: "string" },
       "review-file": { type: "string" },
       "local-state-output": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -65,6 +71,14 @@ export function parseStageDraftCliArgs(argv) {
     }
     if (token.name === "local-state-output") {
       options.localStateOutput = requireTokenValue(token);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw new Error(`Unknown argument: ${token.rawName}`);
@@ -169,6 +183,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
   } = {},
@@ -190,7 +205,7 @@ export async function runCli(
     await postDraftReview({ repo: options.repo, pr: options.pr, reviewPayload }, { env, ghCommand }),
   );
   const localStatePath = await writeLocalState(options.localStateOutput, draftReview);
-  stdout.write(`${JSON.stringify({
+  process.exitCode = emitResult({
     ok: true,
     repo: options.repo,
     pr: options.pr,
@@ -199,7 +214,7 @@ export async function runCli(
     reviewState: draftReview.state,
     commitSha: draftReview.commitSha,
     localStatePath,
-  })}\n`);
+  }, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

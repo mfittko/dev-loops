@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { appendFile, readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { parseArgs } from "node:util";
 export const INSPECT_RUN_VIEWER_RELEVANT_EXACT_PATHS = Object.freeze([
   ".github/workflows/ci.yml",
   "package.json",
@@ -22,9 +24,13 @@ Classify changed files to determine if inspect-run-viewer tests should run.
 Reads a newline-delimited file list and checks against known relevant paths.
 Options:
   --help, -h    Show this help
+
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0   Success
   1   Error
+  2   Invalid --jq filter
 `;
 const parseError = buildParseError(USAGE);
 export function normalizeInspectRunViewerPath(filePath) {
@@ -52,21 +58,27 @@ export function classifyInspectRunViewerCiChanges(changedPaths = []) {
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { env = process.env, stdout = process.stdout } = {},
+  { env = process.env, stdout = process.stdout, stderr = process.stderr } = {},
 ) {
-  if (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h")) {
+  const { values, positionals } = parseArgs({
+    args: [...argv],
+    options: { help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS },
+    allowPositionals: true,
+    strict: false,
+  });
+  if (values.help) {
     stdout.write(HELP);
     return;
   }
-  if (argv.length !== 1) {
+  if (positionals.length !== 1) {
     throw parseError("inspect-run-viewer-ci-changes requires exactly one changed-files path argument");
   }
-  const rawPaths = await readFile(argv[0], "utf8");
+  const rawPaths = await readFile(positionals[0], "utf8");
   const result = classifyInspectRunViewerCiChanges(rawPaths.split(/\r?\n/u));
   if (env.GITHUB_OUTPUT) {
     await appendFile(env.GITHUB_OUTPUT, `inspect_run_viewer=${result.shouldRun}\n`, "utf8");
   }
-  stdout.write(`${JSON.stringify({ ok: true, ...result })}\n`);
+  process.exitCode = emitResult({ ok: true, ...result }, { jq: values.jq, silent: values.silent, stdout, stderr });
   return result;
 }
 if (isDirectCliRun(import.meta.url)) {

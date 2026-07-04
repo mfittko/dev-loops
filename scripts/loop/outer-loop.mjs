@@ -26,6 +26,7 @@ import {
 } from "@dev-loops/core/loop/async-start-contract";
 import { loadDevLoopConfig, resolveConductorModel, resolveAutonomyStopAt, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: outer-loop.mjs --repo <owner/name> --pr <number>
 Thin outer-loop wrapper for the Copilot PR remediation loop.
 Detects current PR state from both the Copilot inner loop and the reviewer
@@ -84,9 +85,11 @@ Error output (stderr, JSON):
     { "ok": false, "error": "..." }
   Async-start contract rejection:
     { "ok": false, "error": "...", "asyncStartContract": "rejected" }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error, gh/git failure, or indeterminate state`.trim();
+  1  Argument error, gh/git failure, or indeterminate state
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 export function parseOuterLoopCliArgs(argv) {
   const options = {
@@ -106,6 +109,7 @@ export function parseOuterLoopCliArgs(argv) {
       "checkpoint-dir": { type: "string" },
       "copilot-input": { type: "string" },
       "reviewer-input": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -140,6 +144,14 @@ export function parseOuterLoopCliArgs(argv) {
     }
     if (token.name === "reviewer-input") {
       options.reviewerInputPath = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -426,11 +438,10 @@ export async function runCli(
   }
   const result = await runOuterLoop(options, { env, ghCommand, gitCommand });
   if (result.ok === false) {
-    stderr.write(`${JSON.stringify(result)}\n`);
-    process.exitCode = 1;
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });
     return;
   }
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {

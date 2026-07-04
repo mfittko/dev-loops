@@ -21,6 +21,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { loadDevLoopConfig, resolveWorktreeConfig } from "@dev-loops/core/config";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   provision-worktree.mjs --worktree-path <p> --repo-root <p>
@@ -34,7 +35,9 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "actions": [ { "mode": "copy"|"link"|"skip"|"reject", ... } ],
     "summary": { "copied": n, "linked": n, "skipped": n, "rejected": n,
-                 "warnings": n } }`.trim();
+                 "warnings": n } }
+
+${JQ_OUTPUT_USAGE}`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -46,6 +49,7 @@ export function parseProvisionWorktreeCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       "worktree-path": { type: "string" },
       "repo-root": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -64,6 +68,14 @@ export function parseProvisionWorktreeCliArgs(argv) {
     }
     if (token.name === "repo-root") {
       options.repoRoot = requireTokenValue(token, parseError, { flagPattern: /^-/u });
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -225,14 +237,14 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
   return { ok: true, actions, summary };
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   const options = parseProvisionWorktreeCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
     return;
   }
   const result = await provisionWorktree(options);
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {

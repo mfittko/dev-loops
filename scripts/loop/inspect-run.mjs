@@ -23,6 +23,7 @@ import {
 } from "@dev-loops/core/loop/steering";
 import { validateSteeringStateTarget } from "./_steering-state-file.mjs";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: inspect-run.mjs --repo <owner/name> --pr <number>
 Read-only run inspection for the Copilot PR outer-loop family.
 Produces a single JSON snapshot describing the current state of one
@@ -68,9 +69,11 @@ Error output (stderr, JSON):
     { "ok": false, "error": "...", "usage": "..." }
   Runtime failures:
     { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or unexpected runtime failure`.trim();
+  1  Argument error or unexpected runtime failure
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 export function parseInspectRunCliArgs(argv) {
   const options = {
@@ -90,6 +93,7 @@ export function parseInspectRunCliArgs(argv) {
       "steering-state-file": { type: "string" },
       "copilot-input": { type: "string" },
       "reviewer-input": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -124,6 +128,14 @@ export function parseInspectRunCliArgs(argv) {
     }
     if (token.name === "reviewer-input") {
       options.reviewerInputPath = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -380,6 +392,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
   } = {},
@@ -390,7 +403,7 @@ export async function runCli(
     return;
   }
   const snapshot = await inspectRun(options, { env, ghCommand });
-  stdout.write(`${JSON.stringify(snapshot)}\n`);
+  process.exitCode = emitResult(snapshot, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {

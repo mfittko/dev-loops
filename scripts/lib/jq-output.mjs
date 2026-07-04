@@ -23,6 +23,8 @@
 //                  (truthy test). <lit> is a JSON string/number/true/false/null.
 // Anything else -> JqFilterError (fail closed).
 
+import { parseArgs } from "node:util";
+
 export class JqFilterError extends Error {
   constructor(message) {
     super(message);
@@ -294,4 +296,19 @@ export function emitResult(
   }
   stdout.write(`${JSON.stringify(result)}\n`);
   return ok ? 0 : 1;
+}
+
+// Convenience one-call form for CLIs with ad-hoc (non-parseArgs) argument
+// parsing: extracts --jq/--silent straight out of raw argv and emits via
+// emitResult, so the caller never has to wire the flags into its own parser's
+// option table. Safe against interleaved unrecognized flags/positionals
+// (strict:false; anything not --jq/--silent/-s is ignored here).
+export function emitJson(result, argv, options = {}) {
+  const { values } = parseArgs({
+    args: [...argv],
+    options: JQ_OUTPUT_PARSE_OPTIONS,
+    allowPositionals: true,
+    strict: false,
+  });
+  return emitResult(result, { ...options, jq: values.jq, silent: values.silent === true });
 }

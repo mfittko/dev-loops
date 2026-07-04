@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const ISSUE_JSON_FIELDS = "number,title,body,url,state";
 const USAGE = `Usage: resolve-tracker-local-spec.mjs (--repo <owner/name> --issue <number> | --issue-url <github-issue-url>)
 Resolve the canonical tracker-backed local spec bundle from one GitHub issue reference.
@@ -30,7 +31,8 @@ Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
-    { "ok": false, "error": "..." }`.trim();
+    { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
 export function parseGitHubIssueUrl(value) {
   let parsedUrl;
@@ -68,6 +70,7 @@ export function parseResolveTrackerLocalSpecCliArgs(argv) {
       repo: { type: "string" },
       issue: { type: "string" },
       "issue-url": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -102,6 +105,14 @@ export function parseResolveTrackerLocalSpecCliArgs(argv) {
       options.issueUrl = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
+      continue;
+    }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const usingIssueUrl = typeof options.issueUrl === "string";
@@ -119,6 +130,8 @@ export function parseResolveTrackerLocalSpecCliArgs(argv) {
       repo,
       issue,
       issueUrl: options.issueUrl,
+      ...(options.jq !== undefined ? { jq: options.jq } : {}),
+      ...(options.silent !== undefined ? { silent: options.silent } : {}),
     };
   }
   try {
@@ -201,7 +214,7 @@ export async function resolveTrackerLocalSpec(
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh" } = {},
 ) {
   const options = parseResolveTrackerLocalSpecCliArgs(argv);
   if (options.help) {
@@ -212,7 +225,7 @@ export async function runCli(
     { repo: options.repo, issue: options.issue },
     { env, ghCommand },
   );
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

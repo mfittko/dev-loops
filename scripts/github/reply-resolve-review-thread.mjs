@@ -9,6 +9,7 @@ import {
   replyAndMaybeResolve,
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 export { hasCommitShaReference } from "./_review-thread-mutations.mjs";
 
@@ -21,7 +22,9 @@ Required:
   --pr <n>                 Pull request number
   --comment-id <n>         GraphQL databaseId of the comment to reply to
   --thread-id <id>         GraphQL node ID of the review thread
-  --body-file <path>       Path to file containing the reply body text`;
+  --body-file <path>       Path to file containing the reply body text
+
+${JQ_OUTPUT_USAGE}`;
 
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
@@ -39,6 +42,7 @@ function parseCliArgs(argv) {
         "thread-id": { type: "string" },
         "body-file": { type: "string" },
         help: { type: "boolean", short: "h" },
+        ...JQ_OUTPUT_PARSE_OPTIONS,
       },
       strict: true,
       allowPositionals: false,
@@ -62,7 +66,15 @@ function parseCliArgs(argv) {
   const pr = parsePositiveInteger(values.pr, "--pr", parseError);
   const commentId = parsePositiveInteger(values["comment-id"], "--comment-id", parseError);
 
-  return { repo: repoSlug, pr, commentId, threadId: values["thread-id"], bodyFile: values["body-file"] };
+  return {
+    repo: repoSlug,
+    pr,
+    commentId,
+    threadId: values["thread-id"],
+    bodyFile: values["body-file"],
+    jq: values.jq,
+    silent: values.silent === true,
+  };
 }
 
 async function run(argv) {
@@ -82,11 +94,10 @@ async function run(argv) {
     { env: process.env, ghCommand: "gh" },
   );
 
-  process.stdout.write(JSON.stringify({
+  return emitResult({
     ok: true, repo: repoSlug, pr, commentId, threadId,
     replyId: result.replyId, replyUrl: result.replyUrl, resolved: true,
-  }) + "\n");
-  return 0;
+  }, { jq: parsed.jq, silent: parsed.silent });
 }
 
 if (isDirectCliRun(import.meta.url)) {

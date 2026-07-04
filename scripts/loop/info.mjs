@@ -7,6 +7,7 @@ import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs"
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { runContextEnv } from "@dev-loops/core/loop/run-context";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 // REPO_ROOT resolves to the git repo root (scripts/loop/info.mjs → scripts/ → repo/)
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)), "..");
@@ -21,9 +22,14 @@ Required (exactly one):
 Optional:
   --json         Machine-readable JSON output (default: human-readable summary)
   --repo <slug>  Repository slug (auto-detected from git remote when omitted)
+
+${JQ_OUTPUT_USAGE}
+(--jq/--silent only apply together with --json; the default text output is unaffected.)
+
 Exit codes:
   0  Success
-  1  Argument error or runtime failure`.trim();
+  1  Argument error or runtime failure
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -37,6 +43,7 @@ function parseCliArgs(argv) {
       issue: { type: "string" },
       pr: { type: "string" },
       repo: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -54,6 +61,8 @@ function parseCliArgs(argv) {
     if (token.name === "issue") { opts.issue = parsePositiveInteger(requireTokenValue(token, parseError), "--issue", parseError); continue; }
     if (token.name === "pr") { opts.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError); continue; }
     if (token.name === "repo") { opts.repo = requireTokenValue(token, parseError); continue; }
+    if (token.name === "jq") { opts.jq = requireTokenValue(token, parseError); continue; }
+    if (token.name === "silent") { opts.silent = true; continue; }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const modes = [opts.issue, opts.pr].filter(v => v !== undefined).length;
@@ -282,15 +291,15 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     const { issueData, startupBundle, linkedPrInfo } = buildIssueInfo(opts.issue, repo, cwd);
     
     if (opts.json) {
-      stdout.write(JSON.stringify({ ok: true, kind: "issue", issue: issueData, startup: startupBundle, linkedPr: linkedPrInfo }) + "\n");
+      process.exitCode = emitResult({ ok: true, kind: "issue", issue: issueData, startup: startupBundle, linkedPr: linkedPrInfo }, { jq: opts.jq, silent: opts.silent, stdout, stderr });
     } else {
       stdout.write(formatIssueSummary(issueData, startupBundle, linkedPrInfo) + "\n");
     }
   } else {
     const { prData, handoffResult } = buildPrInfo(opts.pr, repo, cwd);
-    
+
     if (opts.json) {
-      stdout.write(JSON.stringify({ ok: true, kind: "pr", pr: prData, handoff: handoffResult }) + "\n");
+      process.exitCode = emitResult({ ok: true, kind: "pr", pr: prData, handoff: handoffResult }, { jq: opts.jq, silent: opts.silent, stdout, stderr });
     } else {
       stdout.write(formatPrSummary(prData, handoffResult) + "\n");
     }

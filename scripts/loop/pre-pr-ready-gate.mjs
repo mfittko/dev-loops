@@ -10,6 +10,7 @@ import {
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   pre-pr-ready-gate.mjs --repo <owner/name> --pr <number>
@@ -33,7 +34,8 @@ Output (stdout, JSON on success):
   }
 
 Error output (stderr, JSON):
-  { "ok": false, "error": "<reason>" }`.trim();
+  { "ok": false, "error": "<reason>" }
+${JQ_OUTPUT_USAGE}`.trim();
 
 const parseError = buildParseError(USAGE);
 const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, state } } }`;
@@ -46,6 +48,7 @@ export function parsePrePrReadyGateCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       pr: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -61,6 +64,8 @@ export function parsePrePrReadyGateCliArgs(argv) {
     if (token.name === "help") { options.help = true; return options; }
     if (token.name === "repo") { options.repo = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "pr") { options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError); continue; }
+    if (token.name === "jq") { options.jq = requireTokenValue(token, parseError); continue; }
+    if (token.name === "silent") { options.silent = true; continue; }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
@@ -183,11 +188,11 @@ export async function runCli(argv = process.argv.slice(2), runtime = {}) {
   }
   const result = await prePrReadyGate(options, runtime);
   if (!result.ok) {
-    process.stderr.write(`${JSON.stringify(result)}\n`);
-    process.exitCode = 1;
+    // Failure prints to stderr (existing contract); jq/silent apply there too.
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: process.stderr, stderr: process.stderr });
     return result;
   }
-  process.stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: process.stdout, stderr: process.stderr });
   return result;
 }
 

@@ -3,6 +3,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: detect-copilot-session-activity.mjs --repo <owner/name> --branch <name> [--limit <number>]
 Detect Copilot GitHub Actions session activity on a branch.
 Required:
@@ -32,7 +33,8 @@ Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
-    { "ok": false, "error": "..." }`.trim();
+    { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}`.trim();
 const DEFAULT_LIMIT = 20;
 const ACTIVE_RUN_STATUSES = new Set(["queued", "in_progress", "pending", "requested", "waiting"]);
 const COPILOT_RUN_NAME_PATTERNS = Object.freeze([
@@ -55,6 +57,7 @@ export function parseDetectCopilotSessionActivityCliArgs(argv) {
       repo: { type: "string" },
       branch: { type: "string" },
       limit: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -81,6 +84,14 @@ export function parseDetectCopilotSessionActivityCliArgs(argv) {
     }
     if (token.name === "limit") {
       options.limit = parsePositiveInteger(requireTokenValue(token, parseError), "--limit", parseError);
+      continue;
+    }
+    if (token.name === "jq") {
+      options.jq = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "silent") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -185,7 +196,7 @@ export async function detectCopilotSessionActivity({ repo, branch, limit = DEFAU
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh" } = {},
 ) {
   const options = parseDetectCopilotSessionActivityCliArgs(argv);
   if (options.help) {
@@ -193,7 +204,7 @@ export async function runCli(
     return;
   }
   const result = await detectCopilotSessionActivity(options, { env, ghCommand });
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {
