@@ -72,7 +72,9 @@ const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr-descri
 
 /**
  * @typedef {object} DynamicAngleResult
- * @property {string[]} recommendedAngles — angles to run
+ * @property {string[]} recommendedAngles — angles to run, limited to the
+ *   configured pool (subtractive result); in additive mode the caller
+ *   merges addedAngles on top to form the full effective run set
  * @property {string[]} skippedAngles — angles skipped with reasons
  * @property {Record<string, string>} reasons — why each angle was skipped
  * @property {boolean} fallbackToAll — true when ambiguous → all angles recommended

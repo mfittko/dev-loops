@@ -82,9 +82,10 @@ const GatesConfig = z.strictObject({
   // docs/gate-review-sub-loop-contract.md.
   postFindingsComments: z.boolean().default(true),
   // Explicit global lens catalog override for additive angle selection
-  // (gates.<gate>.additiveAngles, #1048). When absent, the resolver falls
-  // back to the union of all known angles (the built-in persona registry's
-  // angle names).
+  // (gates.<gate>.additiveAngles, #1048). When absent, resolveAnglePool()
+  // falls back to the union of the built-in persona registry's angle names
+  // and every angle configured across this config's own draft/preApproval/
+  // spike gates (angles + mandatoryAngles).
   anglePool: z.array(z.string().trim().min(1)).optional(),
 });
 
