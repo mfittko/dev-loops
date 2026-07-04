@@ -4,6 +4,7 @@ import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 
 const USAGE = `Usage: dev-loops queue add --repo <owner/name> [--project <number|id>] --item <number>
        dev-loops project add … (back-compat alias for "queue add")
@@ -370,7 +371,7 @@ function classifyExitCode(err) {
 
 // ── Main logic ──────────────────────────────────────────────────────────
 
-async function main(args, { env = process.env, runChild } = {}) {
+async function main(args, { env = process.env, runChild, cwd = process.cwd() } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
   const [owner, repoName] = repo.split("/");
@@ -385,16 +386,19 @@ async function main(args, { env = process.env, runChild } = {}) {
       { code: "INVALID_ARGS", usage: USAGE },
     );
   }
-  // --next-up is sugar for --column "Next Up" (the normative pickup queue, #1091).
-  // Reject combining it with a conflicting explicit column/status.
+  // --next-up is sugar for --column <resolved next_up display name> (the
+  // normative pickup queue, #1091), resolved through the SAME statusColumns
+  // mapping board-sync uses (#1098) so a renamed Next Up column agrees with
+  // an explicit --column of the same configured name.
+  const nextUpColumn = loadStateColumnMap(cwd).columnNames[LOGICAL_COLUMN.NEXT_UP];
   const explicitColumn = args.column ?? args.status ?? null;
-  if (args.nextUp && explicitColumn != null && explicitColumn.trim() !== "Next Up") {
+  if (args.nextUp && explicitColumn != null && explicitColumn.trim() !== nextUpColumn) {
     throw Object.assign(
       new Error(`Conflicting --next-up and --column/--status ("${explicitColumn}") — pass only one.`),
       { code: "INVALID_ARGS", usage: USAGE },
     );
   }
-  const targetStatus = (args.nextUp ? "Next Up" : (explicitColumn ?? "Backlog")).trim();
+  const targetStatus = (args.nextUp ? nextUpColumn : (explicitColumn ?? "Backlog")).trim();
   if (!targetStatus) {
     throw Object.assign(new Error("--column must not be empty"), { code: "INVALID_STATUS" });
   }
@@ -543,7 +547,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
   applyDevloopsBoard(args, cwd);
 
   try {
-    const result = await main(args, { env, runChild });
+    const result = await main(args, { env, runChild, cwd });
     process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
   } catch (err) {
     stderr.write(JSON.stringify({ ok: false, error: err.message, code: err.code ?? "UNKNOWN" }) + "\n");

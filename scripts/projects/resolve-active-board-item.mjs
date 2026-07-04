@@ -19,8 +19,11 @@ import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
 import { EMPTY_NEXT_UP_MESSAGE } from "@dev-loops/core/loop/queue-board-ordering";
+import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 
 const IN_PROGRESS_COLUMN = "In Progress";
+// Illustrative default label for USAGE/help + comments only; the actual query
+// column resolves through queue.statusColumns.next_up at runtime (#1098).
 const NEXT_UP_COLUMN = "Next Up";
 // Canonical fail-closed empty-queue message — matches queue-driver.mjs so
 // operators see one string regardless of which layer detects it (#1091).
@@ -147,9 +150,14 @@ function collapseToTarget(items) {
 // column, HEAD by POSITION ascending (list-queue-items returns position order).
 // NEVER pulls from Backlog; empty Next Up fails closed with the canonical
 // message, and a query error propagates (fail closed — surface it, no fallback).
-async function resolveNextUpHead(args, { env, runChild } = {}) {
+async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = {}) {
+  // Resolve the next_up column name through the SAME statusColumns mapping
+  // board-sync uses (#1098): a repo that renamed Next Up (e.g. to "Todo") gets
+  // its configured column queried, not the literal default. Pickup SEMANTICS
+  // (position-ascending HEAD, fail-closed on empty, never Backlog) are unchanged.
+  const nextUpColumn = loadStateColumnMap(cwd).columnNames[LOGICAL_COLUMN.NEXT_UP];
   const listed = await listQueueItems(
-    { repo: args.repo, project: args.project, column: NEXT_UP_COLUMN },
+    { repo: args.repo, project: args.project, column: nextUpColumn },
     { env, runChild },
   );
   const items = listed.items ?? [];
@@ -159,7 +167,7 @@ async function resolveNextUpHead(args, { env, runChild } = {}) {
   return { ok: true, target: itemToTarget(items[0]), source: "next-up" };
 }
 
-async function main(args, { env = process.env, runChild } = {}) {
+async function main(args, { env = process.env, runChild, cwd = process.cwd() } = {}) {
   const listed = await listQueueItems(
     { repo: args.repo, project: args.project, column: IN_PROGRESS_COLUMN },
     { env, runChild },
@@ -168,7 +176,7 @@ async function main(args, { env = process.env, runChild } = {}) {
   // Exactly one → continue it. Multiple → fail closed (never guess). Zero →
   // fall through to the Next Up head (the live pickup path, #1091).
   if (items.length === 0) {
-    return resolveNextUpHead(args, { env, runChild });
+    return resolveNextUpHead(args, { env, runChild, cwd });
   }
   return collapseToTarget(items);
 }
@@ -179,7 +187,7 @@ function classifyExitCode(err) {
   return 2;
 }
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, runChild } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, runChild, cwd = process.cwd() } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);
@@ -193,7 +201,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     return;
   }
   try {
-    const result = await main(args, { env, runChild });
+    const result = await main(args, { env, runChild, cwd });
     // Fail closed (zero/multiple) is a clean, expected outcome — distinct exit code 3,
     // not a crash; --jq/--silent still apply so callers can probe `.ok`.
     process.exitCode = emitResult(result, {
