@@ -198,6 +198,27 @@ test("resolveNextUpOrder yields a clean reason (not '--project is required') whe
   }
 });
 
+test("resolveNextUpOrder queries the configured statusColumns.next_up display name (#1098)", async () => {
+  const dir = await makeRepo('queue:\n  projectNumber: 3\n  statusColumns:\n    next_up: "Todo"\n');
+  try {
+    const result = await resolveNextUpOrder(
+      "owner/repo",
+      dir,
+      { GH_TOKEN: "mock" },
+      {
+        listQueueItems: async (args) => {
+          assert.deepEqual(args, { repo: "owner/repo", project: "3", column: "Todo" });
+          return { ok: true, items: [{ issueNumber: 5 }] };
+        },
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.order, [5]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("resolveNextUpOrder reports ok:false on list query error (fail-closed at driver)", async () => {
   const dir = await makeRepo("queue:\n  projectNumber: 3\n");
   try {

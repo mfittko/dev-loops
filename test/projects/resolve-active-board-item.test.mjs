@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 import { collapseToTarget, main, runCli } from "../../scripts/projects/resolve-active-board-item.mjs";
 
 // A runChild stub that drives list-queue-items end to end. `columns` maps a
@@ -9,9 +12,9 @@ import { collapseToTarget, main, runCli } from "../../scripts/projects/resolve-a
 // the resolver's --column filter pick. `itemsError` forces only the SECOND items
 // query to fail (the resolver queries In Progress first, then Next Up), so the
 // In Progress query succeeds and only the Next Up query errors / hits an outage.
-function boardRunChild({ columns = {}, itemsError = false } = {}) {
+function boardRunChild({ columns = {}, itemsError = false, optionNames = ["Backlog", "Next Up", "In Progress", "Done"] } = {}) {
   let itemsQueryCount = 0;
-  const options = ["Backlog", "Next Up", "In Progress", "Done"].map((name, i) => ({ id: `O_${i}`, name }));
+  const options = optionNames.map((name, i) => ({ id: `O_${i}`, name }));
   const nodes = [];
   for (const [status, items] of Object.entries(columns)) {
     for (const it of items) {
@@ -179,5 +182,55 @@ describe("resolve-active-board-item CLI exit codes", () => {
     assert.equal(code, 2);
     const parsed = JSON.parse(err);
     assert.equal(parsed.ok, false);
+  });
+});
+
+describe("resolve-active-board-item resolves the configured next_up column (#1098)", () => {
+  async function withTempCwd(contents, fn) {
+    const dir = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-statuscol-"));
+    try {
+      if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
+      return await fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("pickup queries the overridden statusColumns.next_up column (\"Todo\"), not the literal", async () => {
+    await withTempCwd('queue:\n  projectNumber: 7\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+      // Head item lives ONLY in the renamed "Todo" column. If the resolver still
+      // queried the literal "Next Up", it would see an empty column and fail
+      // closed — so a resolved target proves it queried the configured name.
+      const child = boardRunChild({
+        optionNames: ["Backlog", "Todo", "In Progress", "Done"],
+        columns: { "In Progress": [], "Todo": [{ issueNumber: 42, title: "Head" }] },
+      });
+      const r = await main({ repo: "o/r", project: "7" }, { runChild: child, cwd });
+      assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 42 }, source: "next-up" });
+    });
+  });
+
+  it("default config (no override) still resolves the literal \"Next Up\"", async () => {
+    await withTempCwd(null, async (cwd) => {
+      const child = boardRunChild({
+        columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      });
+      const r = await main({ repo: "o/r", project: "7" }, { runChild: child, cwd });
+      assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
+    });
+  });
+
+  it("malformed .devloops → pickup fails CLOSED (surfaces config error), never queries the literal \"Next Up\"", async () => {
+    // Zero In Progress → falls through to resolveNextUpHead, which must throw on
+    // an un-parseable config rather than silently querying the default column.
+    await withTempCwd("queue: renamed\n- broken\n", async (cwd) => {
+      const child = boardRunChild({
+        columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      });
+      await assert.rejects(
+        () => main({ repo: "o/r", project: "7" }, { runChild: child, cwd }),
+        /config read\/parse error/,
+      );
+    });
   });
 });

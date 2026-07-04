@@ -1,4 +1,4 @@
-import { loadBoardConfig, resolveProjectNumber } from "./queue-board-sync.mjs";
+import { loadBoardConfig, resolveProjectNumber, loadStateColumnMap, LOGICAL_COLUMN } from "./queue-board-sync.mjs";
 import { main as listQueueItemsMain } from "../../../../scripts/projects/list-queue-items.mjs";
 
 // Canonical fail-closed Next Up tokens — the SINGLE source of truth so the reason
@@ -53,6 +53,17 @@ export async function resolveNextUpOrder(
     return { ok: false, configured: true, order: [], reason: "could not resolve board project" };
   }
 
+  // Resolve the logical next_up column through the SAME statusColumns mapping
+  // board-sync uses (#1098), so a renamed Next Up column (e.g. "Todo") is
+  // queried by its configured display name instead of the literal default.
+  // No config-error guard here: loadBoardConfig above already short-circuits any
+  // `.devloops` read/parse error to `enabled:false` (early return at the top of
+  // this function), so a malformed config never reaches this point. The
+  // fail-closed-on-config-error guard lives on the direct-read pickup path
+  // (resolve-active-board-item), which does NOT go through loadBoardConfig.
+  const { columnNames } = loadStateColumnMap(repoRoot);
+  const nextUpColumn = columnNames[LOGICAL_COLUMN.NEXT_UP];
+
   const listItems = dependencies.listQueueItems ?? listQueueItemsMain;
   try {
     const result = await listItems(
@@ -60,7 +71,7 @@ export async function resolveNextUpOrder(
       // resolveProjectNumber yields a number, so stringify it. Passing the raw
       // number trips parseProjectRef's `typeof raw !== "string"` guard, which
       // surfaces as a misleading "--project is required" (#901).
-      { repo, project: String(projectNumber), column: "Next Up" },
+      { repo, project: String(projectNumber), column: nextUpColumn },
       { env, runChild: dependencies.runChild },
     );
     const order = (result?.items ?? [])

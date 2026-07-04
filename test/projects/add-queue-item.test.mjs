@@ -630,6 +630,119 @@ describe("add-queue-item", () => {
     });
   });
 
+  describe("--next-up resolves the configured next_up column (#1098)", () => {
+    const TODO_STATUS_FIELD = {
+      id: "PVTSSF_status",
+      name: "Status",
+      options: [
+        { id: "opt1", name: "Backlog" },
+        { id: "opt2", name: "Todo" },
+        { id: "opt3", name: "In Progress" },
+        { id: "opt4", name: "Done" },
+      ],
+    };
+
+    async function withTempCwd(contents, fn) {
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "add-queue-statuscol-"));
+      try {
+        if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
+        return await fn(dir);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it("main() lands --next-up in the overridden statusColumns.next_up column (\"Todo\")", async () => {
+      await withTempCwd('queue:\n  projectNumber: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([TODO_STATUS_FIELD]) },
+          { payload: emptyItemsResponse() },
+          { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: addItemResponse("PVTI_new") },
+          { payload: updateFieldResponse() },
+        ];
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+          { env: {}, runChild: mockRunChild(responses), cwd },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.item.status, "Todo");
+      });
+    });
+
+    it("main() accepts --next-up together with an agreeing --column \"Todo\" under the same override", async () => {
+      await withTempCwd('queue:\n  projectNumber: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([TODO_STATUS_FIELD]) },
+          { payload: emptyItemsResponse() },
+          { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: addItemResponse("PVTI_new") },
+          { payload: updateFieldResponse() },
+        ];
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, column: "Todo" },
+          { env: {}, runChild: mockRunChild(responses), cwd },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.item.status, "Todo");
+      });
+    });
+
+    it("main() rejects --next-up + the OLD literal --column \"Next Up\" once next_up is renamed to \"Todo\"", async () => {
+      await withTempCwd('queue:\n  projectNumber: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+        await assert.rejects(
+          () =>
+            main(
+              { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, column: "Next Up" },
+              { env: {}, runChild: mockRunChild([]), cwd },
+            ),
+          /Conflicting --next-up and --column\/--status/,
+        );
+      });
+    });
+
+    it("main() fails CLOSED on a malformed .devloops when --next-up drives the target (no literal fallback)", async () => {
+      // Genuinely un-parseable YAML → loadStateColumnMap surfaces an error;
+      // --next-up must throw rather than silently querying the literal "Next Up".
+      await withTempCwd("queue: renamed\n- broken\n", async (cwd) => {
+        await assert.rejects(
+          () =>
+            main(
+              { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+              { env: {}, runChild: mockRunChild([]), cwd },
+            ),
+          /config read\/parse error/,
+        );
+      });
+    });
+
+    it("main() with an override-free .devloops still resolves --next-up to the default \"Next Up\" (hermetic cwd)", async () => {
+      // Hermetic: explicit empty-config temp cwd so this can't break if the real
+      // repo's .devloops ever gains a next_up override.
+      await withTempCwd("queue:\n  projectNumber: 1\n", async (cwd) => {
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          { payload: emptyItemsResponse() },
+          { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: addItemResponse("PVTI_new") },
+          { payload: updateFieldResponse() },
+        ];
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+          { env: {}, runChild: mockRunChild(responses), cwd },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.item.status, "Next Up");
+      });
+    });
+  });
+
   describe("optional --project resolved from .devloops (#1035)", () => {
     function addResponses(project) {
       return [
