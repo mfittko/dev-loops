@@ -35,15 +35,24 @@ for (const agent of ["developer", "fixer"]) {
 // asserts the canonical shape positively, so any pi-hostile form fails.
 const TOOLS_CANONICAL = /^tools: [a-z][\w-]*(,\s*[a-z][\w-]*)*$/;
 
+// Extract the leading YAML frontmatter block so the fence checks the real
+// frontmatter `tools:` key — not an unrelated body line that happens to start
+// with `tools:`, which could otherwise bypass the guard.
+function frontmatterOf(content, file) {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  assert.ok(match, `agents/${file} must have a leading YAML frontmatter block`);
+  return match[1];
+}
+
 test("every agent `tools:` frontmatter is a pi-safe comma-token scalar (#1111)", async () => {
   const files = (await readdir(new URL("../../agents/", import.meta.url)))
     .filter((name) => name.endsWith(".agent.md"));
   assert.ok(files.length >= 7, `expected the canonical agent set, got ${files.length}`);
 
   for (const file of files) {
-    const content = await readRepo(`agents/${file}`);
-    const line = content.split("\n").find((l) => /^tools:/.test(l));
-    assert.ok(line, `agents/${file} must declare a tools: frontmatter line`);
+    const frontmatter = frontmatterOf(await readRepo(`agents/${file}`), file);
+    const line = frontmatter.split("\n").find((l) => /^tools:/.test(l));
+    assert.ok(line, `agents/${file} frontmatter must declare a tools: line`);
     assert.match(
       line,
       TOOLS_CANONICAL,

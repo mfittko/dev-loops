@@ -71,7 +71,7 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 ## Subagent delegation
 
 <!-- pi-only -->
-This agent has `tools: [subagent]` and `maxSubagentDepth: 3` to allow orchestrating parallel review, chains, and staged fix passes.
+This agent's frontmatter `tools:` comma-token scalar includes `subagent` (single-line comma form, no brackets — see #1111) and it sets `maxSubagentDepth: 3` to allow orchestrating parallel review, chains, and staged fix passes.
 <!-- /pi-only -->
 
 All delegation must originate from the handoff envelope: the envelope's `nextAction`, `requiredReads`, `stopRules`, and `acceptance` define the bounded task. The envelope is passed to child subagents as their primary handoff artifact.
