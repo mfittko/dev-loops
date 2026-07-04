@@ -249,7 +249,10 @@ async function ghApi(ghCommand, args, env, expectJson = true) {
   if (result.code !== 0) {
     const endpoint = extractEndpoint(args);
     const status = captureStatus ? extractHttpStatus(result.stdout) : null;
-    const detail = result.stderr.trim() || "empty response body";
+    // "empty response body" only makes sense for the -i (captureStatus) path;
+    // for JSON/GET calls an empty stderr means fall back to the exit code.
+    const detail = result.stderr.trim()
+      || (captureStatus ? "empty response body" : `exit code ${result.code}`);
     const statusPart = status ? ` (HTTP ${status})` : "";
     throw new Error(`gh api command failed${statusPart} for ${endpoint}: ${detail}`);
   }
