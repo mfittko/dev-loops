@@ -84,12 +84,14 @@ const PATH_GROUP_KEYS = Object.freeze(
 );
 
 /**
- * EVERY repo-root-relative value named across the path-bearing groups — with NO
- * shape filtering, so a malformed/typo'd entry is RETURNED (and then fails the
- * contract test's shape+existence assertions) rather than being silently
- * skipped. Auto-includes any future path-bearing group. This is what keeps the
- * map from drifting off disk (#1081).
- * @returns {string[]}
+ * EVERY value named across the path-bearing groups — with NO shape filtering,
+ * so a malformed/typo'd entry is RETURNED (and then fails the contract test's
+ * shape+existence assertions) rather than being silently skipped. Auto-includes
+ * any future path-bearing group. This is what keeps the map from drifting off
+ * disk (#1081). For a well-formed map every element is a repo-root-relative
+ * `scripts/*.mjs` string; the no-filtering contract means a malformed map can
+ * yield a non-string here, which the contract test is designed to catch.
+ * @returns {unknown[]} wrapper-path values (strings for a well-formed map)
  */
 export function listSanctionedWrapperPaths() {
   const out = [];
