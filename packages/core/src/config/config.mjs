@@ -1100,8 +1100,12 @@ export function resolveGateAngles(config, gate) {
  * Resolve the global lens catalog available for additive angle selection.
  *
  * Returns the explicit `gates.anglePool` override when configured (non-empty
- * array of trimmed strings), otherwise falls back to the union of all known
- * review angles (the built-in persona registry's angle names) — see #1048.
+ * array of trimmed strings). Otherwise falls back to the union of all known
+ * review angles: the built-in persona registry's angle names, plus every
+ * angle actually configured across this config's own draft/preApproval/spike
+ * gates (angles + mandatoryAngles). The persona registry alone omits angles
+ * that ship in extension-defaults.yaml gate pools but have no dedicated
+ * persona (e.g. ci-guard, link-check) — see #1048.
  *
  * @param {DevLoopConfig} config
  * @returns {string[]}
@@ -1111,7 +1115,11 @@ export function resolveAnglePool(config) {
   if (Array.isArray(explicit) && explicit.length > 0) {
     return [...new Set(explicit.map(a => (typeof a === "string" ? a.trim() : "")).filter(a => a.length > 0))];
   }
-  return Object.keys(BUILTIN_PERSONAS);
+  const configured = ["draft", "preApproval", "spike"].flatMap((gate) => {
+    const gateConfig = resolveGateConfig(config, gate);
+    return [...(gateConfig.angles ?? []), ...gateConfig.mandatoryAngles];
+  });
+  return [...new Set([...Object.keys(BUILTIN_PERSONAS), ...configured])];
 }
 
 /**

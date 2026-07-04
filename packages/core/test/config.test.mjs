@@ -21,6 +21,7 @@ import {
   resolveGateConfig,
   resolveGateAngles,
   resolveGateAnglesDynamic,
+  resolveAnglePool,
   resolveWorkflowConfig,
   resolveLightMode,
   resolveGateDispatchMode,
@@ -2999,6 +3000,60 @@ describe("resolveGateAnglesDynamic", () => {
     });
     assert.ok(result.addedAngles.includes("contract-surface"));
     assert.ok(result.recommendedAngles.includes("contract-surface"));
+  });
+
+  test("resolveAnglePool: with no explicit gates.anglePool, includes angles configured on gates.draft that are absent from BUILTIN_PERSONAS", () => {
+    // ci-guard has no entry in BUILTIN_PERSONAS (it resolves via the
+    // default-reviewer persona fallback at dispatch time), but it is a real,
+    // configured angle in this repo's own extension-defaults.yaml draft gate —
+    // the fallback catalog must include it, not just the persona registry.
+    const config = { version: 1, gates: { draft: { angles: ["scope", "ci-guard"] } } };
+    assert.ok(resolveAnglePool(config).includes("ci-guard"));
+  });
+
+  test("resolveAnglePool: with no explicit gates.anglePool, still includes BUILTIN_PERSONAS-only angles not configured on any gate", () => {
+    // renderer-security is in BUILTIN_PERSONAS but not referenced by any gate
+    // in this config — the persona-registry half of the union must still hold.
+    const config = { version: 1, gates: { draft: { angles: ["scope"] } } };
+    assert.ok(resolveAnglePool(config).includes("renderer-security"));
+  });
+
+  test("resolveAnglePool: explicit gates.anglePool override is unaffected by the broadened fallback", () => {
+    const config = {
+      version: 1,
+      gates: {
+        anglePool: [" scope ", "coverage", "scope"],
+        draft: { angles: ["ci-guard"] },
+      },
+    };
+    // Deduped/trimmed explicit list only — no ci-guard leaking in from draft.angles.
+    assert.deepEqual(resolveAnglePool(config), ["scope", "coverage"]);
+  });
+
+  test("additiveAngles: true with no gates.anglePool can additively select an angle configured elsewhere in this config's gates but absent from BUILTIN_PERSONAS", async () => {
+    // ci-guard is a real draft-gate angle in this repo's extension-defaults.yaml
+    // but has no BUILTIN_PERSONAS entry, so the old BUILTIN_PERSONAS-only
+    // fallback could never additively select it. Here the gate under test
+    // (draft) has a hypothetical narrower angle list that omits ci-guard, but
+    // ci-guard is configured on another gate (preApproval) in the same config —
+    // the broadened fallback catalog unions across all of this config's own
+    // gates, so it should still be additively reachable for draft.
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "coverage", "docs"], // ci-guard deliberately omitted here
+          dynamicAngles: true,
+          additiveAngles: true,
+        },
+        preApproval: { angles: ["ci-guard", "link-check"] },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "A\t.github/workflows/ci.yml" },
+    });
+    assert.ok(result.addedAngles.includes("ci-guard"));
+    assert.ok(result.recommendedAngles.includes("ci-guard"));
   });
 
   test("resolveGateConfig: additiveAngles defaults to false when unset (this repo's own gates are unaffected)", () => {
