@@ -83,20 +83,37 @@ test("validatePrBodySpec: an AC section with only an empty placeholder is not te
   assert.ok(result.errors.some((e) => e.code === "missing_acceptance_criteria"));
 });
 
+const ALL_MISSING = [
+  "missing_acceptance_criteria",
+  "missing_definition_of_done",
+  "missing_explicit_non_goals",
+  "missing_in_scope",
+  "missing_objective",
+  "missing_open_questions",
+];
+
 test("validatePrBodySpec: headings buried inside a fenced code block do NOT satisfy the gate (no spoof)", () => {
   // Every invariant heading is real-looking but lives inside a ``` fence.
   const body = "Here is what a good body looks like:\n\n```md\n" + COMPLETE_BODY + "\n```\n";
   const result = validatePrBodySpec({ body });
   assert.equal(result.ok, false);
-  const codes = result.errors.map((e) => e.code).sort();
-  assert.deepEqual(codes, [
-    "missing_acceptance_criteria",
-    "missing_definition_of_done",
-    "missing_explicit_non_goals",
-    "missing_in_scope",
-    "missing_objective",
-    "missing_open_questions",
-  ]);
+  assert.deepEqual(result.errors.map((e) => e.code).sort(), ALL_MISSING);
+});
+
+test("validatePrBodySpec: a 4-backtick fence is NOT closed by a 3-backtick line inside it (fence-length spoof)", () => {
+  // The inner ``` line must NOT close the ```` fence — otherwise the headings
+  // after it get counted and the spoof re-opens.
+  const body = "````md\n" + COMPLETE_BODY + "\n```\nstill inside the outer fence\n````\n";
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors.map((e) => e.code).sort(), ALL_MISSING);
+});
+
+test("validatePrBodySpec: a real body that CONTAINS a fenced code block still validates (no over-strip)", () => {
+  const body = COMPLETE_BODY + "\nExample:\n\n```js\n// # Not a real heading, just code\nconst x = 1;\n```\n";
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
 });
 
 // ---------------------------------------------------------------------------

@@ -63,15 +63,22 @@ export function parseMarkdownSections(body) {
   const lines = body.split(/\r?\n/u);
   const sections = [];
   let current = null;
-  let fence = null; // the open fence marker (``` or ~~~) while inside a code span
+  // While inside a code span, holds { char, len } of the opening fence.
+  // CommonMark: an N-marker fence closes only on a line of >= N SAME-char
+  // markers, so a 4-backtick fence is NOT closed by a 3-backtick line inside it.
+  let fence = null;
 
   for (const line of lines) {
-    const fenceMatch = /^\s*(`{3,}|~{3,})/u.exec(line);
-    if (fenceMatch) {
-      const marker = fenceMatch[1][0];
+    const openMatch = /^\s*(`{3,}|~{3,})/u.exec(line);
+    if (openMatch) {
+      const marker = openMatch[1];
+      const char = marker[0];
+      const len = marker.length;
+      // A closing fence is a bare run of >= N same-char markers (no info string).
+      const isBareRun = /^\s*[`~]+\s*$/u.test(line);
       if (fence === null) {
-        fence = marker;
-      } else if (fence === marker) {
+        fence = { char, len };
+      } else if (fence.char === char && len >= fence.len && isBareRun) {
         fence = null;
       }
       if (current) current.bodyLines.push(line);
