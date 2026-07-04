@@ -1,0 +1,31 @@
+name: Set up Playwright WebKit
+description: >-
+  Installs Node + workspace dependencies and installs (with cache) the
+  Playwright WebKit runtime shared by the WebKit smoke jobs. The calling job
+  must check out the repository before this action, since a local action
+  (`uses: ./...`) can only be resolved once the repo is on disk.
+runs:
+  using: composite
+  steps:
+    - name: Export Playwright browsers path
+      shell: bash
+      run: echo "PLAYWRIGHT_BROWSERS_PATH=${{ github.workspace }}/.cache/ms-playwright" >> "$GITHUB_ENV"
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: 24
+
+    - name: Install workspace dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Restore Playwright WebKit runtime cache
+      uses: actions/cache@v5
+      with:
+        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+        key: ${{ runner.os }}-playwright-webkit-${{ hashFiles('package-lock.json') }}
+
+    - name: Install Playwright WebKit runtime
+      shell: bash
+      run: npx playwright install --with-deps webkit
