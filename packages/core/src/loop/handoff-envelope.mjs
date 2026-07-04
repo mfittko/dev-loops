@@ -509,6 +509,15 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     ? { ...options.overrides }
     : undefined;
 
+  // Sanctioned operation → wrapper command map (issue #1081). Core is
+  // consumer-agnostic: it carries whatever map the consumer supplies (the
+  // `loop build-envelope` CLI injects this repo's scripts/... paths) so every
+  // spawned subagent receives it by DEFAULT. Core defines the SHAPE only —
+  // it never hardcodes repo-specific paths. A non-object is ignored.
+  const sanctionedCommands = options.sanctionedCommands && typeof options.sanctionedCommands === "object" && !Array.isArray(options.sanctionedCommands)
+    ? options.sanctionedCommands
+    : undefined;
+
   // Surface the *effective* async-start posture alongside the *configured* one (#834). The
   // configured `asyncStartMode` is echoed verbatim from settings (back-compat), but the contract
   // is relaxed at validation time under the Claude harness (resolveEffectiveAsyncStartMode →
@@ -562,6 +571,10 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
 
   if (overrides) {
     envelope.overrides = overrides;
+  }
+
+  if (sanctionedCommands) {
+    envelope.sanctionedCommands = sanctionedCommands;
   }
 
   // Advisory retrospective findings (issue #1077, Reading B). Optional structured
