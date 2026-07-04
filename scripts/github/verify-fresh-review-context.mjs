@@ -31,8 +31,12 @@ Options:
                   reviewer must be reading from (the build-once bundle
                   written by write-gate-context.mjs, e.g.
                   tmp/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json).
-                  When provided, fails closed (exit 1) if the artifact is
-                  missing (ENOENT) from the reviewer's cwd. Per-angle
+                  Must be a cwd-relative path that stays within the
+                  reviewer's working directory; an absolute or ..-escaping
+                  path (which could point at another worktree's bundle and
+                  defeat the worktree-locality guard) fails closed (exit 1).
+                  When provided, also fails closed (exit 1) if the artifact
+                  is missing (ENOENT) from the reviewer's cwd. Per-angle
                   gate reviewers must run in the PR's actual worktree/head
                   (never an isolated worktree) so this gitignored,
                   worktree-local artifact is present; a missing artifact
@@ -48,7 +52,9 @@ Output (stdout, JSON):
   { "ok": false, "error": "...", "usage": "..." }
 Exit codes:
   0  Clean (first run)
-  1  Contaminated (prior session detected)
+  1  Refuse to review: contaminated (prior session detected), OR (with
+     --context-path) the seeded gate-context artifact is missing or resolves
+     outside the reviewer's working directory
   2  Usage or internal error`.trim();
 const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const parseError = buildParseError(USAGE);
@@ -138,7 +144,26 @@ async function main(argv = process.argv.slice(2)) {
   }
   const round = resolveHeadRound();
   if (contextPathArg !== null) {
-    const resolvedContextPath = path.resolve(process.cwd(), contextPathArg);
+    const cwd = process.cwd();
+    const resolvedContextPath = path.resolve(cwd, contextPathArg);
+    // The guard proves the reviewer is in the working tree where the gitignored
+    // tmp/gate-context bundle was written. An absolute or ..-escaping path could
+    // stat the real bundle in ANOTHER (stale/isolated) worktree and pass — so a
+    // path resolving outside cwd fails closed, defeating that bypass.
+    const withinCwd =
+      resolvedContextPath === cwd || resolvedContextPath.startsWith(cwd + path.sep);
+    if (!withinCwd) {
+      process.stdout.write(JSON.stringify({
+        ok: true,
+        fresh: false,
+        sentinelCreated: false,
+        round: round ?? null,
+        gateContextPath: contextPathArg,
+        gateContextPresent: false,
+        reason: `Seeded gate-context artifact path "${contextPathArg}" resolves outside the reviewer's working directory — refusing. --context-path must be a cwd-relative path to the worktree-local bundle; an absolute or ..-escaping path could point at another (stale/isolated) worktree's bundle and defeat the worktree-locality guard.`,
+      }) + "\n");
+      return 1;
+    }
     try {
       await stat(resolvedContextPath);
     } catch (err) {

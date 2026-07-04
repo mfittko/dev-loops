@@ -319,6 +319,46 @@ test("verify-fresh-review-context --context-path passes through when the gate-co
   }
 });
 
+test("verify-fresh-review-context --context-path fails closed when the path resolves outside cwd (absolute path to another worktree)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const otherDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-other-wt-"));
+  try {
+    // A real bundle exists in a DIFFERENT worktree; an absolute path to it must
+    // NOT pass the guard, or an isolated/stale reviewer could game worktree-locality.
+    const ctxDir = path.join(otherDir, "tmp", "gate-context", "owner-repo", "pr-1");
+    await mkdir(ctxDir, { recursive: true });
+    const absPath = path.join(ctxDir, "draft_gate-abc1234.json");
+    await writeFile(absPath, JSON.stringify({ adjacentCode: { files: [] } }) + "\n", "utf8");
+    const result = runScript(["--scope", "coverage", "--context-path", absPath], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.fresh, false);
+    assert.equal(output.gateContextPresent, false);
+    assert.ok(output.reason.includes("outside the reviewer's working directory"), output.reason);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await rm(otherDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-fresh-review-context --context-path fails closed on a ..-escaping path", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const result = runScript(
+      ["--scope", "coverage", "--context-path", "../escape/gate-context/draft_gate-abc1234.json"],
+      { cwd: tmpDir }
+    );
+    assert.equal(result.status, 1, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.fresh, false);
+    assert.equal(output.gateContextPresent, false);
+    assert.ok(output.reason.includes("outside the reviewer's working directory"), output.reason);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("verify-fresh-review-context --context-path with missing value fails closed", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
