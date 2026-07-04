@@ -6,6 +6,8 @@ import {
   toFindingsLogShape,
   planFanoutBatches,
   DEFAULT_MAX_FANOUT_REVIEWERS,
+  FANOUT_UNAVAILABLE_MESSAGE,
+  fanoutUnavailableError,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -186,5 +188,26 @@ describe("planFanoutBatches", () => {
     const angles = Array.from({ length: 9 }, (_, i) => `a${i}`);
     assert.equal(planFanoutBatches(angles, 0).batches.length, 2);
     assert.equal(planFanoutBatches(angles, -1).degraded, true);
+  });
+});
+
+describe("fanoutUnavailableError / route-to-conductor contract (AC4)", () => {
+  test("FANOUT_UNAVAILABLE_MESSAGE is the documented stable signal", () => {
+    assert.equal(FANOUT_UNAVAILABLE_MESSAGE, "fan-out unavailable — route to conductor");
+  });
+
+  test("fanoutUnavailableError carries the route-to-conductor signal", () => {
+    const err = fanoutUnavailableError();
+    assert.ok(err instanceof Error);
+    assert.equal(err.message, FANOUT_UNAVAILABLE_MESSAGE);
+    assert.equal(err.routeToConductor, true);
+    assert.equal(err.code, "FANOUT_UNAVAILABLE");
+  });
+
+  test("fanoutUnavailableError appends a diagnostic detail but keeps the matchable prefix", () => {
+    const err = fanoutUnavailableError("subagent tool not honored at child depth");
+    assert.ok(err.message.startsWith(FANOUT_UNAVAILABLE_MESSAGE));
+    assert.ok(err.message.includes("subagent tool not honored"));
+    assert.equal(err.routeToConductor, true);
   });
 });

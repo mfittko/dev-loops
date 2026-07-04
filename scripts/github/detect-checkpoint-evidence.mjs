@@ -9,12 +9,13 @@ import {
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { loadDevLoopConfig, resolveGateConfig, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, loadDevLoopConfig, resolveGateConfig, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
+import { FANOUT_UNAVAILABLE_MESSAGE } from "@dev-loops/core/loop/gate-fanin";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
@@ -265,6 +266,21 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
         failures.push(
           `${gate.name}: requireFanoutEvidence is enabled but no findings-log ledger exists for the reviewed head (${gate.ledgerPath})`,
         );
+        continue;
+      }
+      // Opt-in provenance enforcement (gates.requireFanoutProvenance), layered on
+      // top of fan-out evidence. When off (default) requireProvenance is falsy so
+      // NO new failure is added — behavior is byte-identical to today. When on, a
+      // fanout_fanin ledger must record distinctReviewers >= the floor, proving
+      // independent parallel review rather than a single self-producing agent.
+      if (fanoutEnforcement.requireProvenance) {
+        const prov = gate.provenance;
+        const reviewers = prov && typeof prov.distinctReviewers === "number" ? prov.distinctReviewers : null;
+        if (reviewers === null || reviewers < FANOUT_PROVENANCE_MIN_REVIEWERS) {
+          failures.push(
+            `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${FANOUT_PROVENANCE_MIN_REVIEWERS}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
+          );
+        }
       }
     }
   }
@@ -307,6 +323,26 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
   return false;
 }
 /**
+ * Read the recorded fan-out `provenance` object from the first existing ledger
+ * across the enumerated checkouts. Returns the provenance object, or null when
+ * no ledger is found / it is unreadable / it carries no provenance. Only called
+ * when requireFanoutProvenance is enabled so the default path pays no extra I/O.
+ */
+async function readLedgerProvenanceInAny(checkouts, ledgerPath) {
+  for (const root of checkouts) {
+    const full = path.resolve(root, ledgerPath);
+    try {
+      const parsed = JSON.parse(await readFile(full, "utf8"));
+      if (parsed && typeof parsed === "object") {
+        return parsed.provenance ?? null;
+      }
+    } catch {
+      // Missing/unreadable/malformed ledger in this checkout — try the next.
+    }
+  }
+  return null;
+}
+/**
  * Build the fan-out evidence enforcement descriptor.
  *
  * Enforcement is ON by default (opt-out via gates.requireFanoutEvidence: false).
@@ -322,8 +358,14 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // null and undefined; the loader only ever yields null on failure, but the
   // loose check defensively treats an absent config as unavailable.
   if (config == null || !resolveRequireFanoutEvidence(config)) {
+    // Disabled/unavailable return is intentionally byte-identical to before
+    // (no requireProvenance key): buildPreMergeGateCheck only reads it inside
+    // the `required` block, so this preserves the exact existing shape.
     return { required: false, gates: [] };
   }
+  // Provenance enforcement is opt-in and layered ON TOP of fan-out evidence: it
+  // only takes effect while evidence enforcement (above) is active.
+  const requireProvenance = resolveRequireFanoutProvenance(config);
   const draftRequired = resolveGateConfig(config, "draft").required;
   const preApprovalRequired = resolveGateConfig(config, "preApproval").required;
   const gateSpecs = [
@@ -340,9 +382,10 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       executionMode: spec.marker.executionMode ?? null,
       ledgerPath,
       ledgerExists: await ledgerExistsInAny(checkouts, ledgerPath),
+      provenance: requireProvenance ? await readLedgerProvenanceInAny(checkouts, ledgerPath) : null,
     });
   }
-  return { required: true, gates };
+  return { required: true, requireProvenance, gates };
 }
 export async function detectCheckpointEvidence(options, { env = process.env, ghCommand = "gh", cwd = process.cwd() } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({

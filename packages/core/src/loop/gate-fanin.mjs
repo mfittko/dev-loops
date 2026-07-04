@@ -25,6 +25,31 @@ const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
 
 /**
+ * Canonical fail-closed signal for when a child/agent cannot perform real
+ * parallel fan-out (e.g. the harness does not honor the subagent tool at child
+ * depth). The flow MUST fail closed with this message and route the gate review
+ * to the conductor rather than silently degrading to a single-agent inline
+ * review (which requireFanoutProvenance is designed to reject). Documented as a
+ * contract in docs/gate-review-sub-loop-contract.md.
+ */
+export const FANOUT_UNAVAILABLE_MESSAGE = "fan-out unavailable — route to conductor";
+
+/**
+ * Build a fail-closed Error carrying the route-to-conductor contract signal.
+ * Callers throw this (or check `.routeToConductor === true`) when real fan-out
+ * cannot be performed. `detail` is appended for diagnostics but the stable,
+ * matchable prefix is always {@link FANOUT_UNAVAILABLE_MESSAGE}.
+ *
+ * @param {string} [detail] — optional diagnostic suffix (e.g. why fan-out failed)
+ * @returns {Error & { routeToConductor: true, code: "FANOUT_UNAVAILABLE" }}
+ */
+export function fanoutUnavailableError(detail) {
+  const suffix = typeof detail === "string" && detail.trim().length > 0 ? ` (${detail.trim()})` : "";
+  const error = new Error(`${FANOUT_UNAVAILABLE_MESSAGE}${suffix}`);
+  return Object.assign(error, { routeToConductor: /** @type {const} */ (true), code: /** @type {const} */ ("FANOUT_UNAVAILABLE") });
+}
+
+/**
  * Default cap on parallel fan-out reviewers when a caller does not supply one.
  * Mirrors the config default (gates.maxFanoutReviewers).
  */

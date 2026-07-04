@@ -15,6 +15,7 @@ Required:
   --verdict <clean|findings_present|blocked>
   --findings <json>              JSON array of finding objects with severity, disposition, angle, and summary
 Optional:
+  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model? }] }
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -92,6 +93,48 @@ function parseFindingsJson(raw) {
     return entry;
   });
 }
+/**
+ * Validate + normalize the fan-out provenance object. Records how many distinct
+ * reviewer agents were dispatched (distinctReviewers) and per-angle dispatch
+ * provenance (perAngle). Throws on malformed shape so a caller cannot forge a
+ * satisfying-but-empty provenance blob. Returns the normalized object.
+ */
+export function parseProvenanceJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw parseError("--provenance must be valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw parseError("--provenance must be a JSON object");
+  }
+  if (!Number.isInteger(parsed.distinctReviewers) || parsed.distinctReviewers < 0) {
+    throw parseError("--provenance.distinctReviewers must be a non-negative integer");
+  }
+  if (!Array.isArray(parsed.perAngle)) {
+    throw parseError("--provenance.perAngle must be an array");
+  }
+  const perAngle = parsed.perAngle.map((a, i) => {
+    if (!a || typeof a !== "object" || Array.isArray(a)) {
+      throw parseError(`--provenance.perAngle[${i}] must be an object`);
+    }
+    if (typeof a.angle !== "string" || a.angle.trim().length === 0) {
+      throw parseError(`--provenance.perAngle[${i}].angle is required`);
+    }
+    const entry = { angle: a.angle.trim() };
+    for (const key of ["reviewer", "dispatchId", "model"]) {
+      if (key in a) {
+        if (typeof a[key] !== "string" || a[key].trim().length === 0) {
+          throw parseError(`--provenance.perAngle[${i}].${key} must be a non-empty string`);
+        }
+        entry[key] = a[key].trim();
+      }
+    }
+    return entry;
+  });
+  return { distinctReviewers: parsed.distinctReviewers, perAngle };
+}
 export function parseWriteGateFindingsLogCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
@@ -103,6 +146,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       "head-sha": { type: "string" },
       verdict: { type: "string" },
       findings: { type: "string" },
+      provenance: { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -159,6 +203,10 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.findings = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "provenance") {
+      options.provenance = requireTokenValue(token, parseError);
+      continue;
+    }
     if (token.name === "tmp-root") {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
@@ -188,6 +236,7 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   const findings = parseFindingsJson(options.findings);
+  const provenance = options.provenance === undefined ? undefined : parseProvenanceJson(options.provenance);
   const logPath = buildLogPath({
     repo: options.repo,
     pr: options.pr,
@@ -205,6 +254,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     loggedAt: new Date().toISOString(),
     findings,
   };
+  // Provenance is optional and additive: when absent the ledger writes exactly
+  // as before (no provenance key), preserving byte-identical output for the
+  // default / Claude-Code path. When present it records fan-out provenance for
+  // gates.requireFanoutProvenance enforcement.
+  if (provenance !== undefined) {
+    log.provenance = provenance;
+  }
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(log, null, 2) + "\n", "utf8");
   return { ok: true, path: logPath, log };

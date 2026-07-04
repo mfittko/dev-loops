@@ -27,6 +27,8 @@ import {
   resolveGateDispatchMode,
   GATE_FULL_LABEL,
   resolveRequireFanoutEvidence,
+  resolveRequireFanoutProvenance,
+  FANOUT_PROVENANCE_MIN_REVIEWERS,
   resolveGatePostFindingsComments,
 } from "../src/config/config.mjs";
 // ============================================================================
@@ -3098,6 +3100,39 @@ describe("gates.requireFanoutEvidence", () => {
   test("rejects non-boolean requireFanoutEvidence", () => {
     const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { requireFanoutEvidence: "yes" } });
     assert.equal(bad.success, false);
+  });
+});
+
+describe("gates.requireFanoutProvenance", () => {
+  test("defaults to false (opt-in) and resolveRequireFanoutProvenance reflects it", () => {
+    // Default-OFF: strict === true resolver, so absent/undefined config is false.
+    assert.equal(resolveRequireFanoutProvenance({}), false);
+    assert.equal(resolveRequireFanoutProvenance({ gates: {} }), false);
+    assert.equal(resolveRequireFanoutProvenance({ gates: { requireFanoutProvenance: false } }), false);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.requireFanoutProvenance, false);
+    assert.equal(resolveRequireFanoutProvenance(parsed.data), false);
+  });
+
+  test("opt-in: explicit requireFanoutProvenance: true enables enforcement", () => {
+    assert.equal(resolveRequireFanoutProvenance({ gates: { requireFanoutProvenance: true } }), true);
+    const full = DevLoopConfigSchema.safeParse({ version: 1, gates: { requireFanoutProvenance: true } });
+    assert.equal(full.success, true);
+    assert.equal(full.data.gates.requireFanoutProvenance, true);
+    assert.equal(resolveRequireFanoutProvenance(full.data), true);
+    const file = FileConfigSchema.safeParse({ version: 1, gates: { requireFanoutProvenance: true } });
+    assert.equal(file.success, true);
+    assert.equal(file.data.gates.requireFanoutProvenance, true);
+  });
+
+  test("rejects non-boolean requireFanoutProvenance", () => {
+    const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { requireFanoutProvenance: "yes" } });
+    assert.equal(bad.success, false);
+  });
+
+  test("floor constant is 2 (smallest count that is not a single agent)", () => {
+    assert.equal(FANOUT_PROVENANCE_MIN_REVIEWERS, 2);
   });
 });
 
