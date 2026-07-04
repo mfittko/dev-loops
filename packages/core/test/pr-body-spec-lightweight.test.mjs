@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { validatePrBodySpec } from "../src/loop/issue-refinement-artifact.mjs";
+import { validatePrBodySpec, parseMarkdownSections } from "../src/loop/issue-refinement-artifact.mjs";
 import {
   buildDevLoopHandoffEnvelope,
   validateHandoffEnvelope,
@@ -114,6 +114,27 @@ test("validatePrBodySpec: a real body that CONTAINS a fenced code block still va
   const result = validatePrBodySpec({ body });
   assert.equal(result.ok, true);
   assert.deepEqual(result.errors, []);
+});
+
+test("validatePrBodySpec: a LEADING fenced block closes correctly; all invariant sections AFTER it are detected", () => {
+  // A ``` fence up front (with a heading-like line inside) must CLOSE on its
+  // ```, so the six real ## sections that follow are counted — guards both
+  // "fence closes" and "no over-strip of post-fence sections".
+  const body = "```sh\n# not a heading\necho hi\n```\n\n" + COMPLETE_BODY;
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.acItems, ["The PR body is the spec-of-record"]);
+  assert.deepEqual(result.dodItems, ["npm run verify is green"]);
+  for (const name of ["Objective", "In scope", "Explicit non-goals", "Acceptance criteria", "Definition of done", "Open questions / risks"]) {
+    assert.ok(result.sections.includes(name), `expected section ${name} post-fence, got ${JSON.stringify(result.sections)}`);
+  }
+});
+
+test("parseMarkdownSections: a mixed-marker line (```~~~) does NOT close a backtick fence", () => {
+  const sections = parseMarkdownSections("```\n# Fake\n```~~~\n# Exposed\n```\n# Real");
+  const names = sections.map((s) => s.name);
+  assert.deepEqual(names, ["Real"]);
 });
 
 // ---------------------------------------------------------------------------

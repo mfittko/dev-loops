@@ -74,8 +74,9 @@ export function parseMarkdownSections(body) {
       const marker = openMatch[1];
       const char = marker[0];
       const len = marker.length;
-      // A closing fence is a bare run of >= N same-char markers (no info string).
-      const isBareRun = /^\s*[`~]+\s*$/u.test(line);
+      // A closing fence is a bare run of >= N markers of ONLY the opening char
+      // (CommonMark: no mixed markers, no info string).
+      const isBareRun = new RegExp(`^\\s*${char}+\\s*$`, "u").test(line);
       if (fence === null) {
         fence = { char, len };
       } else if (fence.char === char && len >= fence.len && isBareRun) {
