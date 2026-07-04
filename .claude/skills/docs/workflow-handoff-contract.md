@@ -17,6 +17,35 @@ template.
 | Gate state (detectors) + strategy defaults | `currentGate`, `worktreeRequired` |
 | Settings (`.devloops` at repo root + `defaults.yaml`) | `gateConfig`, `stopRules`, `asyncStartMode`, `requireDraftFirst`, `maxCopilotRounds` |
 | Gate state (detectors) | `currentHeadSha`, `ciStatus`, `unresolvedThreadCount`, `copilotRoundCount` |
+| Canonical sanctioned-command map (`scripts/loop/sanctioned-commands.mjs`) | `sanctionedCommands` |
+
+## Sanctioned commands (MANDATORY DEFAULT — issue #1081)
+
+`sanctionedCommands` is a **mandatory default** element of every handoff
+envelope. It is the operation → wrapper command map (which wrapper performs
+which GitHub/loop operation), plus the forbidden and orchestrator-owned lists.
+The `loop build-envelope` CLI injects it into every emitted envelope, so a
+spawned dev-loop subagent receives it verbatim without the briefer adding it —
+no re-deriving which wrapper does `gh pr ready` etc.
+
+The **single source of truth** is `scripts/loop/sanctioned-commands.mjs` (a
+frozen data module). `@dev-loops/core` stays consumer-agnostic: it defines the
+envelope SHAPE and carries whatever `sanctionedCommands` object the consumer
+supplies; the repo-specific `scripts/...` paths live only in the consumer
+module. Do not duplicate the map into prose — reference the module.
+
+```typescript
+sanctionedCommands?: {
+  reads: Record<string, string>;         // operation → wrapper path (some also accept `loop info`)
+  edits: Record<string, string>;
+  lifecycle: Record<string, string>;
+  forbidden: string[];                   // raw `gh pr view/checks/edit`, `node -e`, `python -c`, transcript tailing, sleep-poll loops
+  orchestratorOwned: string[];           // `gh pr merge`, board status transitions — never done by a subagent
+};
+```
+
+A contract test (`test/contracts/sanctioned-commands-exist.test.mjs`) asserts
+every mapped wrapper exists on disk and fails closed if one is renamed/removed.
 
 ## Acceptance templates
 
@@ -111,6 +140,15 @@ interface HandoffEnvelope {
     scopeConstraint?: string;
     customStopAt?: string;
   };
+
+  // Mandatory default (issue #1081). Source: scripts/loop/sanctioned-commands.mjs
+  sanctionedCommands?: {
+    reads: Record<string, string>;
+    edits: Record<string, string>;
+    lifecycle: Record<string, string>;
+    forbidden: string[];
+    orchestratorOwned: string[];
+  };
 }
 ```
 
@@ -121,6 +159,7 @@ interface HandoffEnvelope {
 3. Execute `nextAction`.
 4. Respect `stopRules` — do not proceed past a gated stop point without authorization.
 5. Use `acceptance` to self-validate before declaring completion.
+6. Use `sanctionedCommands` as the authoritative operation → wrapper map: never call a raw `gh`/`node -e`/`python -c` for an operation the map covers, and never perform an `orchestratorOwned` action.
 
 ## Backward compatibility
 

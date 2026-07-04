@@ -24,6 +24,7 @@ import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { SANCTIONED_COMMANDS } from "./sanctioned-commands.mjs";
 
 const USAGE = `Usage: build-handoff-envelope.mjs --input <path>
 Build a deterministic handoff envelope from startup resolver output and settings.
@@ -147,6 +148,10 @@ export async function buildHandoffEnvelopeCli(
 
   // Build options for envelope builder
   const envelopeOptions = {};
+
+  // Carry the canonical sanctioned operation → wrapper command map (issue #1081)
+  // into every emitted envelope by DEFAULT so spawned subagents never re-derive it.
+  envelopeOptions.sanctionedCommands = SANCTIONED_COMMANDS;
 
   // Repo slug: explicit --repo, then resolver output bundle, then git remote
   const bundleSlug = resolverOutput?.bundle?.repoSlug ?? resolverOutput?.bundle?.repo ?? null;
