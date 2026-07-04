@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -22,6 +22,23 @@ async function writeGhStub(tempDir, entries) {
 
 function subIssuePayload(subIssues) {
   return `${JSON.stringify(subIssues)}\n`;
+}
+
+async function readGhLog(ghLogPath) {
+  const raw = await readFile(ghLogPath, "utf8");
+  return raw
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+function assertNoAfterIdZero(calls) {
+  for (const call of calls) {
+    assert.ok(
+      !call.some((arg) => arg === "after_id=0"),
+      `PATCH call must never send after_id=0, got: ${JSON.stringify(call)}`,
+    );
+  }
 }
 
 function issuePayload({ id, number, title = "Test issue", state = "open" }) {
@@ -437,13 +454,14 @@ test("manage-sub-issues reorder sets execution order via sequential PATCH calls"
       {
         assertArgs: [
           "api",
+          "-i",
           "-X",
           "PATCH",
           "repos/owner/repo/issues/42/sub_issues/priority",
           "-F",
           "sub_issue_id=1002",
           "-F",
-          "after_id=0",
+          "before_id=1001",
         ],
         stdout: "",
       },
@@ -486,6 +504,325 @@ test("manage-sub-issues reorder sets execution order via sequential PATCH calls"
     assert.equal(parsed.ok, true);
     assert.equal(parsed.command, "reorder");
     assert.deepEqual(parsed.order, [11, 12, 10]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("manage-sub-issues reorder moves a non-head first item using before_id, never after_id=0 (full permutation)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-manage-sub-issues-reorder-perm-"));
+
+  try {
+    const { env, ghLogPath } = await writeGhStubHelper(
+      tempDir,
+      [
+        {
+          assertArgs: ["api", "repos/owner/repo/issues/42/sub_issues"],
+          stdout: subIssuePayload([
+            { id: 1001, number: 10, title: "A", state: "open" },
+            { id: 1002, number: 11, title: "B", state: "open" },
+            { id: 1003, number: 12, title: "C", state: "open" },
+          ]),
+        },
+        {
+          assertArgs: [
+            "api",
+            "-i",
+            "-X",
+            "PATCH",
+            "repos/owner/repo/issues/42/sub_issues/priority",
+            "-F",
+            "sub_issue_id=1003",
+            "-F",
+            "before_id=1001",
+          ],
+          stdout: "",
+        },
+        {
+          assertArgs: [
+            "api",
+            "-i",
+            "-X",
+            "PATCH",
+            "repos/owner/repo/issues/42/sub_issues/priority",
+            "-F",
+            "sub_issue_id=1001",
+            "-F",
+            "after_id=1003",
+          ],
+          stdout: "",
+        },
+        {
+          assertArgs: [
+            "api",
+            "-i",
+            "-X",
+            "PATCH",
+            "repos/owner/repo/issues/42/sub_issues/priority",
+            "-F",
+            "sub_issue_id=1002",
+            "-F",
+            "after_id=1001",
+          ],
+          stdout: "",
+        },
+      ],
+      { logCalls: true },
+    );
+
+    const result = await runNode(
+      ["reorder", "--repo", "owner/repo", "--issue", "42", "--order", "12,10,11"],
+      { env },
+    );
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(parsed.order, [12, 10, 11]);
+
+    // AC2: no PATCH call ever sends after_id=0.
+    const calls = await readGhLog(ghLogPath);
+    assertNoAfterIdZero(calls);
+    assert.equal(calls.length, 4); // 1 list + 3 PATCH
+
+    // AC3: verify confirms the resulting order matches the requested order.
+    const verifyEnv = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/42/sub_issues"],
+        stdout: subIssuePayload([
+          { id: 1003, number: 12, title: "C", state: "open" },
+          { id: 1001, number: 10, title: "A", state: "open" },
+          { id: 1002, number: 11, title: "B", state: "open" },
+        ]),
+      },
+    ]);
+    const verifyResult = await runNode(
+      ["verify", "--repo", "owner/repo", "--issue", "42", "--expected", "12,10,11", "--ordered"],
+      { env: verifyEnv },
+    );
+    const verifyParsed = JSON.parse(verifyResult.stdout);
+    assert.equal(verifyParsed.verified, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("manage-sub-issues reorder skips the head call when the first requested item is already current head", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-manage-sub-issues-reorder-same-"));
+
+  try {
+    const { env, ghLogPath } = await writeGhStubHelper(
+      tempDir,
+      [
+        {
+          assertArgs: ["api", "repos/owner/repo/issues/42/sub_issues"],
+          stdout: subIssuePayload([
+            { id: 1001, number: 10, title: "A", state: "open" },
+            { id: 1002, number: 11, title: "B", state: "open" },
+            { id: 1003, number: 12, title: "C", state: "open" },
+          ]),
+        },
+        {
+          assertArgs: [
+            "api",
+            "-i",
+            "-X",
+            "PATCH",
+            "repos/owner/repo/issues/42/sub_issues/priority",
+            "-F",
+            "sub_issue_id=1002",
+            "-F",
+            "after_id=1001",
+          ],
+          stdout: "",
+        },
+        {
+          assertArgs: [
+            "api",
+            "-i",
+            "-X",
+            "PATCH",
+            "repos/owner/repo/issues/42/sub_issues/priority",
+            "-F",
+            "sub_issue_id=1003",
+            "-F",
+            "after_id=1002",
+          ],
+          stdout: "",
+        },
+      ],
+      { logCalls: true },
+    );
+
+    const result = await runNode(
+      ["reorder", "--repo", "owner/repo", "--issue", "42", "--order", "10,11,12"],
+      { env },
+    );
+
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(parsed.order, [10, 11, 12]);
+
+    // AC2: no PATCH call ever sends after_id=0, and the head call was skipped entirely.
+    const calls = await readGhLog(ghLogPath);
+    assertNoAfterIdZero(calls);
+    assert.equal(calls.length, 3); // 1 list + 2 PATCH (head call skipped)
+
+    // AC3: verify confirms order is unchanged and matches the requested order.
+    const verifyEnv = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/42/sub_issues"],
+        stdout: subIssuePayload([
+          { id: 1001, number: 10, title: "A", state: "open" },
+          { id: 1002, number: 11, title: "B", state: "open" },
+          { id: 1003, number: 12, title: "C", state: "open" },
+        ]),
+      },
+    ]);
+    const verifyResult = await runNode(
+      ["verify", "--repo", "owner/repo", "--issue", "42", "--expected", "10,11,12", "--ordered"],
+      { env: verifyEnv },
+    );
+    const verifyParsed = JSON.parse(verifyResult.stdout);
+    assert.equal(verifyParsed.verified, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("manage-sub-issues reorder moves a middle item to head via before_id", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-manage-sub-issues-reorder-mid-"));
+
+  try {
+    const { env, ghLogPath } = await writeGhStubHelper(
+      tempDir,
+      [
+        {
+          assertArgs: ["api", "repos/owner/repo/issues/42/sub_issues"],
+          stdout: subIssuePayload([
+            { id: 1001, number: 10, title: "A", state: "open" },
+            { id: 1002, number: 11, title: "B", state: "open" },
+            { id: 1003, number: 12, title: "C", state: "open" },
+          ]),
+        },
+        {
+          assertArgs: [
+            "api",
+            "-i",
+            "-X",
+            "PATCH",
+            "repos/owner/repo/issues/42/sub_issues/priority",
+            "-F",
+            "sub_issue_id=1002",
+            "-F",
+            "before_id=1001",
+          ],
+          stdout: "",
+        },
+        {
+          assertArgs: [
+            "api",
+            "-i",
+            "-X",
+            "PATCH",
+            "repos/owner/repo/issues/42/sub_issues/priority",
+            "-F",
+            "sub_issue_id=1001",
+            "-F",
+            "after_id=1002",
+          ],
+          stdout: "",
+        },
+        {
+          assertArgs: [
+            "api",
+            "-i",
+            "-X",
+            "PATCH",
+            "repos/owner/repo/issues/42/sub_issues/priority",
+            "-F",
+            "sub_issue_id=1003",
+            "-F",
+            "after_id=1001",
+          ],
+          stdout: "",
+        },
+      ],
+      { logCalls: true },
+    );
+
+    const result = await runNode(
+      ["reorder", "--repo", "owner/repo", "--issue", "42", "--order", "11,10,12"],
+      { env },
+    );
+
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(parsed.order, [11, 10, 12]);
+
+    // AC2: no PATCH call ever sends after_id=0.
+    const calls = await readGhLog(ghLogPath);
+    assertNoAfterIdZero(calls);
+    assert.equal(calls.length, 4); // 1 list + 3 PATCH
+
+    // AC3: verify confirms the resulting order matches the requested order.
+    const verifyEnv = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/42/sub_issues"],
+        stdout: subIssuePayload([
+          { id: 1002, number: 11, title: "B", state: "open" },
+          { id: 1001, number: 10, title: "A", state: "open" },
+          { id: 1003, number: 12, title: "C", state: "open" },
+        ]),
+      },
+    ]);
+    const verifyResult = await runNode(
+      ["verify", "--repo", "owner/repo", "--issue", "42", "--expected", "11,10,12", "--ordered"],
+      { env: verifyEnv },
+    );
+    const verifyParsed = JSON.parse(verifyResult.stdout);
+    assert.equal(verifyParsed.verified, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("manage-sub-issues reorder surfaces HTTP status and endpoint when PATCH returns an empty error body", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-manage-sub-issues-reorder-500-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/42/sub_issues"],
+        stdout: subIssuePayload([
+          { id: 1001, number: 10, title: "A", state: "open" },
+          { id: 1002, number: 11, title: "B", state: "open" },
+        ]),
+      },
+      {
+        assertArgs: ["api", "-i", "-X", "PATCH", "repos/owner/repo/issues/42/sub_issues/priority"],
+        // Simulates GitHub's real empty-body 500 for an invalid priority request:
+        // gh still writes the response status line (via -i) to stdout, but the
+        // (empty) body decode failure is all it can put on stderr.
+        stdout: "HTTP/2.0 500 Internal Server Error\ncontent-type: application/json; charset=utf-8\n\n",
+        stderr: "unexpected end of JSON input\n",
+        exitCode: 1,
+      },
+    ]);
+
+    const result = await runNode(
+      ["reorder", "--repo", "owner/repo", "--issue", "42", "--order", "11,10"],
+      { env },
+    );
+
+    assert.equal(result.code, 1);
+    const parsed = JSON.parse(result.stderr);
+    assert.equal(parsed.ok, false);
+    assert.match(parsed.error, /HTTP 500/);
+    assert.match(parsed.error, /repos\/owner\/repo\/issues\/42\/sub_issues\/priority/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
