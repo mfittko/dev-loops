@@ -47,10 +47,11 @@ const GateConfig = z.strictObject({
     .default(["must-fix"]),
   dynamicAngles: z.boolean().default(false),
   // Additive counterpart to the subtractive dynamicAngles path (#1048): when
-  // true, the context-builder may also ADD catalog angles (gates.anglePool or
-  // the built-in persona registry) that change-category heuristics recommend
-  // but that are not already in this gate's configured pool. Default false
-  // preserves today's subtractive-only behavior exactly.
+  // true, the context-builder may also ADD catalog angles — from
+  // resolveAnglePool() (gates.anglePool, or else the union of the persona
+  // registry and this config's own configured angles) — that change-category
+  // heuristics recommend but that are not already in this gate's configured
+  // pool. Default false preserves today's subtractive-only behavior exactly.
   additiveAngles: z.boolean().default(false),
 });
 
@@ -1133,9 +1134,10 @@ export function resolveAnglePool(config) {
  * angle list (same as `resolveGateAngles`).
  *
  * When `additiveAngles` is also enabled (default off, see #1048), catalog
- * angles (`gates.anglePool` or the built-in persona registry) recommended by
- * change-category heuristics but absent from the gate's configured pool may
- * also be added; `excludeAngles` remains a hard ceiling on additions.
+ * angles from `resolveAnglePool()` (`gates.anglePool`, or else the union of
+ * the persona registry and this config's own configured angles) recommended
+ * by change-category heuristics but absent from the gate's configured pool
+ * may also be added; `excludeAngles` remains a hard ceiling on additions.
  *
  * @param {import("./types.js").DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
