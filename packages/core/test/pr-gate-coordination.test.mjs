@@ -567,13 +567,12 @@ test("interpretLoopState (handoff) and evaluatePrGateCoordination (coordination-
 // Full parity (#1103, #1126): at the cap WITH a significant post-convergence
 // change, both detectors reopen the Copilot cycle. The significance boolean is
 // computed by the SHARED detectPostConvergenceSignificantChange (scripts/loop/
-// _post-convergence-change.mjs) — exercised end-to-end from both consumers by
-// the handoff integration tests (doc-only stops / significant re-requests) and
-// detect's #1103 integration test. Here we assert the core decision each path
-// makes once that shared boolean is true: interpretLoopState resolves the
-// clean-fallback baseline that both scripts start from, and
-// evaluatePrGateCoordination (detect's path) offers the re-request; the handoff
-// script flips the same baseline to a re-request via the shared detector.
+// _post-convergence-change.mjs). This test covers the DETECT side (core level)
+// and the handoff BASELINE it flips from. The handoff FLIP itself (clean-fallback
+// → re-request/watch on a significant change, and staying stopped on a doc-only
+// change) is covered by the copilot-pr-handoff integration tests
+// "re-requests Copilot review at the cap when a significant post-convergence
+// change lands" / "stays at round_cap_clean_fallback ... doc-only".
 test("interpretLoopState (handoff baseline) and evaluatePrGateCoordination (detect) reopen the cycle at the cap WITH a significant post-convergence change (#1103, #1126)", () => {
   const refinementConfig = { maxCopilotRounds: 2 };
   const snapshot = {

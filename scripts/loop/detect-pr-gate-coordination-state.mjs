@@ -581,6 +581,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const roundCapCleanFallback = context.interpretation?.roundCapCleanEligible ?? false;
   const copilotReviewEverFormallyRequested = copilotReviewRequestStatus === "none"
     && guardBoundaries.has(result.gateBoundary)
+    // cap-0 disables the Copilot gate, so shouldGuardCopilotReviewRequest always
+    // returns false here — skip the timeline fetch it would never need (#1126).
+    // (Restores the suppression the roundCapReached predicate swap dropped.)
+    && maxCopilotRounds !== 0
     && !(roundCapReached
       && (sameHeadCleanConverged || roundCapCleanFallback)
       && !postConvergenceSignificantChange)

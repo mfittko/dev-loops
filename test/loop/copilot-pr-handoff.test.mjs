@@ -1378,6 +1378,97 @@ test("copilot-pr-handoff re-requests Copilot review at the cap when a significan
   }
 });
 
+// #1126 fail-closed (integration): if the shared detector's gh compare exits
+// non-zero at the cap, significance is unknown → no re-request; clean fallback holds.
+test("copilot-pr-handoff stays at round_cap_clean_fallback when the compare call fails (fail closed)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-round-cap-compare-fail-"));
+
+  try {
+    const { env } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({
+          isDraft: false, state: "OPEN", number: 17, headRefOid: "newsha",
+          reviews: CAP_REVIEWS,
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+        }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
+        stdout: JSON.stringify({ headRefOid: "newsha", reviews: CAP_REVIEWS, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n",
+      },
+      // compare fails → detector returns false → no reopen
+      { assertArgs: ["api", "repos/owner/repo/compare/oldsha-5...newsha"], stdout: "", stderr: "boom", exitCode: 1 },
+    ], { matchMode: "claims" });
+    env.DEVLOOPS_RUN_ID = "";
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.action, "stop");
+    assert.equal(output.state, "round_cap_clean_fallback");
+    assert.equal(output.roundCapCleanEligible, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1126 (integration): when Copilot's latest review is already on the current
+// head (no new commits since), the same-head guard short-circuits before any
+// compare — clean fallback holds, no re-request.
+test("copilot-pr-handoff stays at round_cap_clean_fallback when the last reviewed head equals the current head", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-round-cap-samehead-"));
+
+  // Five completed rounds; the latest submitted review is on the CURRENT head "newsha".
+  const sameHeadReviews = [1, 2, 3, 4].map((n) => ({
+    id: `r-${n}`, author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+    submittedAt: `2026-06-02T0${n}:00:00Z`, commit: { oid: `oldsha-${n}` },
+  })).concat([{
+    id: "r-5", author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+    submittedAt: "2026-06-02T12:00:00Z", commit: { oid: "newsha" },
+  }]);
+
+  try {
+    const { env } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({
+          isDraft: false, state: "OPEN", number: 17, headRefOid: "newsha",
+          reviews: sameHeadReviews,
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+        }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
+        stdout: JSON.stringify({ headRefOid: "newsha", reviews: sameHeadReviews, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n",
+      },
+      // NOTE: no compare entry — the same-head guard returns before any compare call.
+    ], { matchMode: "claims" });
+    env.DEVLOOPS_RUN_ID = "";
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.action, "stop");
+    assert.equal(output.state, "round_cap_clean_fallback");
+    assert.equal(output.roundCapCleanEligible, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Handoff: unresolved feedback → fix
 // ---------------------------------------------------------------------------

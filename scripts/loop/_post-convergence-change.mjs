@@ -60,6 +60,11 @@ export async function detectPostConvergenceSignificantChange(
   if (!Array.isArray(changedFiles) || changedFiles.length === 0) {
     return false;
   }
+  if (!currentHeadSha) {
+    // No usable current head → the compare call would be doomed; fail closed
+    // without issuing a wasted gh API request.
+    return false;
+  }
   const lastReviewedHeadSha = getLatestSubmittedCopilotReviewHeadSha(reviews);
   if (!lastReviewedHeadSha || lastReviewedHeadSha === currentHeadSha) {
     return false;
