@@ -134,8 +134,9 @@ test("local-implementation skill documents the auto-scoped rendered-artifact UI 
 
 
 test("CI gates the Playwright WebKit smoke behind inspect-run viewer change detection and uses Node24-ready first-party actions", async () => {
-  const [ciWorkflow, readme] = await Promise.all([
+  const [ciWorkflow, playwrightWebkitAction, readme] = await Promise.all([
     readRepo(".github/workflows/ci.yml"),
+    readRepo(".github/actions/playwright-webkit/action.yml"),
     readRepo("README.md"),
   ]);
 
@@ -145,17 +146,21 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(ciWorkflow, /fetch-depth:\s*0/i);
   assert.match(ciWorkflow, /actions\/checkout@v5/i);
   assert.match(ciWorkflow, /actions\/setup-node@v5/i);
-  assert.match(ciWorkflow, /actions\/cache@v5/i);
   assert.match(ciWorkflow, /changes:[\s\S]*Set up Node\.js[\s\S]*node-version:\s*24/i);
   assert.match(ciWorkflow, /GITHUB_OUTPUT="\$GITHUB_OUTPUT" node scripts\/loop\/inspect-run-viewer-ci-changes\.mjs \.inspect-run-viewer-changed-files\.txt/i);
   assert.doesNotMatch(ciWorkflow, /inspect_run_viewer_relevant_paths_json/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*needs:[\s\S]*- changes/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*if:\s*needs\.changes\.outputs\.inspect_run_viewer\s*==\s*'true'/i);
-  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*path:\s*\$\{\{\s*env\.PLAYWRIGHT_BROWSERS_PATH\s*\}\}/i);
-  assert.match(ciWorkflow, /PLAYWRIGHT_BROWSERS_PATH:\s*\$\{\{\s*github\.workspace\s*\}\}\/\.cache\/ms-playwright/i);
-  assert.match(ciWorkflow, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('package-lock\.json'\)\s*\}\}/i);
+  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*npm run test:playwright:viewer/i);
   assert.match(ciWorkflow, /verify:[\s\S]*npm run verify/i);
+
+  // Shared Playwright WebKit setup lives in the composite action; assert its
+  // cache/env wiring stayed intact after the dedup (issue #1058).
+  assert.match(playwrightWebkitAction, /actions\/cache@v5/i);
+  assert.match(playwrightWebkitAction, /path:\s*\$\{\{\s*env\.PLAYWRIGHT_BROWSERS_PATH\s*\}\}/i);
+  assert.match(playwrightWebkitAction, /PLAYWRIGHT_BROWSERS_PATH=\$\{\{\s*github\.workspace\s*\}\}\/\.cache\/ms-playwright/i);
+  assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('package-lock\.json'\)\s*\}\}/i);
 
   assert.match(readme, /workspace-local Playwright WebKit/i);
   assert.match(readme, /small changed-files gate plus parallel `verify` and conditional `viewer-smoke` jobs/i);

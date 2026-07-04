@@ -95,29 +95,13 @@ jobs:
       - changes
     if: needs.changes.outputs.inspect_run_viewer == 'true'
     runs-on: ubuntu-latest
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-
-      - name: Install workspace dependencies
-        run: npm ci
-
-      - name: Restore Playwright WebKit runtime cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
-          key: ${{ runner.os }}-playwright-webkit-${{ hashFiles('package-lock.json') }}
-
-      - name: Install Playwright WebKit runtime
-        run: npx playwright install --with-deps webkit
+      - name: Set up Playwright WebKit
+        uses: ./.github/actions/playwright-webkit
 
       - name: Run inspect-run viewer WebKit smoke
         run: npm run test:playwright:viewer
@@ -127,29 +111,13 @@ jobs:
       - changes
     if: needs.changes.outputs.presentations == 'true'
     runs-on: ubuntu-latest
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-
-      - name: Install workspace dependencies
-        run: npm ci
-
-      - name: Restore Playwright WebKit runtime cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
-          key: ${{ runner.os }}-playwright-webkit-${{ hashFiles('package-lock.json') }}
-
-      - name: Install Playwright WebKit runtime
-        run: npx playwright install --with-deps webkit
+      - name: Set up Playwright WebKit
+        uses: ./.github/actions/playwright-webkit
 
       - name: Run presentation deck fit smoke (WebKit)
         run: |
@@ -161,29 +129,13 @@ jobs:
       - changes
     if: needs.changes.outputs.articles == 'true'
     runs-on: ubuntu-latest
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-
-      - name: Install workspace dependencies
-        run: npm ci
-
-      - name: Restore Playwright WebKit runtime cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
-          key: ${{ runner.os }}-playwright-webkit-${{ hashFiles('package-lock.json') }}
-
-      - name: Install Playwright WebKit runtime
-        run: npx playwright install --with-deps webkit
+      - name: Set up Playwright WebKit
+        uses: ./.github/actions/playwright-webkit
 
       - name: Run article fit smoke (WebKit)
         run: |
