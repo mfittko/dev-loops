@@ -3,6 +3,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { syncBoardStatus } from "@dev-loops/core/loop/queue-board-sync";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: dev-loops queue sync-status --repo <owner/name> --item <number> --to-column <name>
        (dev-loops project sync-status … is a back-compat alias)
@@ -26,9 +27,12 @@ Output (stdout):
     { ok: true, skipped: false, result: { item: { newColumn } } }
     { ok: true, skipped: true, reason: "board not configured" }
 
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0 — always on a parsed command (best-effort sync; skips/failures are reported in JSON)
   1 — usage or argument error
+  2 — invalid --jq filter
 `.trim();
 
 function parseCliArgs(argv) {
@@ -48,6 +52,7 @@ function parseCliArgs(argv) {
       item: { type: "string" },
       "to-column": { type: "string" },
       help: { type: "boolean", short: "h" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -77,8 +82,10 @@ function parseCliArgs(argv) {
       case "to-column":
         args.toColumn = requireValue(token, "--to-column requires a value", "INVALID_COLUMN");
         break;
-      default:
+      default: {
+        if (matchJqOutputToken(token, args, (t) => requireValue(t, "--jq requires a filter", "INVALID_ARGS"))) break;
         throw Object.assign(new Error(`Unknown flag: ${token.rawName}`), { code: "INVALID_ARGS", usage: USAGE });
+      }
     }
   }
   return args;
@@ -174,17 +181,15 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
       return;
     }
     // Defensive: any unexpected error stays best-effort/non-fatal — report it
-    // as a skip and keep exit 0 so it never blocks the PR/merge caller.
-    stdout.write(JSON.stringify({ ok: true, skipped: true, reason: err.message ?? "board sync failed" }) + "\n");
-    // Explicitly assert success: a pre-existing non-zero process.exitCode from a
-    // long-lived caller must not leak through this best-effort path.
-    process.exitCode = 0;
+    // as a skip and keep exit 0 (ok:true) so it never blocks the PR/merge caller,
+    // unless --jq/--silent turns a filter/predicate into a non-zero exit — same
+    // shared contract as the normal result path below.
+    process.exitCode = emitResult({ ok: true, skipped: true, reason: err.message ?? "board sync failed" }, { jq: args.jq, silent: args.silent, stdout, stderr });
     return;
   }
-  stdout.write(JSON.stringify(result) + "\n");
-  // Best-effort contract: a parsed command always reports success. Explicitly
-  // clear any pre-existing non-zero process.exitCode so it cannot leak.
-  process.exitCode = 0;
+  // Best-effort contract: result.ok is always true, so without --jq/--silent this
+  // always exits 0. An invalid --jq filter still fails closed (exit 2).
+  process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {

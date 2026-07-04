@@ -12,6 +12,7 @@ import {
   replyAndMaybeResolve,
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] [--message <text>] [--resolve]
 Reply to all matching unresolved review threads on one PR and optionally resolve them.
 Required:
@@ -30,9 +31,11 @@ Error output (stderr, JSON):
     { "ok": false, "error": "...", "usage": "..." }
   Runtime/gh failures:
     { "ok": false, "error": "...", "partialProgress"?: { ... } }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or gh/runtime failure`.trim();
+  1  Argument error or gh/runtime failure
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 export function parseReplyResolveThreadsCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -44,6 +47,7 @@ export function parseReplyResolveThreadsCliArgs(argv) {
       author: { type: "string" },
       message: { type: "string" },
       resolve: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -88,6 +92,7 @@ export function parseReplyResolveThreadsCliArgs(argv) {
       options.resolve = true;
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
@@ -297,6 +302,7 @@ export async function runCli(
   {
     stdin = process.stdin,
     stdout = process.stdout,
+    stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
   } = {},
@@ -314,7 +320,7 @@ export async function runCli(
   );
   const { matchedTargets, skippedThreadCount } = planBatchReplyTargets(parsed, options.author);
   if (matchedTargets.length === 0) {
-    stdout.write(`${JSON.stringify(createSuccessPayload({
+    process.exitCode = emitResult(createSuccessPayload({
       repo: options.repo,
       pr: options.pr,
       author: options.author,
@@ -324,7 +330,7 @@ export async function runCli(
       resolvedThreadCount: 0,
       skippedThreadCount,
       results: [],
-    }))}\n`);
+    }), { jq: options.jq, silent: options.silent, stdout, stderr });
     return;
   }
   const results = [];
@@ -384,7 +390,7 @@ export async function runCli(
   }
   const repliedThreadCount = results.length;
   const resolvedThreadCount = results.filter((entry) => entry.resolved).length;
-  stdout.write(`${JSON.stringify(createSuccessPayload({
+  process.exitCode = emitResult(createSuccessPayload({
     repo: options.repo,
     pr: options.pr,
     author: options.author,
@@ -394,7 +400,7 @@ export async function runCli(
     resolvedThreadCount,
     skippedThreadCount,
     results,
-  }))}\n`);
+  }), { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

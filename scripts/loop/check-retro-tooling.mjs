@@ -54,6 +54,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
 
@@ -65,10 +66,13 @@ Options:
   --transcript <path>   File of newline-delimited commands (default: read stdin)
   --json                Emit machine-readable JSON (default: human summary)
 
+${JQ_OUTPUT_USAGE}
+(--jq/--silent only apply together with --json; the default text output is unaffected.)
+
 Exit codes:
   0  No violations
   1  One or more violations found
-  2  Argument/runtime error`;
+  2  Argument/runtime error, or invalid --jq filter`;
 
 /**
  * Write-ops that currently have no internal dev-loops wrapper. Recorded
@@ -194,6 +198,7 @@ function parseCliArgs(argv) {
         transcript: { type: "string" },
         json: { type: "boolean" },
         help: { type: "boolean", short: "h" },
+        ...JQ_OUTPUT_PARSE_OPTIONS,
       },
       strict: true,
       allowPositionals: false,
@@ -225,8 +230,10 @@ async function run(argv, { stdout, stderr }) {
   const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript(transcript);
 
   if (values.json) {
-    stdout.write(`${JSON.stringify({ ok: internalToolingOnly, internalToolingOnly, rawCallViolations: violations, allowedWriteOps })}\n`);
-  } else if (internalToolingOnly) {
+    const payload = { ok: internalToolingOnly, internalToolingOnly, rawCallViolations: violations, allowedWriteOps };
+    return emitResult(payload, { jq: values.jq, silent: values.silent, stdout, stderr });
+  }
+  if (internalToolingOnly) {
     stdout.write(`internalToolingOnly: true — no agent-level raw gh/python/node -e calls found.\n`);
     if (allowedWriteOps.length > 0) {
       stdout.write(`Allowed write-ops (no wrapper yet): ${allowedWriteOps.length}\n`);

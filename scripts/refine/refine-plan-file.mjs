@@ -13,6 +13,7 @@ import {
 } from "@dev-loops/core/loop/plan-file-refine-contract";
 import { PLAN_FILE_REFINEMENT_SECTIONS } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { classifyDocsGrillFinding } from "../loop/docs-grill-contract.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   refine-plan-file.mjs --plan-file <path> --payload <path> [--json]
@@ -31,9 +32,14 @@ Required:
 Optional:
   --json              Machine-readable JSON output
   --help              Show this help
+
+${JQ_OUTPUT_USAGE}
+(--jq/--silent only apply together with --json; the default text output is unaffected.)
+
 Exit codes:
   0  Refinement succeeded; plan written in place; stop for local human review
-  1  Argument error, or fail-closed refine/grill/ambiguous state (no write)`.trim();
+  1  Argument error, or fail-closed refine/grill/ambiguous state (no write)
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -45,6 +51,7 @@ export function parseRefinePlanFileCliArgs(argv) {
       "plan-file": { type: "string" },
       payload: { type: "string" },
       json: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -72,6 +79,7 @@ export function parseRefinePlanFileCliArgs(argv) {
       options.json = true;
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (typeof options.planFile !== "string" || options.planFile.trim().length === 0) {
@@ -123,11 +131,12 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   if (!result.ok) {
     // Fail closed: surface the reason, do not write, do not advance, do not promote.
     if (options.json) {
-      stdout.write(`${JSON.stringify({ ok: false, reason: result.reason, planFileIntakeState: result.planFileIntakeState ?? null })}\n`);
+      const failurePayload = { ok: false, reason: result.reason, planFileIntakeState: result.planFileIntakeState ?? null };
+      process.exitCode = emitResult(failurePayload, { jq: options.jq, silent: options.silent, stdout });
     } else {
       stdout.write(`refine-plan-file: FAIL (${result.reason})\n`);
+      process.exitCode = 1;
     }
-    process.exitCode = 1;
     return result;
   }
 
@@ -142,7 +151,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     grillDispositions: result.grillDispositions,
   };
   if (options.json) {
-    stdout.write(`${JSON.stringify(summary)}\n`);
+    process.exitCode = emitResult(summary, { jq: options.jq, silent: options.silent, stdout });
   } else {
     stdout.write(
       [

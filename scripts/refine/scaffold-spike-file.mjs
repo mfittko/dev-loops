@@ -14,7 +14,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { SPIKE_FILE_EXPLORATION_SECTIONS } from "./validate-spike-file.mjs";
 
 // Placeholder bodies the operator fills in during the spike. Non-empty so the
@@ -113,14 +113,10 @@ function parseCliArgs(argv) {
       case "out":
         args.out = requireValue(token, "--out requires a value (path)");
         break;
-      case "jq":
-        args.jq = requireValue(token, "--jq requires a filter");
-        break;
-      case "silent":
-        args.silent = true;
-        break;
-      default:
+      default: {
+        if (matchJqOutputToken(token, args, (t) => requireValue(t, "--jq requires a filter"))) break;
         throw parseError(`Unknown flag: ${token.rawName}`);
+      }
     }
   }
   return args;

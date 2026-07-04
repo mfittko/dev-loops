@@ -4,7 +4,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: comment-issue.mjs --repo <owner/name> --issue <number> (--body <text> | --body-file <path>)
 Post a comment on a GitHub issue. Thin wrapper over \`gh issue comment\` — use this
@@ -82,14 +82,7 @@ export function parseCommentIssueCliArgs(argv) {
       options.bodyFile = rawPath;
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.issue === undefined) {

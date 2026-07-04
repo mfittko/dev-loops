@@ -6,6 +6,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: detect-internal-only-pr.mjs --repo <owner/name> --pr <number> [--config <path>]
 Detect whether a PR only touches internal tooling files (scripts, docs, tests, config)
@@ -20,9 +21,11 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "internalOnly": true|false, "files": ["path1", "path2", ...],
     "reason": "...", "repo": "...", "pr": N }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or gh failure`.trim();
+  1  Argument error or gh failure
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -134,6 +137,7 @@ export function parseCliArgs(argv) {
       pr: { type: "string" },
       config: { type: "string" },
       "label-check": { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -166,6 +170,7 @@ export function parseCliArgs(argv) {
       options.labelCheck = true;
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
@@ -265,6 +270,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
   } = {},
@@ -275,7 +281,7 @@ export async function runCli(
     return;
   }
   const result = await detectInternalOnly(options, { env, ghCommand });
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {

@@ -34,6 +34,7 @@ import {
 import { formatCliError } from "../_core-helpers.mjs";
 import { requireTokenValue as readSharedTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const SUBMIT_USAGE = `Usage:
   steer-loop.mjs submit --repo <owner/name> --pr <number>
     --kind stop_at_next_safe_gate --directive <text> --seq <n>
@@ -61,7 +62,9 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "acknowledgement": { ... }, "result": { ... }, "steeringState": { ... } }
 Error output (stderr, JSON):
-  { "ok": false, "error": "...", "usage": "..." }`.trim();
+  { "ok": false, "error": "...", "usage": "..." }
+
+${JQ_OUTPUT_USAGE}`.trim();
 const STATUS_USAGE = `Usage:
   steer-loop.mjs status --run-id <id> [--state-file <path>]
   steer-loop.mjs status --repo <owner/name> --pr <number> [--state-file <path>]
@@ -75,7 +78,9 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "status": { ... } }
 Error output (stderr, JSON):
-  { "ok": false, "error": "...", "usage": "..." }`.trim();
+  { "ok": false, "error": "...", "usage": "..." }
+
+${JQ_OUTPUT_USAGE}`.trim();
 const PROMOTE_USAGE = `Usage:
   steer-loop.mjs promote --run-id <id> --loop-state <state> [--state-file <path>]
   steer-loop.mjs promote --repo <owner/name> --pr <number>
@@ -93,7 +98,9 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "promotedCount": <n>, "promoted": [ ... ], "steeringState": { ... } }
 Error output (stderr, JSON):
-  { "ok": false, "error": "...", "usage": "..." }`.trim();
+  { "ok": false, "error": "...", "usage": "..." }
+
+${JQ_OUTPUT_USAGE}`.trim();
 const TOP_USAGE = `Usage:
   steer-loop.mjs <subcommand> [options]
 Subcommands:
@@ -171,6 +178,7 @@ export function parseSubmitCliArgs(argv) {
       "event-id": { type: "string" },
       "copilot-input": { type: "string" },
       "reviewer-input": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -250,6 +258,7 @@ export function parseSubmitCliArgs(argv) {
       options.reviewerInputPath = readRequiredOptionValue(token, SUBMIT_USAGE);
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => readRequiredOptionValue(t, SUBMIT_USAGE))) continue;
     throw usageError(`Unknown argument: ${token.rawName}`, SUBMIT_USAGE);
   }
   if (!options.help) {
@@ -290,6 +299,7 @@ export function parseStatusCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       "state-file": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -324,6 +334,7 @@ export function parseStatusCliArgs(argv) {
       options.stateFile = readRequiredOptionValue(token, STATUS_USAGE);
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => readRequiredOptionValue(t, STATUS_USAGE))) continue;
     throw usageError(`Unknown argument: ${token.rawName}`, STATUS_USAGE);
   }
   if (!options.help) {
@@ -357,6 +368,7 @@ export function parsePromoteCliArgs(argv) {
       pr: { type: "string" },
       "state-file": { type: "string" },
       "loop-state": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -399,6 +411,7 @@ export function parsePromoteCliArgs(argv) {
       options.loopState = val;
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => readRequiredOptionValue(t, PROMOTE_USAGE))) continue;
     throw usageError(`Unknown argument: ${token.rawName}`, PROMOTE_USAGE);
   }
   if (!options.help) {
@@ -651,7 +664,7 @@ function rejectUnsteerableInspection(inspection, { runId, eventId, seq, directiv
 }
 export async function runSubmit(
   argv = [],
-  { stdout = process.stdout, cwd = process.cwd(), env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd(), env = process.env, ghCommand = "gh" } = {},
 ) {
   const options = parseSubmitCliArgs(argv);
   if (options.help) {
@@ -793,12 +806,12 @@ export async function runSubmit(
     } catch {
       steeringState = createSteeringState(runId, target);
     }
-    stdout.write(`${JSON.stringify({
+    process.exitCode = emitResult({
       ok: true,
       acknowledgement: validationRejection.acknowledgement,
       result: validationRejection.result,
       steeringState,
-    })}\n`);
+    }, { jq: options.jq, silent: options.silent, stdout, stderr });
     return;
   }
   const { steeringState: newState, result } = await withStateFileLock(stateFilePath, async () => {
@@ -828,9 +841,9 @@ export async function runSubmit(
     safePointCategory,
     readbackPath,
   });
-  stdout.write(`${JSON.stringify({ ok: true, acknowledgement, result, steeringState: newState })}\n`);
+  process.exitCode = emitResult({ ok: true, acknowledgement, result, steeringState: newState }, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
-export async function runStatus(argv = [], { stdout = process.stdout, cwd = process.cwd() } = {}) {
+export async function runStatus(argv = [], { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd() } = {}) {
   const options = parseStatusCliArgs(argv);
   if (options.help) {
     stdout.write(`${STATUS_USAGE}\n`);
@@ -843,9 +856,9 @@ export async function runStatus(argv = [], { stdout = process.stdout, cwd = proc
   const stateFilePath = options.stateFile ?? (target ? defaultStateFilePathForTarget(target, cwd) : defaultStateFilePath(runId, cwd));
   const steeringState = await loadOrCreateSteeringState(stateFilePath, runId, target);
   const status = getSteeringStatus(steeringState);
-  stdout.write(`${JSON.stringify({ ok: true, status })}\n`);
+  process.exitCode = emitResult({ ok: true, status }, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
-export async function runPromote(argv = [], { stdout = process.stdout, cwd = process.cwd() } = {}) {
+export async function runPromote(argv = [], { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd() } = {}) {
   const options = parsePromoteCliArgs(argv);
   if (options.help) {
     stdout.write(`${PROMOTE_USAGE}\n`);
@@ -864,16 +877,16 @@ export async function runPromote(argv = [], { stdout = process.stdout, cwd = pro
     }
     return nextState;
   });
-  stdout.write(`${JSON.stringify({
+  process.exitCode = emitResult({
     ok: true,
     promotedCount: promotedState.promoted.length,
     promoted: promotedState.promoted,
     steeringState: promotedState.steeringState,
-  })}\n`);
+  }, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, cwd = process.cwd(), env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd(), env = process.env, ghCommand = "gh" } = {},
 ) {
   const [subcommand, ...rest] = argv;
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
@@ -881,13 +894,13 @@ export async function runCli(
     return;
   }
   if (subcommand === "submit") {
-    return runSubmit(rest, { stdout, cwd, env, ghCommand });
+    return runSubmit(rest, { stdout, stderr, cwd, env, ghCommand });
   }
   if (subcommand === "promote") {
-    return runPromote(rest, { stdout, cwd });
+    return runPromote(rest, { stdout, stderr, cwd });
   }
   if (subcommand === "status") {
-    return runStatus(rest, { stdout, cwd });
+    return runStatus(rest, { stdout, stderr, cwd });
   }
   const error = usageError(`Unknown subcommand: ${subcommand}`, TOP_USAGE);
   throw error;

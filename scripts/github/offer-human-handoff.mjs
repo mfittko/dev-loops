@@ -4,6 +4,7 @@ import { parsePrNumber, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { resolveHandoffCandidates } from "./resolve-handoff-candidates.mjs";
+import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: offer-human-handoff.mjs --repo <owner/name> --pr <number> [--assign <login>...] [--request-review <login>...] [--changed-files <csv>] [--pr-author <login>]
 Human-handoff offer at the pre-approval / merge-handoff boundary (#920, Request B
@@ -28,9 +29,11 @@ Optional:
 Output (stdout, JSON):
   Offer mode:  { "ok": true, "mode": "offer", "enabled", "candidates": [...], ... }
   Apply mode:  { "ok": true, "mode": "apply", "assigned": [...], "requestedReview": [...] }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (including disabled no-op offer)
-  1  Argument error or gh failure`.trim();
+  1  Argument error or gh failure
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -70,6 +73,8 @@ export function parseOfferCliArgs(argv) {
       continue;
     }
     if (token === "--pr-author") { options.prAuthor = nextValue(args, ++i, "--pr-author").trim().replace(/^@/, ""); continue; }
+    if (token === "--jq") { options.jq = nextValue(args, ++i, "--jq"); continue; }
+    if (token === "--silent" || token === "-s") { options.silent = true; continue; }
     throw parseError(`Unknown argument: ${token}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
@@ -123,8 +128,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         { repo: options.repo, pr: options.pr, assign: options.assign, requestReview: options.requestReview },
         { run, ghCommand },
       );
-      process.stdout.write(`${JSON.stringify(applied)}\n`);
-      return 0;
+      return emitResult(applied, { jq: options.jq, silent: options.silent });
     } catch (error) {
       process.stderr.write(`${formatCliError(error)}\n`);
       return 1;
@@ -138,8 +142,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     { repo: options.repo, pr: options.pr, changedFiles: options.changedFiles, prAuthor: options.prAuthor ?? null },
     { ...deps, config, repoRoot, run, ghCommand },
   );
-  process.stdout.write(`${JSON.stringify({ ...offer, mode: "offer" })}\n`);
-  return 0;
+  return emitResult({ ...offer, mode: "offer" }, { jq: options.jq, silent: options.silent });
 }
 
 if (isDirectCliRun(import.meta.url)) {

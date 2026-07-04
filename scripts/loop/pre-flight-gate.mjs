@@ -12,6 +12,7 @@ import {
   isListedWorktree,
   detectSubagentAvailability,
 } from "@dev-loops/core/loop/worktree-guard";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const DEVLOOPS_PREFLIGHT_BYPASS_VAR = "DEVLOOPS_PREFLIGHT_BYPASS";
 const USAGE = `Usage:
   pre-flight-gate.mjs [--expected-branch <name>] [--check-subagents]
@@ -28,7 +29,9 @@ Violation output (stderr, JSON, exit 1):
   { "ok": false, "error": "<error_code>", "checks": { ... },
     "guidance": "<actionable instruction for the agent>" }
 Bypass:
-  DEVLOOPS_PREFLIGHT_BYPASS=1   Skip all checks (for development/testing only).`.trim();
+  DEVLOOPS_PREFLIGHT_BYPASS=1   Skip all checks (for development/testing only).
+
+${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
 export function parsePreFlightGateCliArgs(argv) {
   const options = {
@@ -42,6 +45,7 @@ export function parsePreFlightGateCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       "expected-branch": { type: "string" },
       "check-subagents": { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -66,6 +70,7 @@ export function parsePreFlightGateCliArgs(argv) {
       options.checkSubagents = true;
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   return options;
@@ -189,7 +194,7 @@ export async function runCli(
       checks: { worktree: true, branch: "skipped", subagents: "skipped" },
       summary: "pre-flight gate bypassed via DEVLOOPS_PREFLIGHT_BYPASS=1",
     };
-    stdout.write(`${JSON.stringify(payload)}\n`);
+    process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, stdout, stderr });
     return payload;
   }
   const checks = { worktree: false, branch: "skipped", subagents: "skipped" };
@@ -230,7 +235,7 @@ export async function runCli(
       guidance: errors.map((e) => e.guidance).join("\n\n"),
       errors,
     };
-    stderr.write(`${JSON.stringify(payload)}\n`);
+    process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });
     return payload;
   }
   const payload = {
@@ -238,16 +243,11 @@ export async function runCli(
     checks,
     summary: "all checks passed",
   };
-  stdout.write(`${JSON.stringify(payload)}\n`);
+  process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, stdout, stderr });
   return payload;
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli()
-    .then((result) => {
-      if (result?.ok === false) {
-        process.exitCode = 1;
-      }
-    })
     .catch((error) => {
       process.stderr.write(`${formatCliError(error)}\n`);
       process.exitCode = 1;

@@ -21,6 +21,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath, WORKTREE_NAMESPACE } from "@dev-loops/core/loop/handoff-envelope";
 import { canonicalize } from "./_worktree-path.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p>)
@@ -37,7 +38,9 @@ Optional:
 Output (stdout, JSON):
   { "ok": bool, "removed": <path>|null, "reason": "<why>" }
   ok is true on success/skip (incl. fail-soft git errors); false ONLY when the
-  path is refused for being outside ${WORKTREE_NAMESPACE}/ (removed: null).`.trim();
+  path is refused for being outside ${WORKTREE_NAMESPACE}/ (removed: null).
+
+${JQ_OUTPUT_USAGE}`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -57,6 +60,7 @@ export function parseCleanupWorktreeCliArgs(argv) {
       issue: { type: "string" },
       pr: { type: "string" },
       path: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -85,6 +89,7 @@ export function parseCleanupWorktreeCliArgs(argv) {
       options.path = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.help) return options;
@@ -155,14 +160,18 @@ export function cleanupWorktree({ repoRoot, issue, pr, path: explicitPath }, { g
   return { ok: true, removed: target, reason: "removed" };
 }
 
-export function runCli(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
+export function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   const options = parseCleanupWorktreeCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
     return;
   }
   const result = cleanupWorktree(options);
-  stdout.write(`${JSON.stringify(result)}\n`);
+  // FAIL-SOFT contract (see file header): a parsed command always exits 0 on the
+  // non-jq path, even when `ok:false` (path refused) — it must never break a
+  // merge-completion caller. Force ok:true here so the default path keeps that
+  // contract; --jq/--silent can still read the real `ok` field explicitly.
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: true });
 }
 
 if (isDirectCliRun(import.meta.url)) {

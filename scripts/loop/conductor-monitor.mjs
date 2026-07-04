@@ -15,6 +15,7 @@ import {
 import { interpretLoopState, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { listOpenPrs } from "./_loop-pr-aggregation.mjs";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: conductor-monitor.mjs --repo <owner/name> [--auto-resume]
 Aggregate Copilot-loop status across all open PRs in one repo.
 Required:
@@ -78,9 +79,11 @@ Error output (stderr, JSON):
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
     { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error, gh failure, or indeterminate PR status`.trim();
+  1  Argument error, gh failure, or indeterminate PR status
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 const DEFAULT_SESSION_ROOT = path.join(os.homedir(), ".pi", "agent", "sessions");
 const RUN_STATE = {
@@ -125,6 +128,7 @@ function parseCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       "auto-resume": { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -149,6 +153,7 @@ function parseCliArgs(argv) {
       options.autoResume = true;
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined) {
@@ -1796,7 +1801,7 @@ export async function runConductorMonitor(
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, env = process.env, ghCommand = "gh", cwd = process.cwd() } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", cwd = process.cwd() } = {},
 ) {
   const options = parseCliArgs(argv);
   if (options.help) {
@@ -1808,7 +1813,7 @@ export async function runCli(
     ghCommand,
     repoRoot: cwd,
   });
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

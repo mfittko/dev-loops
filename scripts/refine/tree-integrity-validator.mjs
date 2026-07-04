@@ -199,7 +199,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   }
   const tree = await loadTreeFromInput(options.input);
   const result = runTreeIntegrityValidator(tree);
-  writeCheckerOutput(result, { stdout, json: options.json });
+  process.exitCode = writeCheckerOutput(result, { stdout, json: options.json, jq: options.jq, silent: options.silent });
   return result;
 }
 

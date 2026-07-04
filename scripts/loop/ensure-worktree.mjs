@@ -27,6 +27,7 @@ import { parseArgs } from "node:util";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
 import { provisionWorktree } from "./provision-worktree.mjs";
 import { canonicalize } from "./_worktree-path.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) [--branch <name>] [--base <ref>]
@@ -43,7 +44,9 @@ Optional:
   -h, --help        Show this help.
 Output (stdout, JSON):
   { "ok": true, "path": <p>, "created": bool, "reused": bool,
-    "provision": { "actions": [...], "summary": {...} } }`.trim();
+    "provision": { "actions": [...], "summary": {...} } }
+
+${JQ_OUTPUT_USAGE}`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -71,6 +74,7 @@ export function parseEnsureWorktreeCliArgs(argv) {
       pr: { type: "string" },
       branch: { type: "string" },
       base: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -103,6 +107,7 @@ export function parseEnsureWorktreeCliArgs(argv) {
       options.base = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.help) return options;
@@ -201,14 +206,14 @@ export async function ensureWorktree(
   return { ok: true, path: target, created: true, reused: false, provision: summary };
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   const options = parseEnsureWorktreeCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
     return;
   }
   const result = await ensureWorktree(options);
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {

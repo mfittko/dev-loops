@@ -15,6 +15,7 @@ import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
@@ -50,9 +51,11 @@ Error output (stderr, JSON):
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
     { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (including unavailable)
-  1  Argument error or gh failure`.trim();
+  1  Argument error or gh failure
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 export function parseRequestCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -62,6 +65,7 @@ export function parseRequestCliArgs(argv) {
       "force-rerequest-review": { type: "boolean" },
       repo: { type: "string" },
       pr: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -96,6 +100,7 @@ export function parseRequestCliArgs(argv) {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
@@ -609,6 +614,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
   } = {},
@@ -619,7 +625,7 @@ export async function runCli(
     return;
   }
   const result = await performCopilotReviewRequest(options, { env, ghCommand });
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

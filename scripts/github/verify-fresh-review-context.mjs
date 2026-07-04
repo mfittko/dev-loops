@@ -3,6 +3,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
+import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
 Verify that the current scoped-reviewer session has fresh context.
 
@@ -51,12 +52,13 @@ Output (stdout, JSON):
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
   On error (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Clean (first run)
   1  Refuse to review: contaminated (prior session detected), OR (with
      --context-path) the seeded gate-context artifact is missing or resolves
      outside the reviewer's working directory
-  2  Usage or internal error`.trim();
+  2  Usage or internal error, or invalid --jq filter`.trim();
 const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const parseError = buildParseError(USAGE);
 // Resolve a `--flag <value>` argument. Returns null when the flag is absent,
@@ -143,6 +145,20 @@ async function main(argv = process.argv.slice(2)) {
     )}\n`);
     return 2;
   }
+  const jqArg = resolveFlagValue(argv, "--jq");
+  if (jqArg === "") {
+    process.stderr.write(`${formatCliError(
+      parseError("Invalid --jq value: must be non-empty.")
+    )}\n`);
+    return 2;
+  }
+  const jq = jqArg === null ? undefined : jqArg;
+  const silent = argv.includes("--silent") || argv.includes("-s");
+  // Every branch below reports ok:true (the tool ran successfully); the
+  // fresh/contaminated verdict maps to the exit code via `ok` here so the
+  // shared --jq/--silent contract composes with the existing 0=fresh/1=refuse
+  // signal instead of always reading ok:true as success.
+  const finish = (payload, freshLike) => emitResult(payload, { jq, silent, ok: freshLike });
   const round = resolveHeadRound();
   if (contextPathArg !== null) {
     const cwd = process.cwd();
@@ -154,7 +170,7 @@ async function main(argv = process.argv.slice(2)) {
     const withinCwd =
       resolvedContextPath === cwd || resolvedContextPath.startsWith(cwd + path.sep);
     if (!withinCwd) {
-      process.stdout.write(JSON.stringify({
+      return finish({
         ok: true,
         fresh: false,
         sentinelCreated: false,
@@ -162,14 +178,13 @@ async function main(argv = process.argv.slice(2)) {
         gateContextPath: contextPathArg,
         gateContextPresent: false,
         reason: `Seeded gate-context artifact path "${contextPathArg}" resolves outside the reviewer's working directory — refusing. --context-path must be a cwd-relative path to the worktree-local bundle; an absolute or ..-escaping path could point at another (stale/isolated) worktree's bundle and defeat the worktree-locality guard.`,
-      }) + "\n");
-      return 1;
+      }, false);
     }
     try {
       await stat(resolvedContextPath);
     } catch (err) {
       if (err.code !== "ENOENT") throw err;
-      process.stdout.write(JSON.stringify({
+      return finish({
         ok: true,
         fresh: false,
         sentinelCreated: false,
@@ -177,8 +192,7 @@ async function main(argv = process.argv.slice(2)) {
         gateContextPath: contextPathArg,
         gateContextPresent: false,
         reason: `Seeded gate-context artifact missing at "${contextPathArg}" — refusing to review without the build-once neutral context bundle. Per-angle gate reviewers must run in the PR's actual worktree/head (never an isolated worktree checked out from stale main), which is where the context-builder preamble wrote this gitignored artifact.`,
-      }) + "\n");
-      return 1;
+      }, false);
     }
   }
   const sentinelPath = path.resolve(process.cwd(), sentinelRelative(scope, round));
@@ -190,14 +204,13 @@ async function main(argv = process.argv.slice(2)) {
   }
   const existing = await checkSentinelExists(scope, round);
   if (existing.exists) {
-    process.stdout.write(JSON.stringify({
+    return finish({
       ok: true,
       fresh: false,
       sentinelCreated: false,
       round: round ?? null,
       reason: `Checkpoint context sentinel already exists${existing.legacy ? " (legacy name)" : ""} — inherited session context detected. Restart the subagent with fresh context (subagent({context:\"fresh\"})).`,
-    }) + "\n");
-    return 1;
+    }, false);
   }
   const sentinel = {
     createdAt: new Date().toISOString(),
@@ -212,26 +225,24 @@ async function main(argv = process.argv.slice(2)) {
     });
   } catch (err) {
     if (err.code === "EEXIST") {
-      process.stdout.write(JSON.stringify({
+      return finish({
         ok: true,
         fresh: false,
         sentinelCreated: false,
         round: round ?? null,
         reason: "Checkpoint context sentinel already exists (detected on atomic create) — inherited session context detected. Restart the subagent with fresh context (subagent({context:\"fresh\"})).",
-      }) + "\n");
-      return 1;
+      }, false);
     }
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
-  process.stdout.write(JSON.stringify({
+  return finish({
     ok: true,
     fresh: true,
     sentinelCreated: true,
     round: round ?? null,
     ...(contextPathArg !== null ? { gateContextPath: contextPathArg, gateContextPresent: true } : {}),
-  }) + "\n");
-  return 0;
+  }, true);
 }
 if (isDirectCliRun(import.meta.url)) {
   try {

@@ -5,7 +5,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: edit-pr.mjs --repo <owner/name> --pr <number> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>]
 Edit PR title/body/assignees/milestone. Thin wrapper over \`gh pr edit\` — use this
@@ -138,14 +138,7 @@ export function parseEditPrCliArgs(argv) {
       options.milestone = token.value;
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {

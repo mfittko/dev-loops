@@ -7,6 +7,7 @@ import {
   GATE_FULL_LABEL,
 } from "@dev-loops/core/config";
 import { detectScope } from "./detect-change-scope.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: resolve-gate-dispatch.mjs --gate <draft|preApproval> [--base <ref>] [--head <ref>] [--full-label] [--inline-severities <csv>]
 Decide inline vs full fan-out for a gate from lightMode config + PR facts.
@@ -23,9 +24,13 @@ Output (stdout, JSON):
   { "ok": true, "gate": "draft", "scope": { "ok": false, ... }, "mode": "full_fanout", "reason": "scope_detection_failed", "threshold": null }
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage"?: "..." }
+
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0   Success
   1   Error
+  2   Invalid --jq filter
 `;
 
 const VALID_GATES = new Set(["draft", "preApproval"]);
@@ -50,6 +55,7 @@ function parseCliArgs(argv) {
       "full-label": { type: "boolean", default: false },
       "inline-severities": { type: "string" },
       help: { type: "boolean", short: "h" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: true,
@@ -67,6 +73,8 @@ function parseCliArgs(argv) {
     head: values.head ?? null,
     hasFullLabel: Boolean(values["full-label"]),
     inlineFindingSeverities: parseSeverities(values["inline-severities"]),
+    jq: values.jq,
+    silent: values.silent === true,
   };
 }
 
@@ -87,16 +95,14 @@ export async function run(argv) {
     // Fail CLOSED on unmeasurable scope: a broken/failed diff must route to the
     // full gate, never silently collapse to inline (which would bypass review).
     if (scope.ok === false) {
-      process.stdout.write(
-        JSON.stringify({
-          ok: true,
-          gate: opts.gate,
-          scope,
-          mode: "full_fanout",
-          reason: "scope_detection_failed",
-          threshold: null,
-        }) + "\n"
-      );
+      process.exitCode = emitResult({
+        ok: true,
+        gate: opts.gate,
+        scope,
+        mode: "full_fanout",
+        reason: "scope_detection_failed",
+        threshold: null,
+      }, { jq: opts.jq, silent: opts.silent });
       return;
     }
     const decision = resolveGateDispatchMode(config, opts.gate, {
@@ -104,8 +110,9 @@ export async function run(argv) {
       hasFullLabel: opts.hasFullLabel,
       inlineFindingSeverities: opts.inlineFindingSeverities,
     });
-    process.stdout.write(
-      JSON.stringify({ ok: true, gate: opts.gate, scope, ...decision }) + "\n"
+    process.exitCode = emitResult(
+      { ok: true, gate: opts.gate, scope, ...decision },
+      { jq: opts.jq, silent: opts.silent },
     );
   } catch (err) {
     process.stderr.write(

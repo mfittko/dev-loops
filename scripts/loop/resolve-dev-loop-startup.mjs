@@ -37,6 +37,7 @@ import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-cont
 import { loadBoardConfig } from "@dev-loops/core/loop/queue-board-sync";
 import { main as reconcileQueue } from "../projects/reconcile-queue.mjs";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
   resolve-dev-loop-startup.mjs --pr <number>
@@ -56,9 +57,12 @@ Required (exactly one):
   --input <path>  Path to a JSON file with canonical-state payload
   --plan-file <path>  Path to a phase-doc-format plan to start locally
   --spike <path>  Path to a spike artifact to start a spike loop locally
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0  Success
-  1  Argument error, runtime failure, or async-start contract rejection`.trim();
+  1  Argument error, runtime failure, or async-start contract rejection
+  2  Invalid --jq filter`.trim();
 // Upper bound on the awaited best-effort startup reconcile so a slow or hung gh
 // can never delay startup completion.
 const STARTUP_RECONCILE_BUDGET_MS = 20000;
@@ -138,6 +142,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       pr: { type: "string" },
       "plan-file": { type: "string" },
       spike: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -174,6 +179,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       options.spike = requireTokenValue(token, parseError);
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const modeCount = [options.inputPath, options.issue, options.pr, options.planFile, options.spike].filter(v => v !== undefined).length;
@@ -716,13 +722,12 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   }
   const result = buildResolveDevLoopStartupResult(input, { asyncStartMode, adapter });
   if (result.ok === false) {
-    stderr.write(`${JSON.stringify(result)}\n`);
-    process.exitCode = 1;
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });
     return;
   }
   // Emit the deterministic bundle FIRST, before the best-effort self-heal below,
   // so a slow or hung gh reconcile can never delay the startup result.
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
   // #1069: best-effort startup self-heal — converge the board from live GitHub
   // state so merged→Done / ready→In Progress land deterministically. Gated on a
   // configured board so it never shells out to gh in the no-.devloops unit tests;

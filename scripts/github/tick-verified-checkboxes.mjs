@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { editPr } from "./edit-pr.mjs";
 import { viewPr } from "./view-pr.mjs";
 
@@ -122,14 +122,7 @@ export function parseTickVerifiedCliArgs(argv) {
       options.dryRun = true;
       continue;
     }
-    if (token.name === "jq") {
-      options.jq = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "silent") {
-      options.silent = true;
-      continue;
-    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {

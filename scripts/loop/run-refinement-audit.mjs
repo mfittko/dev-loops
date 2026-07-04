@@ -4,6 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue, runCommand } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const DEFAULT_MAX_LINES = 1000;
 const DEFAULT_DUPLICATE_WINDOW_LINES = 4;
 const DEFAULT_BRANCH_THRESHOLD = 25;
@@ -35,7 +36,9 @@ Success output (stdout, JSON):
   }
 Failure behavior (stderr, JSON, exit 1):
   - malformed arguments, blank paths, invalid thresholds, and zero auditable files fail closed
-  - findings are not a process failure; findings still return exit 0`.trim();
+  - findings are not a process failure; findings still return exit 0
+
+${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
 const BRANCH_TOKEN_PATTERN = /\b(?:if|else|switch|case|for|while|catch|finally|break|continue)\b|&&|\|\||\?(?![?.])/gu;
 const PRIORITY_ORDER = new Map([
@@ -67,6 +70,7 @@ export function parseRefinementAuditCliArgs(argv) {
       "branch-threshold": { type: "string" },
       "thin-wrapper-max-lines": { type: "string" },
       output: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -127,6 +131,7 @@ export function parseRefinementAuditCliArgs(argv) {
       options.output = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.paths !== undefined && options.pathsFile !== undefined) {
@@ -512,22 +517,16 @@ export async function runCli(
       fullRepoScan: false,
     },
   };
-  const serializedPayload = `${JSON.stringify(payload)}\n`;
   if (typeof options.output === "string") {
     const outputPath = path.resolve(cwd, options.output);
     await mkdir(path.dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, serializedPayload, "utf8");
+    await writeFile(outputPath, `${JSON.stringify(payload)}\n`, "utf8");
   }
-  stdout.write(serializedPayload);
+  process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, stdout, stderr });
   return payload;
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli()
-    .then((result) => {
-      if (result?.ok === false) {
-        process.exitCode = 1;
-      }
-    })
     .catch((error) => {
       process.stderr.write(`${formatCliError(error)}\n`);
       process.exitCode = 1;

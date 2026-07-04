@@ -3,6 +3,7 @@ import process from "node:process";
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { interpretTrackerLoopState } from "@dev-loops/core/loop/tracker-first-loop-state";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 function showHelp() {
   process.stdout.write(`Usage: detect-tracker-first-loop-state.mjs --repo <owner/name> --issue <number>
@@ -11,9 +12,13 @@ Options:
   --repo <owner/name>   GitHub repository slug
   --issue <number>      GitHub issue number
   --help, -h            Show this help
+
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0   Success
   1   Error
+  2   Invalid --jq filter
 `);
   process.exit(0);
 }
@@ -25,6 +30,7 @@ function parseCliArgs(argv) {
       repo: { type: "string" },
       issue: { type: "string" },
       help: { type: "boolean", short: "h" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -46,7 +52,9 @@ function parseCliArgs(argv) {
       }
       if (token.name === "issue") {
         opts.issue = token.value ?? null;
+        continue;
       }
+      if (matchJqOutputToken(token, opts)) continue;
     }
   }
   return opts;
@@ -90,7 +98,7 @@ async function main() {
     return;
   }
   const result = interpretTrackerLoopState({ trackerState: rawState, prContext });
-  process.stdout.write(JSON.stringify(result) + "\n");
+  process.exitCode = emitResult(result, { jq: rawOpts.jq, silent: rawOpts.silent });
 }
 const isDirectRun =
   process.argv[1] && process.argv[1].includes("detect-tracker-first-loop-state.mjs");

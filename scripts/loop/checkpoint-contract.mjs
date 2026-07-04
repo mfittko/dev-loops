@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const CHECKPOINT_FILE = ".pi/dev-loop-retrospective-checkpoint.json";
 const ALLOWED_STATES = new Set(["required", "complete", "skipped", "none", "missing"]);
@@ -17,7 +18,9 @@ Required:
 
 Optional:
   --notes <text>           Required when --state is complete
-  --reason <text>          Required when --state is skipped`;
+  --reason <text>          Required when --state is skipped
+
+${JQ_OUTPUT_USAGE}`;
 
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
@@ -43,6 +46,7 @@ function parseCliArgs(argv) {
         notes: { type: "string" },
         reason: { type: "string" },
         help: { type: "boolean", short: "h" },
+        ...JQ_OUTPUT_PARSE_OPTIONS,
       },
       strict: true,
       allowPositionals: false,
@@ -67,7 +71,7 @@ function parseCliArgs(argv) {
     throw parseError('state "skipped" requires --reason');
   }
 
-  return { state, notes: values.notes ?? null, reason: values.reason ?? null };
+  return { state, notes: values.notes ?? null, reason: values.reason ?? null, jq: values.jq, silent: values.silent === true };
 }
 
 async function run(argv) {
@@ -82,8 +86,7 @@ async function run(argv) {
   const checkpointPath = path.join(process.cwd(), CHECKPOINT_FILE);
   await mkdir(path.dirname(checkpointPath), { recursive: true });
   await writeFile(checkpointPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  process.stdout.write(JSON.stringify({ ok: true, path: CHECKPOINT_FILE, checkpoint: payload }) + "\n");
-  return 0;
+  return emitResult({ ok: true, path: CHECKPOINT_FILE, checkpoint: payload }, { jq: parsed.jq, silent: parsed.silent });
 }
 
 if (isDirectCliRun(import.meta.url)) {

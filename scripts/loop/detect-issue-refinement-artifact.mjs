@@ -8,6 +8,7 @@ import {
   detectIssueRefinementArtifact,
   REFINEMENT_SOURCE,
 } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage:
   detect-issue-refinement-artifact.mjs --repo <owner/name> --issue <number>
   detect-issue-refinement-artifact.mjs --input <path>
@@ -31,7 +32,8 @@ Success output (stdout, JSON):
     "reason": "..."
   }
 Error output (stderr, JSON):
-  { "ok": false, "error": "...", "usage": "..." }`.trim();
+  { "ok": false, "error": "...", "usage": "..." }
+${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectIssueRefinementArtifactCliArgs(argv) {
   const options = {
@@ -47,6 +49,7 @@ export function parseDetectIssueRefinementArtifactCliArgs(argv) {
       repo: { type: "string" },
       issue: { type: "string" },
       input: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -79,6 +82,7 @@ export function parseDetectIssueRefinementArtifactCliArgs(argv) {
       options.input = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const hasInput = typeof options.input === "string" && options.input.length > 0;
@@ -165,8 +169,7 @@ export async function runCli(
   }
   try {
     const result = await detectIssueRefinementArtifactFromOptions(options, { env, ghCommand });
-    stdout.write(`${JSON.stringify(result)}\n`);
-    return 0;
+    return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
   } catch (error) {
     stderr.write(`${formatCliError(error)}\n`);
     return 1;

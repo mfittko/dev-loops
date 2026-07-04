@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings } from "./_resolve-project.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: dev-loops queue ensure --repo <owner/name> [--project <number>] [--title <title>] [--link-repo <owner/name>] [--repair-rename]
        (dev-loops project ensure … is a back-compat alias)
@@ -25,10 +26,12 @@ queue.projectNumber or queue.boardTitle.
 Output (stdout):
   JSON: { ok: true, project: { id, number, title, url, statusFieldId, linkedRepo } }
 
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0 — board exists or was created successfully (idempotent)
   1 — usage or argument error
-  2 — GitHub API error
+  2 — GitHub API error / invalid --jq filter
   3 — board schema/config mismatch (manual reconciliation needed)
 `;
 
@@ -52,6 +55,7 @@ function parseCliArgs(argv) {
       "link-repo": { type: "string" },
       "repair-rename": { type: "boolean" },
       help: { type: "boolean", short: "h" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -96,8 +100,10 @@ function parseCliArgs(argv) {
         }
         args.repairRename = true;
         break;
-      default:
+      default: {
+        if (matchJqOutputToken(token, args, (t) => requireValue(t, "--jq requires a filter"))) break;
         throw parseError(`Unknown flag: ${token.rawName}`);
+      }
     }
   }
   return args;
@@ -790,7 +796,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
 
   try {
     const result = await main(args, { env });
-    stdout.write(JSON.stringify(result) + "\n");
+    process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
   } catch (err) {
     stderr.write(`${formatCliError(err)}\n`);
     process.exitCode = classifyExitCode(err);

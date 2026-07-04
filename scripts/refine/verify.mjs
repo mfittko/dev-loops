@@ -9,6 +9,7 @@ import { runProseLinkageDetector } from "./prose-linkage-detector.mjs";
 import { runScopeBoundaryCrossChecker } from "./scope-boundary-cross-checker.mjs";
 import { runRefinementCompletenessChecker } from "./refinement-completeness-checker.mjs";
 import { runTreeIntegrityValidator } from "./tree-integrity-validator.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   dev-loops refine verify --issue <number> [--repo <owner/name>] [--json]
@@ -26,7 +27,10 @@ Required (exactly one mode):
 Optional:
   --repo <owner/name>       Repository slug for online mode
   --json                    Machine-readable JSON output (default: human-readable summary)
-  --help                    Show this help`.trim();
+  --help                    Show this help
+
+${JQ_OUTPUT_USAGE}
+(--jq/--silent only apply together with --json; the default text output is unaffected.)`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -39,6 +43,7 @@ export function parseRefineVerifyCliArgs(argv) {
       repo: { type: "string" },
       input: { type: "string" },
       json: { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -79,6 +84,7 @@ export function parseRefineVerifyCliArgs(argv) {
       options.json = true;
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
 
@@ -177,13 +183,12 @@ export async function runCli(
   };
 
   if (options.json) {
-    stdout.write(`${JSON.stringify(payload)}\n`);
+    process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, stdout });
   } else {
     writeHumanOutput(result, tree, { stdout });
-  }
-
-  if (!result.ok) {
-    process.exitCode = 1;
+    if (!result.ok) {
+      process.exitCode = 1;
+    }
   }
   return payload;
 }

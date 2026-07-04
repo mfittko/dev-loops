@@ -4,6 +4,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> --findings <json> [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
@@ -15,6 +16,8 @@ Required:
   --findings <json>              JSON array of finding objects with severity, disposition, angle, and summary
 Optional:
   --tmp-root <path>              Root tmp directory (default: tmp/)
+
+${JQ_OUTPUT_USAGE}
 `.trim();
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
@@ -101,6 +104,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       verdict: { type: "string" },
       findings: { type: "string" },
       "tmp-root": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -159,6 +163,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const missing = ["repo", "pr", "gate", "headSha", "verdict", "findings"]
@@ -219,7 +224,7 @@ async function main() {
   }
   try {
     const result = await writeGateFindingsLog(options);
-    process.stdout.write(JSON.stringify(result) + "\n");
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
     process.stderr.write(JSON.stringify({
       ok: false,

@@ -9,6 +9,7 @@ import {
   interpretTrackerPrState,
   normalizeTrackerPrSnapshot,
 } from "@dev-loops/core/loop/tracker-pr-state";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage:
   detect-tracker-pr-state.mjs --input <path>
 Interpret a pre-built tracker-PR snapshot JSON and emit the current lifecycle
@@ -47,9 +48,11 @@ Output (stdout, JSON):
 Error output (stderr, JSON):
   Argument/usage errors: { "ok": false, "error": "...", "usage": "..." }
   Runtime failures:      { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or runtime failure`.trim();
+  1  Argument error or runtime failure
+  2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectTrackerPrCliArgs(argv) {
   const options = {
@@ -61,6 +64,7 @@ export function parseDetectTrackerPrCliArgs(argv) {
     options: {
       help: { type: "boolean", short: "h" },
       input: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -81,6 +85,7 @@ export function parseDetectTrackerPrCliArgs(argv) {
       options.inputPath = requireTokenValue(token, parseError);
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.inputPath === undefined) {
@@ -92,6 +97,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    stderr = process.stderr,
   } = {},
 ) {
   const options = parseDetectTrackerPrCliArgs(argv);
@@ -103,8 +109,9 @@ export async function runCli(
   const raw = parseJsonText(text);
   const snapshot = normalizeTrackerPrSnapshot(raw);
   const { state, allowedTransitions, nextAction, reverseSyncAction } = interpretTrackerPrState(snapshot);
-  stdout.write(
-    `${JSON.stringify({ ok: true, snapshot, state, allowedTransitions, nextAction, reverseSyncAction })}\n`,
+  process.exitCode = emitResult(
+    { ok: true, snapshot, state, allowedTransitions, nextAction, reverseSyncAction },
+    { jq: options.jq, silent: options.silent, stdout, stderr },
   );
 }
 const isDirectRun =

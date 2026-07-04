@@ -256,6 +256,24 @@ export const JQ_OUTPUT_USAGE = `Output filtering:
   --silent, -s              Suppress stdout; map result to exit code only
                             (0 = pass/truthy, 1 = fail/falsy). Composes with --jq as a predicate.`;
 
+// Shared token-matcher for scripts that hand-roll a `parseArgs({ tokens: true })`
+// loop (rather than reading `values.jq`/`values.silent` off a strict parse).
+// Call once per `option` token: `if (matchJqOutputToken(token, options)) continue;`.
+// `requireValue` extracts the `--jq <value>` argument; pass the script's own
+// value-extraction function (e.g. `(t) => requireTokenValue(t, parseError)`) to
+// preserve its existing error semantics. Defaults to the raw token value.
+export function matchJqOutputToken(token, options, requireValue = (t) => t.value) {
+  if (token.name === "jq") {
+    options.jq = requireValue(token);
+    return true;
+  }
+  if (token.name === "silent") {
+    options.silent = true;
+    return true;
+  }
+  return false;
+}
+
 // Apply --jq / --silent to a result object and emit. Returns the exit code the
 // CLI should use (0 success / truthy, 1 falsy or non-ok, 2 invalid filter).
 // Without jq/silent the result is printed verbatim as JSON (unchanged shape).

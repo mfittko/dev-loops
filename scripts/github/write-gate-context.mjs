@@ -37,6 +37,7 @@ import { resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 /**
  * Map the artifact gate name (draft_gate | pre_approval_gate) to the config
@@ -117,6 +118,8 @@ Optional:
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL)
   --validation-posture <text>    Short description of the validation posture
   --tmp-root <path>              Root tmp directory (default: tmp/)
+
+${JQ_OUTPUT_USAGE}
 `.trim();
 
 function parseError(message) {
@@ -210,6 +213,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "acceptance-criteria": { type: "string" },
       "validation-posture": { type: "string" },
       "tmp-root": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -286,6 +290,7 @@ export function parseWriteGateContextCliArgs(argv) {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const missing = ["repo", "pr", "gate", "headSha", "angles"]
@@ -637,7 +642,7 @@ async function main() {
   }
   try {
     const result = await writeGateContext(options);
-    process.stdout.write(JSON.stringify(result) + "\n");
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
     process.stderr.write(JSON.stringify({
       ok: false,

@@ -9,6 +9,7 @@ import {
   loadDevLoopConfig,
   resolveHumanHandoffConfig,
 } from "@dev-loops/core/config";
+import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: resolve-handoff-candidates.mjs --repo <owner/name> --pr <number> [--changed-files <a,b,c>] [--pr-author <login>]
 Resolve an ordered, deduped list of human-handoff reviewer/assignee candidates
@@ -39,9 +40,11 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "enabled": bool, "candidates": [{ "login", "source", "isTeam"?, "paths"? }],
     "changedFiles": [...], "sources": [...], "warnings": [...] }
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (including disabled no-op and fail-soft per-source skips)
-  1  Argument error`.trim();
+  1  Argument error
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -74,6 +77,8 @@ export function parseResolveCandidatesCliArgs(argv) {
       continue;
     }
     if (token === "--pr-author") { options.prAuthor = nextValue(args, ++i, "--pr-author").trim().replace(/^@/, ""); continue; }
+    if (token === "--jq") { options.jq = nextValue(args, ++i, "--jq"); continue; }
+    if (token === "--silent" || token === "-s") { options.silent = true; continue; }
     throw parseError(`Unknown argument: ${token}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
@@ -403,8 +408,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     { repo: options.repo, pr: options.pr, changedFiles: options.changedFiles, prAuthor: options.prAuthor ?? null },
     { ...deps, config, repoRoot },
   );
-  process.stdout.write(`${JSON.stringify(result)}\n`);
-  return 0;
+  return emitResult(result, { jq: options.jq, silent: options.silent });
 }
 
 if (isDirectCliRun(import.meta.url)) {

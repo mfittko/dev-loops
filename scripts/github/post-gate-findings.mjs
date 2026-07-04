@@ -3,6 +3,7 @@ import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --findings <json>
 Post (or idempotently update) a visible, marker-tagged PR issue comment that lists the
@@ -23,9 +24,12 @@ Required:
                                    ([{severity, angle, summary, disposition?, files?}])
 Output (stdout, JSON):
   { "ok": true, "action": "created"|"updated"|"noop"|"skipped", ... }
+
+${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or gh failure`.trim();
+  1  Argument error or gh failure
+  2  Invalid --jq filter`.trim();
 
 const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
 // Severity ordering for grouped rendering (most-blocking first).
@@ -140,6 +144,14 @@ export function parsePostGateFindingsCliArgs(argv) {
     }
     if (token === "--findings") {
       options.findings = requireOptionValue(args, "--findings", parseError);
+      continue;
+    }
+    if (token === "--jq") {
+      options.jq = requireOptionValue(args, "--jq", parseError);
+      continue;
+    }
+    if (token === "--silent" || token === "-s") {
+      options.silent = true;
       continue;
     }
     throw parseError(`Unknown argument: ${token}`);
@@ -380,7 +392,7 @@ async function main() {
   }
   try {
     const result = await postGateFindings(options);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
     process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
     process.exitCode = 1;

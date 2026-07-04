@@ -24,6 +24,7 @@ import { DebtSignalSchema } from "@dev-loops/core/debt/signal";
 import { clusterSignalsEnriched } from "@dev-loops/core/debt/cluster";
 import { shapeFindings } from "@dev-loops/core/debt/shape";
 import { createRemediationIssue } from "@dev-loops/core/debt/remediation-to-issue";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -45,9 +46,12 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "signals": N, "findings": N, "remediationItems": N, "issues": [...], "summary": "..." }
 
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0  Success (all remediation issue creations succeeded)
-  1  Argument error, input validation failure, or issue creation failure`.trim();
+  1  Argument error, input validation failure, or issue creation failure
+  2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -160,6 +164,7 @@ export async function runCli(argv) {
       input: { type: "string" },
       repo: { type: "string" },
       "dry-run": { type: "boolean" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -188,6 +193,7 @@ export async function runCli(argv) {
       options.dryRun = true;
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown flag: ${token.rawName}`);
   }
 
@@ -195,6 +201,14 @@ export async function runCli(argv) {
     process.stdout.write(USAGE + "\n");
     return { exitCode: 0 };
   }
+
+  // Every early-exit failure below reports via the shared jq/silent contract on
+  // stderr (this script's existing error-output convention); `ok:false` maps to
+  // the existing exit 1 by default, and an invalid --jq filter still fails
+  // closed with exit 2 instead of being swallowed by this fixed exit code.
+  const failEarly = (payload) => ({
+    exitCode: emitResult(payload, { jq: options.jq, silent: options.silent, stdout: process.stderr, stderr: process.stderr }),
+  });
 
   if (!options.input) {
     throw parseError("Missing required flag: --input <path>");
@@ -208,20 +222,20 @@ export async function runCli(argv) {
   try {
     rawInput = await readFile(inputPath, "utf-8");
   } catch (err) {
-    return { exitCode: 1, output: { ok: false, error: `Cannot read input file: ${inputPath}`, detail: err.message } };
+    return failEarly({ ok: false, error: `Cannot read input file: ${inputPath}`, detail: err.message });
   }
 
   let signals;
   try {
     signals = JSON.parse(rawInput);
   } catch (err) {
-    return { exitCode: 1, output: { ok: false, error: "Input file is not valid JSON", detail: err.message } };
+    return failEarly({ ok: false, error: "Input file is not valid JSON", detail: err.message });
   }
 
   // Validate signals
   const validation = validateSignals(signals);
   if (!validation.ok) {
-    return { exitCode: 1, output: validation };
+    return failEarly(validation);
   }
 
   // Resolve repo
@@ -230,14 +244,14 @@ export async function runCli(argv) {
     try {
       repo = parseRepoSlug(options.repo);
     } catch {
-      return { exitCode: 1, output: { ok: false, error: `Invalid repo slug: ${options.repo}` } };
+      return failEarly({ ok: false, error: `Invalid repo slug: ${options.repo}` });
     }
   } else {
     repo = detectRepo();
   }
 
   if (!repo) {
-    return { exitCode: 1, output: { ok: false, error: "Cannot detect repository. Pass --repo <owner/name>." } };
+    return failEarly({ ok: false, error: "Cannot detect repository. Pass --repo <owner/name>." });
   }
 
   // Run pipeline: cluster → score → shape
@@ -298,8 +312,9 @@ export async function runCli(argv) {
   report.repo = `${repo.owner}/${repo.name}`;
 
   const outputTarget = report.ok ? process.stdout : process.stderr;
-  outputTarget.write(JSON.stringify(report) + "\n");
-  return { exitCode: anyIssueFailed ? 1 : 0 };
+  return {
+    exitCode: emitResult(report, { jq: options.jq, silent: options.silent, stdout: outputTarget, stderr: process.stderr }),
+  };
 }
 
 // ============================================================================
@@ -307,10 +322,7 @@ export async function runCli(argv) {
 // ============================================================================
 
 if (isDirectCliRun(import.meta.url)) {
-  runCli(process.argv.slice(2)).then(({ exitCode, output }) => {
-    if (output) {
-      process.stderr.write(JSON.stringify(output) + "\n");
-    }
+  runCli(process.argv.slice(2)).then(({ exitCode }) => {
     process.exitCode = exitCode;
   }).catch((err) => {
     process.stderr.write(`${formatCliError(err)}\n`);

@@ -5,6 +5,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectLinkedIssuePr } from "../github/detect-linked-issue-pr.mjs";
 import { detectCopilotSessionActivity } from "./detect-copilot-session-activity.mjs";
 import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: detect-initial-copilot-pr-state.mjs --repo <owner/name> --issue <number>
 Detect whether an assigned issue is still on the bootstrap-only Copilot draft PR
 or has moved into normal linked-PR follow-up.
@@ -43,7 +44,8 @@ Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
-    { "ok": false, "error": "..." }`.trim();
+    { "ok": false, "error": "..." }
+${JQ_OUTPUT_USAGE}`.trim();
 export const LINKED_PR_STATE = Object.freeze({
   NO_LINKED_PR: "no_linked_pr",
   PRIOR_LINKED_PR_CLOSED_UNMERGED: "prior_linked_pr_closed_unmerged",
@@ -91,6 +93,7 @@ export function parseDetectInitialCopilotPrStateCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       issue: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -115,6 +118,7 @@ export function parseDetectInitialCopilotPrStateCliArgs(argv) {
       options.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.issue === undefined) {
@@ -313,7 +317,7 @@ export async function detectInitialCopilotPrState({ repo, issue }, { env = proce
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh" } = {},
 ) {
   const options = parseDetectInitialCopilotPrStateCliArgs(argv);
   if (options.help) {
@@ -324,7 +328,7 @@ export async function runCli(
     { repo: options.repo, issue: options.issue },
     { env, ghCommand },
   );
-  stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {
