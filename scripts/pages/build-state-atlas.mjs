@@ -287,7 +287,7 @@ const LEGEND = [
 
 function legendMarkup() {
   const items = LEGEND.map(
-    (l) => `        <li><span class="swatch" style="border-color:${l.stroke}"></span>${l.label}</li>`,
+    (l) => `        <li><span class="swatch" style="border-color:${l.stroke}" aria-hidden="true"></span> ${l.label}</li>`,
   ).join('\n');
   return `      <ul class="legend" aria-label="diagram colour key">
 ${items}
@@ -300,7 +300,13 @@ ${items}
  * The returned HTML has a single <style> block and a <body> tag so build-site's
  * injectNav can attach the shared nav. It references the vendored mermaid via
  * <script src="assets/mermaid.min.js"> (copied into site/ by build-site) rather
- * than inlining ~3MB; GitHub Pages applies no CSP, so no CSP meta is emitted.
+ * than inlining ~3MB.
+ *
+ * The CSP meta mirrors the article pages' policy (default-src 'none';
+ * 'unsafe-inline' styles; data: images; locked base/form) and extends it with
+ * script-src 'self' (the copied mermaid asset) + 'unsafe-inline' (the init
+ * script below), matching the articles' inline approach — they use
+ * 'unsafe-inline', not hash sources.
  *
  * @returns {string}
  */
@@ -312,6 +318,7 @@ export function buildStateAtlasHtml() {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
 <title>State atlas — dev-loops</title>
 <style>
   :root {
