@@ -1,5 +1,8 @@
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 import {
   main,
   parseCliArgs,
@@ -7,6 +10,12 @@ import {
   selectArchivable,
   resolveSettings,
 } from "../../scripts/projects/archive-done-items.mjs";
+
+// Isolated default cwd (no .devloops): main() resolves statusColumns from cwd,
+// so tests must never read THIS repo's real config as a hidden dependency —
+// a future repo-level statusColumns override would silently break them.
+const ISOLATED_CWD = mkdtempSync(nodePath.join(tmpdir(), "archive-done-isolated-"));
+after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 
 // ── Pure unit: parseCliArgs ───────────────────────────────────────────────
 
@@ -177,7 +186,7 @@ describe("archive-done — integration", () => {
 
     const result = await main(
       { repo: "mfittko/dev-loops", project: "1", olderThan: "30d", now: Date.parse("2026-06-24T00:00:00Z") },
-      { runChild },
+      { runChild, cwd: ISOLATED_CWD },
     );
 
     assert.ok(result.ok);
@@ -202,7 +211,7 @@ describe("archive-done — integration", () => {
 
     const result = await main(
       { repo: "mfittko/dev-loops", project: "1", olderThan: "30d", dryRun: true, now: Date.parse("2026-06-24T00:00:00Z") },
-      { runChild },
+      { runChild, cwd: ISOLATED_CWD },
     );
 
     assert.strictEqual(result.dryRun, true);
@@ -225,7 +234,7 @@ describe("archive-done — integration", () => {
 
     const result = await main(
       { repo: "mfittko/dev-loops", project: "1", now: Date.parse("2026-06-24T00:00:00Z") },
-      { runChild },
+      { runChild, cwd: ISOLATED_CWD },
     );
 
     assert.ok(result.ok);
@@ -246,7 +255,7 @@ describe("archive-done — integration", () => {
 
     const result = await main(
       { repo: "mfittko/dev-loops", project: "1", olderThanDefault: "3d", now: Date.parse("2026-06-24T00:00:00Z") },
-      { runChild },
+      { runChild, cwd: ISOLATED_CWD },
     );
 
     assert.ok(result.ok);
@@ -266,7 +275,7 @@ describe("archive-done — integration", () => {
     const result = await main(
       // explicit 7d wins over config default 3d → 5d-old item is kept
       { repo: "mfittko/dev-loops", project: "1", olderThan: "7d", olderThanDefault: "3d", now: Date.parse("2026-06-24T00:00:00Z") },
-      { runChild },
+      { runChild, cwd: ISOLATED_CWD },
     );
 
     assert.ok(result.ok);
@@ -286,7 +295,7 @@ describe("archive-done — integration", () => {
 
     const result = await main(
       { repo: "mfittko/dev-loops", projectTitle: "Dev Loop Queue", olderThan: "30d", now: Date.parse("2026-06-24T00:00:00Z") },
-      { runChild },
+      { runChild, cwd: ISOLATED_CWD },
     );
 
     assert.ok(result.ok);
@@ -297,17 +306,13 @@ describe("archive-done — integration", () => {
   it("fails closed when neither --project nor a configured board resolves", async () => {
     const runChild = mockRunChild([]);
     await assert.rejects(
-      () => main({ repo: "mfittko/dev-loops", now: Date.parse("2026-06-24T00:00:00Z") }, { runChild }),
+      () => main({ repo: "mfittko/dev-loops", now: Date.parse("2026-06-24T00:00:00Z") }, { runChild, cwd: ISOLATED_CWD }),
       (e) => e.code === "INVALID_PROJECT",
     );
   });
 });
 
 // ── resolveSettings (config-driven defaults) ──────────────────────────────
-
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import nodePath from "node:path";
 
 function withTempDevloops(contents, fn) {
   const dir = mkdtempSync(nodePath.join(tmpdir(), "archive-done-cfg-"));

@@ -1,9 +1,15 @@
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { collapseToTarget, main, runCli } from "../../scripts/projects/resolve-active-board-item.mjs";
+
+// Isolated default cwd (no .devloops): main() resolves statusColumns from cwd,
+// so tests must never read THIS repo's real config as a hidden dependency —
+// a future repo-level statusColumns override would silently break them.
+const ISOLATED_CWD = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-isolated-"));
+after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 
 // A runChild stub that drives list-queue-items end to end. `columns` maps a
 // Status column name to the items GraphQL returns for it; list-queue-items
@@ -49,7 +55,7 @@ function boardRunChild({ columns = {}, itemsError = false, optionNames = ["Backl
   };
 }
 
-const runArgs = (child) => main({ repo: "o/r", project: "7" }, { runChild: child });
+const runArgs = (child) => main({ repo: "o/r", project: "7" }, { runChild: child, cwd: ISOLATED_CWD });
 
 function captureCli(child, extraArgs = []) {
   let out = "";
@@ -60,6 +66,7 @@ function captureCli(child, extraArgs = []) {
     stdout: { write: (s) => { out += s; } },
     stderr: { write: (s) => { err += s; } },
     runChild: child,
+    cwd: ISOLATED_CWD,
   }).then(() => {
     const code = process.exitCode;
     process.exitCode = prev;
