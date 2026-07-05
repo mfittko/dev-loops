@@ -13,13 +13,14 @@ The raw `git worktree` commands remain documented as the underlying mechanism.
 
 ## Canonical location and naming
 
-- Loop-owned worktrees live under the namespaced path
-  `tmp/worktrees/dev-loops/<kind>-<number>` — e.g. `tmp/worktrees/dev-loops/issue-909`,
-  `tmp/worktrees/dev-loops/pr-908`. **No branch suffix:** the path is recomputable
-  from the issue/PR number alone, which is what lets cleanup find it.
-- A single resolver, `resolveWorktreePath({ repoRoot, kind, number })` in
-  `packages/core/src/loop/handoff-envelope.mjs`, is the sole source of truth for
-  create, provision, and cleanup.
+<!-- rule: WORKTREE-CANONICAL-PATH -->
+`WORKTREE-CANONICAL-PATH`: Loop-owned worktrees MUST live at the namespaced path
+`tmp/worktrees/dev-loops/<kind>-<number>` — e.g. `tmp/worktrees/dev-loops/issue-909`,
+`tmp/worktrees/dev-loops/pr-908` — with **no branch suffix**, so the path is
+recomputable from the issue/PR number alone. `resolveWorktreePath({ repoRoot, kind,
+number })` in `packages/core/src/loop/handoff-envelope.mjs` is the sole resolver for
+create, provision, and cleanup.
+
 - The `dev-loops/` namespace marks loop-owned worktrees so cleanup can only ever
   remove its own — a hand-made `tmp/worktrees/my-experiment` is never touched.
 - Deprecate ad hoc locations such as `tmp/copilot-loop/`, repo-root `worktrees/`,
@@ -34,11 +35,13 @@ underlying mechanism, not the operator interface.
 
 ### Create (or reuse) + provision: `ensure-worktree.mjs`
 
-This is the lifecycle entrypoint. It resolves the canonical namespaced path,
-`git fetch`es the base remote, creates the worktree if absent (or reuses it if
-one already exists at that exact path — idempotent; a different branch at the
-path is reported as a conflict rather than clobbered), then provisions it
-(below) in the same step:
+<!-- rule: WORKTREE-CREATE-PROVISION -->
+`WORKTREE-CREATE-PROVISION`: Creating or reusing a loop-owned worktree MUST use
+this lifecycle entrypoint. It resolves the canonical namespaced path, `git
+fetch`es the base remote, creates the worktree if absent (or reuses it if one
+already exists at that exact path — idempotent; a different branch at the path
+is reported as a conflict rather than clobbered), then provisions it (below) in
+the same step:
 
 ```sh
 node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \
@@ -94,56 +97,57 @@ node scripts/loop/provision-worktree.mjs --worktree-path <p> --repo-root <p>
 
 ### Post-merge cleanup
 
-After a successful merge, the canonical worktree is removed automatically:
+<!-- rule: WORKTREE-CLEANUP -->
+`WORKTREE-CLEANUP`: After a successful merge, the canonical worktree MUST be
+removed via this entrypoint, which resolves the path through the shared
+resolver, runs `git worktree remove --force` + `git worktree prune` from the
+main checkout, and MUST NOT touch any path outside `tmp/worktrees/dev-loops/`:
 
 ```sh
 node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p>)
 ```
 
-It resolves the canonical path via the shared resolver, runs `git worktree remove
---force` + `git worktree prune` from the main checkout, and **refuses any path not
-under `tmp/worktrees/dev-loops/`**. Git errors are logged but never fatal, so
-cleanup can't break a merge-completion flow.
+Git errors are logged but never fatal, so cleanup can't break a
+merge-completion flow.
 
 ## Default rule: use a worktree for mutating local work
 
-- Do not use the main checkout as the default mutation surface.
-- Reserve the main checkout for inspection, control, and lightweight status checks.
-- For non-trivial local edits, PR follow-up, or delegated/parallel work, create or
-  reuse a dedicated git worktree first.
-- The default creation flow should start from `origin/main`.
+<!-- rule: WORKTREE-DEFAULT-USE -->
+`WORKTREE-DEFAULT-USE`: Non-trivial local edits, PR follow-up, or
+delegated/parallel work MUST use a dedicated git worktree, created or reused
+from a freshly fetched `origin/main`, not the main checkout. The main checkout
+is reserved for inspection, control, and lightweight status checks.
 
 ## Create or reuse flow
 
-**Default:** run `ensure-worktree.mjs` (above). It fetches the base remote,
-reuses an existing worktree at the canonical path or creates one from
-`origin/main`, provisions it, and reports a conflict instead of clobbering. Then
-do the local editing, validation, commit, and PR follow-up work from that
-worktree rather than from the main checkout.
+**Default:** run `ensure-worktree.mjs` (`WORKTREE-CREATE-PROVISION`, above),
+then do the local editing, validation, commit, and PR follow-up work from that
+worktree:
 
 ```sh
 node scripts/loop/ensure-worktree.mjs --repo-root <p> --issue <n>
 ```
 
-**Underlying mechanism** (what `ensure-worktree.mjs` runs for you — use directly
-only when the entrypoint is unavailable): always `git fetch origin` first (never
-create from a stale `origin/main`), check `git worktree list`, then
+**Underlying mechanism** (use directly only when the entrypoint is
+unavailable): `git fetch origin`, check `git worktree list`, then
 `git worktree add -b <branch> tmp/worktrees/dev-loops/<kind>-<number> origin/main`.
 
 ## Dependency and install expectations
 
-- If the worktree needs dependencies, or its installed state is stale, run
-  `npm install` or `npm ci` inside the worktree.
-- Do not assume the main checkout's `node_modules` are present or valid for a
-  separate worktree.
-- Re-run worktree-local installs when the dependency state is missing or clearly
-  out of date for the branch you are working on.
+<!-- rule: WORKTREE-DEPS-ISOLATED -->
+`WORKTREE-DEPS-ISOLATED`: A worktree's dependencies MUST NOT be assumed present
+or valid from the main checkout's `node_modules`; run `npm install` or `npm ci`
+inside the worktree whenever it needs dependencies or its installed state is
+stale or out of date for the branch.
 
 ## Coordination and collision checks
 
-- Always check `git worktree list` before creating a new worktree.
-- Reuse an existing matching worktree when practical instead of creating a second
-  path for the same branch.
+<!-- rule: WORKTREE-DEDUPE -->
+`WORKTREE-DEDUPE`: Before creating a worktree, an agent MUST check `git worktree
+list` for an existing entry at the target branch/path, and SHOULD reuse a
+matching existing worktree instead of creating a second path for the same
+branch when practical.
+
 - Avoid branch-name and filesystem-path collisions by checking both branch intent
   and target path before `git worktree add`.
 - When multiple agents or operators may touch the same issue, record which branch
@@ -152,26 +156,23 @@ create from a stale `origin/main`), check `git worktree list`, then
 ## Cleanup and prune flow
 
 **Default:** after a PR is merged (or the work is abandoned), run
-`cleanup-worktree.mjs` (see [Post-merge cleanup](#post-merge-cleanup) above). It
-resolves the canonical path, removes the worktree, prunes, and refuses any path
-not under `tmp/worktrees/dev-loops/`:
+`cleanup-worktree.mjs` (`WORKTREE-CLEANUP`, see [Post-merge cleanup](#post-merge-cleanup)
+above):
 
 ```sh
 node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>)
 ```
 
-**Underlying mechanism** (what cleanup runs for you):
-`git worktree remove --force <path>` then `git worktree prune`. Clean up promptly
-after merge so stale worktrees do not accumulate under `tmp/worktrees/`.
+Clean up promptly after merge so stale worktrees do not accumulate under
+`tmp/worktrees/`.
 
 ## Fallback when worktrees are unavailable
 
-- If `git worktree` is unavailable or the local environment cannot create a
-  worktree, say so explicitly.
-- In that fallback case, use a dedicated branch in the current checkout instead of
-  failing closed.
-- Even in fallback mode, treat the current checkout as an exception path rather
-  than the normal default for mutating local work.
+<!-- rule: WORKTREE-FALLBACK -->
+`WORKTREE-FALLBACK`: If `git worktree` is unavailable or the local environment
+cannot create a worktree, say so explicitly and use a dedicated branch in the
+current checkout instead of failing closed — treated as an exception path, never
+the normal default for mutating local work.
 
 ## Non-goals
 
