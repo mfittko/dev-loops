@@ -1042,8 +1042,8 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
-    // 7 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check
-    assert.equal(Number((await readFile(env.GH_COUNTER_PATH, "utf8")).trim()), 7);
+    // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
+    assert.equal(Number((await readFile(env.GH_COUNTER_PATH, "utf8")).trim()), 8);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1553,8 +1553,8 @@ test("upsert-checkpoint-verdict expands an abbreviated current-head SHA before m
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
-    // 7 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check
-    assert.equal(Number((await readFile(env.GH_COUNTER_PATH, "utf8")).trim()), 7);
+    // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
+    assert.equal(Number((await readFile(env.GH_COUNTER_PATH, "utf8")).trim()), 8);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

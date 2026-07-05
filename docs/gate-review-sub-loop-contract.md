@@ -323,6 +323,33 @@ resolved-in SHA (for findings resolved in a later pass).
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
 default `inline_single_agent`) via the [Gate comment command](../skills/copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the inline_single_agent fallback only. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA, and the pre-merge evidence check fails closed for a required gate otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
 
+### Light-mode inline acceptance (under-threshold micro-PRs)
+
+`lightMode` (`localImplementation.lightMode`, #1043) collapses the gate fan-out to a
+single `inline_single_agent` check for genuinely small changes. Because
+`requireFanoutEvidence` otherwise rejects any non-`fanout_fanin` verdict, the pre-merge
+evidence check (`buildPreMergeGateCheck` in `detect-checkpoint-evidence.mjs`) is
+**light-mode-aware** (#1174): it accepts a required gate's `inline_single_agent` verdict
+**only** when **all** of the following hold, and **fails closed** on any one that does
+not — leaving today's rejection byte-identical:
+
+- `localImplementation.lightMode.enabled` is `true` in config;
+- the reviewed head's scope is **re-derived fail-closed** at merge time — the merge-base
+  diff (`git diff <base>...<head>`, the same scope resolution `resolve-gate-dispatch`
+  uses) is genuinely under the configured `maxFiles`/`maxLines`. If scope cannot be
+  derived (missing base ref, git failure), the inline verdict is rejected;
+- the PR carries **no `gate:full` label** (the label always forces the full fan-out —
+  scope is not even measured);
+- the verdict records a non-empty `--inline-reason`.
+
+Evidence retention stays uniform: a light-accepted inline verdict **still requires a
+findings-log ledger** for the reviewed head (the single-agent path's
+`write-gate-findings-log.mjs` writes it). `requireFanoutProvenance`, when enabled, is
+enforced **only for `fanout_fanin` verdicts** — a light inline verdict is already
+scope-bounded and carries no multi-reviewer provenance, so it is exempt. Any inline
+verdict that is over threshold, labelled `gate:full`, produced while `lightMode` is
+disabled, or whose scope is underivable remains rejected exactly as before.
+
 ### Fan-out provenance (closing the self-produced-artifact loophole)
 
 `requireFanoutEvidence` is artifact-based: it only proves a `fanout_fanin` verdict

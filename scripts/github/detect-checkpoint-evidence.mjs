@@ -14,8 +14,9 @@ import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, loadDevLoopConfig, resolveGateConfig, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateConfig, resolveLightMode, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
@@ -256,7 +257,24 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   // { required: false, gates: [] } so the `.required` guard skips this block.
   if (fanoutEnforcement && fanoutEnforcement.required) {
     for (const gate of fanoutEnforcement.gates) {
-      if (gate.executionMode !== "fanout_fanin") {
+      // Light-mode acceptance (#1174): a genuinely under-threshold micro-PR
+      // collapses the gate fan-out to a single inline check (#1043). Accept that
+      // inline verdict ONLY when ALL hold, fail CLOSED otherwise:
+      //   - lightMode is enabled in config, AND
+      //   - the reviewed head's merge-base scope was RE-DERIVED under threshold
+      //     (scopeUnderThreshold; false whenever scope could not be derived), AND
+      //   - the PR carries no gate:full label (which always forces fan-out), AND
+      //   - the verdict records a non-empty inline reason.
+      // Any non-light inline verdict (over threshold / label / lightMode off /
+      // scope underivable) falls through to the byte-identical rejection below.
+      const lightAccepted =
+        gate.executionMode === "inline_single_agent"
+        && fanoutEnforcement.lightMode === true
+        && fanoutEnforcement.hasFullLabel !== true
+        && gate.scopeUnderThreshold === true
+        && typeof gate.inlineReason === "string"
+        && gate.inlineReason.trim().length > 0;
+      if (gate.executionMode !== "fanout_fanin" && !lightAccepted) {
         failures.push(
           `${gate.name}: requireFanoutEvidence is enabled but executionMode is "${gate.executionMode ?? "unset"}" (expected "fanout_fanin"); inline gate verdicts are not accepted`,
         );
@@ -274,7 +292,11 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
       // fanout_fanin ledger must record INTERNALLY-CONSISTENT provenance (checked
       // the same way the write path validates it — a hand-edited or shadow ledger
       // is re-validated here, not trusted) with distinctReviewers >= the floor.
-      if (fanoutEnforcement.requireProvenance) {
+      // Provenance is enforced ONLY for fanout_fanin verdicts (#1174): a
+      // light-accepted inline verdict is already scope-bounded and has no
+      // multi-reviewer provenance to record, so requiring it would make the
+      // light path unmergeable — the inverse of this issue's fix.
+      if (fanoutEnforcement.requireProvenance && gate.executionMode === "fanout_fanin") {
         const prov = gate.provenance;
         const consistencyErr = provenanceConsistencyError(prov);
         const reviewers = prov && Number.isInteger(prov.distinctReviewers) ? prov.distinctReviewers : null;
@@ -368,7 +390,7 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath) {
  * reviewed head SHA so the pre-merge check can fail closed on inline verdicts or
  * missing ledgers.
  */
-export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd }) {
+export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null }) {
   // Fail open when config could not be loaded/validated. `== null` covers both
   // null and undefined; the loader only ever yields null on failure, but the
   // loose check defensively treats an absent config as unavailable.
@@ -381,6 +403,12 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // Provenance enforcement is opt-in and layered ON TOP of fan-out evidence: it
   // only takes effect while evidence enforcement (above) is active.
   const requireProvenance = resolveRequireFanoutProvenance(config);
+  // Light-mode facts (#1174): the threshold that a re-derived merge-base scope
+  // must fall under for an inline verdict to be accepted. null when lightMode is
+  // disabled → no inline verdict can ever be accepted (scopeUnderThreshold stays
+  // false), preserving today's rejection.
+  const lightThreshold = resolveLightMode(config);
+  const lightMode = lightThreshold != null;
   const draftRequired = resolveGateConfig(config, "draft").required;
   const preApprovalRequired = resolveGateConfig(config, "preApproval").required;
   const gateSpecs = [
@@ -389,18 +417,31 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   ].filter((spec) => spec.required && spec.marker.visible);
   const gates = [];
   const checkouts = resolveLedgerCheckouts(cwd);
+  const repoRoot = resolveRepoRoot(cwd);
   for (const spec of gateSpecs) {
     const headSha = spec.marker.headSha ?? currentHeadSha;
     const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
+    // Re-derive scope FAIL-CLOSED for inline verdicts only (the fan-out default
+    // path pays no git I/O). scopeUnderThreshold is true ONLY when lightMode is
+    // on, the PR has no gate:full label, a base ref is known, and the merge-base
+    // diff for the reviewed head is genuinely under threshold. Any git/scope
+    // failure leaves it false, so the inline verdict is rejected exactly as today.
+    let scopeUnderThreshold = false;
+    if (lightMode && !hasFullLabel && baseRef && spec.marker.executionMode === "inline_single_agent") {
+      const scope = detectMergeBaseScope({ base: baseRef, head: headSha, cwd: repoRoot });
+      scopeUnderThreshold = scope.ok === true && isEligibleForLightMode(scope, lightThreshold);
+    }
     gates.push({
       name: spec.name,
       executionMode: spec.marker.executionMode ?? null,
+      inlineReason: spec.marker.inlineReason ?? null,
+      scopeUnderThreshold,
       ledgerPath,
       ledgerExists: await ledgerExistsInAny(checkouts, ledgerPath),
       provenance: requireProvenance ? await readLedgerProvenanceInAny(checkouts, ledgerPath) : null,
     });
   }
-  return { required: true, requireProvenance, gates };
+  return { required: true, requireProvenance, lightMode, hasFullLabel, gates };
 }
 export async function detectCheckpointEvidence(options, { env = process.env, ghCommand = "gh", cwd = process.cwd() } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
@@ -457,6 +498,29 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   let config = null;
   const { config: loadedConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
   config = Array.isArray(configErrors) && configErrors.length > 0 ? null : loadedConfig;
+  // Light-mode pre-merge facts (#1174): the base commit for the merge-base scope
+  // re-derivation and whether the PR forces full fan-out via the gate:full label.
+  // Fetched LAZILY — only when fan-out enforcement is active AND lightMode is on
+  // AND a gate actually recorded an inline verdict — so the common fan-out path
+  // (and every existing caller/test) makes NO extra gh call and stays unchanged.
+  let baseRef = null;
+  let hasFullLabel = false;
+  const anyInlineVerdict = [draftGateMarker, preApprovalGateMarker].some(
+    (marker) => marker.visible && marker.executionMode === "inline_single_agent",
+  );
+  if (config != null && resolveRequireFanoutEvidence(config) && resolveLightMode(config) != null && anyInlineVerdict) {
+    try {
+      const lightFacts = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefOid,labels"], { env, ghCommand });
+      baseRef = typeof lightFacts?.baseRefOid === "string" && lightFacts.baseRefOid.trim().length > 0
+        ? lightFacts.baseRefOid.trim()
+        : null;
+      hasFullLabel = Array.isArray(lightFacts?.labels)
+        && lightFacts.labels.some((label) => (typeof label === "string" ? label : label?.name) === GATE_FULL_LABEL);
+    } catch {
+      // Fail CLOSED: without the label/base facts we cannot safely accept an
+      // inline verdict, so leave baseRef null (scope underivable → rejected).
+    }
+  }
   const fanoutEnforcement = await buildFanoutEnforcement({
     repo: options.repo,
     pr: options.pr,
@@ -465,6 +529,8 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
     preApprovalGateMarker,
     config,
     cwd,
+    hasFullLabel,
+    baseRef,
   });
   return {
     ok: true,

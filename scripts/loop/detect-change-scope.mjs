@@ -96,6 +96,27 @@ function detectScope({ base, head } = {}) {
 function isEligibleForLightMode(scope, threshold) {
   return scope.filesChanged <= threshold.maxFiles && scope.linesChanged <= threshold.maxLines;
 }
+/**
+ * Detect change scope for the merge-base diff between `base` and `head` (the
+ * three-dot `base...head` diff git resolves against merge-base(base, head)).
+ *
+ * Fails CLOSED: a missing base/head, or any git failure, returns `{ ok: false }`
+ * so callers that gate on scope (e.g. the light-mode pre-merge acceptance) reject
+ * rather than silently treating an unmeasurable diff as under threshold. Reuses
+ * the same `parseGitDiffStat` scope resolution as `detectScope`.
+ */
+function detectMergeBaseScope({ base, head, cwd } = {}) {
+  if (!base || !head) {
+    return { ok: false, filesChanged: 0, linesChanged: 0, error: "base and head are required for merge-base scope detection" };
+  }
+  let output;
+  try {
+    output = execFileSync("git", ["diff", "--stat", `${base}...${head}`], { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined });
+  } catch (err) {
+    return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, ...parseGitDiffStat(output) };
+}
 async function main() {
   const opts = parseCliArgs(process.argv.slice(2));
   const scope = detectScope(opts);
@@ -132,4 +153,4 @@ if (isDirectRun) {
     process.exitCode = 1;
   });
 }
-export { detectScope, isEligibleForLightMode };
+export { detectScope, detectMergeBaseScope, isEligibleForLightMode };
