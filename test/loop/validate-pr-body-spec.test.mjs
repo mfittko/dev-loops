@@ -10,7 +10,9 @@ import {
   runCli,
 } from "../../scripts/loop/validate-pr-body-spec.mjs";
 
-const COMPLETE_BODY = `## Objective
+const COMPLETE_BODY = `Closes #123
+
+## Objective
 Because reasons.
 
 ## In scope
@@ -51,6 +53,25 @@ test("parseValidatePrBodySpecCliArgs rejects a zero --pr", () => {
   assert.throws(() => parseValidatePrBodySpecCliArgs(["--repo", "owner/name", "--pr", "0"]), /positive/i);
 });
 
+test("parseValidatePrBodySpecCliArgs parses --expected-issue", () => {
+  const opts = parseValidatePrBodySpecCliArgs(["--repo", "owner/name", "--pr", "7", "--expected-issue", "123"]);
+  assert.equal(opts.expectedIssue, 123);
+});
+
+test("parseValidatePrBodySpecCliArgs rejects a zero --expected-issue", () => {
+  assert.throws(
+    () => parseValidatePrBodySpecCliArgs(["--repo", "owner/name", "--pr", "7", "--expected-issue", "0"]),
+    /positive/i,
+  );
+});
+
+test("parseValidatePrBodySpecCliArgs rejects a non-numeric --expected-issue", () => {
+  assert.throws(
+    () => parseValidatePrBodySpecCliArgs(["--repo", "owner/name", "--pr", "7", "--expected-issue", "abc"]),
+    /positive/i,
+  );
+});
+
 test("parseValidatePrBodySpecCliArgs rejects --input combined with a stray --repo (no --pr)", () => {
   assert.throws(
     () => parseValidatePrBodySpecCliArgs(["--input", "/tmp/x.json", "--repo", "owner/name"]),
@@ -88,6 +109,64 @@ test("runCli --input fails closed (exit 1) when the body is missing the DoD", as
     const parsed = JSON.parse(out);
     assert.equal(parsed.ok, false);
     assert.ok(parsed.errors.some((e) => e.code === "missing_definition_of_done"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --input fails closed (exit 1) when the body has no Closes/Fixes/Resolves reference", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pr-body-spec-"));
+  try {
+    const body = COMPLETE_BODY.replace("Closes #123\n\n", "");
+    const p = path.join(dir, "noclosing.json");
+    await writeFile(p, JSON.stringify({ body }), "utf8");
+    let out = "";
+    const code = await runCli(["--input", p], {
+      stdout: { write: (s) => { out += s; } },
+      stderr: { write: () => {} },
+    });
+    assert.equal(code, 1);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.ok, false);
+    assert.ok(parsed.errors.some((e) => e.code === "missing_closing_issue_reference"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --input --expected-issue matching the Closes reference exits 0", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pr-body-spec-"));
+  try {
+    const p = path.join(dir, "complete.json");
+    await writeFile(p, JSON.stringify({ body: COMPLETE_BODY }), "utf8");
+    let out = "";
+    const code = await runCli(["--input", p, "--expected-issue", "123"], {
+      stdout: { write: (s) => { out += s; } },
+      stderr: { write: () => {} },
+    });
+    assert.equal(code, 0);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(parsed.closesIssues, [123]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --input --expected-issue mismatched with the Closes reference fails closed with closes_wrong_issue", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pr-body-spec-"));
+  try {
+    const p = path.join(dir, "complete.json");
+    await writeFile(p, JSON.stringify({ body: COMPLETE_BODY }), "utf8");
+    let out = "";
+    const code = await runCli(["--input", p, "--expected-issue", "456"], {
+      stdout: { write: (s) => { out += s; } },
+      stderr: { write: () => {} },
+    });
+    assert.equal(code, 1);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.ok, false);
+    assert.ok(parsed.errors.some((e) => e.code === "closes_wrong_issue"));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

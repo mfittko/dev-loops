@@ -52,6 +52,7 @@ Artifacts:
 
 Key contract:
 - The PR body must carry the same invariants a durable spec would: **Objective/why, in-scope + explicit non-goals, testable acceptance criteria, definition of done, open questions/risks**. `scripts/loop/validate-pr-body-spec.mjs` (reusing the generic markdown logic of `@dev-loops/core/loop/issue-refinement-artifact`, `validatePrBodySpec`) validates these and **fails closed** with a distinct `missing_*` reason per absent invariant.
+- The PR body MUST also carry the `Closes #N` linkage (GitHub's other closing keywords count too); `validate-pr-body-spec` fails closed with `missing_closing_issue_reference` without it, and with `closes_wrong_issue` when an `--expected-issue` is given and doesn't match — the lightweight path's issue-tracking state must never silently diverge from PR state (issue #1181).
 - This flips the promotion invariant below (P4, "the PR body carries the committed plan-doc **path**"): under lightweight there is no committed plan doc — the PR body **is** the spec, not a pointer to one.
 - The explicit `--lightweight` flag is the primary, deterministic trigger. The secondary heuristic (chore/fix commit type + no `--plan-file` + small change) is a documented manual signal for when to reach for the flag; it is not an automatic selector.
 - `--lightweight` is rejected when combined with `--plan-file` (they are opposites: `--plan-file` commits a durable plan doc as the spec, `--lightweight` makes the PR body the spec) and only composes with `--issue`.

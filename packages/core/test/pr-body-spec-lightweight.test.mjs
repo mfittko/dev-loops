@@ -12,7 +12,9 @@ import {
 // (b) PR-body-as-spec validation
 // ---------------------------------------------------------------------------
 
-const COMPLETE_BODY = `## Objective
+const COMPLETE_BODY = `Closes #123
+
+## Objective
 Ship the lightweight path because reasons.
 
 ## In scope
@@ -68,6 +70,7 @@ test("validatePrBodySpec: an empty body reports every missing invariant", () => 
   const codes = result.errors.map((e) => e.code).sort();
   assert.deepEqual(codes, [
     "missing_acceptance_criteria",
+    "missing_closing_issue_reference",
     "missing_definition_of_done",
     "missing_explicit_non_goals",
     "missing_in_scope",
@@ -83,8 +86,63 @@ test("validatePrBodySpec: an AC section with only an empty placeholder is not te
   assert.ok(result.errors.some((e) => e.code === "missing_acceptance_criteria"));
 });
 
+// ---------------------------------------------------------------------------
+// Closing-issue-reference invariant (issue #1181)
+// ---------------------------------------------------------------------------
+
+test("validatePrBodySpec: a body with Closes #N passes and extracts closesIssues", () => {
+  const result = validatePrBodySpec({ body: COMPLETE_BODY });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.closesIssues, [123]);
+});
+
+test("validatePrBodySpec: no closing-keyword reference fails closed with missing_closing_issue_reference", () => {
+  const body = COMPLETE_BODY.replace("Closes #123\n\n", "");
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "missing_closing_issue_reference"));
+  assert.deepEqual(result.closesIssues, []);
+});
+
+const CLOSING_KEYWORD_VARIANTS = ["Closes #123", "Fixes #123", "closed #123", "RESOLVES #123", "fixed #123", "resolve #123"];
+
+for (const reference of CLOSING_KEYWORD_VARIANTS) {
+  test(`validatePrBodySpec: closing keyword variant "${reference}" is accepted`, () => {
+    const body = COMPLETE_BODY.replace("Closes #123", reference);
+    const result = validatePrBodySpec({ body });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.closesIssues, [123]);
+  });
+}
+
+test("validatePrBodySpec: the cross-repo owner/repo#N form is accepted", () => {
+  const body = COMPLETE_BODY.replace("Closes #123", "Closes octocat/Hello-World#123");
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.closesIssues, [123]);
+});
+
+test("validatePrBodySpec: expectedIssue matching the closing reference passes", () => {
+  const result = validatePrBodySpec({ body: COMPLETE_BODY, expectedIssue: 123 });
+  assert.equal(result.ok, true);
+});
+
+test("validatePrBodySpec: expectedIssue NOT among the closing references fails closed with closes_wrong_issue", () => {
+  const result = validatePrBodySpec({ body: COMPLETE_BODY, expectedIssue: 456 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "closes_wrong_issue"));
+});
+
+test("validatePrBodySpec: a fenced Closes #N does NOT satisfy the gate (no spoof)", () => {
+  const body = COMPLETE_BODY.replace("Closes #123", "```\nCloses #123\n```");
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "missing_closing_issue_reference"));
+});
+
 const ALL_MISSING = [
   "missing_acceptance_criteria",
+  "missing_closing_issue_reference",
   "missing_definition_of_done",
   "missing_explicit_non_goals",
   "missing_in_scope",
@@ -138,7 +196,9 @@ test("parseMarkdownSections: a mixed-marker line (```~~~) does NOT close a backt
 });
 
 test("validatePrBodySpec: AC/DoD checkboxes that live ONLY inside a code fence do NOT count (fails closed)", () => {
-  const body = `## Objective
+  const body = `Closes #123
+
+## Objective
 x
 ## In scope
 - a
@@ -164,7 +224,9 @@ x
 });
 
 test("validatePrBodySpec: a narrative section whose body is ONLY a fenced block is treated as empty (fails closed)", () => {
-  const body = `## Objective
+  const body = `Closes #123
+
+## Objective
 \`\`\`
 just a code block, no real objective prose
 \`\`\`
@@ -185,7 +247,9 @@ just a code block, no real objective prose
 });
 
 test("validatePrBodySpec: real prose plus an ADDITIONAL fenced example still counts as a non-empty section", () => {
-  const body = `## Objective
+  const body = `Closes #123
+
+## Objective
 We ship the lightweight path. Example config:
 \`\`\`
 key: value
@@ -207,7 +271,9 @@ key: value
 });
 
 test("validatePrBodySpec: a mix of fenced and real checkboxes counts ONLY the real ones", () => {
-  const body = `## Objective
+  const body = `Closes #123
+
+## Objective
 x
 ## In scope
 - a
