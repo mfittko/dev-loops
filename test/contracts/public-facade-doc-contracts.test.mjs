@@ -8,6 +8,9 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
+import { assertRuleOwned } from "./_rule-helpers.mjs";
+
+const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
 async function readCopilotFollowupSurface() {
   const [skill, operationsDoc, intakeDoc] = await Promise.all([
@@ -155,7 +158,7 @@ test("workflow-surface taxonomy stays explicit and guards the entrypoint asset s
   assert.match(publicContract, /Internal routed strategy modules/i);
   assert.match(publicContract, /Reusable role agents/i);
   assert.match(publicContract, /specialized Copilot behavior stays internal-only behind `dev-loop`/i);
-  assert.match(publicContract, /Regression tests must fail if this taxonomy drifts/i);
+  assertRuleOwned("FACADE-TAXONOMY-DRIFT-TEST", PUBLIC_CONTRACT_PATH);
 
   assert.match(devLoopAgent, /single public workflow entrypoint/i);
 
@@ -226,7 +229,7 @@ test("status reporting contract requires authoritative state-first resolution an
   ]);
 
   assert.match(publicContract, /Authoritative-state-first status reporting contract/i);
-  assert.match(publicContract, /fail closed to reconcile\/unknown instead of guessing/i);
+  assertRuleOwned("FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED", PUBLIC_CONTRACT_PATH);
   assert.match(publicContract, /resolveAuthoritativeDevLoopStatus/i);
   assert.match(publicContract, /issue↔PR linkage resolution/i);
   assert.match(publicContract, /detect-linked-issue-pr\.mjs/i);
@@ -239,7 +242,7 @@ test("status reporting contract requires authoritative state-first resolution an
   assert.match(copilotFollowupSkill, /status\/progress\/readiness\/merge-state\/next-step/i);
   assert.match(copilotFollowupSkill, /reconcile\/unknown instead of guessing from chat context/i);
   assert.match(copilotFollowupSkill, /do not assert "no open PR" until authoritative issue↔PR linkage is resolved/i);
-  assert.match(publicContract, /only canonical active artifact for the issue during follow-up/i);
+  assertRuleOwned("FACADE-LINKED-PR-SINGLE-ARTIFACT", PUBLIC_CONTRACT_PATH);
   assert.match(devLoopSkill, /single canonical artifact for the issue and reuse it instead of opening another PR/i);
   assert.match(copilotFollowupSkill, /do not open another PR unless the prior PR was explicitly superseded and reconciled first/i);
   assert.match(copilotFollowupSkill, /reuse\/update that canonical PR instead of opening another one/i);
@@ -267,7 +270,7 @@ test("public dev-loop contract keeps conflict reconciliation local and context-f
   assert.match(publicContract, /current PR head SHA and effective PR diff/i);
   assert.match(publicContract, /issue\/PR scope and acceptance criteria/i);
   assert.match(publicContract, /current-head gate evidence and relevant unresolved review feedback/i);
-  assert.match(publicContract, /if required authoritative context is missing, stale for the current head, or contradictory, fail closed to reconcile/i);
+  assertRuleOwned("FACADE-CONFLICT-CONTEXT-FAIL-CLOSED", PUBLIC_CONTRACT_PATH);
   assert.match(publicContract, /resolve the conflict locally on the PR branch/i);
   assert.match(publicContract, /rerun required local validation, gate checks, and required CI checks for the new head before approval\/merge evaluation/i);
   assert.doesNotMatch(publicContract, /resolve the conflict .*blind merge\/update step/i);
