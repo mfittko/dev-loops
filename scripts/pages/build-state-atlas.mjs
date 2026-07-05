@@ -20,12 +20,15 @@ import { PUBLIC_DEV_LOOP_GATE_CONTRACT } from '../../packages/core/src/loop/publ
 // drawn from the site's own dark palette (accent violet, kicker blue,
 // accent-soft, and the card-border slate) so diagrams sit natively in the skin.
 const WAIT = /waiting|watch/;
-const STOP = /blocked|unavailable|stop|needs_human|reconcile|invalidated/;
+const STOP = /blocked|unavailable|stop|needs_human|reconcile|invalidated|conflict/;
 const TERM = /done|terminal|complete|merged/;
+// TERM is tested before STOP so names carrying both (e.g. stop_done_terminal)
+// classify as terminal, not blocked. `conflict` is a stop keyword: a conflicted
+// head is a blocked/detour state, never active progress.
 function classify(name) {
   if (WAIT.test(name)) return 'wait';
-  if (STOP.test(name)) return 'stop';
   if (TERM.test(name)) return 'term';
+  if (STOP.test(name)) return 'stop';
   return 'act';
 }
 
@@ -64,6 +67,17 @@ function renderStateDiagram(edges, states) {
 
 // The public dev-loop gate contract as a router → gates flowchart hub: one edge
 // per row, labelled with routeKind; each gate node shows gate id + strategy.
+// Gates carry their own routeKind, so color by it (route→act, wait→wait,
+// stop/needs_reconcile→stop) instead of the name heuristic — e.g.
+// waiting_for_merge_authorization names "waiting" but its routeKind is stop.
+// Terminal-named gates (stop_done_terminal) still classify as term.
+function gateClass(row) {
+  if (TERM.test(row.gate)) return 'term';
+  if (row.routeKind === 'route') return 'act';
+  if (row.routeKind === 'wait') return 'wait';
+  return 'stop';
+}
+
 function renderGateFlowchart(contract) {
   const lines = ['flowchart TD', '    router(["dev-loop router"])'];
   for (const row of contract) {
@@ -71,7 +85,7 @@ function renderGateFlowchart(contract) {
     lines.push(`    router -->|${row.routeKind}| ${row.gate}["${row.gate} — ${strategy}"]`);
   }
   lines.push(...CLASSDEFS);
-  for (const row of contract) lines.push(`    class ${row.gate} ${classify(row.gate)}`);
+  for (const row of contract) lines.push(`    class ${row.gate} ${gateClass(row)}`);
   return lines.join('\n');
 }
 
