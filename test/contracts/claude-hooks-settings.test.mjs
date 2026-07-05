@@ -16,7 +16,7 @@ function runHook(script, payload, env = {}) {
   // spawnSync handling is version-dependent and could coerce to the string "undefined").
   const childEnv = { ...process.env };
   delete childEnv.DEVLOOPS_RUN_ID;
-  delete childEnv["PI_" + "SUBAGENT" + "_RUN_ID"];
+  delete childEnv.PI_SUBAGENT_RUN_ID;
   const res = spawnSync("node", [path.join(hooksDir, script)], {
     input: JSON.stringify(payload),
     encoding: "utf8",

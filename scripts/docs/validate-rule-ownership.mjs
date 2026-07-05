@@ -182,8 +182,14 @@ export function detectModalityConflicts(definitions) {
 }
 
 async function readRequiredRules(repoRoot) {
-  const text = await readFile(path.join(repoRoot, "skills", "docs", "required-rules.json"), "utf8");
-  const parsed = parseJsonText(text);
+  const rulesPath = path.join(repoRoot, "skills", "docs", "required-rules.json");
+  const text = await readFile(rulesPath, "utf8");
+  let parsed;
+  try {
+    parsed = parseJsonText(text);
+  } catch (error) {
+    throw new Error(`Malformed JSON in ${rulesPath}`, { cause: error });
+  }
   return Array.isArray(parsed.requiredRules) ? parsed.requiredRules : [];
 }
 
