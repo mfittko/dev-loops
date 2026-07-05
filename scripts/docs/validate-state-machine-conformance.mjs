@@ -93,17 +93,25 @@ function realEdges(transitions) {
  * (Map<"from->to raw text", [from, to][]>) — an unmapped abstract row throws,
  * never silently drops, so a new abstract bullet in the doc is loud.
  *
- * Caveat: a top-level line that does not match "- X -> Y" is treated as prose
- * and skipped, so a malformed-but-intended bullet (unicode arrow, trailing
- * annotation) drops out silently. For pr-gate-coordination the load-time 1:1
- * doc<->atlas binding below catches every such drop; a second machine MUST
- * pair this parser with an equivalent independent binding (or extend the
- * parser with a "looks like a transition bullet but did not parse" check).
+ * Caveat: a top-level line that does not match "- X -> Y" at all (a unicode
+ * arrow, or missing the "- " bullet prefix) is treated as prose and skipped —
+ * that drop is silent. A line that DOES match "- X -> Y" but whose from/to is
+ * neither a `backtick token` nor a mapped abstractRows entry (e.g. a bullet
+ * with a trailing annotation after the arrow) is NOT silent: it fails the
+ * backtick-token match and throws via the unmapped-abstract-row path above.
+ * For pr-gate-coordination the load-time 1:1 doc<->atlas binding below
+ * additionally catches every silent-drop case; a second machine MUST pair
+ * this parser with an equivalent independent binding (or extend the parser
+ * with a "looks like a transition bullet but did not parse" check).
  */
 export function parseRequiredTransitions(markdown, { sectionHeading = "## Required transitions", abstractRows = new Map() } = {}) {
-  const sectionStart = markdown.indexOf(`\n${sectionHeading}\n`);
+  // The heading may open the file (index 0, no leading "\n") or appear further down (leading
+  // "\n"); check both so a doc that starts with this section is not falsely reported as missing.
+  const atStart = markdown.startsWith(`${sectionHeading}\n`);
+  const sectionStart = atStart ? 0 : markdown.indexOf(`\n${sectionHeading}\n`);
   if (sectionStart === -1) throw new Error(`doc has no "${sectionHeading}" section`);
-  const afterHeading = markdown.slice(sectionStart + sectionHeading.length + 2);
+  const headingEnd = sectionStart + (atStart ? 0 : 1) + sectionHeading.length + 1;
+  const afterHeading = markdown.slice(headingEnd);
   const body = afterHeading.split(/\n#{1,6} /)[0];
 
   const transitions = [];
@@ -208,7 +216,8 @@ export function compareDocCodeTransitions(docTransitions, transitionChecks) {
         if (outcome && outcome.result !== undefined) observations.push(outcome.result);
         results.push({ from, to, status: outcome.ok ? "verified" : "divergent", detail: outcome.detail });
       } catch (err) {
-        results.push({ from, to, status: "divergent", detail: `verify() threw: ${err.message}` });
+        const message = err instanceof Error ? err.message : String(err);
+        results.push({ from, to, status: "divergent", detail: `verify() threw: ${message}` });
       }
     } else {
       results.push({ from, to, status: check.status, issue: check.issue ?? null, note: check.note ?? null });
@@ -235,6 +244,9 @@ export function registerMachine(machine) {
   // half-registered machine that would otherwise skip L2 silently as ok:true.
   if (Boolean(machine.docTransitions) !== Boolean(machine.transitionChecks)) {
     throw new Error(`machine "${machine.name}" must provide docTransitions and transitionChecks together (or neither)`);
+  }
+  if (REGISTRY.has(machine.name)) {
+    throw new Error(`machine "${machine.name}" is already registered — duplicate registration would silently overwrite it`);
   }
   REGISTRY.set(machine.name, machine);
   return machine;
