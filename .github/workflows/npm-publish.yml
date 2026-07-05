@@ -47,8 +47,22 @@ jobs:
       - name: Dry-run pack root package
         run: npm pack --dry-run
 
+      # Per-package idempotency: a re-run after a partial failure must not
+      # fail on the package that already made it to the registry.
       - name: Publish core package to npm
-        run: npm publish -w packages/core --provenance --access public
+        run: |
+          VERSION=$(npm pkg get version | tr -d '"')
+          if npm view "@dev-loops/core@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::@dev-loops/core@${VERSION} already published; skipping."
+          else
+            npm publish -w packages/core --provenance --access public
+          fi
 
       - name: Publish root package to npm
-        run: npm publish --provenance --access public
+        run: |
+          VERSION=$(npm pkg get version | tr -d '"')
+          if npm view "dev-loops@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::dev-loops@${VERSION} already published; skipping."
+          else
+            npm publish --provenance --access public
+          fi

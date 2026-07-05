@@ -81,8 +81,9 @@ jobs:
             --latest \
             --verify-tag
 
+      # Not gated on `exists`: re-running after a failed dispatch/publish must
+      # retry. npm-publish.yml itself skips versions already on the registry.
       - name: Dispatch npm publish for the release tag
-        if: steps.exists.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
