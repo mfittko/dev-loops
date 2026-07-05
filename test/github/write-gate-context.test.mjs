@@ -12,6 +12,7 @@ import {
   buildGateContextArtifact,
   buildGateContextPath,
   buildGateDiffPath,
+  captureDiffFromBase,
   main,
   mapGateToConfigKey,
   parseChangedFiles,
@@ -841,21 +842,23 @@ test("parseWriteGateContextCliArgs defaults --base to null", () => {
   assert.equal(result.base, null);
 });
 
-test("parseWriteGateContextCliArgs rejects an implausible --base ref", () => {
-  assert.throws(() => parseWriteGateContextCliArgs([
-    "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate",
-    "--head-sha", "abc1234", "--angles", '["scope"]',
-    "--base", "--evil-flag",
-  ]), /--base/);
-  assert.throws(() => parseWriteGateContextCliArgs([
-    "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate",
-    "--head-sha", "abc1234", "--angles", '["scope"]',
-    "--base", "a..b",
-  ]), /--base/);
+test("parseWriteGateContextCliArgs rejects only the genuinely-unsafe/malformed --base refs (denylist)", () => {
+  // Leading "-" (flag-injection shape), ".." (ambiguous with <base>...HEAD),
+  // and empty/whitespace-only are the ONLY rejected shapes.
+  for (const bad of ["--evil-flag", "a..b", "   "]) {
+    assert.throws(() => parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc1234", "--angles", '["scope"]',
+      "--base", bad,
+    ]), /--base/, `${JSON.stringify(bad)} should be rejected`);
+  }
 });
 
-test("parseWriteGateContextCliArgs accepts ancestry refs (HEAD~3, main^)", () => {
-  for (const ref of ["HEAD~3", "main^", "HEAD~2^2", "release/1.0~1"]) {
+test("parseWriteGateContextCliArgs accepts valid git revision syntaxes (denylist lets git resolve validity)", () => {
+  // Ancestry, reflog/upstream selectors, and tag-peel — all argv-safe under
+  // execFileSync (no shell), so the parser accepts them and defers resolution
+  // to `git diff` (a nonexistent-but-well-shaped ref fails closed downstream).
+  for (const ref of ["HEAD~3", "main^", "HEAD~2^2", "release/1.0~1", "HEAD@{upstream}", "main@{1}", "v1.0.0^{commit}"]) {
     const result = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate",
       "--head-sha", "abc1234", "--angles", '["scope"]',
@@ -1019,6 +1022,87 @@ test("CLI --base degrades to scope.diffPath=null but STILL writes the artifact w
     // changedFiles (from name-status) and adjacentCode are unaffected by the diff-write failure.
     assert.deepEqual(artifact.scope.changedFiles, ["src/changed.mjs"]);
     assert.ok(artifact.adjacentCode, "adjacentCode still built from changedFiles");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// captureDiffFromBase — split posture: --name-status fail-closed, full diff best-effort
+// ---------------------------------------------------------------------------
+
+test("captureDiffFromBase: full-diff overflow (tiny maxBuffer) degrades to empty diffOutput while --name-status still resolves", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cap-"));
+  try {
+    git(repoRoot, ["init", "-q"]);
+    git(repoRoot, ["config", "user.email", "test@example.com"]);
+    git(repoRoot, ["config", "user.name", "Test"]);
+    await mkdir(path.join(repoRoot, "src"), { recursive: true });
+    await writeFile(path.join(repoRoot, "src/big.mjs"), "export const x = 0;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "base"]);
+    // A large single-file change: name-status stays one tiny line, the full diff
+    // is many KB — so a small maxBuffer overflows ONLY the full-diff capture.
+    const bigBody = Array.from({ length: 4000 }, (_, i) => `export const v${i} = ${i};`).join("\n") + "\n";
+    await writeFile(path.join(repoRoot, "src/big.mjs"), bigBody, "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "grow"]);
+
+    const { nameStatusOutput, diffOutput } = captureDiffFromBase("HEAD~1", { repoRoot, maxBuffer: 512 });
+    assert.match(nameStatusOutput, /src\/big\.mjs/, "--name-status resolved under the tiny buffer");
+    assert.equal(diffOutput, "", "full diff degraded to empty on overflow (best-effort)");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("captureDiffFromBase: --name-status failure fails closed (throws)", async () => {
+  const { repoRoot } = await makeBaseDiffRepo();
+  try {
+    assert.throws(
+      () => captureDiffFromBase("this-ref-does-not-exist", { repoRoot }),
+      /git diff against --base .* failed/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base with a failing full diff still writes the artifact (changedFiles + adjacentCode present, diffPath null, diffSource stays 'base')", async () => {
+  // Downstream proof of the best-effort split: an empty diffOutput (what a failed
+  // full-diff capture returns) leaves diffPath null while changedFiles +
+  // adjacentCode are still built, and the posture marker stays "base".
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-partial-"));
+  try {
+    const files = {
+      "src/changed.mjs": 'import { helper } from "./dep.mjs";\nexport function changed() { return helper(); }\n',
+      "src/dep.mjs": "export function helper() { return 1; }\n",
+      "src/caller.mjs": 'import { changed } from "./changed.mjs";\nchanged();\n',
+    };
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = path.join(repoRoot, rel);
+      await mkdir(path.dirname(abs), { recursive: true });
+      await writeFile(abs, content, "utf8");
+    }
+    const config = draftConfig({ dynamicAngles: false });
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        // diffOutput:"" == what captureDiffFromBase returns on a best-effort full-diff failure.
+        diff: { nameStatusOutput: "M\tsrc/changed.mjs\n", diffOutput: "" },
+        repo: "owner/repo",
+        pr: 46,
+        headSha: "abc1234567890",
+      },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.scope.diffPath, null);
+    assert.deepEqual(result.artifact.scope.changedFiles, ["src/changed.mjs"]);
+    assert.ok(result.artifact.adjacentCode, "adjacentCode still built from changedFiles");
+    const byPath = Object.fromEntries(result.artifact.adjacentCode.files.map((f) => [f.path, f]));
+    assert.equal(byPath["src/dep.mjs"].role, "imports");
+    assert.equal(byPath["src/caller.mjs"].role, "importedBy");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

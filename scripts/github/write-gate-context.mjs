@@ -139,18 +139,20 @@ function normalizeHeadSha(value) {
   return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
 }
 
-// ponytail: a conservative allowlist for a "plausible" git ref — rejects a
-// leading "-" (flag injection into the argv-array `git diff` call below,
-// which is already immune since execFileSync never invokes a shell, but a
-// leading dash is also just never a valid ref) and ".." (ambiguous with our
-// own "<base>...HEAD" triple-dot construction). `~` and `^` are allowed so
-// ancestry refs (HEAD~3, main^, HEAD~2^2) resolve — they are injection-safe
-// under execFileSync's argv array. Not a full git ref-name validator; upgrade
-// if a legitimately-shaped ref ever gets rejected.
+// ponytail: a DENYLIST, not an allowlist — the `git diff` call runs via
+// execFileSync's argv array (no shell), so `base` cannot inject shell syntax
+// and we don't need to enumerate every valid git revision grammar. We reject
+// only what is genuinely unsafe or malformed for OUR use, and let `git diff`
+// itself resolve validity (a syntactically-allowed but nonexistent ref fails
+// closed via the unresolvable-base path). Rejected: empty/whitespace-only; a
+// leading "-" (flag-injection shape, never a valid ref); and ".." (ambiguous
+// with our own "<base>...HEAD" triple-dot construction). Everything else —
+// including HEAD@{upstream}, main@{1}, tag-peel v1.0.0^{commit}, HEAD~3 — is
+// accepted.
 function normalizeBaseRef(value) {
   const trimmed = String(value).trim();
   if (trimmed.length === 0 || trimmed.startsWith("-") || trimmed.includes("..")) return null;
-  return /^[A-Za-z0-9][A-Za-z0-9._/~^-]*$/.test(trimmed) ? trimmed : null;
+  return trimmed;
 }
 
 const VALID_ACTIONS = new Set(["kept", "added", "dropped", "joined"]);
@@ -569,15 +571,24 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
  * `{ nameStatusOutput, diffOutput }` input `resolveDiffScope`/`buildGateContext`
  * expect. Uses execFileSync with an argv array (no shell), so `base` cannot
  * inject shell syntax; `parseWriteGateContextCliArgs` additionally validates it
- * looks like a plausible ref before this runs. Throws on failure (unresolvable
- * base, not a git repo, etc.) — the CLI treats that as fail-closed, not a
- * silent degrade to a thin briefing.
+ * looks like a plausible ref before this runs.
+ *
+ * Split posture:
+ * - the `--name-status` capture is FAIL-CLOSED: it drives scope.changedFiles +
+ *   the adjacentCode bundle, so an unresolvable base / non-git-repo throws and
+ *   the CLI writes NO artifact (never a silent thin briefing).
+ * - the FULL diff capture is BEST-EFFORT: if it fails (output exceeds maxBuffer,
+ *   a rendering error, etc.) we warn and return an EMPTY diffOutput. downstream
+ *   resolveDiffScope then leaves scope.diffPath null while still populating
+ *   changedFiles + adjacentCode; reviewers fall back to re-deriving the diff
+ *   (the existing safety net). scope.diffSource stays "base" — it IS a
+ *   base-derived bundle, just without the persisted full diff.
  *
  * @param {string} base
- * @param {{ repoRoot: string }} opts
+ * @param {{ repoRoot: string, maxBuffer?: number }} opts — maxBuffer overridable for tests
  * @returns {{ nameStatusOutput: string, diffOutput: string }}
  */
-function captureDiffFromBase(base, { repoRoot }) {
+export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024 }) {
   const range = `${base}...HEAD`;
   // Isolate the persisted .diff BYTES from ambient global/system gitconfig so
   // every reviewer is seeded with an IDENTICAL neutral bundle (the whole point
@@ -599,15 +610,23 @@ function captureDiffFromBase(base, { repoRoot }) {
   const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer,
   });
+  // FAIL-CLOSED: --name-status feeds changedFiles + adjacentCode (the bundle's core).
   let nameStatusOutput;
-  let diffOutput;
   try {
     nameStatusOutput = runGit(["diff", "--no-ext-diff", "--name-status", range]);
-    diffOutput = runGit(["diff", "--no-ext-diff", range]);
   } catch (err) {
     throw new Error(`git diff against --base ${JSON.stringify(base)} failed: ${err?.message ?? err}`);
+  }
+  // BEST-EFFORT: the full diff only feeds the persisted scope.diffPath; on
+  // failure degrade to an empty diffOutput (diffPath becomes null downstream).
+  let diffOutput = "";
+  try {
+    diffOutput = runGit(["diff", "--no-ext-diff", range]);
+  } catch (err) {
+    process.stderr.write(`[gate-context] full-diff capture against --base ${JSON.stringify(base)} failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
+    diffOutput = "";
   }
   return { nameStatusOutput, diffOutput };
 }
