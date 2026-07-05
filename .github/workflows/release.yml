@@ -1,8 +1,10 @@
 name: Create GitHub Release
 
 # Tagging is the only manual release step. Pushing a "v*" tag creates the
-# GitHub Release (notes = the matching CHANGELOG.md section), which in turn
-# fires npm-publish.yml (on: release: published).
+# GitHub Release, then dispatches npm-publish.yml explicitly: releases
+# created with GITHUB_TOKEN never fire `on: release`, so event chaining
+# alone silently skips npm publishing (#1187). workflow_dispatch is the
+# documented GITHUB_TOKEN exception.
 on:
   push:
     tags:
@@ -13,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -77,3 +80,11 @@ jobs:
             --notes-file release-notes.md \
             --latest \
             --verify-tag
+
+      # Not gated on `exists`: re-running after a failed dispatch/publish must
+      # retry. npm-publish.yml itself skips versions already on the registry.
+      - name: Dispatch npm publish for the release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run npm-publish.yml --ref "${{ steps.version.outputs.tag }}"
