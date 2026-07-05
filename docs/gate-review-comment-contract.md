@@ -1,7 +1,7 @@
 # Checkpoint Verdict Comment Contract
 
-This document defines the required visible PR-comment contract for the two gate
-boundaries in the dev-loop workflow: `draft_gate` and `pre_approval_gate`.
+Canonical owner for gate-review **PR comment field** rules for the two gate boundaries in
+the dev-loop workflow: `draft_gate` and `pre_approval_gate`.
 
 ## Purpose
 
@@ -10,10 +10,11 @@ conversation alone. A reviewer or maintainer can inspect which gate ran, which h
 commit was reviewed, whether it passed cleanly, and whether a result is current for
 the latest head — without relying on local or session-only artifacts.
 
-This document owns the visible checkpoint verdict comment evidence contract only. It does
-not restate the full PR follow-up procedure; that remains owned by the relevant
-workflow skill. The broader family-local PR lifecycle that consumes this evidence
-is defined in [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md).
+<!-- rule: GATE-COMMENT-SCOPE-ONLY -->
+`GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict comment evidence contract only.
+It does not restate the full PR follow-up procedure; that
+remains owned by the relevant workflow skill. The broader family-local PR lifecycle
+that consumes this evidence is defined in [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md).
 
 ## Scope
 
@@ -28,17 +29,16 @@ This contract covers exactly two gates with distinct lifecycle semantics:
 
 ## Separate chains per gate
 
-Each gate runs an independent review chain with its own disposition ledger. The chains
-are not interchangeable:
+Each gate runs its own independent review chain (`GATE-EXEC-SEPARATE-CHAINS`, owned by
+[Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#separate-chains-per-gate)).
+This section owns only the comment-visible ledger path per gate:
 
-| Gate | Own review angles | Own disposition ledger | Own exit conditions |
-|---|---|---|---|
-| `draft_gate` | Config: `gates.draft.angles` | `tmp/gate-findings/.../draft_gate-<sha>.json` | Clean = no blocking-severity findings for draft→ready |
-| `pre_approval_gate` | Config: `gates.preApproval.angles` | `tmp/gate-findings/.../pre_approval_gate-<sha>.json` | Clean = no blocking-severity findings for final approval |
+| Gate | Own disposition ledger path |
+|---|---|
+| `draft_gate` | `tmp/gate-findings/.../draft_gate-<sha>.json` |
+| `pre_approval_gate` | `tmp/gate-findings/.../pre_approval_gate-<sha>.json` |
 
 ## Review-angle ownership and non-substitution rules
-
-These gates are related but **not interchangeable**.
 
 Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). The reviewer persona for each angle is resolved via `resolveReviewerRole` from the persona registry (`packages/core/src/config/config.mjs`). Consumer repos may override angles and map custom personas via their own config.
 
@@ -49,12 +49,14 @@ Resolve angles at runtime with `resolveGateAngles(config, "draft")` and `resolve
 | `draft_gate` | Draft → ready for review | Resolved from `gates.draft.angles` in config | `gh pr ready` / leaving draft for the reviewed head SHA | final-approval readiness, merge-ready claims, or satisfaction of `pre_approval_gate` |
 | `pre_approval_gate` | Final approval / merge readiness | Resolved from `gates.preApproval.angles` in config | approval-ready / final-human-approval readiness for the reviewed head SHA | draft-stage `gh pr ready` decisions for a different gate run |
 
-A clean `draft_gate` comment does **not** satisfy `pre_approval_gate` requirements.
+<!-- rule: GATE-COMMENT-NON-SUBSTITUTION -->
+`GATE-COMMENT-NON-SUBSTITUTION`: A clean `draft_gate` comment does **not** satisfy `pre_approval_gate` requirements.
 A clean `pre_approval_gate` comment does **not** retroactively replace the required `draft_gate` evidence for leaving draft.
 
 ## Required fields
 
-Every gate-review PR comment must include:
+<!-- rule: GATE-COMMENT-REQUIRED-FIELDS -->
+`GATE-COMMENT-REQUIRED-FIELDS`: Every gate-review PR comment MUST include:
 
 | Field | Description |
 |---|---|
@@ -67,6 +69,9 @@ Every gate-review PR comment must include:
 
 ## Verdict definitions
 
+<!-- rule: GATE-COMMENT-VERDICT-VALUES -->
+`GATE-COMMENT-VERDICT-VALUES`:
+
 | Verdict | Meaning |
 |---|---|
 | `clean` | No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain |
@@ -75,40 +80,36 @@ Every gate-review PR comment must include:
 
 ## Disposition ledger
 
-Every gate pass writes a durable final-findings log via `write-gate-findings-log.mjs`
-before the visible PR comment is posted. The disposition ledger is the source of truth
-for what the gate found and what was decided:
-
-- each finding records: severity, review angle, summary, affected files
-- resolved findings record the head SHA that resolved them
-- the log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`
-
+Durable-ledger sequencing and content are owned by `GATE-EXEC-DISPOSITION-LEDGER`
+([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#disposition-ledger-and-durable-logging)).
 The visible PR comment is a summary for auditability; the disposition ledger is the
 complete durable record.
 
 ## Readable deterministic format
 
-- Keep the visible comment compact and deterministic, but slightly human-friendly:
-  prefer labels like `Gate review`, `Reviewed head SHA`, `Verdict`, `Blocking severities`,
-  `Findings summary`, and `Next action`.
-- Preserve parser stability for gate name and reviewed head SHA; minor label wording is fine as long as those fields remain easy to extract deterministically.
-- When a gate pass reached `clean` only after corrective changes on the reviewed head, the findings summary should briefly say what gap was found, what changed, and why the current head now satisfies the gate.
-- Validation reporting in visible gate comments must stay concise by default:
-  include command names plus pass/fail status, aggregate counts when useful, and
-  current-head CI/check status when available — not raw passing log streams.
-- Any command output included in the visible comment must be truncated to a
-  deterministic retained-prefix length before comment creation; the rendered text may include a short truncation marker suffix.
-- When validation fails, include only a focused relevant excerpt rather than an
-  unbounded raw log dump; detailed logs may live in local/session artifacts or
-  linked GitHub logs instead of the visible audit comment.
+<!-- rule: GATE-COMMENT-VALIDATION-REPORTING -->
+`GATE-COMMENT-VALIDATION-REPORTING`: Keep the visible comment compact, deterministic, and
+slightly human-friendly (labels like `Gate review`, `Reviewed head SHA`, `Verdict`,
+`Blocking severities`, `Findings summary`, `Next action`); gate name and reviewed head SHA
+MUST stay deterministically parseable even if label wording changes. Validation reporting
+MUST stay concise by default — command names plus pass/fail status, aggregate counts, and
+current-head CI/check status, never raw passing log streams. Any included command output
+MUST be truncated to a deterministic retained-prefix length (a short truncation marker
+suffix is allowed); a failure MUST show only a focused relevant excerpt, not an unbounded
+raw log dump. When a pass reached `clean` only after corrective changes, the findings
+summary should briefly say what gap was found, what changed, and why the current head now
+satisfies the gate.
 
 ## Behavior requirements
 
-**Post-before-fix ordering rule:** Gate-review findings must be posted as a
-visible PR comment **before** the fix cycle begins. Fixes must not be applied
-until the auditable trail exists on the PR. This applies to both gate boundaries.
+Post-before-fix ordering is owned by `GATE-EXEC-POST-BEFORE-FIX`
+([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger));
+it applies to both gate boundaries.
 
 ### Draft gate (`draft_gate`) comment requirements
+
+<!-- rule: GATE-COMMENT-DRAFT-REQUIREMENTS -->
+`GATE-COMMENT-DRAFT-REQUIREMENTS`:
 
 **One-time transition boundary.** `draft_gate` is not a recurring per-head gate — it
 records exactly one decision point: the draft → ready-for-review transition. Once a
@@ -137,6 +138,9 @@ normal review/fix loops and the recurring per-head `pre_approval_gate`.
 
 ### Pre-approval gate (`pre_approval_gate`) comment requirements
 
+<!-- rule: GATE-COMMENT-PREAPPROVAL-REQUIREMENTS -->
+`GATE-COMMENT-PREAPPROVAL-REQUIREMENTS`:
+
 - When the `pre_approval_gate` runs, the PR must receive a visible checkpoint verdict comment.
 - If the `pre_approval_gate` verdict is `findings_present` or `blocked`, the comment
   must state that follow-up fixes are required before final approval.
@@ -147,6 +151,9 @@ normal review/fix loops and the recurring per-head `pre_approval_gate`.
 
 ## Rerun rules
 
+<!-- rule: GATE-COMMENT-RERUN-RULES -->
+`GATE-COMMENT-RERUN-RULES`:
+
 | Scenario | Rule |
 |---|---|
 | Same head SHA rerun | Idempotent behavior: do not post a second visible marker for the same gate+head. Reuse/suppress by default; if correction is needed, update/replace the existing marker in place. |
@@ -154,9 +161,10 @@ normal review/fix loops and the recurring per-head `pre_approval_gate`.
 
 ## Fail-closed behavior
 
-If the required checkpoint verdict comment cannot be posted (for example due to a GitHub
-API error, permission restriction, or tooling failure), the workflow must not cross
-the gate boundary:
+<!-- rule: GATE-COMMENT-FAIL-CLOSED -->
+`GATE-COMMENT-FAIL-CLOSED`: If the required checkpoint verdict comment cannot be posted
+(for example due to a GitHub API error, permission restriction, or tooling failure), the
+workflow MUST NOT cross the gate boundary:
 
 - do not run `gh pr ready` (for `draft_gate`)
 - do not declare final-approval readiness (for `pre_approval_gate`)
@@ -178,3 +186,4 @@ required visible PR comment is confirmed posted for the current head SHA.
 - [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md) — execution shape for gate inspection work
 - [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md) — skill that owns gate execution
 - [Final Approval](../skills/final-approval/SKILL.md) — human approval gate route
+- [Contract style guide](../skills/docs/contract-style-guide.md) — rule ID and RFC-2119 conventions

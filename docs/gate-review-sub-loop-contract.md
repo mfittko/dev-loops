@@ -1,7 +1,7 @@
 # Checkpoint Review Chain Contract
 
-This document defines the reusable checkpoint review chain execution shape shared by the
-two dev-loop gate boundaries: `draft_gate` and `pre_approval_gate`.
+Canonical owner for gate-review **execution shape** rules shared by the two dev-loop gate
+boundaries: `draft_gate` and `pre_approval_gate`.
 
 ## Purpose
 
@@ -12,8 +12,12 @@ shared contract avoids inconsistent execution.
 
 ### Execution model: build once, seed many (no fork)
 
-The sub-loop does **not** fork reviewers from a parent agent's loaded context, and
-it does not depend on any fork primitive or the Workflow tool. Instead:
+<!-- rule: GATE-EXEC-BUILD-ONCE-SEED -->
+`GATE-EXEC-BUILD-ONCE-SEED`: Each gate pass MUST build ONE neutral context bundle once
+via a deterministic context-builder script and seed every independent, fresh-context
+reviewer with that bundle verbatim. Reviewers MUST NOT fork from, or inherit, a parent
+agent's loaded context, and the sub-loop MUST NOT depend on any fork primitive or the
+Workflow tool. Concretely:
 
 1. A deterministic **context-builder script** (`scripts/github/write-gate-context.mjs`)
    builds ONE generous, neutral context bundle for the head SHA: the full diff plus
@@ -39,19 +43,18 @@ This contract owns the **execution shape** of gate-review work. It does not own:
 
 ## Relationship to the checkpoint verdict comment contract
 
-The sub-loop executes the review work. The checkpoint verdict comment contract
-([Gate Review Comment Contract](gate-review-comment-contract.md)) defines the visible PR comment evidence that
-proves the sub-loop completed for a specific head SHA. Both are required for a gate to
-be satisfied, but they address different concerns:
-- this contract = **how** the review work is structured and executed
-- checkpoint verdict comment contract = **what** visible evidence must exist on the PR
+This contract owns **how** the review work is structured and executed; [Gate Review
+Comment Contract](gate-review-comment-contract.md) owns **what** visible PR-comment
+evidence proves the sub-loop completed for a head SHA. Both are required for a gate to
+be satisfied.
 
 ## Separate chains per gate
 
-Each gate (`draft_gate`, `pre_approval_gate`) runs its own independent review chain
-with its own review angles, its own disposition ledger, its own fix cycle, and its own
-exit conditions. The chains are not interchangeable; each gate's execution is a complete,
-self-contained sub-loop pass.
+<!-- rule: GATE-EXEC-SEPARATE-CHAINS -->
+`GATE-EXEC-SEPARATE-CHAINS`: Each gate (`draft_gate`, `pre_approval_gate`) MUST run its
+own independent review chain with its own review angles, its own disposition ledger, its
+own fix cycle, and its own exit conditions. The chains are not interchangeable; each
+gate's execution is a complete, self-contained sub-loop pass.
 
 | Property | `draft_gate` chain | `pre_approval_gate` chain |
 |---|---|---|
@@ -212,16 +215,15 @@ malformed/missing, and `toFindingsLogShape` maps the result into the
 - write the durable final-findings log via `write-gate-findings-log.mjs` under
   deterministic `tmp/` paths before posting the visible PR comment
 
-**Disposition ledger rule:** The consolidated findings and their dispositions must be
-logged as the durable disposition ledger **before** the visible PR comment is posted.
-The ledger is the source of truth for what the gate found; the visible PR comment is a
-summary for auditability.
+Disposition-ledger sequencing (write before the visible comment) is owned by
+`GATE-EXEC-DISPOSITION-LEDGER` below.
 
-**Post-findings rule:** The consolidated findings must be posted as a visible,
+<!-- rule: GATE-EXEC-POST-BEFORE-FIX -->
+`GATE-EXEC-POST-BEFORE-FIX`: The consolidated findings MUST be posted as a visible,
 marker-tagged PR comment via `post-gate-findings.mjs` (a consolidated comment listing
 each finding grouped by severity, with `file:line` refs) **before** the fix cycle in
 Phase 4 begins, so the findings are auditable and Copilot/humans are aware of them.
-Fixes must not be applied until the auditable trail exists on the PR. The helper is
+Fixes MUST NOT be applied until the auditable trail exists on the PR. The helper is
 idempotent per gate (exactly one comment per gate, updated in place on each run; the
 reviewed head is shown in the body) and posts a brief "no findings" note when the set
 is empty. This comment
@@ -247,7 +249,7 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 
 After applying fixes and advancing the head SHA:
 
-- **Re-gate is mandatory:** a new head SHA always requires a fresh full-chain gate pass. Never skip the gate because a previous head was clean.
+- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean.
 - rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA)
 - continue the fix-then-retry cycle until the synthesis verdict is `clean`
 - on retry, only re-invoke reviewers that previously returned `findings_present`; the context-builder and consolidation always run fresh
@@ -296,13 +298,19 @@ The execution phases are identical; only the review angles and blocking severity
 
 ## Non-substitution rule
 
-A clean sub-loop pass for one gate does not satisfy the other gate. Each gate requires
-its own complete sub-loop execution with its own review angles, its own disposition ledger,
-and its own visible checkpoint verdict comment on the PR for the reviewed head SHA.
+<!-- rule: GATE-EXEC-NON-SUBSTITUTION -->
+`GATE-EXEC-NON-SUBSTITUTION`: A clean sub-loop pass for one gate does not satisfy the other gate.
+Each gate MUST run its own complete sub-loop execution with its own review
+angles, its own disposition ledger, and its own visible checkpoint verdict comment on the
+PR for the reviewed head SHA.
 
 ## Disposition ledger and durable logging
 
-Every gate pass writes a durable final-findings log via `write-gate-findings-log.mjs`:
+<!-- rule: GATE-EXEC-DISPOSITION-LEDGER -->
+`GATE-EXEC-DISPOSITION-LEDGER`: Every gate pass MUST write a durable final-findings log
+via `write-gate-findings-log.mjs` **before** the visible PR comment is posted; the ledger
+is the durable record of what the gate found and what was decided, and the visible
+comment is a summary for auditability, not a replacement for it.
 
 ```sh
 node scripts/github/write-gate-findings-log.mjs \
@@ -417,3 +425,4 @@ recording + enforcement + fail-closed signal that land independently.
 - [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) — broader lifecycle state machine
 - [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md) — skill that owns gate execution
 - [Local Implementation](../skills/local-implementation/SKILL.md) — uses chain pattern for local phase plan audits
+- [Contract style guide](../skills/docs/contract-style-guide.md) — rule ID and RFC-2119 conventions
