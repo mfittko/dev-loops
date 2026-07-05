@@ -52,11 +52,12 @@ function edgesFromTransitions(values, transitions) {
   return edges;
 }
 
-// ponytail: mermaid sources are emitted RAW (never HTML-escaped). Every id here
-// is snake_case and every edge is `a --> b`, so the source contains `>` but
-// never `<` — a browser parses those as literal text (no tag/comment), the
-// element's textContent is the exact source mermaid needs, and the `-->` arrows
-// survive verbatim for the atlas tests. Keep it `<`-free: no HTML tags in labels.
+// Note: mermaid sources are HTML-escaped (& then <) when embedded into the page
+// (see sectionMarkup), so the browser's parser hands mermaid the exact source
+// back via textContent. Every id here is snake_case and every label is HTML-free,
+// so the escaping is defense-in-depth against future drift, not load-bearing:
+// today's sources contain `>` (in `-->` arrows) but never `<` or `&`, and the
+// arrows survive verbatim in the built bytes for the atlas tests.
 function renderStateDiagram(edges, states) {
   const lines = ['stateDiagram-v2'];
   for (const [a, b] of edges) lines.push(`    ${a} --> ${b}`);
@@ -259,13 +260,18 @@ function proseParagraphs(prose) {
   return prose.map((p) => `        <p>${p}</p>`).join('\n');
 }
 
+// Escape mermaid source for HTML embedding: & first, then <. The HTML parser
+// unescapes these before mermaid reads the element's textContent, so mermaid
+// sees the exact original source (and `-->` arrows pass through untouched).
+const escapeMermaid = (src) => src.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
 function sectionMarkup(s) {
   return `      <section class="atlas-section" id="${s.id}">
         <h2>${s.title}</h2>
         <p class="source">Diagram generated from <code>${s.source}</code></p>
 ${proseParagraphs(s.prose)}
         <div class="diagram"><div class="mermaid">
-${s.diagram}
+${escapeMermaid(s.diagram)}
 </div></div>
       </section>`;
 }
@@ -405,7 +411,7 @@ ${sections}
     <script>
       mermaid.initialize({
         startOnLoad: true,
-        securityLevel: 'loose',
+        securityLevel: 'strict',
         theme: 'base',
         themeVariables: {
           darkMode: true,
