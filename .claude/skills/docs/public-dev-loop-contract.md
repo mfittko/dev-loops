@@ -1,10 +1,10 @@
 # Public dev-loop contract
 
-This document is the canonical authority for the public `dev-loop` entrypoint, its routed semantics, accepted shorthand, and the rule that internal strategy names stay behind that public façade.
+This document is the canonical authority for the public `dev-loop` entrypoint: routed semantics, accepted shorthand, and the rule that internal strategy names stay behind the façade.
 
 This canonical owner lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree. In installed layouts, read the same contract via [Public Dev Loop Contract](../docs/public-dev-loop-contract.md) from the installed skill directory.
 
-Other repo docs may summarize or link this contract, but they should not redefine it.
+Other repo docs MAY summarize or link this contract; they MUST NOT redefine it.
 
 ## Public surface
 
@@ -12,7 +12,7 @@ The single public entrypoint is:
 
 - `dev-loop`
 
-It should be callable from the user-facing workflow surfaces, including:
+`dev-loop` MUST be callable from the user-facing workflow surfaces, including:
 
 - `subagent dev-loop`
 - `/skill:dev-loop`
@@ -28,8 +28,6 @@ Day-one user-intent forms:
 - auto dev loop on issue `<n>`
 - what state is the dev loop in?
 
-Users should not have to choose `dev-loop` vs internal seam names up front.
-
 ## Issue-based shorthand auto trigger contract
 
 This shorthand form is explicitly accepted and resolves to the same bounded public `dev-loop` intent:
@@ -44,7 +42,7 @@ Canonical mapping:
 
 Stop-boundary contract for this shorthand:
 
-1. continue through the normal GitHub/Copilot loop (assignment, PR watch, draft review/fix, Copilot review/fix, and final pre-approval work) unless a genuine stop condition is reached
+1. continue through the normal GitHub/Copilot loop (assignment, PR watch, draft/Copilot review-fix, final pre-approval) unless a genuine stop condition is reached
 2. stop at the final human approval decision by default
 3. after formal approval, stop again in `waiting_for_merge_authorization` unless merge authorization is explicitly granted for the active issue/PR scope
 4. merge only after explicit merge authorization for the active issue/PR scope
@@ -76,7 +74,8 @@ Use this taxonomy consistently across docs, discovery surfaces, and tests:
 
 Any remaining specialized Copilot behavior stays internal-only behind `dev-loop`.
 
-Regression tests must fail if this taxonomy drifts in wording or surfaced entrypoint assets.
+<!-- rule: FACADE-TAXONOMY-DRIFT-TEST -->
+`FACADE-TAXONOMY-DRIFT-TEST`: Regression tests MUST fail if this taxonomy drifts in wording or surfaced entrypoint assets.
 
 ## Canonical current state
 
@@ -90,17 +89,7 @@ The public router consumes one canonical current state with these top-level dime
 | `status` | `active` \| `waiting` \| `blocked` \| `approval_ready` \| `merge_ready` \| `done` |
 | `authorization` | `authorized` \| `needs_confirmation` \| `not_authorized` |
 
-The authoritative first-slice evaluator is:
-
-- `packages/core/src/loop/public-dev-loop-routing.mjs`
-
-Authoritative status-report helper:
-
-- `resolveAuthoritativeDevLoopStatus()` in `packages/core/src/loop/public-dev-loop-routing.mjs`
-
-Authoritative startup/resume bundle helper:
-
-- `resolveAuthoritativeStartupResumeBundle()` in `packages/core/src/loop/public-dev-loop-routing.mjs`
+The authoritative first-slice evaluator, status-report helper (`resolveAuthoritativeDevLoopStatus()`), and startup/resume bundle helper (`resolveAuthoritativeStartupResumeBundle()`) all live in `packages/core/src/loop/public-dev-loop-routing.mjs`.
 
 Its tests are:
 
@@ -118,7 +107,8 @@ Before answering status/progress/readiness/merge-state/next-step questions, cons
 
 Prior chat context is only a hint, never state authority.
 
-If authoritative identity/state (including issue↔PR linkage when relevant) cannot be resolved confidently, fail closed to reconcile/unknown instead of guessing.
+<!-- rule: FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED -->
+`FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED`: If authoritative identity/state (including issue↔PR linkage when relevant) cannot be resolved confidently, consumers MUST fail closed to reconcile/unknown instead of guessing.
 For async/durable-auto flows, do not claim that `dev-loop` has started or is running unless a visible Pi-managed async run id has also been resolved.
 
 When the routed next step requires confirmation for a mutation, the status/startup next action should name that concrete pending mutation (for example issue assignment to `copilot-swe-agent`) instead of generic "approval gate" wording.
@@ -140,10 +130,8 @@ Required authoritative inputs:
   - `auto_continue_current` always resolves to `durable_auto`
 - `issueLinkageResolution` (`resolved_linked_pr` \| `resolved_no_open_pr` \| `not_applicable`)
   - required when `currentState.target.kind === issue`
-- `issueReadiness` (`ready` \| `needs_clarification` \| `not_applicable`)
-  - required for Copilot-first issue targets with `issueLinkageResolution=resolved_no_open_pr`
-- `issueAssignmentState` (`unassigned` \| `assigned_to_copilot` \| `not_applicable`)
-  - required for Copilot-first issue targets with `issueLinkageResolution=resolved_no_open_pr`
+- `issueReadiness` (`ready` \| `needs_clarification` \| `not_applicable`) and `issueAssignmentState` (`unassigned` \| `assigned_to_copilot` \| `not_applicable`)
+  - both required for Copilot-first issue targets with `issueLinkageResolution=resolved_no_open_pr`
 - `artifactState` (`open` \| `closed` \| `merged` \| `not_applicable`)
 - explicit resolved `loopState` (`unknown` is not authoritative input)
 - required for async/durable-auto startup or status paths: `asyncRun`
@@ -151,8 +139,8 @@ Required authoritative inputs:
   - durable-auto success requires `kind=pi_managed_run`, a non-empty visible `runId`, and `visible=true`
   - when `inspectionState` is provided as `hidden`, `stale`, or `uninspectable`, durable-auto must fail closed with that state surfaced in diagnostics
   - detached local processes are diagnostic-only evidence and must fail closed instead of being treated as a successful async start
-- when refreshed loop state is `linked_pr_ready_for_followup` for an issue target with a resolved linked PR, startup/resume and status resolution must promote stale bootstrap waiting to the linked PR follow-up path (or fail closed if the linked-PR facts are incomplete/contradictory) instead of preserving the old bootstrap wait route
-- when refreshed loop state is `prior_linked_pr_closed_unmerged` for a Copilot-owned issue target with `issueLinkageResolution=resolved_no_open_pr`, startup/resume and status resolution must fail closed to reconcile instead of treating the issue as a healthy bootstrap wait or fresh issue-intake path
+- refreshed `linked_pr_ready_for_followup` for an issue target with a resolved linked PR: promote stale bootstrap waiting to the linked PR follow-up path, or fail closed if the linked-PR facts are incomplete/contradictory, instead of preserving the old bootstrap wait route
+- refreshed `prior_linked_pr_closed_unmerged` for a Copilot-owned issue target with `issueLinkageResolution=resolved_no_open_pr`: fail closed to reconcile instead of treating the issue as a healthy bootstrap wait or fresh issue-intake path
 
 Resolved bundle output shape:
 
@@ -222,8 +210,8 @@ Resolved bundle output shape:
 
 Dev-mode observability requirement:
 
-- saved artifacts must preserve the `contractTrace` decision, wait strategy, state-refresh boundary, and stop classification so a fresh session can explain why a healthy wait re-attached, stopped, or failed closed without replaying the whole run
-- wait/watch artifacts must record the effective timeout budget in force and whether the seam ran as `persistent_watch` or `one_shot_probe`; when a surface does not own a poll interval directly it may record `effectivePollIntervalMs=null` rather than inventing a value
+- saved artifacts MUST preserve the `contractTrace` decision, wait strategy, state-refresh boundary, and stop classification so a fresh session can explain a re-attach, stop, or fail-closed without replaying the run
+- wait/watch artifacts MUST record the effective timeout budget and whether the seam ran as `persistent_watch` or `one_shot_probe`; a surface without a poll interval MAY record `effectivePollIntervalMs=null` instead of inventing one
 
 Fail-closed semantics:
 
@@ -284,13 +272,13 @@ Deterministic GitHub-backed spec resolution:
 State-sync expectations for this slice:
 
 - local branch state and `tmp/` artifacts remain local execution state
-- durable scope / acceptance / status changes discovered during local execution should sync back to the tracker issue, because the tracker issue remains the canonical spec source for tracker-backed sessions
+- durable scope / acceptance / status changes discovered during local execution SHOULD sync back to the tracker issue
 - this slice does **not** introduce full bidirectional tracker sync or tracker-provider adapters beyond the bounded GitHub-backed helper path above
 
 Non-duplication rule:
 
 - do not create, read, or update `docs/phases/phase-<n>.md` for the same tracker-backed session
-- if a duplicate local phase doc already exists for the same tracker-backed session, reconcile that conflict explicitly before continuing; do not silently keep two durable spec surfaces alive
+- if a duplicate local phase doc already exists, reconcile explicitly before continuing rather than keeping two durable spec surfaces alive
 
 ## Copilot-first issue-assignment seam (unassigned issues)
 
@@ -330,7 +318,7 @@ For issue targets, authoritative issue↔PR linkage resolution remains part of s
 
 - when canonical issue state includes `linkedPr`, route selection first uses that linked PR as the authoritative routable artifact
 - when canonical issue state does **not** include `linkedPr`, status/reporting consumers must still require explicit authoritative linkage resolution before asserting there is no open linked PR
-- when authoritative linkage resolves an already-open linked PR, that PR is the only canonical active artifact for the issue during follow-up; startup/status/follow-up must reuse it and fail closed against opening another PR until the prior state is explicitly reconciled
+- <!-- rule: FACADE-LINKED-PR-SINGLE-ARTIFACT --> `FACADE-LINKED-PR-SINGLE-ARTIFACT`: when authoritative linkage resolves an already-open linked PR, that PR is the only canonical active artifact for the issue during follow-up; startup/status/follow-up MUST reuse it and MUST fail closed against opening another PR until the prior state is explicitly reconciled
 
 ## Deterministic routing order
 
@@ -360,27 +348,33 @@ When an open linked PR reports merge conflict against `main`, treat this as an e
    - issue/PR scope and acceptance criteria
    - current-head gate evidence and relevant unresolved review feedback
    - local validation surface for the touched conflict slice
-3. if required authoritative context is missing, stale for the current head, or contradictory, fail closed to reconcile
+3. <!-- rule: FACADE-CONFLICT-CONTEXT-FAIL-CLOSED --> `FACADE-CONFLICT-CONTEXT-FAIL-CLOSED`: if required authoritative context is missing, stale for the current head, or contradictory, orchestration MUST fail closed to reconcile
 4. only when that context is complete for one current head, resolve the conflict locally on the PR branch
 5. after conflict resolution, rerun required local validation, gate checks, and required CI checks for the new head before approval/merge evaluation
 
 ## `auto dev loop` durable auto contract
 
-When the public intent is `auto dev loop`, the router must:
+When the public intent is `auto dev loop`, the router MUST:
 
 1. require canonical current state resolution first
 2. route to the same detected internal strategy as normal state-based routing
 3. mark execution mode as durable auto ownership (`durable_auto`)
 4. keep waiting/watch states in healthy-wait semantics (`auto_healthy_wait`)
 
-In healthy waiting states, quiet watcher observations (for example `timeout` or `idle`) are observational only and must not be surfaced as attention by themselves. Escalation is still expected for true blocked/authorization/reconcile states.
+In healthy waiting states, quiet watcher observations (for example `timeout` or `idle`) are observational only and MUST NOT be surfaced as attention by themselves. Escalation is still expected for true blocked/authorization/reconcile states.
 
-For the Copilot-first bootstrap seam (`waiting_for_initial_copilot_implementation`), durable-auto ownership must route to the dedicated `watch-initial-copilot-pr.mjs` watcher with its default 1-hour watch budget. Quiet/no-activity observations alone do not eject durable ownership while refreshed authoritative state still resolves `waiting_for_initial_copilot_implementation`; inspect/status intents may still summarize that state and exit normally. This seam has a bootstrap-only exception to the general blocked escalation rule: when the linked PR is still bootstrap-only, approval-gated Actions/Copilot runs in `action_required` (GitHub Actions run conclusion, not a lifecycle state term) are treated as non-blocking observational signals (surfacing as concluded session activity) and do not by themselves force stop/escalation.
-When refreshed authoritative bootstrap state instead resolves `prior_linked_pr_closed_unmerged`, that is not a healthy wait seam: the routed outcome must fail closed to reconcile so status/startup answers surface the prior closed-unmerged PR decision rather than implying normal watch continuity.
+Bootstrap-only exception to the general blocked-escalation rule for `waiting_for_initial_copilot_implementation`:
 
-When that refreshed seam state advances to `linked_pr_ready_for_followup`, durable-auto continuation must re-enter the same linked PR follow-up path. If the follow-up handoff carries `conductorRouting.handoffEnvelope.requiresLocalIsolation=true`, orchestration should continue through an isolated checkout/worktree transition instead of treating that boundary as final completion.
+| Rule ID | Condition | Outcome |
+|---|---|---|
+| <!-- rule: FACADE-BOOTSTRAP-WATCH-ROUTE --> `FACADE-BOOTSTRAP-WATCH-ROUTE` | durable-auto ownership of this seam | ownership MUST route to the dedicated `watch-initial-copilot-pr.mjs` watcher with its default 1-hour watch budget |
+| <!-- rule: FACADE-BOOTSTRAP-QUIET-NO-EJECT --> `FACADE-BOOTSTRAP-QUIET-NO-EJECT` | quiet/no-activity observation while refreshed state still resolves this seam | durable ownership MUST NOT be ejected; inspect/status intents MAY still summarize that state and exit normally |
+| <!-- rule: FACADE-BOOTSTRAP-ACTION-REQUIRED-NONBLOCKING --> `FACADE-BOOTSTRAP-ACTION-REQUIRED-NONBLOCKING` | bootstrap-only linked PR; approval-gated Actions/Copilot run reports `action_required` (a run conclusion, not a lifecycle state) | treated as a non-blocking observational signal (concluded session activity); MUST NOT by itself force stop/escalation |
+| <!-- rule: FACADE-BOOTSTRAP-CLOSED-UNMERGED-RECONCILE --> `FACADE-BOOTSTRAP-CLOSED-UNMERGED-RECONCILE` | refreshed bootstrap state resolves `prior_linked_pr_closed_unmerged` | MUST fail closed to reconcile so status/startup surfaces the prior closed-unmerged decision instead of normal watch continuity |
+| <!-- rule: FACADE-BOOTSTRAP-FOLLOWUP-REENTRY --> `FACADE-BOOTSTRAP-FOLLOWUP-REENTRY` | refreshed seam state advances to `linked_pr_ready_for_followup` | durable-auto continuation MUST re-enter the same linked PR follow-up path |
+| <!-- rule: FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION --> `FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION` | follow-up handoff carries `conductorRouting.handoffEnvelope.requiresLocalIsolation=true` | orchestration SHOULD continue through an isolated checkout/worktree transition rather than treat that boundary as final completion (the runtime surfaces the flag; it does not enforce re-entry) |
 
-Main conductor orchestration must treat non-terminal follow-up/wait states (for example `waiting_for_copilot_review`) as continuation boundaries rather than clean completion. If an async child exits before the requested stop boundary and continuation is feasible, re-dispatch via the main session driver (the subagent exits on external wait; the main session re-dispatches); otherwise surface the concrete blocker.
+Main conductor orchestration MUST treat non-terminal follow-up/wait states (for example `waiting_for_copilot_review`) as continuation boundaries rather than clean completion. If an async child exits before the requested stop boundary and continuation is feasible, re-dispatch via the main session driver (the subagent exits on external wait; the main session re-dispatches); otherwise surface the concrete blocker.
 
 ## Internal / external model
 
@@ -413,9 +407,9 @@ flowchart TD
 
 - `dev-loop` is the only intended public workflow entrypoint.
 - any remaining specialized Copilot behavior is internal-only and non-user-invocable behind the canonical internal route-pack surface (`issue-intake`, `copilot-pr-followup`, `local-implementation`, `final-approval`).
-- Documentation and examples should lead with `dev-loop` and explain routed behavior.
-- Almost all workflow branching should converge into deterministic state-machine/tooling surfaces behind `dev-loop`.
-- User-visible variation should be expressed through the external `dev-loop` API / bounded parameters or settings, not by preserving multiple public workflow names or legacy compatibility seams.
+- Documentation and examples SHOULD lead with `dev-loop` and explain routed behavior.
+- Workflow branching SHOULD converge into deterministic state-machine/tooling surfaces behind `dev-loop`.
+- User-visible variation SHOULD be expressed through the `dev-loop` API/parameters or settings, not multiple public workflow names or legacy compatibility seams.
 
 ## Bounded variation parameter contract
 
@@ -461,7 +455,7 @@ The following parameter/state combinations fail closed to `needs_reconcile` inst
 | `mode=bounded_handoff` + `intent=auto_continue_current` | `auto_continue_current` always requires durable auto execution mode |
 | Unrecognized `mode` value | Value not on the bounded allow-list |
 | Unrecognized `targetPreference` value | Value not on the bounded allow-list |
-| `watch=true` when an otherwise-successful routed result is not wait/watch-eligible | Watch semantics require a routed wait result (`routeKind=wait`), not just `selectedGate=wait_watch`; existing `stop` and `needs_reconcile` outcomes stay authoritative |
+| `watch=true` when an otherwise-successful routed result is not wait/watch-eligible | Watch semantics require a routed wait result (`routeKind=wait`), not just `selectedGate=wait_watch`; `stop`/`needs_reconcile` outcomes stay authoritative |
 | Non-boolean `watch` value | Value is outside the bounded boolean allow-list and must fail closed |
 | `targetPreference=prefer_local` when authoritative state has a linked PR or active PR artifact | Preference must not override authoritative PR/linked-PR active artifact truth |
 | `mode=durable_auto` without authoritative current state | Durable auto requires authoritative current state to route from |

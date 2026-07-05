@@ -8,6 +8,9 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
+import { assertRuleOwned } from "./_rule-helpers.mjs";
+
+const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
 async function readIssueIntakeSurface() {
   const [skill, intakeDoc, operationsDoc] = await Promise.all([
@@ -135,11 +138,10 @@ test("issue-based shorthand auto dev-loop trigger is documented as one public in
   assert.match(publicContract, /`dev-loop --intent auto_continue_current`/i);
   assert.match(publicContract, /stop at the final human approval decision by default/i);
   assert.match(publicContract, /waiting_for_merge_authorization/i);
-  assert.match(publicContract, /Copilot-first bootstrap seam.*waiting_for_initial_copilot_implementation/i);
-  assert.match(publicContract, /watch-initial-copilot-pr\.mjs.*default 1-hour watch budget/i);
-  assert.match(publicContract, /Quiet\/no-activity observations alone do not eject durable ownership/i);
-  assert.match(publicContract, /inspect\/status intents may still summarize that state and exit normally/i);
-  assert.match(publicContract, /linked_pr_ready_for_followup[\s\S]*isolated checkout\/worktree transition instead of treating that boundary as final completion/i);
+  assertRuleOwned("FACADE-BOOTSTRAP-WATCH-ROUTE", PUBLIC_CONTRACT_PATH);
+  assertRuleOwned("FACADE-BOOTSTRAP-QUIET-NO-EJECT", PUBLIC_CONTRACT_PATH);
+  assertRuleOwned("FACADE-BOOTSTRAP-FOLLOWUP-REENTRY", PUBLIC_CONTRACT_PATH);
+  assertRuleOwned("FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION", PUBLIC_CONTRACT_PATH);
   assert.match(publicContract, /non-terminal follow-up\/wait states[\s\S]*waiting_for_copilot_review[\s\S]*continuation boundaries/i);
   assert.match(publicContract, /async child exits before the requested stop boundary[\s\S]*re-dispatch via the main session driver/i);
   assert.match(publicContract, /R --> A\[Human approval checkpoint\]/i);
