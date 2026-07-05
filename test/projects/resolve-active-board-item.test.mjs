@@ -1,9 +1,15 @@
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { collapseToTarget, main, runCli } from "../../scripts/projects/resolve-active-board-item.mjs";
+
+// Isolated default cwd (no .devloops): main() resolves statusColumns from cwd,
+// so tests must never read THIS repo's real config as a hidden dependency —
+// a future repo-level statusColumns override would silently break them.
+const ISOLATED_CWD = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-isolated-"));
+after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 
 // A runChild stub that drives list-queue-items end to end. `columns` maps a
 // Status column name to the items GraphQL returns for it; list-queue-items
@@ -49,7 +55,7 @@ function boardRunChild({ columns = {}, itemsError = false, optionNames = ["Backl
   };
 }
 
-const runArgs = (child) => main({ repo: "o/r", project: "7" }, { runChild: child });
+const runArgs = (child) => main({ repo: "o/r", project: "7" }, { runChild: child, cwd: ISOLATED_CWD });
 
 function captureCli(child, extraArgs = []) {
   let out = "";
@@ -60,6 +66,7 @@ function captureCli(child, extraArgs = []) {
     stdout: { write: (s) => { out += s; } },
     stderr: { write: (s) => { err += s; } },
     runChild: child,
+    cwd: ISOLATED_CWD,
   }).then(() => {
     const code = process.exitCode;
     process.exitCode = prev;
@@ -226,6 +233,54 @@ describe("resolve-active-board-item resolves the configured next_up column (#109
     await withTempCwd("queue: renamed\n- broken\n", async (cwd) => {
       const child = boardRunChild({
         columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      });
+      await assert.rejects(
+        () => main({ repo: "o/r", project: "7" }, { runChild: child, cwd }),
+        /config read\/parse error/,
+      );
+    });
+  });
+});
+
+describe("resolve-active-board-item resolves the configured in_progress column (#1143)", () => {
+  async function withTempCwd(contents, fn) {
+    const dir = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-statuscol-inprogress-"));
+    try {
+      if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
+      return await fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("pickup queries the overridden statusColumns.in_progress column (\"Doing\"), not the literal", async () => {
+    await withTempCwd('queue:\n  projectNumber: 7\n  statusColumns:\n    in_progress: "Doing"\n', async (cwd) => {
+      // The single active item lives ONLY in the renamed "Doing" column. If the
+      // resolver still queried the literal "In Progress", it would see an empty
+      // column and fall through to Next Up instead — proving misdetection.
+      const child = boardRunChild({
+        optionNames: ["Backlog", "Next Up", "Doing", "Done"],
+        columns: { "Doing": [{ issueNumber: 42, title: "Active" }], "Next Up": [{ issueNumber: 7, title: "Later" }] },
+      });
+      const r = await main({ repo: "o/r", project: "7" }, { runChild: child, cwd });
+      assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 42 }, source: "in-progress" });
+    });
+  });
+
+  it("default config (no override) still resolves the literal \"In Progress\"", async () => {
+    await withTempCwd(null, async (cwd) => {
+      const child = boardRunChild({
+        columns: { "In Progress": [{ issueNumber: 42, title: "Active" }], "Next Up": [] },
+      });
+      const r = await main({ repo: "o/r", project: "7" }, { runChild: child, cwd });
+      assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 42 }, source: "in-progress" });
+    });
+  });
+
+  it("malformed .devloops → pickup fails CLOSED (surfaces config error), never queries the literal \"In Progress\"", async () => {
+    await withTempCwd("queue: renamed\n- broken\n", async (cwd) => {
+      const child = boardRunChild({
+        columns: { "In Progress": [{ issueNumber: 42, title: "Active" }], "Next Up": [] },
       });
       await assert.rejects(
         () => main({ repo: "o/r", project: "7" }, { runChild: child, cwd }),

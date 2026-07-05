@@ -21,9 +21,10 @@ import { main as listQueueItems } from "./list-queue-items.mjs";
 import { EMPTY_NEXT_UP_MESSAGE } from "@dev-loops/core/loop/queue-board-ordering";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 
+// Illustrative default labels for USAGE/help + comments only; the actual query
+// columns resolve through queue.statusColumns.in_progress / .next_up at
+// runtime (#1098, #1143).
 const IN_PROGRESS_COLUMN = "In Progress";
-// Illustrative default label for USAGE/help + comments only; the actual query
-// column resolves through queue.statusColumns.next_up at runtime (#1098).
 const NEXT_UP_COLUMN = "Next Up";
 // Canonical fail-closed empty-queue message — matches queue-driver.mjs so
 // operators see one string regardless of which layer detects it (#1091).
@@ -179,8 +180,21 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
 }
 
 async function main(args, { env = process.env, runChild, cwd = process.cwd() } = {}) {
+  // Resolve the in_progress column name through the SAME statusColumns mapping
+  // board-sync uses (#1098, #1143): a repo that renamed In Progress gets its
+  // configured column queried, not the literal default. Fail CLOSED on a
+  // malformed `.devloops` — never silently query the literal "In Progress"
+  // and risk missing the active item on a renamed/stale column.
+  const { columnNames, error: configError } = loadStateColumnMap(cwd);
+  if (configError) {
+    throw Object.assign(
+      new Error(`could not resolve in_progress column (config read/parse error: ${configError})`),
+      { code: "CONFIG_ERROR" },
+    );
+  }
+  const inProgressColumn = columnNames[LOGICAL_COLUMN.IN_PROGRESS];
   const listed = await listQueueItems(
-    { repo: args.repo, project: args.project, column: IN_PROGRESS_COLUMN },
+    { repo: args.repo, project: args.project, column: inProgressColumn },
     { env, runChild },
   );
   const items = listed.items ?? [];
