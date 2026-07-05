@@ -2,7 +2,13 @@
 
 Canonical owner for contract style, rule IDs, and definitional discipline.
 
-This guide is written in the target style. One short orientation paragraph MAY introduce the document, but it MUST NOT add normative rules outside the rule table.
+A short orientation paragraph introduces the document; normative rules live only in the rule table.
+
+## Terms
+
+| Term | Definition |
+|---|---|
+| <!-- term: gate:pre_approval_gate --> `pre_approval_gate` | Review gate that checks changed contract rules against the registry before approval. |
 
 ## Rule ownership
 
@@ -20,12 +26,6 @@ This guide is written in the target style. One short orientation paragraph MAY i
 | <!-- rule: STYLE-CANONICAL-OPENER --> `STYLE-CANONICAL-OPENER` | A contract document SHOULD open with `Canonical owner for X` and SHOULD end with a Cross-references section. |
 | <!-- rule: STYLE-CONTRADICTION-LENS --> `STYLE-CONTRADICTION-LENS` | A contract-touching PR MUST include an RFC-2119 contradiction check in `pre_approval_gate`: every added or changed rule is checked against the rule registry for opposing modality or a weaker restatement. |
 | <!-- rule: STYLE-LEXICAL-SCAN-LIMIT --> `STYLE-LEXICAL-SCAN-LIMIT` | The ownership validator's contradiction scan is lexical only; behavioral contradictions belong to the L2/L3 harness and semantic contradictions belong to the gate contradiction lens. |
-
-## Terms
-
-| Term | Definition |
-|---|---|
-| <!-- term: gate:pre_approval_gate --> `pre_approval_gate` | Review gate that checks changed contract rules against the registry before approval. |
 
 ## Reference syntax
 
