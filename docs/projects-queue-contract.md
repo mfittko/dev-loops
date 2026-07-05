@@ -1,15 +1,17 @@
 # GitHub Projects Queue Contract
 
-This document defines the minimal board contract for dev-loop queue tooling that reads
-and writes GitHub Projects V2 state.
+Canonical owner for the GitHub Projects V2 queue board contract: board shape, the Status
+column vocabulary, and `Next Up` pickup rules. [Queue Board Setup](./queue-board-setup.md)
+and [Projects Queue Usage](./projects-queue-usage.md) reference this contract's rules by ID
+rather than restating them.
 
 ## Purpose
 
 When a dev-loop operator opts into the GitHub Projects queue path, queue helpers read queue
-ordering from a project board and write status transitions back. This contract defines the
-expected board shape so tooling can rely on deterministic field/column names and fail safely
-when the board is absent or misconfigured.
+ordering from a project board and write status transitions back, relying on deterministic
+field/column names and failing safely when the board is absent or misconfigured.
 
+<!-- rule: QUEUE-BOARD-LINKED -->
 **The queue board MUST be linked to the target repository** via `linkProjectV2ToRepository`.
 Repo-linked boards travel with the repository, are visible to all collaborators, and appear
 in the repository's Projects tab. User-level (unlinked) projects are not supported for queue
@@ -95,7 +97,10 @@ Field ID and option IDs are used in subsequent mutations to set Status on items.
 
 ## Conventional columns
 
-The Status field must contain these four columns. Tooling keys off the option **names**:
+<!-- rule: QUEUE-COLUMN-CANONICAL -->
+The Status field MUST contain these four columns; this is the single canonical definition of
+the board-column vocabulary — other queue docs reference it by ID instead of restating it.
+Tooling keys off the option **names**:
 
 | Column | Meaning |
 |---|---|
@@ -108,8 +113,11 @@ Columns are case-sensitive exact matches. `"backlog"`, `"BACKLOG"`, or `"Backlog
 match.
 
 The bootstrap wrapper creates these four columns automatically. Operators may add additional
-Status options but **must not remove or rename** the four conventional columns — tooling
-fails closed when expected columns are missing.
+Status options.
+
+<!-- rule: QUEUE-COLUMN-NO-REMOVE -->
+Operators **MUST NOT remove or rename** the four conventional columns — tooling fails closed
+when expected columns are missing.
 
 ## Queue ordering
 
@@ -180,10 +188,11 @@ board validates preconditions first:
 
 ### Idempotent bootstrap exception
 
+<!-- rule: QUEUE-BOOTSTRAP-ONLY-MUTATOR -->
 The `dev-loops project ensure` bootstrap wrapper has relaxed fail-closed behavior: it
-**creates** a missing project and/or Status field with conventional columns. This is the only
-tool allowed to mutate project structure. Runtime queue helpers (list, move, add, reorder)
-never create or modify project/field structure.
+**creates** a missing project and/or Status field with conventional columns. It **MUST** be
+the only tool that mutates project structure; runtime queue helpers (list, move, add,
+reorder) **MUST NOT** create or modify project/field structure.
 
 ### Error reporting
 
@@ -240,7 +249,8 @@ With `--repair-rename`, the wrapper:
 
 ### Conflicts
 
-When multiple existing columns map to the same standard column, the wrapper reports an irreconcilable conflict in `repairs.conflicts` and performs no mutation. The operator must resolve the ambiguity manually.
+<!-- rule: QUEUE-RENAME-CONFLICT-NO-MUTATION -->
+When multiple existing columns map to the same standard column, the wrapper **MUST** report an irreconcilable conflict in `repairs.conflicts` and **MUST NOT** perform any mutation. The operator must resolve the ambiguity manually.
 
 ## Lifecycle status transitions
 
@@ -291,19 +301,21 @@ The inner `result.ok` / `result.item` shape is owned by the underlying `move-que
 
 ## Queue pickup ordering
 
+<!-- rule: QUEUE-NEXTUP-SOURCE -->
 When a queue board is configured, `Next Up` is the **normative, fail-closed pickup source** — not a soft hint. The driver **MUST** pick **only** from the `Next Up` column, by POSITION ascending, and **MUST NOT** auto-pull from Backlog or fall back to non-board local queue order under any circumstance.
 
 ### Behavior (board configured)
 
 - The driver queries items in the `Next Up` column by POSITION ascending before the first dispatch, and dispatches **only** those items, in that order.
 - An entry present in the local queue but **absent** from `Next Up` is **never** auto-picked. Working an item requires the deliberate prioritization step of moving it to `Next Up` first.
-- **Empty `Next Up` (successful query, zero items) → fail closed.** The driver idles/stops with an explicit, machine-readable outcome (`reason: "next-up-empty"`, message `"queue empty — prioritize Backlog items into Next Up"`). It **MUST NOT** fall back to Backlog or local order.
-- **Board-query error (API/unreachable/unresolvable project) → surface and stop** (`reason: "board-query-error"`). Again, **no** fallback to Backlog or local order. This is deliberately distinct from an empty `Next Up`: an outage never silently drains Backlog.
-- **`Next Up` target with no local queue entry → fail closed.** When the resolved `Next Up` order contains one or more targets absent from `.pi/dev-loop-queue.json` (membership reconcile not run/persisted, or the board changed between reconcile and this query), the driver **MUST** stop with an actionable outcome (`reason: "next-up-target-missing-locally"`, the offending numbers in `missingTargets`, message `"Next Up contains items with no local queue entry — run membership reconcile / re-add them"`) rather than silently filtering them out and returning an empty idle. This is distinct from an empty `Next Up`: real Next Up work exists but is undispatchable locally. **No** Backlog pickup.
+- <!-- rule: QUEUE-NEXTUP-EMPTY-FAIL-CLOSED --> **Empty `Next Up` (successful query, zero items) → fail closed.** The driver **MUST** idle/stop with an explicit, machine-readable outcome (`reason: "next-up-empty"`, message `"queue empty — prioritize Backlog items into Next Up"`) and **MUST NOT** fall back to Backlog or local order.
+- <!-- rule: QUEUE-BOARD-QUERY-FAIL-CLOSED --> **Board-query error (API/unreachable/unresolvable project) → surface and stop.** The driver **MUST** surface the error and stop (`reason: "board-query-error"`) and **MUST NOT** fall back to Backlog or local order. This is deliberately distinct from an empty `Next Up`: an outage never silently drains Backlog.
+- <!-- rule: QUEUE-NEXTUP-TARGET-MISSING-FAIL-CLOSED --> **`Next Up` target with no local queue entry → fail closed.** When the resolved `Next Up` order contains one or more targets absent from `.pi/dev-loop-queue.json` (membership reconcile not run/persisted, or the board changed between reconcile and this query), the driver **MUST** stop with an actionable outcome (`reason: "next-up-target-missing-locally"`, the offending numbers in `missingTargets`, message `"Next Up contains items with no local queue entry — run membership reconcile / re-add them"`) rather than silently filtering them out and returning an empty idle, and **MUST NOT** pick from Backlog. This is distinct from an empty `Next Up`: real Next Up work exists but is undispatchable locally.
 
 ### Live pickup path (`/loop-continue`)
 
-Bare `/loop-continue` is the operator-facing pickup path, and it enforces the same `Next Up` normative source. It resolves a single continue target via `scripts/projects/resolve-active-board-item.mjs`:
+<!-- rule: QUEUE-LIVE-PICKUP-SOURCE -->
+Bare `/loop-continue` is the operator-facing pickup path; it **MUST** enforce the same `Next Up` normative source as the queue driver and **MUST NOT** pick from Backlog. It resolves a single continue target via `scripts/projects/resolve-active-board-item.mjs`:
 
 - **Exactly one `In Progress` item →** continue it (`source: "in-progress"`).
 - **Multiple `In Progress` items →** fail closed (never guesses); the operator must pass an explicit `/loop-continue #N`.

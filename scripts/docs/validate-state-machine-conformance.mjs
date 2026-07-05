@@ -61,6 +61,7 @@ import { fileURLToPath } from "node:url";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
+import { evaluateConductorRouting, getAllowedOuterTransitions, OUTER_STATE, OUTER_TERMINAL_STATES } from "@dev-loops/core/loop/conductor-routing";
 import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from "./_pr-lifecycle-tables.mjs";
 
 const USAGE = `Usage: validate-state-machine-conformance.mjs [--help]
@@ -583,6 +584,92 @@ const PR_GATE_COORDINATION_MACHINE = {
 };
 
 registerMachine(PR_GATE_COORDINATION_MACHINE);
+
+// ---------------------------------------------------------------------------
+// Second machine (issue #1156): conductor-routing.
+//
+// Doc side: docs/conductor-routing-contract.md's "## Required transitions" bullets,
+// parsed at load time via parseRequiredTransitions. The doc bullets one abstract row
+// per non-terminal outer state ("`state` -> any outer state") because the outer-loop
+// graph is stateless per cycle (every evaluation is independent, so a non-terminal
+// outcome can be followed, next cycle, by any of the 7 outcomes) — the abstractRows
+// map below expands each row to its 7 concrete edges.
+//
+// Code side: packages/core/src/loop/conductor-routing.mjs exports OUTER_STATE,
+// OUTER_TERMINAL_STATES, and getAllowedOuterTransitions. Each expanded edge is checked
+// by calling the real evaluateConductorRouting with a fixture drawn verbatim from the
+// doc's own "Scenario matrix" (one fixture per reachable `to` state, reused across every
+// `from`) and asserting getAllowedOuterTransitions(from) structurally allows `to` while
+// the fixture's real routingOutcome matches `to` — a real characterization of the code,
+// not a hand-copied assumption.
+// ---------------------------------------------------------------------------
+
+const OUTER_STATE_VALUES = Object.values(OUTER_STATE);
+const OUTER_NON_TERMINAL_STATES = OUTER_STATE_VALUES.filter((s) => !OUTER_TERMINAL_STATES.includes(s));
+
+const CONDUCTOR_ROUTING_ABSTRACT_ROWS = new Map(
+  OUTER_NON_TERMINAL_STATES.map((from) => [
+    `\`${from}\`->any outer state`,
+    OUTER_STATE_VALUES.map((to) => [from, to]),
+  ]),
+);
+
+const CONDUCTOR_ROUTING_DOC_TRANSITIONS = parseRequiredTransitions(
+  readFileSync(path.join(REPO_ROOT, "docs", "conductor-routing-contract.md"), "utf8"),
+  { abstractRows: CONDUCTOR_ROUTING_ABSTRACT_ROWS },
+);
+
+const TARGET = { repo: "acme/widgets", pr: 42 };
+
+function routeOuter(input) {
+  return evaluateConductorRouting({ target: TARGET, ...input });
+}
+
+// One fixture per reachable outer state, drawn verbatim from the doc's own Scenario
+// matrix (scenarios 1-7) so no new behavior is invented for this registration.
+const OUTER_TO_FIXTURE = new Map([
+  [OUTER_STATE.CONTINUE_CURRENT_WAIT, () => routeOuter({ copilotState: "waiting_for_copilot_review", reviewerState: "waiting_for_author_followup" })],
+  [OUTER_STATE.HANDOFF_TO_COPILOT_LOOP, () => routeOuter({ copilotState: "pr_draft", reviewerState: "waiting_for_review_request" })],
+  [OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP, () => routeOuter({ copilotState: "pr_ready_no_feedback", reviewerState: "review_requested" })],
+  [OUTER_STATE.STAY_WITH_CURRENT_LIVE_OWNER, () => routeOuter({ copilotState: "unresolved_feedback_present", reviewerState: "waiting_for_author_followup", ownershipState: "live_owner" })],
+  [OUTER_STATE.STOP_NEEDS_HUMAN, () => routeOuter({ copilotState: "blocked_needs_user_decision", reviewerState: "waiting_for_review_request" })],
+  [OUTER_STATE.DONE_TERMINAL, () => routeOuter({ copilotState: "done", reviewerState: "waiting_for_review_request" })],
+  [OUTER_STATE.NEEDS_RECONCILE, () => routeOuter({ copilotState: "some_unmapped_copilot_state", reviewerState: "some_unmapped_reviewer_state" })],
+]);
+
+const CONDUCTOR_ROUTING_TRANSITION_CHECKS = new Map();
+for (const from of OUTER_NON_TERMINAL_STATES) {
+  for (const to of OUTER_STATE_VALUES) {
+    CONDUCTOR_ROUTING_TRANSITION_CHECKS.set(`${from}->${to}`, {
+      status: "verified",
+      verify: () => {
+        const result = OUTER_TO_FIXTURE.get(to)();
+        const ok = result.routingOutcome === to && getAllowedOuterTransitions(from).includes(to);
+        return { ok, detail: result, result };
+      },
+    });
+  }
+}
+
+const CONDUCTOR_ROUTING_MACHINE = {
+  name: "conductor-routing",
+  states: OUTER_STATE_VALUES,
+  terminalStates: OUTER_TERMINAL_STATES,
+  transitions: OUTER_NON_TERMINAL_STATES.flatMap((from) => getAllowedOuterTransitions(from).map((to) => [from, to])),
+  docTransitions: CONDUCTOR_ROUTING_DOC_TRANSITIONS,
+  transitionChecks: CONDUCTOR_ROUTING_TRANSITION_CHECKS,
+  safetyRules: [
+    {
+      // Analog of "fail-closed states never dispatch a Backlog pull" (epic #1104 / docs:
+      // ROUTING-FAIL-CLOSED-RECONCILE): a fail-closed observation never carries a live handoff.
+      name: "fail-closed-no-dispatch",
+      check: (result) => (result.routingOutcome !== OUTER_STATE.STOP_NEEDS_HUMAN && result.routingOutcome !== OUTER_STATE.NEEDS_RECONCILE)
+        || (result.handoffEnvelope.loopFamily === null && result.handoffEnvelope.entrypoint === null),
+    },
+  ],
+};
+
+registerMachine(CONDUCTOR_ROUTING_MACHINE);
 
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {

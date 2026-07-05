@@ -18,17 +18,17 @@ Implementation:
 
 | State | Meaning |
 |---|---|
-| `waiting_for_review_request` | No active reviewer loop for this PR/head |
+| <!-- term: state:waiting_for_review_request --> `waiting_for_review_request` | No active reviewer loop for this PR/head |
 | `review_requested` | Review has been requested for the active reviewer |
 | `determine_review_plan` | Review angles are being selected |
 | `reviews_running` | Bounded local review passes are running |
 | `merge_results` | Local review runs completed; merged synthesis pending |
 | `draft_review_ready` | Merged review package is ready to stage |
 | `draft_review_posted` | Pending GitHub review exists for current head but link not yet surfaced |
-| `waiting_for_user_submit` | Pending review link is surfaced; wait for submission |
+| <!-- term: state:waiting_for_user_submit --> `waiting_for_user_submit` | Pending review link is surfaced; wait for submission |
 | `submitted_review` | Internal reviewer pass reached a submitted outcome/verdict; handoff boundary to remediation/fix follow-up |
-| `waiting_for_author_followup` | Legacy external-wait compatibility state (named actor boundary: author/Copilot follow-up), not an internal reviewer-pass completion target |
-| `waiting_for_re_request` | Legacy external-wait compatibility state (named actor boundary: author/Copilot re-request action), not an internal reviewer-pass completion target |
+| <!-- term: state:waiting_for_author_followup --> `waiting_for_author_followup` | Legacy external-wait compatibility state (named actor boundary: author/Copilot follow-up), not an internal reviewer-pass completion target |
+| <!-- term: state:waiting_for_re_request --> `waiting_for_re_request` | Legacy external-wait compatibility state (named actor boundary: author/Copilot re-request action), not an internal reviewer-pass completion target |
 | `review_invalidated` | Pending draft review is stale for current head SHA |
 | `blocked_needs_user_decision` | Failure state requiring explicit user decision |
 
