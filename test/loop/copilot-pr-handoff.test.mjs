@@ -1494,7 +1494,10 @@ test("copilot-pr-handoff waits for the pending Copilot review (in-flight force-r
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
-      // The request is newer than any submitted review → pending on the current head.
+      // CAP_REVIEWS are all on older heads (oldsha-N), so there's no submitted Copilot
+      // review on the current head — copilotReviewRequestStatus resolves to "requested"
+      // via the no-submitted-review branch, never reaching the timeline timestamp
+      // comparison. Stub kept (unclaimed) in case that derivation path changes.
       { assertArgs: ["api", "repos/owner/repo/issues/17/timeline"], stdout: JSON.stringify({ login: "Copilot", created_at: "2026-06-03T00:00:00Z" }) + "\n" },
     ], { matchMode: "claims" });
     env.DEVLOOPS_RUN_ID = "";
