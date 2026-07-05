@@ -854,6 +854,17 @@ test("parseWriteGateContextCliArgs rejects an implausible --base ref", () => {
   ]), /--base/);
 });
 
+test("parseWriteGateContextCliArgs accepts ancestry refs (HEAD~3, main^)", () => {
+  for (const ref of ["HEAD~3", "main^", "HEAD~2^2", "release/1.0~1"]) {
+    const result = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc1234", "--angles", '["scope"]',
+      "--base", ref,
+    ]);
+    assert.equal(result.base, ref, `${ref} should be accepted`);
+  }
+});
+
 test("CLI --base <ref> produces a full build-once bundle: non-null diffPath, populated changedFiles, adjacentCode present", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
@@ -930,6 +941,84 @@ test("CLI --base <ref> that fails to resolve fails closed (no artifact written, 
       repo: "owner/repo", pr: 42, gate: "draft_gate", headSha,
     }, { repoRoot });
     assert.equal(artifact, null, "no artifact written on a fail-closed --base resolution failure");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base accepts an ancestry ref (HEAD~1) and resolves it end-to-end", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    // HEAD~1 is the base commit; the range HEAD~1...HEAD is the single change.
+    await main([
+      "--repo", "owner/repo", "--pr", "43", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+      "--base", "HEAD~1",
+    ], { repoRoot });
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 43, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assert.equal(artifact.scope.diffSource, "base");
+    assert.deepEqual(artifact.scope.changedFiles, ["src/changed.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base isolates git config: persisted diff is color-free even with color.diff=always in the repo config (determinism)", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    // Force git to want color regardless of tty; the -c isolation in
+    // captureDiffFromBase must override this so the persisted .diff bytes are
+    // environment-independent (the neutral-bundle determinism guarantee).
+    git(repoRoot, ["config", "color.ui", "always"]);
+    git(repoRoot, ["config", "color.diff", "always"]);
+
+    await main([
+      "--repo", "owner/repo", "--pr", "44", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+      "--base", "HEAD~1",
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 44, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    const diffOnDisk = await readFile(path.resolve(repoRoot, artifact.scope.diffPath), "utf8");
+    // No ANSI escape sequences (ESC, \x1b) leaked into the persisted diff.
+    assert.ok(!diffOnDisk.includes("\x1b"), "persisted diff must contain no ANSI color codes");
+    assert.deepEqual(artifact.scope.changedFiles, ["src/changed.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base degrades to scope.diffPath=null but STILL writes the artifact when the .diff write fails (best-effort)", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    // Force the .diff writeFile to fail without touching the .json write: occupy
+    // the deterministic .diff path with a DIRECTORY so writeFile throws EISDIR.
+    // The sibling .json context write (different filename) still succeeds.
+    const diffRel = buildGateDiffPath({ repo: "owner/repo", pr: 45, gate: "draft_gate", headSha });
+    const diffAbs = path.resolve(repoRoot, diffRel);
+    await mkdir(diffAbs, { recursive: true });
+
+    await main([
+      "--repo", "owner/repo", "--pr", "45", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+      "--base", "HEAD~1",
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 45, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assert.ok(artifact, "artifact still written despite the .diff write failure");
+    assert.equal(artifact.scope.diffPath, null, "diffPath degrades to null on write failure");
+    // changedFiles (from name-status) and adjacentCode are unaffected by the diff-write failure.
+    assert.deepEqual(artifact.scope.changedFiles, ["src/changed.mjs"]);
+    assert.ok(artifact.adjacentCode, "adjacentCode still built from changedFiles");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

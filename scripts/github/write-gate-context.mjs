@@ -143,12 +143,14 @@ function normalizeHeadSha(value) {
 // leading "-" (flag injection into the argv-array `git diff` call below,
 // which is already immune since execFileSync never invokes a shell, but a
 // leading dash is also just never a valid ref) and ".." (ambiguous with our
-// own "<base>...HEAD" triple-dot construction). Not a full git ref-name
-// validator; upgrade if a legitimately-shaped ref ever gets rejected.
+// own "<base>...HEAD" triple-dot construction). `~` and `^` are allowed so
+// ancestry refs (HEAD~3, main^, HEAD~2^2) resolve — they are injection-safe
+// under execFileSync's argv array. Not a full git ref-name validator; upgrade
+// if a legitimately-shaped ref ever gets rejected.
 function normalizeBaseRef(value) {
   const trimmed = String(value).trim();
   if (trimmed.length === 0 || trimmed.startsWith("-") || trimmed.includes("..")) return null;
-  return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(trimmed) ? trimmed : null;
+  return /^[A-Za-z0-9][A-Za-z0-9._/~^-]*$/.test(trimmed) ? trimmed : null;
 }
 
 const VALID_ACTIONS = new Set(["kept", "added", "dropped", "joined"]);
@@ -577,7 +579,24 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
  */
 function captureDiffFromBase(base, { repoRoot }) {
   const range = `${base}...HEAD`;
-  const runGit = (args) => execFileSync("git", args, {
+  // Isolate the persisted .diff BYTES from ambient global/system gitconfig so
+  // every reviewer is seeded with an IDENTICAL neutral bundle (the whole point
+  // of build-once). Without this isolation, an operator/CI with
+  // color.diff=always, a configured diff.external/difftool, or non-default
+  // prefix settings would make scope.diffPath environment-dependent.
+  // color.ui=false + color.diff=false strip ANSI; core.pager=cat neutralizes a
+  // configured pager; diff.noprefix=false + diff.mnemonicPrefix=false pin the
+  // a/ b/ prefixes; the --no-ext-diff flag (below) disables any external diff
+  // driver (NOT `-c diff.external=`, which makes git try to exec the empty
+  // string and die).
+  const isolation = [
+    "-c", "color.ui=false",
+    "-c", "color.diff=false",
+    "-c", "core.pager=cat",
+    "-c", "diff.noprefix=false",
+    "-c", "diff.mnemonicPrefix=false",
+  ];
+  const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -585,8 +604,8 @@ function captureDiffFromBase(base, { repoRoot }) {
   let nameStatusOutput;
   let diffOutput;
   try {
-    nameStatusOutput = runGit(["diff", "--name-status", range]);
-    diffOutput = runGit(["diff", range]);
+    nameStatusOutput = runGit(["diff", "--no-ext-diff", "--name-status", range]);
+    diffOutput = runGit(["diff", "--no-ext-diff", range]);
   } catch (err) {
     throw new Error(`git diff against --base ${JSON.stringify(base)} failed: ${err?.message ?? err}`);
   }
