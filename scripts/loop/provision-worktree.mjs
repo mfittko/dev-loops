@@ -188,19 +188,24 @@ async function ensureCoreWorkspaceLink(worktreePath, logWarn) {
     return { mode: "skip", reason: "source-missing", src: corePkgDir, dest: linkPath };
   }
 
+  const relTarget = path.relative(scopeDir, corePkgDir);
   const existing = await fsp.readlink(linkPath).catch(() => null);
   if (existing !== null) {
-    if (path.resolve(path.dirname(linkPath), existing) === corePkgDir) {
+    // Only the exact RELATIVE target is idempotent. An absolute (or otherwise
+    // differently-spelled) link that happens to resolve correctly is
+    // normalized to the relative form — absolute links break when the
+    // worktree moves under tmp/.
+    if (existing === relTarget) {
       return { mode: "skip", reason: "exists", src: corePkgDir, dest: linkPath };
     }
-    await fsp.rm(linkPath, { force: true }); // stale/broken target — replace below
+    await fsp.rm(linkPath, { force: true }); // stale/absolute/broken — replace below
   } else if (await pathExists(linkPath)) {
     logWarn(`workspace self-link dest conflict (not a symlink), skipping: ${linkPath}`);
     return { mode: "skip", reason: "dest-conflict", src: corePkgDir, dest: linkPath };
   }
 
   await fsp.mkdir(scopeDir, { recursive: true });
-  await fsp.symlink(path.relative(scopeDir, corePkgDir), linkPath);
+  await fsp.symlink(relTarget, linkPath);
   return { mode: "link", src: corePkgDir, dest: linkPath };
 }
 
@@ -276,6 +281,7 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
       entry: "node_modules/@dev-loops/core",
       mode: "skip",
       reason: `link-failed: ${msg}`,
+      src: path.join(dst, "packages", "core"),
       dest: path.join(dst, "node_modules", "@dev-loops", "core"),
     });
   }

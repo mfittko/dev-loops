@@ -294,6 +294,33 @@ test("provision: workspace self-link is idempotent on re-provision", async () =>
     const secondAction = second.actions.find((a) => a.entry === "node_modules/@dev-loops/core");
     assert.equal(secondAction.mode, "skip");
     assert.equal(secondAction.reason, "exists");
+    // skip/exists is only granted for the exact relative target form.
+    assert.equal(
+      readlinkSync(path.join(fx.worktreePath, "node_modules/@dev-loops/core")),
+      path.join("..", "..", "packages", "core"),
+    );
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provision: normalizes an absolute-but-correct pre-existing link to relative", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    mkdirSync(path.join(fx.worktreePath, "packages/core"), { recursive: true });
+    // Absolute link that resolves to the CORRECT dir — still not the required
+    // relative form, so it must be replaced (reported as link, not skip/exists).
+    const scopeDir = path.join(fx.worktreePath, "node_modules/@dev-loops");
+    mkdirSync(scopeDir, { recursive: true });
+    symlinkSync(path.join(fx.worktreePath, "packages/core"), path.join(scopeDir, "core"));
+
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const action = res.actions.find((a) => a.entry === "node_modules/@dev-loops/core");
+    assert.equal(action.mode, "link");
+
+    const dest = path.join(fx.worktreePath, "node_modules/@dev-loops/core");
+    assert.equal(readlinkSync(dest), path.join("..", "..", "packages", "core"));
+    assert.equal(realpathSync(dest), realpathSync(path.join(fx.worktreePath, "packages/core")));
   } finally {
     fx.cleanup();
   }
