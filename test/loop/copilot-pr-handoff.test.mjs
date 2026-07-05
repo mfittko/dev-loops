@@ -1495,7 +1495,7 @@ test("copilot-pr-handoff waits for the pending Copilot review (in-flight force-r
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       // The request is newer than any submitted review → pending on the current head.
-      { assertArgs: ["api", "repos/owner/repo/issues/17/timeline"], stdout: JSON.stringify([{ login: "Copilot", created_at: "2026-06-03T00:00:00Z" }]) + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/issues/17/timeline"], stdout: JSON.stringify({ login: "Copilot", created_at: "2026-06-03T00:00:00Z" }) + "\n" },
     ], { matchMode: "claims" });
     env.DEVLOOPS_RUN_ID = "";
 
@@ -1540,7 +1540,7 @@ test("copilot-pr-handoff waits (fail closed) when a review is pending and the es
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/issues/17/timeline"], stdout: JSON.stringify([{ login: "Copilot", created_at: "2026-06-03T00:00:00Z" }]) + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/issues/17/timeline"], stdout: JSON.stringify({ login: "Copilot", created_at: "2026-06-03T00:00:00Z" }) + "\n" },
       // Escape-hatch fetch fails — significance cannot be positively determined.
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"], stdout: "", stderr: "boom", exitCode: 1 },
     ], { matchMode: "claims" });
