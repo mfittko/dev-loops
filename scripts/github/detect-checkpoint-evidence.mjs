@@ -417,7 +417,10 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   ].filter((spec) => spec.required && spec.marker.visible);
   const gates = [];
   const checkouts = resolveLedgerCheckouts(cwd);
-  const repoRoot = resolveRepoRoot(cwd);
+  // checkouts[0] is always resolveRepoRoot(cwd) (resolveLedgerCheckouts adds it
+  // first, unconditionally, and never throws — it falls back to cwd on git
+  // failure) — reuse it instead of a second `git rev-parse --show-toplevel`.
+  const repoRoot = checkouts[0];
   for (const spec of gateSpecs) {
     const headSha = spec.marker.headSha ?? currentHeadSha;
     const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
