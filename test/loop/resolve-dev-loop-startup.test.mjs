@@ -37,6 +37,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     pr: undefined,
     planFile: undefined,
     spike: undefined,
+    lightweight: false,
   });
   assert.deepEqual(parseResolveDevLoopStartupCliArgs(["--help"]), {
     help: true,
@@ -45,6 +46,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     pr: undefined,
     planFile: undefined,
     spike: undefined,
+    lightweight: false,
   });
 });
 
@@ -1013,6 +1015,162 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
     assert.equal(parsed.canonicalStateSummary.ownership, "external_human");
     assert.equal(parsed.canonicalStateSummary.nextActor, "external_human");
     assert.equal(parsed.canonicalStateSummary.target.pr, 740);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Lightweight PR-body-as-spec modifier (issue #1025)
+// ---------------------------------------------------------------------------
+
+test("parseResolveDevLoopStartupCliArgs parses --lightweight as a modifier on --issue", () => {
+  const opts = parseResolveDevLoopStartupCliArgs(["--issue", "1025", "--lightweight"]);
+  assert.equal(opts.lightweight, true);
+  assert.equal(opts.issue, 1025);
+});
+
+test("parseResolveDevLoopStartupCliArgs defaults lightweight to false", () => {
+  assert.equal(parseResolveDevLoopStartupCliArgs(["--issue", "1025"]).lightweight, false);
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --lightweight combined with --plan-file (opposites)", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--plan-file", "p.md", "--lightweight"]),
+    /opposites/i,
+  );
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --lightweight without --issue", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--pr", "7", "--lightweight"]),
+    /modifier for the --issue/i,
+  );
+});
+
+test("buildResolveDevLoopStartupResult threads canonicalSpecSource:pr_body onto the result", () => {
+  const input = {
+    intent: "start_issue_locally",
+    mode: "bounded_handoff",
+    targetPreference: "prefer_local",
+    artifactState: "not_applicable",
+    issueLinkageResolution: "not_applicable",
+    issueReadiness: "not_applicable",
+    issueAssignmentState: "not_applicable",
+    loopState: "implementation_pending",
+    canonicalSpecSource: "pr_body",
+    currentState: {
+      target: { kind: "local_phase", issue: 1025, pr: null, linkedPr: null, branch: null, phase: "issue-1025" },
+      ownership: "local",
+      nextActor: "local",
+      status: "active",
+      authorization: "authorized",
+    },
+  };
+  const result = buildResolveDevLoopStartupResult(input, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } });
+  assert.equal(result.selectedStrategy, "local_implementation");
+  assert.equal(result.canonicalSpecSource, "pr_body");
+});
+
+test("buildResolveDevLoopStartupResult omits canonicalSpecSource on the default (non-lightweight) path", () => {
+  const input = {
+    intent: "start_issue_locally",
+    mode: "bounded_handoff",
+    targetPreference: "prefer_local",
+    artifactState: "not_applicable",
+    issueLinkageResolution: "not_applicable",
+    issueReadiness: "not_applicable",
+    issueAssignmentState: "not_applicable",
+    loopState: "implementation_pending",
+    currentState: {
+      target: { kind: "local_phase", issue: 1025, pr: null, linkedPr: null, branch: null, phase: "issue-1025" },
+      ownership: "local",
+      nextActor: "local",
+      status: "active",
+      authorization: "authorized",
+    },
+  };
+  const result = buildResolveDevLoopStartupResult(input, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } });
+  assert.equal("canonicalSpecSource" in result, false);
+});
+
+test("ADDITIVE: --lightweight only adds canonicalSpecSource; the rest of the resolver output is unchanged", () => {
+  const baseInput = {
+    intent: "start_issue_locally",
+    mode: "bounded_handoff",
+    targetPreference: "prefer_local",
+    artifactState: "not_applicable",
+    issueLinkageResolution: "not_applicable",
+    issueReadiness: "not_applicable",
+    issueAssignmentState: "not_applicable",
+    loopState: "implementation_pending",
+    currentState: {
+      target: { kind: "local_phase", issue: 1025, pr: null, linkedPr: null, branch: null, phase: "issue-1025" },
+      ownership: "local",
+      nextActor: "local",
+      status: "active",
+      authorization: "authorized",
+    },
+  };
+  const opts = { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } };
+  const def = buildResolveDevLoopStartupResult(structuredClone(baseInput), opts);
+  const lite = buildResolveDevLoopStartupResult({ ...structuredClone(baseInput), canonicalSpecSource: "pr_body" }, opts);
+  assert.equal(lite.canonicalSpecSource, "pr_body");
+  const liteNormalized = { ...lite };
+  delete liteNormalized.canonicalSpecSource;
+  assert.deepEqual(liteNormalized, def);
+});
+
+test("runCli --issue --lightweight threads canonicalSpecSource:pr_body onto the emitted result (end-to-end)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-lightweight-e2e-"));
+  try {
+    execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+    await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
+    // phase-docs inputSource short-circuits buildAutoResolvedInput before any gh
+    // call, so the empty gh stub (exits non-zero on any call) proves zero side effects.
+    await writeFile(
+      path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
+      "version: 1\nstrategy:\n  default: local-first\ninputSource:\n  default: phase-docs\n",
+      "utf8",
+    );
+    const ghStub = await writeGhStubHelper(tempDir, []);
+    const result = await runNode(["--issue", "1025", "--lightweight"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.selectedStrategy, "local_implementation");
+    assert.equal(parsed.canonicalSpecSource, "pr_body");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --input STRIPS an injected canonicalSpecSource (injection guard, end-to-end)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-injection-e2e-"));
+  try {
+    const inputPath = await writeTempJson(tempDir, "startup.json", {
+      currentState: {
+        target: { kind: "local_branch", branch: "feature/local-route" },
+        ownership: "local",
+        nextActor: "local",
+        status: "active",
+        authorization: "authorized",
+      },
+      artifactState: "not_applicable",
+      loopState: "active",
+      // Malicious untrusted field: must be stripped, never re-attached to output.
+      canonicalSpecSource: "pr_body",
+    });
+    const result = await runNode(["--input", inputPath], {
+      cwd: tempDir,
+      env: { ...process.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.equal("canonicalSpecSource" in parsed, false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

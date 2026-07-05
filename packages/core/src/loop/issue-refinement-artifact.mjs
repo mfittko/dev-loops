@@ -48,8 +48,44 @@ const DOD_SECTION_PATTERNS = Object.freeze([
 ]);
 
 /**
+ * Fenced-code-span tracker. Given the previous fence state and the current
+ * line, returns { fence, isFenceLine, insideFence } where:
+ *   - `fence` is the next state ({ char, len } while open, else null)
+ *   - `isFenceLine` is true when the line is itself a fence open/close marker
+ *   - `insideFence` is true when the line's CONTENT is inside a code span
+ *     (i.e. a fence line, or a line between an open and its close)
+ *
+ * CommonMark: an N-marker fence (``` or ~~~) closes only on a line of >= N
+ * markers of the SAME char with no info string. This is the single source of
+ * truth shared by parseMarkdownSections (headings) and extractChecklistItems
+ * (checkboxes) so the two anti-spoof layers cannot drift (issue #1025).
+ */
+function stepFence(fence, line) {
+  const openMatch = /^\s*(`{3,}|~{3,})/u.exec(line);
+  if (openMatch) {
+    const char = openMatch[1][0];
+    const len = openMatch[1].length;
+    // A closing fence is a bare run of >= N markers of ONLY the opening char
+    // (CommonMark: no mixed markers, no info string).
+    const isBareRun = new RegExp(`^\\s*${char}+\\s*$`, "u").test(line);
+    if (fence === null) {
+      return { fence: { char, len }, isFenceLine: true, insideFence: true };
+    }
+    if (fence.char === char && len >= fence.len && isBareRun) {
+      return { fence: null, isFenceLine: true, insideFence: true };
+    }
+    return { fence, isFenceLine: true, insideFence: true };
+  }
+  return { fence, isFenceLine: false, insideFence: fence !== null };
+}
+
+/**
  * Extract `## ...` heading boundaries from a Markdown body.
  * Returns a sorted array of { level, name, bodyLines } records.
+ *
+ * Headings inside a fenced code span (``` or ~~~) are NOT treated as headings —
+ * otherwise a body could spoof the refinement/spec gate with real-looking
+ * headings that carry no real spec (gate integrity, issue #1025).
  */
 export function parseMarkdownSections(body) {
   if (typeof body !== "string" || body.length === 0) {
@@ -59,8 +95,15 @@ export function parseMarkdownSections(body) {
   const lines = body.split(/\r?\n/u);
   const sections = [];
   let current = null;
+  let fence = null;
 
   for (const line of lines) {
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) {
+      if (current) current.bodyLines.push(line);
+      continue;
+    }
     const match = /^(#{1,6})\s+(.+?)\s*$/u.exec(line);
     if (match) {
       if (current) {
@@ -117,8 +160,17 @@ export function extractChecklistItems(sectionBody) {
 
   const items = [];
   const lines = sectionBody.split(/\r?\n/u);
+  let fence = null;
 
   for (const line of lines) {
+    // Checkboxes/bullets inside a fenced code span are non-interactive text, not
+    // real items — skip them so a body cannot spoof the AC/DoD gate with
+    // code-fenced checkboxes (issue #1025). Same fence logic as parseMarkdownSections.
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) {
+      continue;
+    }
     // Checklist item: `- [ ]` / `- [x]` (leading indentation tolerated).
     // Consume ANY checkbox-marker line here; push only when it carries text,
     // so empty placeholders (`- [ ]`) are skipped rather than counted.
@@ -266,6 +318,106 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null } 
     linkedDoc,
     reason: "Issue body has no Acceptance criteria section, no DoD section, and no linked refinement doc.",
     finding: REFINEMENT_ARTIFACT_FINDING,
+  };
+}
+
+/**
+ * PR-body-as-spec invariant sections (issue #1025, lightweight path).
+ *
+ * When a lightweight session uses the PR description itself as the
+ * spec-of-record (no committed phase/plan doc), the PR body must still carry
+ * the same invariants a durable spec doc would. AC/DoD reuse the checklist
+ * patterns above; these are the narrative sections not covered by those.
+ * Key order = validation/report order. Each key maps to its distinct
+ * `missing_*` code (mirrors `checkBaseSections` in _refine-helpers.mjs).
+ */
+export const PR_BODY_SPEC_NARRATIVE_SECTIONS = Object.freeze({
+  objective: {
+    code: "missing_objective",
+    label: "Objective/why",
+    patterns: [/^objective\b/iu, /^why\b/iu, /^goals?\b/iu, /^summary\b/iu, /^problem\b/iu],
+  },
+  in_scope: {
+    code: "missing_in_scope",
+    label: "In scope",
+    patterns: [/^in[- ]?scope\b/iu, /^scope\b/iu],
+  },
+  non_goals: {
+    code: "missing_explicit_non_goals",
+    label: "Explicit non-goals",
+    patterns: [/^explicit non-?goals\b/iu, /^non-?goals\b/iu, /^out of scope\b/iu],
+  },
+  open_questions: {
+    code: "missing_open_questions",
+    label: "Open questions/risks",
+    patterns: [/^open questions\b/iu, /^risks?\b/iu, /^questions\b/iu],
+  },
+});
+
+function sectionHasBody(section) {
+  // A real body needs >=1 non-whitespace line OUTSIDE any fenced code span —
+  // a section whose only content is a ```fenced``` block is treated as empty so
+  // it cannot spoof the narrative-invariant gate (issue #1025, same stepFence as
+  // parseMarkdownSections + extractChecklistItems).
+  if (!section) return false;
+  let fence = null;
+  for (const line of section.bodyLines) {
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) continue;
+    if (line.trim().length > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Validate that a PR body carries every invariant required to serve as the
+ * lightweight spec-of-record: Objective/why, in-scope, explicit non-goals,
+ * testable Acceptance criteria (>=1 checklist item), Definition of done
+ * (>=1 checklist item), and Open questions/risks. Reuses the generic markdown
+ * logic (parseMarkdownSections / AC + DoD patterns / extractChecklistItems) so
+ * there is no parallel validator. Fails closed: every missing invariant is
+ * reported under its distinct `missing_*` code. Pure; no side effects.
+ *
+ * @param {{ body?: string }} input
+ * @returns {{ checker: "validate-pr-body-spec", ok: boolean, errors: { code: string, message: string }[], sections: string[], acItems: string[], dodItems: string[] }}
+ */
+export function validatePrBodySpec({ body = "" } = {}) {
+  const sections = parseMarkdownSections(typeof body === "string" ? body : "");
+  const errors = [];
+
+  for (const { code, label, patterns } of Object.values(PR_BODY_SPEC_NARRATIVE_SECTIONS)) {
+    const section = findSectionByPatterns(sections, patterns);
+    if (!sectionHasBody(section)) {
+      errors.push({ code, message: `Missing or empty ${label} section.` });
+    }
+  }
+
+  const acSection = findSectionByPatterns(sections, ACCEPTANCE_SECTION_PATTERNS);
+  const acItems = acSection ? extractChecklistItems(acSection.bodyLines.join("\n")) : [];
+  if (acItems.length === 0) {
+    errors.push({
+      code: "missing_acceptance_criteria",
+      message: "Missing testable Acceptance criteria (no checklist items found).",
+    });
+  }
+
+  const dodSection = findSectionByPatterns(sections, DOD_SECTION_PATTERNS);
+  const dodItems = dodSection ? extractChecklistItems(dodSection.bodyLines.join("\n")) : [];
+  if (dodItems.length === 0) {
+    errors.push({
+      code: "missing_definition_of_done",
+      message: "Missing Definition of done (no checklist items found).",
+    });
+  }
+
+  return {
+    checker: "validate-pr-body-spec",
+    ok: errors.length === 0,
+    errors,
+    sections: sections.map((s) => s.name),
+    acItems,
+    dodItems,
   };
 }
 

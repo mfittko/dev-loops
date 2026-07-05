@@ -42,12 +42,28 @@ Key contract:
 - GitHub issues may still be used for tracking or linking, but the plan file is authoritative for scope and acceptance criteria
 - A tracker-backed local implementation session (GitHub issue as canonical spec) must not also maintain a duplicate `docs/phases/phase-<n>.md` — see [Public Dev Loop Contract](public-dev-loop-contract.md) "Tracker-backed local implementation input-source contract"
 
+### Lightweight (PR-body-as-spec)
+
+**The PR description itself is the authoritative artifact store — no committed plan artifact.** This is a lightweight modifier on the local `--issue` path (`resolve-dev-loop-startup.mjs --issue <n> --lightweight`, `canonicalSpecSource: pr_body`), not a settings-level mode. No phase/plan doc is minted or committed; the PR body carries the spec-of-record invariants directly. The gate sequence is identical to the phase-doc path (draft → pre-approval fanout → detect-evidence → human merge); only the backing artifact differs (PR body vs phase doc).
+
+Artifacts:
+- **Planning + execution artifact:** the GitHub PR — its description is the spec, its diff is the execution
+- **No committed plan doc:** no `docs/phases/*.md` is created for the session
+
+Key contract:
+- The PR body must carry the same invariants a durable spec would: **Objective/why, in-scope + explicit non-goals, testable acceptance criteria, definition of done, open questions/risks**. `scripts/loop/validate-pr-body-spec.mjs` (reusing the generic markdown logic of `@dev-loops/core/loop/issue-refinement-artifact`, `validatePrBodySpec`) validates these and **fails closed** with a distinct `missing_*` reason per absent invariant.
+- This flips the promotion invariant below (P4, "the PR body carries the committed plan-doc **path**"): under lightweight there is no committed plan doc — the PR body **is** the spec, not a pointer to one.
+- The explicit `--lightweight` flag is the primary, deterministic trigger. The secondary heuristic (chore/fix commit type + no `--plan-file` + small change) is a documented manual signal for when to reach for the flag; it is not an automatic selector.
+- `--lightweight` is rejected when combined with `--plan-file` (they are opposites: `--plan-file` commits a durable plan doc as the spec, `--lightweight` makes the PR body the spec) and only composes with `--issue`.
+- Pre-approval acceptance-criteria verification reads the AC/DoD/invariants directly from the PR body rather than a linked issue body; see [Acceptance Criteria Verification](acceptance-criteria-verification.md).
+
 ### Mode selection table
 
 | Mode | Canonical artifact | GitHub issue required | Settings value |
 |---|---|---|---|
 | Tracker-first | GitHub issue | Yes | `strategy.default: github-first` |
 | Local-planning (shipped default) | Markdown plan file | No | `strategy.default: local-first` |
+| Lightweight (PR-body-as-spec) | GitHub PR description | Yes (`--issue`) | modifier: `--lightweight` (`canonicalSpecSource: pr_body`) |
 
 `inputSource.default` further disambiguates local-first startup:
 | inputSource | Meaning |

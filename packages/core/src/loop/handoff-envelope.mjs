@@ -270,6 +270,55 @@ function deriveRequiredReads(bundle, resolverOutput) {
 }
 
 // ---------------------------------------------------------------------------
+// specSource derivation (issue #1025 — lightweight PR-body-as-spec)
+// ---------------------------------------------------------------------------
+
+/**
+ * The LOCAL-FIRST spec-source subset the envelope distinguishes: phase_doc vs
+ * pr_body. This is NOT the full `canonicalSpecSource` value space — the same
+ * field name also carries "tracker_issue" in the tracker-backed mode
+ * (scripts/github/resolve-tracker-local-spec.mjs), which the envelope does not
+ * model (deriveSpecSource coerces it to null).
+ */
+export const CANONICAL_SPEC_SOURCE = Object.freeze({
+  PHASE_DOC: "phase_doc",
+  PR_BODY: "pr_body",
+});
+
+/**
+ * Derive the canonical spec source. Prefer the resolver-output-level field,
+ * fall back to bundle-level (mirrors deriveRequiredReads). Returns null when
+ * absent so the default (phase-doc) path carries no specSource field and stays
+ * byte-identical. Any value outside the local-first subset {phase_doc, pr_body}
+ * — e.g. the tracker-backed "tracker_issue" carried by the same field name — is
+ * coerced to null so the envelope can never set a specSource that
+ * validateHandoffEnvelope would then reject.
+ */
+function deriveSpecSource(bundle, resolverOutput) {
+  const raw = normalizeStringOrNull(resolverOutput?.canonicalSpecSource)
+    ?? normalizeStringOrNull(bundle?.canonicalSpecSource);
+  return raw === CANONICAL_SPEC_SOURCE.PHASE_DOC || raw === CANONICAL_SPEC_SOURCE.PR_BODY ? raw : null;
+}
+
+/**
+ * Apply the spec-source variant to acceptance criteria. Under the lightweight
+ * PR-body-as-spec path the phase-doc criterion text is retargeted to the PR
+ * description; the default (null/phase_doc) path returns the criteria verbatim
+ * so the phase-doc template text stays identical.
+ */
+function applySpecSourceVariant(criteria, specSource) {
+  // ponytail: free-text substring retarget is a no-op for any strategy whose
+  // criteria lack the phase-doc phrase — fine while lightweight only composes
+  // with local_implementation; make it a structured criterion-id lookup if
+  // lightweight is ever extended to another strategy.
+  if (specSource !== CANONICAL_SPEC_SOURCE.PR_BODY) return [...criteria];
+  return criteria.map((c) => ({
+    ...c,
+    must: c.must.replace("from the active phase doc", "from the PR description"),
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Gate config derivation
 // ---------------------------------------------------------------------------
 
@@ -504,6 +553,11 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   const gateConfig = deriveGateConfig(settings, subGate);
   const derivedCwd = deriveCwd(bundle, { repoRoot: options.repoRoot, worktreeCwd: options.worktreeCwd });
   const template = lookupAcceptanceTemplate(strategy, subGate);
+  // Lightweight PR-body-as-spec (issue #1025): retarget the phase-doc criterion
+  // text to the PR description. Null/phase_doc leaves the criteria untouched, so
+  // the non-lightweight path stays byte-identical.
+  const specSource = deriveSpecSource(bundle, resolverOutput);
+  const acceptanceCriteria = applySpecSourceVariant(template.criteria, specSource);
 
   const overrides = options.overrides && typeof options.overrides === "object" && Object.keys(options.overrides).length > 0
     ? { ...options.overrides }
@@ -554,7 +608,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     worktreeRequired: true,
 
     acceptance: {
-      criteria: [...template.criteria],
+      criteria: acceptanceCriteria,
       evidence: [...template.evidence],
       maxFinalizationTurns: template.maxFinalizationTurns,
     },
@@ -582,6 +636,13 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   // gate — the conductor surfaces these as an advisory PR comment, not a block.
   if (retrospectiveFindings) {
     envelope.retrospectiveFindings = retrospectiveFindings;
+  }
+
+  // Canonical spec source (issue #1025). Optional: only set when the resolver
+  // marks a lightweight PR-body-as-spec session, so the default (phase-doc) path
+  // carries no specSource field and its envelope stays byte-identical.
+  if (specSource) {
+    envelope.specSource = specSource;
   }
 
   return deepFreeze(envelope);
@@ -835,6 +896,18 @@ export function validateHandoffEnvelope(envelope) {
       if (!Array.isArray(rf.allowedWriteOps) || rf.allowedWriteOps.some((v) => typeof v !== "string")) {
         errors.push({ field: "retrospectiveFindings.allowedWriteOps", reason: "must be an array of strings", got: rf.allowedWriteOps });
       }
+    }
+  }
+
+  // ----- specSource (optional — issue #1025, lightweight PR-body-as-spec) -----
+  if (envelope.specSource !== undefined && envelope.specSource !== null) {
+    const validSources = [CANONICAL_SPEC_SOURCE.PHASE_DOC, CANONICAL_SPEC_SOURCE.PR_BODY];
+    if (typeof envelope.specSource !== "string" || !validSources.includes(envelope.specSource)) {
+      errors.push({
+        field: "specSource",
+        reason: `if present, must be one of ${validSources.join(", ")}`,
+        got: envelope.specSource,
+      });
     }
   }
 

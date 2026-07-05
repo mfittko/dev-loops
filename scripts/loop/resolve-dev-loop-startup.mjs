@@ -57,6 +57,14 @@ Required (exactly one):
   --input <path>  Path to a JSON file with canonical-state payload
   --plan-file <path>  Path to a phase-doc-format plan to start locally
   --spike <path>  Path to a spike artifact to start a spike loop locally
+Optional modifier:
+  --lightweight  With --issue: use the PR body as the spec-of-record
+                 (canonicalSpecSource: pr_body) — no phase/plan doc minted or
+                 committed. Same gate sequence; only the backing artifact
+                 differs. Rejected with --plan-file (its opposite). The secondary
+                 heuristic (chore/fix commit type + no --plan-file + small change)
+                 is a documented manual signal; --lightweight is the explicit,
+                 deterministic trigger.
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
@@ -132,6 +140,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     pr: undefined,
     planFile: undefined,
     spike: undefined,
+    lightweight: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -142,6 +151,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       pr: { type: "string" },
       "plan-file": { type: "string" },
       spike: { type: "string" },
+      lightweight: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -179,6 +189,10 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       options.spike = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "lightweight") {
+      options.lightweight = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -188,6 +202,15 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
   }
   if (modeCount === 0) {
     throw parseError("--input <path>, --issue <n>, --pr <n>, --plan-file <path>, or --spike <path> is required");
+  }
+  // --lightweight is a MODIFIER (not a 6th mode): it makes the PR body the
+  // spec-of-record for the --issue local path. It is the opposite of --plan-file
+  // (which commits a durable plan doc as the spec) and only composes with --issue.
+  if (options.lightweight && options.planFile !== undefined) {
+    throw parseError("--lightweight and --plan-file are opposites: --plan-file commits a durable plan doc as the spec-of-record, --lightweight makes the PR body the spec. Provide only one.");
+  }
+  if (options.lightweight && options.issue === undefined) {
+    throw parseError("--lightweight is a modifier for the --issue path (the PR body becomes the spec-of-record). Combine it with --issue <n>.");
   }
   return options;
 }
@@ -552,7 +575,10 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
   // evaluator does not model. Strip them before evaluation and re-apply them to
   // the result; `planFileExempt` waives the worktree-isolation guard because a
   // pre-promotion plan has no issue to key a worktree on.
-  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, ...routingInput } = input;
+  // `canonicalSpecSource` (issue #1025) is a resolver-only field the pure routing
+  // evaluator does not model — strip it before evaluation and re-attach to the
+  // result, mirroring planFileIntakeState/spikeIntakeState.
+  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, ...routingInput } = input;
   input = routingInput;
   try {
     const checkpointText = readFileSync(
@@ -663,6 +689,7 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
     canonicalStateSummary: summarizeCanonicalState(bundle),
     ...(planFileIntakeState !== null ? { planFileIntakeState } : {}),
     ...(spikeIntakeState !== null ? { spikeIntakeState } : {}),
+    ...(canonicalSpecSource !== null ? { canonicalSpecSource } : {}),
     bundle,
   };
 }
@@ -704,6 +731,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       delete parsed.planFileExempt;
       delete parsed.planFileIntakeState;
       delete parsed.spikeIntakeState;
+      delete parsed.canonicalSpecSource;
     }
     input = parsed;
   } else if (options.issue !== undefined) {
@@ -713,6 +741,11 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       targetPreference,
       inputSource,
     });
+    // --lightweight modifier (issue #1025): the PR body becomes the
+    // spec-of-record for this local session — no phase/plan doc minted.
+    if (options.lightweight) {
+      input = { ...input, canonicalSpecSource: "pr_body" };
+    }
   } else {
     input = buildAutoResolvedInput({
       pr: options.pr,
