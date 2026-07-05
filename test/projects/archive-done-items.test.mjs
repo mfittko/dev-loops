@@ -319,6 +319,83 @@ function withTempDevloops(contents, fn) {
   }
 }
 
+describe("archive-done resolves the configured done column (#1143)", () => {
+  it("archives items in the overridden statusColumns.done column (\"Complete\"), not the literal \"Done\"", async () => {
+    await withTempDevloops('queue:\n  projectNumber: 1\n  statusColumns:\n    done: "Complete"\n', async (cwd) => {
+      const nodes = [rawItemNode("A", 1, { closed: true, closedAt: "2026-01-01T00:00:00Z", status: "Complete" })];
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([PROJECT]) },
+        { payload: itemsResponse(nodes) },
+        { payload: archiveResponse("A") },
+      ];
+      const runChild = mockRunChild(responses);
+
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", olderThan: "30d", now: Date.parse("2026-06-24T00:00:00Z") },
+        { runChild, cwd },
+      );
+
+      assert.ok(result.ok);
+      assert.strictEqual(result.archived.length, 1);
+      assert.strictEqual(result.archived[0].itemId, "A");
+    });
+  });
+
+  it("does NOT archive an item still literally in \"Done\" when statusColumns.done is renamed", async () => {
+    await withTempDevloops('queue:\n  projectNumber: 1\n  statusColumns:\n    done: "Complete"\n', async (cwd) => {
+      // Stale item sitting in the old literal "Done" column must be left alone —
+      // the configured column ("Complete") is the only one archive-done matches.
+      const nodes = [rawItemNode("A", 1, { closed: true, closedAt: "2026-01-01T00:00:00Z", status: "Done" })];
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([PROJECT]) },
+        { payload: itemsResponse(nodes) },
+      ];
+      const runChild = mockRunChild(responses);
+
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", olderThan: "30d", now: Date.parse("2026-06-24T00:00:00Z") },
+        { runChild, cwd },
+      );
+
+      assert.ok(result.ok);
+      assert.strictEqual(result.archived.length, 0);
+    });
+  });
+
+  it("default config (no override) still archives against the literal \"Done\"", async () => {
+    await withTempDevloops(null, async (cwd) => {
+      const nodes = [rawItemNode("A", 1, { closed: true, closedAt: "2026-01-01T00:00:00Z" })];
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([PROJECT]) },
+        { payload: itemsResponse(nodes) },
+        { payload: archiveResponse("A") },
+      ];
+      const runChild = mockRunChild(responses);
+
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", olderThan: "30d", now: Date.parse("2026-06-24T00:00:00Z") },
+        { runChild, cwd },
+      );
+
+      assert.ok(result.ok);
+      assert.strictEqual(result.archived.length, 1);
+    });
+  });
+
+  it("malformed .devloops → archive-done fails CLOSED (surfaces config error), never archives against the literal \"Done\"", async () => {
+    await withTempDevloops("queue: renamed\n- broken\n", async (cwd) => {
+      const runChild = mockRunChild([]);
+      await assert.rejects(
+        () => main({ repo: "mfittko/dev-loops", project: "1", now: Date.parse("2026-06-24T00:00:00Z") }, { runChild, cwd }),
+        /config read\/parse error/,
+      );
+    });
+  });
+});
+
 describe("archive-done — resolveSettings", () => {
   it("returns null when no .devloops is present (default threshold/board apply)", () => {
     withTempDevloops(null, (dir) => {

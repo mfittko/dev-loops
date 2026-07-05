@@ -234,3 +234,51 @@ describe("resolve-active-board-item resolves the configured next_up column (#109
     });
   });
 });
+
+describe("resolve-active-board-item resolves the configured in_progress column (#1143)", () => {
+  async function withTempCwd(contents, fn) {
+    const dir = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-statuscol-inprogress-"));
+    try {
+      if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
+      return await fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("pickup queries the overridden statusColumns.in_progress column (\"Doing\"), not the literal", async () => {
+    await withTempCwd('queue:\n  projectNumber: 7\n  statusColumns:\n    in_progress: "Doing"\n', async (cwd) => {
+      // The single active item lives ONLY in the renamed "Doing" column. If the
+      // resolver still queried the literal "In Progress", it would see an empty
+      // column and fall through to Next Up instead — proving misdetection.
+      const child = boardRunChild({
+        optionNames: ["Backlog", "Next Up", "Doing", "Done"],
+        columns: { "Doing": [{ issueNumber: 42, title: "Active" }], "Next Up": [{ issueNumber: 7, title: "Later" }] },
+      });
+      const r = await main({ repo: "o/r", project: "7" }, { runChild: child, cwd });
+      assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 42 }, source: "in-progress" });
+    });
+  });
+
+  it("default config (no override) still resolves the literal \"In Progress\"", async () => {
+    await withTempCwd(null, async (cwd) => {
+      const child = boardRunChild({
+        columns: { "In Progress": [{ issueNumber: 42, title: "Active" }], "Next Up": [] },
+      });
+      const r = await main({ repo: "o/r", project: "7" }, { runChild: child, cwd });
+      assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 42 }, source: "in-progress" });
+    });
+  });
+
+  it("malformed .devloops → pickup fails CLOSED (surfaces config error), never queries the literal \"In Progress\"", async () => {
+    await withTempCwd("queue: renamed\n- broken\n", async (cwd) => {
+      const child = boardRunChild({
+        columns: { "In Progress": [{ issueNumber: 42, title: "Active" }], "Next Up": [] },
+      });
+      await assert.rejects(
+        () => main({ repo: "o/r", project: "7" }, { runChild: child, cwd }),
+        /config read\/parse error/,
+      );
+    });
+  });
+});

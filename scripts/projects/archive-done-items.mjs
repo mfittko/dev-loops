@@ -4,6 +4,7 @@ import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings, parseProjectRef, findProject } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 
 const USAGE = `Usage: dev-loops queue archive-done --repo <owner/name> [--project <number|id|board-uri>] [--older-than <duration>] [--dry-run]
        (dev-loops project archive-done … is a back-compat alias)
@@ -308,12 +309,14 @@ function normalizeItem(node) {
 // ── Selection logic (pure) ────────────────────────────────────────────────
 
 // Select items whose issue/PR is closed and has been closed for >= olderThanMs.
-function selectArchivable(items, { now, olderThanMs }) {
+// `doneColumn` defaults to the literal "Done" for direct/pure-unit callers;
+// main() always passes the configured column name (#1098, #1143).
+function selectArchivable(items, { now, olderThanMs, doneColumn = "Done" }) {
   return items.filter((it) => {
     if (it.isArchived) return false;
     // Only archive items in the Done column — a closed issue/PR parked in
     // another column (Backlog/Next Up/In Progress) must be left untouched.
-    if (it.status !== "Done") return false;
+    if (it.status !== doneColumn) return false;
     const c = it.content;
     if (!c || !c.closed || !c.closedAt) return false;
     const closedAtMs = Date.parse(c.closedAt);
@@ -333,9 +336,22 @@ function classifyExitCode(err) {
 
 // ── Main logic ──────────────────────────────────────────────────────────
 
-async function main(args, { env = process.env, runChild } = {}) {
+async function main(args, { env = process.env, runChild, cwd = process.cwd() } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
+  // Resolve the done column name through the SAME statusColumns mapping
+  // board-sync uses (#1098, #1143): a repo that renamed Done gets its
+  // configured column matched here, not the literal default. Fail CLOSED on a
+  // malformed `.devloops` — never silently archive against the literal "Done"
+  // and risk archiving nothing on a renamed/stale column.
+  const { columnNames, error: configError } = loadStateColumnMap(cwd);
+  if (configError) {
+    throw Object.assign(
+      new Error(`could not resolve done column (config read/parse error: ${configError})`),
+      { code: "CONFIG_ERROR" },
+    );
+  }
+  const doneColumn = columnNames[LOGICAL_COLUMN.DONE];
   const [owner] = repo.split("/");
   // Board: explicit --project ref wins; otherwise resolve by board title from
   // .devloops (passed in as args.projectTitle by runCli). Fail closed if neither.
@@ -368,7 +384,7 @@ async function main(args, { env = process.env, runChild } = {}) {
     .filter((n) => n.content && n.content.repository?.nameWithOwner === repo)
     .map(normalizeItem);
 
-  const archivable = selectArchivable(repoItems, { now, olderThanMs });
+  const archivable = selectArchivable(repoItems, { now, olderThanMs, doneColumn });
 
   const mutations = archivable.map((it) => ({
     query: ARCHIVE_ITEM,
@@ -438,7 +454,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
   }
 
   try {
-    const result = await main(args, { env });
+    const result = await main(args, { env, cwd });
     process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
   } catch (err) {
     stderr.write(JSON.stringify({ ok: false, error: err.message, code: err.code ?? "UNKNOWN" }) + "\n");
