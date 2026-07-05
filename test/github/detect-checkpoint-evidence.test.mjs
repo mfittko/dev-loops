@@ -15,8 +15,12 @@ import {
 import {
   parseDetectCheckpointEvidenceCliArgs,
   buildPreMergeGateCheck,
+  buildFanoutEnforcement,
 } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdir } from "node:fs/promises";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
 
@@ -1006,6 +1010,209 @@ test("buildPreMergeGateCheck with requireProvenance ON fails closed on a non-int
     result.failures.some((f) => f.includes("distinctReviewers must be a non-negative integer")),
     JSON.stringify(result.failures),
   );
+});
+
+// --- #1174: light-mode-aware pre-merge acceptance of inline verdicts ---------
+// A genuinely under-threshold micro-PR collapses the gate fan-out to a single
+// inline check (#1043). buildPreMergeGateCheck accepts that inline verdict ONLY
+// when lightMode is on, scope was re-derived under threshold, no gate:full label,
+// a ledger exists, and a non-empty inline reason was recorded. Fail closed on any
+// missing precondition — non-light inline verdicts stay byte-identically rejected.
+function lightGate(overrides = {}) {
+  return {
+    name: "pre_approval_gate",
+    executionMode: "inline_single_agent",
+    inlineReason: "under_threshold",
+    scopeUnderThreshold: true,
+    ledgerPath: "tmp/b.json",
+    ledgerExists: true,
+    provenance: null,
+    ...overrides,
+  };
+}
+
+test("buildPreMergeGateCheck (#1174) ACCEPTS a light inline verdict under threshold with reason + ledger", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: true,
+    hasFullLabel: false,
+    gates: [lightGate()],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+  assert.deepEqual(result.failures, []);
+});
+
+test("buildPreMergeGateCheck (#1174) REJECTS a light inline verdict when the ledger is missing (evidence retention still uniform)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: true,
+    hasFullLabel: false,
+    gates: [lightGate({ ledgerExists: false, ledgerPath: "tmp/gate-findings/o-r/pr-17/pre_approval_gate-abc1234.json" })],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.failures.some((f) => f.includes("no findings-log ledger")), JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck (#1174) REJECTS an over-threshold inline verdict (scope not under threshold)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: true,
+    hasFullLabel: false,
+    gates: [lightGate({ scopeUnderThreshold: false })],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("inline_single_agent") && f.includes("requireFanoutEvidence")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck (#1174) REJECTS an inline verdict when the gate:full label is present", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: true,
+    hasFullLabel: true,
+    gates: [lightGate()],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.failures.some((f) => f.includes("inline_single_agent")), JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck (#1174) REJECTS an inline verdict when lightMode is disabled", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: false,
+    hasFullLabel: false,
+    gates: [lightGate()],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.failures.some((f) => f.includes("inline_single_agent")), JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck (#1174) REJECTS an inline verdict with no recorded inline reason", () => {
+  for (const inlineReason of [null, "", "   "]) {
+    const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+      required: true,
+      lightMode: true,
+      hasFullLabel: false,
+      gates: [lightGate({ inlineReason })],
+    });
+    assert.equal(result.ok, false, `inlineReason=${JSON.stringify(inlineReason)}`);
+    assert.ok(result.failures.some((f) => f.includes("inline_single_agent")), JSON.stringify(result.failures));
+  }
+});
+
+test("buildPreMergeGateCheck (#1174) exempts a light inline verdict from requireFanoutProvenance (provenance only enforced for fanout_fanin)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    lightMode: true,
+    hasFullLabel: false,
+    gates: [lightGate({ provenance: null })],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+  assert.deepEqual(result.failures, []);
+});
+
+test("buildPreMergeGateCheck (#1174) non-regression: fanout gates unaffected by the light keys", () => {
+  // A fanout_fanin gate with lightMode on/off and hasFullLabel present must
+  // behave exactly as before: ledger present => pass, provenance still enforced.
+  const pass = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: true,
+    hasFullLabel: true,
+    gates: [
+      { name: "draft_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/a.json", ledgerExists: true },
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true },
+    ],
+  });
+  assert.equal(pass.ok, true, JSON.stringify(pass.failures));
+  const provFail = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    lightMode: true,
+    hasFullLabel: false,
+    gates: [
+      { name: "draft_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/a.json", ledgerExists: true, provenance: { distinctReviewers: 2, perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-b" }] } },
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true, provenance: null },
+    ],
+  });
+  assert.equal(provFail.ok, false);
+  assert.ok(provFail.failures.some((f) => f.includes("requireFanoutProvenance")), JSON.stringify(provFail.failures));
+});
+
+test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scopeUnderThreshold for light inline verdicts", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-light-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(path.join(dir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 200\n", "utf8");
+    await writeFile(path.join(dir, "a.txt"), "one\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    const baseRef = g("rev-parse", "HEAD").trim();
+    await writeFile(path.join(dir, "a.txt"), "one\ntwo\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head");
+    const headSha = g("rev-parse", "HEAD").trim();
+
+    // Ledger for the reviewed head so the light path retains evidence uniformly.
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-17");
+    await mkdir(ledgerDir, { recursive: true });
+    for (const gate of ["draft_gate", "pre_approval_gate"]) {
+      await writeFile(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
+    }
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = (headOverride) => ({ visible: true, headSha: headOverride, executionMode: "inline_single_agent", inlineReason: "under_threshold" });
+
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo",
+      pr: 17,
+      currentHeadSha: headSha,
+      draftGateMarker: marker(headSha),
+      preApprovalGateMarker: marker(headSha),
+      config,
+      cwd: dir,
+      hasFullLabel: false,
+      baseRef,
+    });
+    assert.equal(enforcement.required, true);
+    assert.equal(enforcement.lightMode, true);
+    assert.equal(enforcement.hasFullLabel, false);
+    for (const gate of enforcement.gates) {
+      assert.equal(gate.scopeUnderThreshold, true, gate.name);
+      assert.equal(gate.inlineReason, "under_threshold");
+      assert.equal(gate.ledgerExists, true, gate.name);
+    }
+    const accepted = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    }, 0, null, enforcement);
+    assert.equal(accepted.ok, true, JSON.stringify(accepted.failures));
+
+    // gate:full label forces fan-out: scope is never even measured -> rejected.
+    const labelled = await buildFanoutEnforcement({
+      repo: "owner/repo",
+      pr: 17,
+      currentHeadSha: headSha,
+      draftGateMarker: marker(headSha),
+      preApprovalGateMarker: marker(headSha),
+      config,
+      cwd: dir,
+      hasFullLabel: true,
+      baseRef,
+    });
+    for (const gate of labelled.gates) {
+      assert.equal(gate.scopeUnderThreshold, false, gate.name);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("detect-checkpoint-evidence fails pre-merge with unresolved human review threads", async () => {
