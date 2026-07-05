@@ -101,7 +101,7 @@ function main(argv) {
   const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
   // --dry-run is side-effect-free: mint a run id in-memory without persisting the state file.
-  const { runId } = ensureRunId({ env: process.env, root: opts.dryRun ? undefined : repoRoot });
+  const { runId } = ensureRunId({ env: opts.dryRun ? {} : process.env, root: opts.dryRun ? undefined : repoRoot });
   const prompt = opts.prompt ?? buildDevLoopPrompt({ issue: opts.issue, pr: opts.pr });
   const { command, args, env } = buildHeadlessClaudeInvocation({
     prompt,
