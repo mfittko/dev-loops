@@ -42,7 +42,7 @@ It does not redefine helper transport mechanics, reviewer-loop internals, conduc
 <!-- rule: LIFECYCLE-ONE-STATE -->
 `LIFECYCLE-ONE-STATE`: Exactly **one current lifecycle state** MUST apply at a time.
 
-- The lifecycle must fail closed when required evidence is missing, stale, ambiguous, or unparsable (see [Fail-closed rules](#fail-closed-rules), `LIFECYCLE-FAIL-CLOSED`).
+- The lifecycle MUST fail closed when required evidence is missing, stale, ambiguous, or unparsable (see [Fail-closed rules](#fail-closed-rules), `LIFECYCLE-FAIL-CLOSED`).
 - Every gate-crossing decision is for the **current PR head SHA**.
 - Draft existence alone is **not** draft-gate readiness.
 - A PR must clear the draft-stage gate for the current head before Copilot review may be requested.
@@ -146,7 +146,7 @@ At minimum, the lifecycle must enforce these transitions:
 - no Copilot request before clean current-head `draft_gate` evidence
 - no direct skip from fix-applied to Copilot re-request while reply/resolve remains incomplete
 - no reuse of ready-side or gate evidence after ready -> draft
-- <!-- rule: LIFECYCLE-CONFLICT-BLOCKS-PROGRESS --> `LIFECYCLE-CONFLICT-BLOCKS-PROGRESS`: a conflicted PR must not be treated as `waiting_for_human_pr_approval`, `waiting_for_merge`, or merge-ready, even if older gate comments and CI were previously green
+- <!-- rule: LIFECYCLE-CONFLICT-BLOCKS-PROGRESS --> `LIFECYCLE-CONFLICT-BLOCKS-PROGRESS`: a conflicted PR MUST NOT be treated as `waiting_for_human_pr_approval`, `waiting_for_merge`, or merge-ready, even if older gate comments and CI were previously green
 - no implicit fallthrough from approval/merge waits into remediation without a triggering event
 
 ## Remediation ownership boundary

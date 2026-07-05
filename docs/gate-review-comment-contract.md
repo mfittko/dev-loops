@@ -70,7 +70,8 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 ## Verdict definitions
 
 <!-- rule: GATE-COMMENT-VERDICT-VALUES -->
-`GATE-COMMENT-VERDICT-VALUES`:
+`GATE-COMMENT-VERDICT-VALUES`: The verdict field MUST be one of the following values, each
+with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
@@ -110,12 +111,13 @@ it applies to both gate boundaries.
 ### Draft gate (`draft_gate`) comment requirements
 
 <!-- rule: GATE-COMMENT-DRAFT-REQUIREMENTS -->
-`GATE-COMMENT-DRAFT-REQUIREMENTS`:
+`GATE-COMMENT-DRAFT-REQUIREMENTS`: The PR MUST NOT leave draft unless a visible, current-head
+`clean` `draft_gate` checkpoint verdict comment exists, per the rules below.
 
 **One-time transition boundary.** `draft_gate` is not a recurring per-head gate — it
 records exactly one decision point: the draft → ready-for-review transition. Once a
 clean `draft_gate` comment exists on the PR and the PR leaves draft, later head
-changes must not trigger new `draft_gate` comments. Post-draft follow-up relies on
+changes MUST NOT trigger new `draft_gate` comments. Post-draft follow-up relies on
 normal review/fix loops and the recurring per-head `pre_approval_gate`.
 
 - **Skip rule:** before posting a `draft_gate` comment, check whether a clean `draft_gate`
@@ -123,10 +125,10 @@ normal review/fix loops and the recurring per-head `pre_approval_gate`.
   anywhere on the PR, skip the draft gate entirely — the draft→ready transition was
   already recorded. Do not re-post draft gate on new heads. This is a one-time gate.
 - When the `draft_gate` runs (while the PR is still draft and no clean evidence exists),
-  the PR must receive a visible checkpoint verdict comment.
-- If the `draft_gate` verdict is `findings_present` or `blocked`, the comment must
+  the PR MUST receive a visible checkpoint verdict comment.
+- If the `draft_gate` verdict is `findings_present` or `blocked`, the comment MUST
   state that the PR stays draft and fixes are required before retrying.
-- The PR must not leave draft (`gh pr ready`) unless a visible `clean` `draft_gate`
+- The PR MUST NOT leave draft (`gh pr ready`) unless a visible `clean` `draft_gate`
   checkpoint verdict comment exists for the current head SHA.
 - A checkpoint verdict comment for an older head SHA does not satisfy this requirement for
   the current head while the PR is still draft.
@@ -134,18 +136,20 @@ normal review/fix loops and the recurring per-head `pre_approval_gate`.
   one-time transition record — it records that the draft → ready boundary was properly
   crossed. Later head changes do not invalidate this record.
 - If a PR is already non-draft and no clean `draft_gate` evidence exists at all (no
-  valid checkpoint verdict comment was ever posted), automation must fail closed and reconcile
+  valid checkpoint verdict comment was ever posted), automation MUST fail closed and reconcile
   that missing draft-stage evidence before continuing.
 
 ### Pre-approval gate (`pre_approval_gate`) comment requirements
 
 <!-- rule: GATE-COMMENT-PREAPPROVAL-REQUIREMENTS -->
-`GATE-COMMENT-PREAPPROVAL-REQUIREMENTS`:
+`GATE-COMMENT-PREAPPROVAL-REQUIREMENTS`: Final-approval readiness MUST NOT rely only on
+local or hidden artifacts; a visible, current-head `pre_approval_gate` checkpoint verdict
+comment is the required auditable evidence, per the rules below.
 
-- When the `pre_approval_gate` runs, the PR must receive a visible checkpoint verdict comment.
+- When the `pre_approval_gate` runs, the PR MUST receive a visible checkpoint verdict comment.
 - If the `pre_approval_gate` verdict is `findings_present` or `blocked`, the comment
-  must state that follow-up fixes are required before final approval.
-- Final-approval readiness must not rely only on local or hidden artifacts; the
+  MUST state that follow-up fixes are required before final approval.
+- Final-approval readiness MUST NOT rely only on local or hidden artifacts; the
   visible PR comment is the required auditable evidence.
 - A checkpoint verdict comment for an older head SHA does not satisfy this requirement for
   the current head.
@@ -153,12 +157,13 @@ normal review/fix loops and the recurring per-head `pre_approval_gate`.
 ## Rerun rules
 
 <!-- rule: GATE-COMMENT-RERUN-RULES -->
-`GATE-COMMENT-RERUN-RULES`:
+`GATE-COMMENT-RERUN-RULES`: A gate rerun MUST follow the same-head vs. new-head handling
+defined below.
 
 | Scenario | Rule |
 |---|---|
 | Same head SHA rerun | Idempotent behavior: do not post a second visible marker for the same gate+head. Reuse/suppress by default; if correction is needed, update/replace the existing marker in place. |
-| New head SHA rerun | A new visible checkpoint verdict comment must be posted for the new head; the older-head comment remains but does not satisfy readiness for the new head |
+| New head SHA rerun | A new visible checkpoint verdict comment MUST be posted for the new head; the older-head comment remains but does not satisfy readiness for the new head |
 
 ## Fail-closed behavior
 
