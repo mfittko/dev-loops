@@ -1,6 +1,10 @@
 name: Publish to npm
 
+# release.yml dispatches this with --ref <tag> (GITHUB_TOKEN-created releases
+# never fire `on: release`, see #1187); the release trigger remains for
+# releases published manually in the UI.
 on:
+  workflow_dispatch:
   release:
     types:
       - published
