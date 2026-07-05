@@ -1078,6 +1078,83 @@ test("captureDiffFromBase: --name-status failure fails closed (throws)", async (
   }
 });
 
+// A base commit + a HEAD commit that renames src/original.mjs -> src/renamed.mjs
+// with two small edits ("CHANGE_A"/"CHANGE_B") separated by a 4-line unchanged
+// gap. The gap size (4) sits between the merge thresholds of context=1
+// (2*1=2, stays 2 separate hunks) and context=3 (2*3=6, merges into 1 hunk),
+// so an unpinned diff.context would change the hunk COUNT/shape, not just
+// cosmetics. The rename (75% line similarity, above git's default 50%
+// threshold) additionally exercises diff.renames: off, it shows as a D+A pair
+// instead of an R pair, changing --name-status output shape.
+async function makeRenameRepo({ contraryConfig }) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cross-env-"));
+  git(repoRoot, ["init", "-q"]);
+  git(repoRoot, ["config", "user.email", "test@example.com"]);
+  git(repoRoot, ["config", "user.name", "Test"]);
+  if (contraryConfig) {
+    git(repoRoot, ["config", "diff.renames", "false"]);
+    git(repoRoot, ["config", "diff.algorithm", "histogram"]);
+    git(repoRoot, ["config", "diff.context", "1"]);
+  }
+  const base = [
+    'export const header = true;',
+    'const a = "CHANGE_A_OLD";',
+    "const gap1 = 1;",
+    "const gap2 = 2;",
+    "const gap3 = 3;",
+    "const gap4 = 4;",
+    'const b = "CHANGE_B_OLD";',
+    "export const footer = true;",
+    "",
+  ].join("\n");
+  await mkdir(path.join(repoRoot, "src"), { recursive: true });
+  await writeFile(path.join(repoRoot, "src/original.mjs"), base, "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "base"]);
+
+  const renamed = [
+    'export const header = true;',
+    'const a = "CHANGE_A_NEW";',
+    "const gap1 = 1;",
+    "const gap2 = 2;",
+    "const gap3 = 3;",
+    "const gap4 = 4;",
+    'const b = "CHANGE_B_NEW";',
+    "export const footer = true;",
+    "",
+  ].join("\n");
+  await rm(path.join(repoRoot, "src/original.mjs"));
+  await writeFile(path.join(repoRoot, "src/renamed.mjs"), renamed, "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "rename+edit"]);
+  return repoRoot;
+}
+
+test("captureDiffFromBase: cross-environment byte-reproducibility — a CONTRARY local config (diff.renames=false, diff.algorithm=histogram, diff.context=1) still yields identical persisted diff bytes + changedFiles as the default case", async () => {
+  const defaultRepo = await makeRenameRepo({ contraryConfig: false });
+  const contraryRepo = await makeRenameRepo({ contraryConfig: true });
+  try {
+    const defaultCapture = captureDiffFromBase("HEAD~1", { repoRoot: defaultRepo });
+    const contraryCapture = captureDiffFromBase("HEAD~1", { repoRoot: contraryRepo });
+
+    assert.equal(
+      contraryCapture.diffOutput,
+      defaultCapture.diffOutput,
+      "persisted diff bytes must be identical regardless of ambient repo diff config",
+    );
+    assert.deepEqual(
+      parseChangedFiles(contraryCapture.nameStatusOutput),
+      parseChangedFiles(defaultCapture.nameStatusOutput),
+      "changedFiles/adjacentCode membership must be identical regardless of ambient diff.renames",
+    );
+    // Locks in that the rename WAS detected (not a D+A pair) in both cases.
+    assert.deepEqual(parseChangedFiles(defaultCapture.nameStatusOutput), ["src/renamed.mjs"]);
+  } finally {
+    await rm(defaultRepo, { recursive: true, force: true });
+    await rm(contraryRepo, { recursive: true, force: true });
+  }
+});
+
 test("buildGateContext with an empty diffOutput leaves diffPath null but still builds changedFiles + adjacentCode, and (programmatic) omits diffSource", async () => {
   // Downstream proof of the best-effort split at the LIBRARY layer: an empty
   // diffOutput (what a failed full-diff capture returns) leaves diffPath null
