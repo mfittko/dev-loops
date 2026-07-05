@@ -193,3 +193,123 @@ test("pr-gate-coordination known gap regression: gate entry is permitted from a 
   // Gate entry is permitted despite no independent reviewed-head verification (the known gap).
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
 });
+
+// ---------------------------------------------------------------------------
+// Doc-side parser: the L2 doc table is parsed from the owner doc's own
+// "## Required transitions" bullets, so editing the doc is visible.
+// ---------------------------------------------------------------------------
+
+const FIXTURE_DOC = `# Fixture
+
+## Required transitions
+
+At minimum:
+
+- \`a\` -> \`b\`
+  - some guard
+- any open slice -> \`c\`
+
+### Required negative boundaries
+
+- \`x\` -> \`y\` (must not count: different section)
+`;
+
+test("parseRequiredTransitions reads top-level bullets and applies abstract-row mappings", async () => {
+  const { parseRequiredTransitions } = await import("../../scripts/docs/validate-state-machine-conformance.mjs");
+  const parsed = parseRequiredTransitions(FIXTURE_DOC, {
+    abstractRows: new Map([["any open slice->`c`", [["b", "c"]]]]),
+  });
+  assert.deepEqual(parsed, [["a", "b"], ["b", "c"]]);
+});
+
+test("parseRequiredTransitions throws on an unmapped abstract row (loud, never dropped)", async () => {
+  const { parseRequiredTransitions } = await import("../../scripts/docs/validate-state-machine-conformance.mjs");
+  assert.throws(() => parseRequiredTransitions(FIXTURE_DOC), /unmapped abstract transition row/);
+});
+
+test("doc-content mutation test: perturbing the doc's transition bullets is caught end to end", async () => {
+  const { parseRequiredTransitions } = await import("../../scripts/docs/validate-state-machine-conformance.mjs");
+  const checks = new Map([
+    ["a->b", { status: "verified", verify: () => ({ ok: true, result: {} }) }],
+    ["b->c", { status: "verified", verify: () => ({ ok: true, result: {} }) }],
+  ]);
+  const abstractRows = new Map([["any open slice->`c`", [["b", "c"]]]]);
+
+  // Unmutated doc: everything binds.
+  const clean = compareDocCodeTransitions(parseRequiredTransitions(FIXTURE_DOC, { abstractRows }), checks);
+  assert.equal(clean.ok, true);
+
+  // Mutate the DOC CONTENT (rename a bullet's target state): the parsed table
+  // no longer matches any registered check AND the old check goes unreferenced.
+  const doctoredDoc = FIXTURE_DOC.replace("- `a` -> `b`", "- `a` -> `doctored`");
+  const report = compareDocCodeTransitions(parseRequiredTransitions(doctoredDoc, { abstractRows }), checks);
+  assert.equal(report.ok, false);
+  assert.ok(report.results.some((r) => r.status === "missing" && r.to === "doctored"));
+  assert.ok(report.results.some((r) => r.status === "unreferenced" && r.from === "a" && r.to === "b"));
+});
+
+test("compareDocCodeTransitions fails on a check key no doc transition references (stale check)", () => {
+  const checks = new Map([
+    ["a->b", { status: "verified", verify: () => ({ ok: true, result: {} }) }],
+    ["stale->edge", { status: "verified", verify: () => ({ ok: true, result: {} }) }],
+  ]);
+  const report = compareDocCodeTransitions([["a", "b"]], checks);
+  assert.equal(report.ok, false);
+  assert.ok(report.results.some((r) => r.status === "unreferenced" && r.from === "stale" && r.to === "edge"));
+});
+
+test("registerMachine throws when exactly one of docTransitions/transitionChecks is provided", () => {
+  assert.throws(() => registerMachine({
+    name: "half-registered-machine",
+    states: ["a"],
+    terminalStates: ["a"],
+    transitions: [],
+    docTransitions: [["a", "a"]],
+    // transitionChecks missing -> would silently skip L2 as ok:true
+  }), /docTransitions and transitionChecks together/);
+});
+
+// ---------------------------------------------------------------------------
+// Safety-rule hardening: the merge-analog assertions the machine's safetyRules
+// comment refers to.
+// ---------------------------------------------------------------------------
+
+test("pr-gate-coordination: DECLARE_MERGE_READY is never an allowed action in any gathered observation", async () => {
+  const { PR_CHECKPOINT_ACTION } = await import("@dev-loops/core/loop/pr-gate-coordination");
+  const machine = getRegisteredMachines().find((m) => m.name === "pr-gate-coordination");
+  const report = runMachineConformance(machine);
+  assert.ok(report.conformance.observations.length > 0, "expected gathered observations");
+  for (const observation of report.conformance.observations) {
+    assert.ok(
+      !observation.allowedNextActions.includes(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY),
+      `DECLARE_MERGE_READY allowed at ${observation.gateBoundary}`,
+    );
+  }
+});
+
+test("pr-gate-coordination adversarial probe: clean pre_approval_gate WITHOUT draft_gate evidence is not final-approval ready", async () => {
+  const { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } = await import("@dev-loops/core/loop/pr-gate-coordination");
+  const { STATE } = await import("@dev-loops/core/loop/copilot-loop-state");
+
+  const result = evaluatePrGateCoordination({
+    currentHeadSha: "abc1234567890",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    ciStatus: "success",
+    sameHeadCleanConverged: true,
+    // pre_approval_gate is clean at head, but NO draft_gate evidence exists.
+    draftGate: { visible: false, headSha: null, verdict: null, contractComplete: false },
+    preApprovalGate: { visible: true, headSha: "abc1234", verdict: "clean", contractComplete: false },
+    preApprovalGateMarker: { visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true },
+  });
+
+  assert.notEqual(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.ok(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
+
+  // Feed the probe through the machine's own safety rules: the
+  // no-final-approval-without-both-gates-clean rule must hold on it too.
+  const machine = getRegisteredMachines().find((m) => m.name === "pr-gate-coordination");
+  const safety = checkSafetyRules([result], machine.safetyRules);
+  assert.equal(safety.ok, true);
+});

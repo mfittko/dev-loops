@@ -34,15 +34,15 @@
  *     transitions,           // [from, to][] — the FULL graph, for L3 (may
  *                            //   include a synthetic '[*]' terminal marker
  *                            //   target; it is ignored by both L2 and L3)
- *     docTransitions,        // [from, to][] — the subset of `transitions`
- *                            //   the OWNER DOC declares (usually === transitions
- *                            //   minus the '[*]' marker rows); this is the L2
- *                            //   "doc table" and should be sourced from an
- *                            //   already-reviewed doc-derived table (reuse one
- *                            //   if it exists — see the pr-gate-coordination
- *                            //   registration below for the pattern) rather
- *                            //   than hand-copied prose, so it cannot silently
- *                            //   drift from the doc it represents;
+ *     docTransitions,        // [from, to][] — the transitions the OWNER DOC
+ *                            //   declares (usually === transitions minus the
+ *                            //   '[*]' marker rows); this is the L2 "doc
+ *                            //   table" and MUST be parsed from the owner
+ *                            //   doc's own structured transition section via
+ *                            //   `parseRequiredTransitions` (see the
+ *                            //   pr-gate-coordination registration below for
+ *                            //   the pattern), so editing the doc is visible
+ *                            //   to the harness — never a hand-copied array;
  *     transitionChecks,      // Map<"from->to", Check> — the L2 "code table":
  *                            //   { status: "verified", verify: () => { ok, detail, result } }
  *                            //   { status: "known_gap", issue, note }
@@ -53,6 +53,10 @@
  * "adding a second machine" extensibility test in
  * test/docs/validate-state-machine-conformance.test.mjs.
  */
+
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -78,6 +82,40 @@ const TERMINAL_MARKER = "[*]";
 
 function realEdges(transitions) {
   return transitions.filter(([, to]) => to !== TERMINAL_MARKER);
+}
+
+/**
+ * L2 doc-side parser: read a contract doc's structured transition section
+ * (top-level bullets of the shape "- `from` -> `to`" under `sectionHeading`)
+ * into a [from, to][] table. Rows whose from/to is prose rather than a
+ * backtick token (abstract rows like "any open non-terminal lifecycle slice")
+ * MUST be resolved via an explicit `abstractRows` mapping
+ * (Map<"from->to raw text", [from, to][]>) — an unmapped abstract row throws,
+ * never silently drops, so a new abstract bullet in the doc is loud.
+ */
+export function parseRequiredTransitions(markdown, { sectionHeading = "## Required transitions", abstractRows = new Map() } = {}) {
+  const sectionStart = markdown.indexOf(`\n${sectionHeading}\n`);
+  if (sectionStart === -1) throw new Error(`doc has no "${sectionHeading}" section`);
+  const afterHeading = markdown.slice(sectionStart + sectionHeading.length + 2);
+  const body = afterHeading.split(/\n#{1,6} /)[0];
+
+  const transitions = [];
+  for (const line of body.split(/\r?\n/)) {
+    const bullet = line.match(/^- (.+?) -> (.+)$/);
+    if (!bullet) continue; // sub-bullets (guards) are indented and skipped
+    const parts = [bullet[1].trim(), bullet[2].trim()];
+    const tokens = parts.map((p) => p.match(/^`([A-Za-z0-9_]+)`$/)?.[1] ?? null);
+    if (tokens[0] !== null && tokens[1] !== null) {
+      transitions.push([tokens[0], tokens[1]]);
+      continue;
+    }
+    const rawKey = `${parts[0]}->${parts[1]}`;
+    const mapped = abstractRows.get(rawKey);
+    if (!mapped) throw new Error(`unmapped abstract transition row in doc: "${rawKey}" — add it to abstractRows`);
+    transitions.push(...mapped);
+  }
+  if (transitions.length === 0) throw new Error(`"${sectionHeading}" section contains no transition bullets`);
+  return transitions;
 }
 
 /** L3 completeness: every non-terminal state has >=1 outgoing transition. */
@@ -135,13 +173,18 @@ export function checkSafetyRules(observations, safetyRules) {
 
 /**
  * L2: compare a doc-declared transition table against the registered code
- * checks. `transitionChecks` is a Map keyed by `"from->to"`.
+ * checks. `transitionChecks` is a Map keyed by `"from->to"`. Bidirectional:
+ * a doc transition with no check is "missing"; a check key no doc transition
+ * references is "unreferenced" (a stale check, or a code-side transition the
+ * doc dropped) — both fail.
  */
 export function compareDocCodeTransitions(docTransitions, transitionChecks) {
   const results = [];
   const observations = [];
+  const referencedKeys = new Set();
   for (const [from, to] of realEdges(docTransitions)) {
     const key = `${from}->${to}`;
+    referencedKeys.add(key);
     const check = transitionChecks.get(key);
     if (!check) {
       results.push({ from, to, status: "missing" });
@@ -155,7 +198,13 @@ export function compareDocCodeTransitions(docTransitions, transitionChecks) {
       results.push({ from, to, status: check.status, issue: check.issue ?? null, note: check.note ?? null });
     }
   }
-  const ok = results.every((r) => r.status !== "missing" && r.status !== "divergent");
+  for (const key of transitionChecks.keys()) {
+    if (!referencedKeys.has(key)) {
+      const [from, to] = key.split("->");
+      results.push({ from, to, status: "unreferenced" });
+    }
+  }
+  const ok = results.every((r) => r.status !== "missing" && r.status !== "divergent" && r.status !== "unreferenced");
   return { ok, results, observations };
 }
 
@@ -165,6 +214,11 @@ const REGISTRY = new Map();
 export function registerMachine(machine) {
   if (!machine || typeof machine.name !== "string" || machine.name.trim().length === 0) {
     throw new Error("registerMachine requires a non-empty `name`");
+  }
+  // Fail-closed shape check: L2 needs BOTH tables; exactly one present is a
+  // half-registered machine that would otherwise skip L2 silently as ok:true.
+  if (Boolean(machine.docTransitions) !== Boolean(machine.transitionChecks)) {
+    throw new Error(`machine "${machine.name}" must provide docTransitions and transitionChecks together (or neither)`);
   }
   REGISTRY.set(machine.name, machine);
   return machine;
@@ -198,12 +252,13 @@ export function runMachineConformance(machine) {
 // ---------------------------------------------------------------------------
 // Reference machine (issue #1148): pr-gate-coordination.
 //
-// Doc side: skills/docs/pr-lifecycle-contract.md's "Required transitions" /
-// lifecycle-state vocabulary — reused verbatim from
-// scripts/pages/build-state-atlas.mjs's PR_LIFECYCLE_STATES/TRANSITIONS
-// (already a reviewed, hand-derived structured table for that doc; see that
-// file's own header for why no single code table exists for this doc's
-// vocabulary today).
+// Doc side: skills/docs/pr-lifecycle-contract.md's "## Required transitions"
+// bullets, parsed at load time via parseRequiredTransitions so a doc edit is
+// immediately visible to the harness. The two abstract (non-backtick) rows are
+// mapped explicitly to their concrete representatives below. The parsed table
+// is additionally asserted to bind 1:1 to build-state-atlas.mjs's
+// PR_LIFECYCLE_TRANSITIONS (the state-atlas diagram source), so that constant
+// cannot drift from the doc either.
 //
 // Code side: packages/core/src/loop/pr-gate-coordination.mjs exports
 // PR_CHECKPOINT / PR_CHECKPOINT_ACTION but no state-to-state table in the
@@ -215,6 +270,49 @@ export function runMachineConformance(machine) {
 // is consistent with the "to" state — a real characterization of the code,
 // not a hand-copied assumption.
 // ---------------------------------------------------------------------------
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+// Abstract doc rows -> concrete graph edges. "any open non-terminal lifecycle
+// slice" is represented by waiting_for_copilot_review (the guard fires ahead of
+// every lifecycle-state branch in the code, so one representative suffices);
+// "normal lifecycle re-entry state" re-enters the same representative slice.
+const PR_LIFECYCLE_ABSTRACT_ROWS = new Map([
+  ["any open non-terminal lifecycle slice->`merge_conflict_resolution`", [["waiting_for_copilot_review", "merge_conflict_resolution"]]],
+  ["`merge_conflict_resolution`->normal lifecycle re-entry state", [["merge_conflict_resolution", "waiting_for_copilot_review"]]],
+]);
+
+// Edges the doc implies but does not bullet under "Required transitions".
+// pr-lifecycle-contract.md sends pre-approval findings to final_gate_remediation
+// and its "Remediation ownership boundary" section routes that remediation back
+// to the gate, but no explicit re-entry bullet exists (unlike the draft pair's
+// draft_local_remediation -> draft_local_review_gate). Without this edge the
+// state is a non-terminal dead-end, so the atlas diagram carries it; it is
+// allowlisted here explicitly instead of silently — remove this entry if the
+// doc ever gains the bullet.
+const PR_LIFECYCLE_IMPLIED_EDGES = [["final_gate_remediation", "final_local_preapproval_gate"]];
+
+const PR_LIFECYCLE_DOC_TRANSITIONS = [
+  ...parseRequiredTransitions(
+    readFileSync(path.join(REPO_ROOT, "skills", "docs", "pr-lifecycle-contract.md"), "utf8"),
+    { abstractRows: PR_LIFECYCLE_ABSTRACT_ROWS },
+  ),
+  ...PR_LIFECYCLE_IMPLIED_EDGES,
+];
+
+// Bind the parsed doc table 1:1 to the atlas constant (order-insensitive).
+{
+  const docSet = new Set(PR_LIFECYCLE_DOC_TRANSITIONS.map(([a, b]) => `${a}->${b}`));
+  const atlasSet = new Set(realEdges(PR_LIFECYCLE_TRANSITIONS).map(([a, b]) => `${a}->${b}`));
+  const onlyDoc = [...docSet].filter((k) => !atlasSet.has(k));
+  const onlyAtlas = [...atlasSet].filter((k) => !docSet.has(k));
+  if (onlyDoc.length > 0 || onlyAtlas.length > 0) {
+    throw new Error(
+      "pr-lifecycle-contract.md Required transitions and build-state-atlas.mjs PR_LIFECYCLE_TRANSITIONS have drifted apart. "
+      + `Only in doc: [${onlyDoc.join(", ")}]. Only in atlas: [${onlyAtlas.join(", ")}].`,
+    );
+  }
+}
 
 function gate({ visible = false, headSha = null, verdict = null, contractComplete = false } = {}) {
   return { visible, headSha, verdict, contractComplete };
@@ -315,7 +413,10 @@ PR_GATE_TRANSITION_CHECKS.set("waiting_for_copilot_review->final_local_preapprov
   note: "Gate entry into pre_approval_gate trusts caller-supplied sameHeadCleanConverged with no "
     + "independent reviewed-head-SHA check; the fail-closed guard is at verdict-post "
     + "(upsert-checkpoint-verdict.mjs), not at gate entry (pr-gate-coordination.mjs). See epic #1104 "
-    + "comment thread; tracked in #1190.",
+    + "comment thread; tracked in #1190. NOTE: this allowlist entry never fails the CLI — if #1190 "
+    + "lands a backward-compatible gate-entry guard, this run keeps passing silently; the loud guard "
+    + "is the known-gap regression test in test/docs/validate-state-machine-conformance.test.mjs, "
+    + "which starts failing the moment the gap closes and tells you to retire this entry.",
 });
 
 // final_local_preapproval_gate -> final_gate_remediation: pre-approval gate findings require changes.
@@ -414,15 +515,15 @@ const PR_GATE_COORDINATION_MACHINE = {
   states: PR_LIFECYCLE_STATES,
   terminalStates: ["terminal_slice_complete", "stopped_needs_user_decision"],
   transitions: PR_LIFECYCLE_TRANSITIONS,
-  docTransitions: PR_LIFECYCLE_TRANSITIONS,
+  docTransitions: PR_LIFECYCLE_DOC_TRANSITIONS,
   transitionChecks: PR_GATE_TRANSITION_CHECKS,
   safetyRules: [
     {
       // Analog of "no ->merged without both gates clean at head": final-approval readiness
       // (this machine's closest reachable state to "ready to merge") requires both draft_gate and
-      // pre_approval_gate to be clean-at-head; PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY itself is
-      // never returned as an allowed action by this function at all (merge is external/human-only),
-      // so that half of the analog holds trivially and is asserted directly in the unit test.
+      // pre_approval_gate to be clean-at-head. The other half of the analog — DECLARE_MERGE_READY
+      // never appearing in any allowedNextActions (merge is external/human-only) — is asserted over
+      // the gathered observations in test/docs/validate-state-machine-conformance.test.mjs.
       name: "no-final-approval-without-both-gates-clean",
       check: (result) => result.nextAction !== PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL
         || (result.draftGate.cleanEvidenceExists && result.preApprovalGate.currentHeadClean),
@@ -460,7 +561,7 @@ async function main(argv = process.argv.slice(2)) {
     if (!report.liveness.ok) process.stdout.write(`  liveness: state(s) stuck without a terminal path: ${report.liveness.stuck.join(", ")}\n`);
     if (!report.conformance.ok) {
       for (const r of report.conformance.results) {
-        if (r.status === "missing" || r.status === "divergent") {
+        if (r.status === "missing" || r.status === "divergent" || r.status === "unreferenced") {
           process.stdout.write(`  conformance ${r.status}: ${r.from} -> ${r.to}\n`);
         }
       }
