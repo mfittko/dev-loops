@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, lstatSync, readlinkSync, existsSync, symlinkSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  lstatSync,
+  readlinkSync,
+  existsSync,
+  symlinkSync,
+  realpathSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -175,10 +186,12 @@ test("provision: rejects a source that is a symlink escaping the main checkout",
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Fail-closed: a config with load/validation errors yields zero actions
+// Fail-closed: a config with load/validation errors yields zero CONFIG-DRIVEN
+// actions. The workspace self-link (#1144) is unconditional — a structural
+// need, not a config-driven copy/link entry — so it still runs.
 // ---------------------------------------------------------------------------
 
-test("provision: config with errors yields zero provisioning actions (fail-closed)", async () => {
+test("provision: config with errors yields zero config-driven actions (fail-closed)", async () => {
   const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/app.yml\n");
   try {
     // A real, present source — proves the EMPTY treatment is driven by the
@@ -196,7 +209,10 @@ test("provision: config with errors yields zero provisioning actions (fail-close
       { loadConfig },
     );
     assert.equal(res.ok, true);
-    assert.equal(res.actions.length, 0);
+    // Only the unconditional self-link action remains (this fixture has no
+    // packages/core in the worktree, so it's a source-missing skip).
+    assert.equal(res.actions.length, 1);
+    assert.equal(res.actions[0].entry, "node_modules/@dev-loops/core");
     assert.equal(res.summary.copied, 0);
     assert.equal(res.summary.linked, 0);
     assert.ok(res.summary.warnings >= 1, "one WARN about the invalid config");
@@ -239,6 +255,131 @@ test("provision: a per-entry copy failure is recorded as skip and does not throw
   }
 });
 
+// ---------------------------------------------------------------------------
+// Workspace self-link: node_modules/@dev-loops/core -> worktree's OWN
+// packages/core (#1144) — unconditional, independent of .devloops entries.
+// ---------------------------------------------------------------------------
+
+test("provision: links node_modules/@dev-loops/core to the worktree's OWN packages/core", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    mkdirSync(path.join(fx.worktreePath, "packages/core"), { recursive: true });
+    writeFileSync(path.join(fx.worktreePath, "packages/core/index.mjs"), "export const x = 1;\n");
+
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const action = res.actions.find((a) => a.entry === "node_modules/@dev-loops/core");
+    assert.ok(action, `expected a self-link action, got ${JSON.stringify(res.actions)}`);
+    assert.equal(action.mode, "link");
+
+    const dest = path.join(fx.worktreePath, "node_modules/@dev-loops/core");
+    assert.ok(lstatSync(dest).isSymbolicLink());
+    assert.ok(!path.isAbsolute(readlinkSync(dest)), "expected a relative symlink target");
+    // Resolves to the worktree's OWN packages/core, not the main checkout's.
+    assert.equal(realpathSync(dest), realpathSync(path.join(fx.worktreePath, "packages/core")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provision: workspace self-link is idempotent on re-provision", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    mkdirSync(path.join(fx.worktreePath, "packages/core"), { recursive: true });
+
+    const first = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const firstAction = first.actions.find((a) => a.entry === "node_modules/@dev-loops/core");
+    assert.equal(firstAction.mode, "link");
+
+    const second = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const secondAction = second.actions.find((a) => a.entry === "node_modules/@dev-loops/core");
+    assert.equal(secondAction.mode, "skip");
+    assert.equal(secondAction.reason, "exists");
+    // skip/exists is only granted for the exact relative target form.
+    assert.equal(
+      readlinkSync(path.join(fx.worktreePath, "node_modules/@dev-loops/core")),
+      path.join("..", "..", "packages", "core"),
+    );
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provision: normalizes an absolute-but-correct pre-existing link to relative", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    mkdirSync(path.join(fx.worktreePath, "packages/core"), { recursive: true });
+    // Absolute link that resolves to the CORRECT dir — still not the required
+    // relative form, so it must be replaced (reported as link, not skip/exists).
+    const scopeDir = path.join(fx.worktreePath, "node_modules/@dev-loops");
+    mkdirSync(scopeDir, { recursive: true });
+    symlinkSync(path.join(fx.worktreePath, "packages/core"), path.join(scopeDir, "core"));
+
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const action = res.actions.find((a) => a.entry === "node_modules/@dev-loops/core");
+    assert.equal(action.mode, "link");
+
+    const dest = path.join(fx.worktreePath, "node_modules/@dev-loops/core");
+    assert.equal(readlinkSync(dest), path.join("..", "..", "packages", "core"));
+    assert.equal(realpathSync(dest), realpathSync(path.join(fx.worktreePath, "packages/core")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provision: workspace self-link replaces a stale/broken symlink", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    mkdirSync(path.join(fx.worktreePath, "packages/core"), { recursive: true });
+    // Simulate the up-tree bug: an existing link pointing at some OTHER core
+    // (e.g. the main checkout's), which must be replaced, not left in place.
+    const scopeDir = path.join(fx.worktreePath, "node_modules/@dev-loops");
+    mkdirSync(scopeDir, { recursive: true });
+    const staleTarget = path.join(fx.repoRoot, "packages/core"); // does not even exist — broken too
+    symlinkSync(staleTarget, path.join(scopeDir, "core"));
+
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const action = res.actions.find((a) => a.entry === "node_modules/@dev-loops/core");
+    assert.equal(action.mode, "link");
+
+    const dest = path.join(fx.worktreePath, "node_modules/@dev-loops/core");
+    assert.equal(realpathSync(dest), realpathSync(path.join(fx.worktreePath, "packages/core")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provision: workspace self-link never clobbers a real dir/file at the dest", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    mkdirSync(path.join(fx.worktreePath, "packages/core"), { recursive: true });
+    const scopeDir = path.join(fx.worktreePath, "node_modules/@dev-loops");
+    mkdirSync(path.join(scopeDir, "core"), { recursive: true });
+    writeFileSync(path.join(scopeDir, "core/marker.txt"), "not a symlink");
+
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const action = res.actions.find((a) => a.entry === "node_modules/@dev-loops/core");
+    assert.equal(action.mode, "skip");
+    assert.equal(action.reason, "dest-conflict");
+    assert.ok(existsSync(path.join(scopeDir, "core/marker.txt")), "real dest left untouched");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provision: workspace self-link fails soft when the worktree has no packages/core", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    // No packages/core created in the worktree at all.
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const action = res.actions.find((a) => a.entry === "node_modules/@dev-loops/core");
+    assert.equal(action.mode, "skip");
+    assert.equal(action.reason, "source-missing");
+    assert.ok(!existsSync(path.join(fx.worktreePath, "node_modules")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("provision: idempotent on reuse (second run skips)", async () => {
   const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/app.yml\n  linkOnInit:\n    - data/big\n");
   try {
@@ -253,7 +394,9 @@ test("provision: idempotent on reuse (second run skips)", async () => {
     const second = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
     assert.equal(second.summary.copied, 0);
     assert.equal(second.summary.linked, 0);
-    assert.equal(second.summary.skipped, 2);
+    // 2 config-driven entries (exists) + the workspace self-link (this fixture
+    // has no packages/core, so it's a source-missing skip on both runs).
+    assert.equal(second.summary.skipped, 3);
   } finally {
     fx.cleanup();
   }

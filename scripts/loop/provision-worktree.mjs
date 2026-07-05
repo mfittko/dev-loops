@@ -12,6 +12,15 @@
  * - Idempotent: skips a dest that is already correct.
  * - Does NOT run npm install (deps belong to `npm ci`-in-worktree).
  *
+ * Also (unconditionally, independent of .devloops): links the workspace
+ * package node_modules/@dev-loops/core -> ../../packages/core (relative,
+ * pointing at the WORKTREE's own packages/core). Without npm install/ci in a
+ * fresh worktree there is no node_modules at all, so scripts/**'s
+ * `@dev-loops/core` imports resolve UP-TREE to the nearest ancestor
+ * node_modules (the main checkout's) — silently testing main's core instead
+ * of the branch's (#1144). Stale/broken links are replaced; a real file/dir
+ * already occupying the slot is left alone (dest-conflict, never clobbered).
+ *
  * Prints a JSON summary of actions to stdout. Never throws on a per-entry
  * problem; exits 0 unless its own arguments are invalid.
  */
@@ -161,6 +170,45 @@ async function provisionLink(src, dest, logWarn) {
   return { mode: "link", src, dest };
 }
 
+/**
+ * Ensure node_modules/@dev-loops/core -> ../../packages/core (relative) in the
+ * worktree, pointing at the worktree's OWN packages/core — never the main
+ * checkout's (#1144). Idempotent: a correct link is a no-op; a stale/broken
+ * link is replaced; a real file/dir at the dest is a dest-conflict skip
+ * (never clobbered). node_modules is gitignored repo-wide, so this link is
+ * always untracked.
+ */
+async function ensureCoreWorkspaceLink(worktreePath, logWarn) {
+  const corePkgDir = path.join(worktreePath, "packages", "core");
+  const scopeDir = path.join(worktreePath, "node_modules", "@dev-loops");
+  const linkPath = path.join(scopeDir, "core");
+
+  if (!(await pathExists(corePkgDir))) {
+    logWarn(`workspace self-link source missing, skipping: ${corePkgDir}`);
+    return { mode: "skip", reason: "source-missing", src: corePkgDir, dest: linkPath };
+  }
+
+  const relTarget = path.relative(scopeDir, corePkgDir);
+  const existing = await fsp.readlink(linkPath).catch(() => null);
+  if (existing !== null) {
+    // Only the exact RELATIVE target is idempotent. An absolute (or otherwise
+    // differently-spelled) link that happens to resolve correctly is
+    // normalized to the relative form — absolute links break when the
+    // worktree moves under tmp/.
+    if (existing === relTarget) {
+      return { mode: "skip", reason: "exists", src: corePkgDir, dest: linkPath };
+    }
+    await fsp.rm(linkPath, { force: true }); // stale/absolute/broken — replace below
+  } else if (await pathExists(linkPath)) {
+    logWarn(`workspace self-link dest conflict (not a symlink), skipping: ${linkPath}`);
+    return { mode: "skip", reason: "dest-conflict", src: corePkgDir, dest: linkPath };
+  }
+
+  await fsp.mkdir(scopeDir, { recursive: true });
+  await fsp.symlink(relTarget, linkPath);
+  return { mode: "link", src: corePkgDir, dest: linkPath };
+}
+
 export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig = loadDevLoopConfig } = {}) {
   const root = path.resolve(repoRoot);
   const dst = path.resolve(worktreePath);
@@ -218,6 +266,24 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
         }
       }
     }
+  }
+
+  // Unconditional (not driven by .devloops, still applies under a fail-closed
+  // empty config) — the worktree's own package resolution is a structural
+  // need, not an opt-in copy/link entry.
+  try {
+    const selfLink = await ensureCoreWorkspaceLink(dst, logWarn);
+    actions.push({ entry: "node_modules/@dev-loops/core", ...selfLink });
+  } catch (err) {
+    const msg = (err && err.message) ? err.message : String(err);
+    logWarn(`workspace self-link failed, skipping: ${msg}`);
+    actions.push({
+      entry: "node_modules/@dev-loops/core",
+      mode: "skip",
+      reason: `link-failed: ${msg}`,
+      src: path.join(dst, "packages", "core"),
+      dest: path.join(dst, "node_modules", "@dev-loops", "core"),
+    });
   }
 
   const summary = { copied: 0, linked: 0, skipped: 0, rejected: 0, warnings: warnings.length };
