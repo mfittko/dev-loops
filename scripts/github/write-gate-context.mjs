@@ -600,12 +600,28 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
   // a/ b/ prefixes; the --no-ext-diff flag (below) disables any external diff
   // driver (NOT `-c diff.external=`, which makes git try to exec the empty
   // string and die).
+  // CROSS-environment reproducibility (#1168): the overrides above only pin
+  // bytes WITHIN a single run/machine — an operator/CI box with a contrary
+  // local diff.renames/diff.algorithm/diff.context/core.abbrev/core.autocrlf
+  // would still produce different bytes than another box on the SAME base and
+  // HEAD. diff.algorithm=myers + diff.context=3 + core.abbrev=12 +
+  // core.autocrlf=false pin the diff body/hunk headers/blob-id length/line
+  // endings. diff.renames=true additionally pins rename DETECTION itself: with
+  // it off, a moved-and-edited file shows as a straight D+A pair in
+  // `--name-status` instead of an R### pair, which changes the SET of names in
+  // scope.changedFiles (and therefore adjacentCode's membership) across
+  // environments, not just the diff body's bytes.
   const isolation = [
     "-c", "color.ui=false",
     "-c", "color.diff=false",
     "-c", "core.pager=cat",
     "-c", "diff.noprefix=false",
     "-c", "diff.mnemonicPrefix=false",
+    "-c", "diff.renames=true",
+    "-c", "diff.algorithm=myers",
+    "-c", "diff.context=3",
+    "-c", "core.abbrev=12",
+    "-c", "core.autocrlf=false",
   ];
   const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
