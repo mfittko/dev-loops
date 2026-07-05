@@ -8,8 +8,15 @@ import { writeGhStub } from "../_helpers.mjs";
 import {
   detectPostConvergenceSignificantChange,
   getLatestSubmittedCopilotReviewHeadSha,
+  isCommentOnlyFileChange,
   isTrivialDocumentationOnlyPath,
 } from "../../scripts/loop/_post-convergence-change.mjs";
+
+// Minimal unified-diff patch builder: each line carries its diff marker —
+// `+` (added), `-` (removed), or a leading space (context line).
+function patchOf(...lines) {
+  return ["@@ -1,3 +1,3 @@", ...lines].join("\n");
+}
 
 const COPILOT = "copilot-pull-request-reviewer[bot]";
 
@@ -117,6 +124,136 @@ test("additions/deletions fallback aggregates when file.changes is non-finite", 
   assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [{ filename: "a.mjs", additions: 15, deletions: 10 }] }) }), true);
   // changes present but small; single file, no files>=2 → false
   assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [{ filename: "a.mjs", additions: 3, deletions: 1 }] }) }), false);
+});
+
+// --- content-aware significance filter (#1137) ---
+
+test("comment-only .mjs change (every changed line blank/comment) → NOT significant", async () => {
+  // 40 changed lines, but all are JSDoc/inline comments → filtered out before thresholds.
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/loop/foo.mjs", changes: 40, patch: patchOf(
+      "+// tweak the wording",
+      "-// old wording",
+      "+/*",
+      "+ * jsdoc continuation",
+      "+ */",
+      "+",
+    ) },
+  ] }) }), false);
+});
+
+test("mixed change (one real code line among comments) → significant", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/loop/foo.mjs", changes: 20, patch: patchOf(
+      "+// a comment",
+      "+const x = compute(); // note",
+    ) },
+  ] }) }), true);
+});
+
+test("patch field MISSING on a non-doc code file → significant (fail toward review)", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/loop/foo.mjs", changes: 40 },
+  ] }) }), true);
+});
+
+test("patch field MISSING but below thresholds (single file, 10 lines) → NOT significant", async () => {
+  // Intentional: a missing patch only blocks the comment-only classification —
+  // the file stays in the significance math under the PRE-EXISTING size/count
+  // thresholds (single non-doc file <20 lines → not significant). It does NOT
+  // escalate to significant on its own; that would change pre-#1137 behavior.
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/loop/foo.mjs", changes: 10 },
+  ] }) }), false);
+});
+
+test("multi-file: 2 files both comment-only → NOT significant", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "a.mjs", changes: 30, patch: patchOf("+// a", "-// b") },
+    { filename: "b.ts", changes: 30, patch: patchOf("+// c", "-// d") },
+  ] }) }), false);
+});
+
+test("multi-file: one comment-only + one small code file → NOT significant (only 1 code file <20 remains)", async () => {
+  // The comment-only file is filtered out; the surviving code file has <20 lines
+  // and is the only remaining file, so neither the size nor files>=2 gate trips.
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "comments.mjs", changes: 30, patch: patchOf("+// a", "-// b") },
+    { filename: "code.mjs", changes: 5, patch: patchOf("+const x = 1;") },
+  ] }) }), false);
+});
+
+test("multi-file: one comment-only + one large code file (>=20) → significant", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "comments.mjs", changes: 30, patch: patchOf("+// a", "-// b") },
+    { filename: "code.mjs", changes: 25, patch: patchOf("+const x = doWork();") },
+  ] }) }), true);
+});
+
+// --- block-comment state machine (draft-gate must-fix) ---
+
+test("generator method rename (`*items()` → `*entries()`) → significant (bare * outside a block is CODE)", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/store.mjs", changes: 25, patch: patchOf(
+      " class Store {",
+      "-  *items() {",
+      "+  *entries() {",
+      "     yield 1;",
+      " }",
+    ) },
+  ] }) }), true); // significant: reopen expected
+});
+
+test("genuine block-comment body change with opener visible in patch → NOT significant", async () => {
+  // Context lines carry the `/**` opener and `*/` closer; the changed `*` lines
+  // are inside the observed open block → comment-only.
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/store.mjs", changes: 40, patch: patchOf(
+      " /**",
+      "- * old wording",
+      "+ * new wording",
+      "  */",
+    ) },
+  ] }) }), false);
+});
+
+test("`*`-leading changed line with NO opener in the patch → significant (conservative)", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/math.mjs", changes: 25, patch: patchOf("+  * b") },
+  ] }) }), true);
+});
+
+test("`+++counter;` content line (added `++counter;`) → significant (no header-skip on compare patches)", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/count.mjs", changes: 25, patch: patchOf("+++counter;") },
+  ] }) }), true);
+});
+
+// --- isCommentOnlyFileChange unit edges ---
+
+test("isCommentOnlyFileChange: conservative edges", () => {
+  // all comments/blank (block opener observed → `*` continuation is comment) → true
+  assert.equal(isCommentOnlyFileChange({ filename: "x.ts", patch: patchOf("+// hi", "-/* bye", "+ * cont", "+ */", "+") }), true);
+  // mixed code+comment on one line → false
+  assert.equal(isCommentOnlyFileChange({ filename: "x.ts", patch: patchOf("+foo(); // note") }), false);
+  // missing patch → false (treated as code)
+  assert.equal(isCommentOnlyFileChange({ filename: "x.ts" }), false);
+  // un-classifiable extension → false
+  assert.equal(isCommentOnlyFileChange({ filename: "x.py", patch: patchOf("+# comment") }), false);
+  // Documented string-literal ceiling: a changed line INSIDE a multi-line
+  // template literal that literally starts with `//` is mis-read as a comment,
+  // so the change classifies comment-only even though it edits real string
+  // content. Accepted, documented trade-off (the classifier only sees line
+  // prefixes; context lines — here the template-literal delimiters — are never
+  // classified). This assertion locks the ceiling's actual semantics.
+  assert.equal(isCommentOnlyFileChange({ filename: "x.mjs", patch: patchOf(
+    " const banner = `",
+    "-// generated by v1 — do not edit",
+    "+// generated by v2 — do not edit",
+    " `;",
+  ) }), true);
+  // no parseable changed lines (context only) → false (ambiguous → code)
+  assert.equal(isCommentOnlyFileChange({ filename: "x.mjs", patch: "@@ -1,1 +1,1 @@\n unchanged context" }), false);
 });
 
 // --- helper units ---
