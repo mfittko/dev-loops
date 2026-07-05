@@ -53,23 +53,62 @@ export function isTrivialDocumentationOnlyPath(filePath) {
 // Extensions whose comment syntax we can classify with confidence (`//`, `/* */`).
 const JS_TS_EXTENSIONS = [".mjs", ".cjs", ".js", ".jsx", ".ts", ".tsx", ".mts", ".cts"];
 
+// Classifies one line's content given the current block-comment state.
+// Returns { code, state }: code=true when the line carries anything that is not
+// comment/blank; state = inBlockComment AFTER the line.
+// Known ceilings (both err toward significance or genuinely-trivial cases only):
+//   - a line STARTING with `//` or `/*` inside a string literal is misread as a
+//     comment — such a line still has to literally begin with the token, which
+//     real code lines almost never do;
+//   - a `/*` opener sitting AFTER code on the same line (`foo(); /* start`) is
+//     not tracked (we return code=true immediately) — follow-up `*` body lines
+//     then read as code → significant, the safe direction.
+function classifyLine(content, inBlock) {
+  let rest = content;
+  let state = inBlock;
+  while (true) {
+    if (state) {
+      const close = rest.indexOf("*/");
+      if (close === -1) return { code: false, state: true };
+      rest = rest.slice(close + 2);
+      state = false;
+      continue;
+    }
+    const trimmed = rest.trim();
+    if (trimmed.length === 0) return { code: false, state };
+    if (trimmed.startsWith("//")) return { code: false, state };
+    if (trimmed.startsWith("/*")) {
+      rest = trimmed.slice(2);
+      state = true;
+      continue;
+    }
+    // Anything else is code — including a bare `*`-leading line with NO open
+    // block observed: generator signatures (`*items() {`) and operator
+    // continuations (`* b`) start with `*` and are real code.
+    return { code: true, state };
+  }
+}
+
 // Content-level significance filter (#1137). A JS/TS file change is "comment-only"
 // when EVERY added/removed line in its patch is blank OR a comment line. Such
 // changes (JSDoc/inline-comment tweaks) must NOT reopen a Copilot round past the
-// cap. Conservative by construction — every ambiguous case returns false (= NOT
+// cap. Comment rules:
+//   - a line starting with `//` is a comment;
+//   - `/*` opens block-comment state, `*/` closes it; state is tracked across
+//     ALL patch lines (changed AND context) and RESET at every `@@` hunk header
+//     — a block opened before the hunk is unobservable, so a `*`-leading line
+//     with no observed opener in the same hunk is treated as CODE (conservative:
+//     bare `*` counts as comment ONLY inside an observed open `/* ... */` block).
+// Conservative by construction — every ambiguous case returns false (= NOT
 // comment-only = treated as code = keeps the file in the significance math):
 //   - patch missing (binary / too large to diff)    → false
 //   - extension we cannot classify (non-JS/TS code)  → false
 //   - a changed line mixing code + comment           → false
 //   - a patch with no parseable added/removed lines  → false
-// Known ceiling (documented, accepted toward significance only): a changed line
-// whose trimmed content STARTS with a comment token is treated as a comment even
-// if that token lives inside a string literal (e.g. `const s = "// x"` is rare
-// because such a line still starts with `const`, not `//`). This can only ever
-// mis-classify a line that literally begins with `//`, `/*`, `*`, or `*/`, which
-// for real code is a comment — so the ceiling errs toward calling a change
-// comment-only only in vanishingly rare, genuinely-trivial cases.
-// ponytail: line-prefix heuristic, upgrade to a real tokenizer only if string-literal misreads ever bite.
+// Input contract: GitHub compare `files[].patch` starts at `@@` and never
+// contains `---`/`+++` file headers, so `+`/`-` prefixes are always content
+// (`+++counter;` is the real added line `++counter;`, not a header).
+// ponytail: line-scanner heuristic, upgrade to a real tokenizer only if string-literal misreads ever bite.
 export function isCommentOnlyFileChange(file) {
   const filename = typeof file?.filename === "string" ? file.filename : "";
   const lower = filename.toLowerCase();
@@ -83,21 +122,25 @@ export function isCommentOnlyFileChange(file) {
     return false;
   }
   let sawChangedLine = false;
+  let inBlock = false;
   for (const line of patch.split("\n")) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue; // file headers
-    if (line.startsWith("@@")) continue; // hunk header
-    if (line[0] !== "+" && line[0] !== "-") continue; // context / metadata
-    sawChangedLine = true;
-    const trimmed = line.slice(1).trim();
-    if (trimmed.length === 0) continue; // blank line
-    if (
-      trimmed.startsWith("//")
-      || trimmed.startsWith("/*")
-      || trimmed.startsWith("*") // covers block-comment body and `*/`
-    ) {
-      continue; // comment line
+    if (line.startsWith("@@")) {
+      inBlock = false; // hunk boundary: the gap is unobserved → reset state
+      continue;
     }
-    return false; // a real (or mixed code+comment) line → not comment-only
+    if (line.startsWith("\\")) continue; // "\ No newline at end of file"
+    const marker = line[0];
+    const content = line.slice(1);
+    if (marker === "+" || marker === "-") {
+      sawChangedLine = true;
+      const { code, state } = classifyLine(content, inBlock);
+      if (code) return false;
+      inBlock = state;
+    } else {
+      // Context line: never classified as changed content, but it advances
+      // block-comment state so an opener/closer visible in the hunk is honored.
+      inBlock = classifyLine(content, inBlock).state;
+    }
   }
   // A patch with zero parseable changed lines is ambiguous → treat as code.
   return sawChangedLine;

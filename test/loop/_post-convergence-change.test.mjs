@@ -133,7 +133,7 @@ test("comment-only .mjs change (every changed line blank/comment) → NOT signif
     { filename: "packages/core/src/loop/foo.mjs", changes: 40, patch: patchOf(
       "+// tweak the wording",
       "-// old wording",
-      "+/* block open */",
+      "+/*",
       "+ * jsdoc continuation",
       "+ */",
       "+",
@@ -179,11 +179,50 @@ test("multi-file: one comment-only + one large code file (>=20) → significant"
   ] }) }), true);
 });
 
+// --- block-comment state machine (draft-gate must-fix) ---
+
+test("generator method rename (`*items()` → `*entries()`) → significant (bare * outside a block is CODE)", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/store.mjs", changes: 25, patch: patchOf(
+      " class Store {",
+      "-  *items() {",
+      "+  *entries() {",
+      "     yield 1;",
+      " }",
+    ) },
+  ] }) }), true); // significant: reopen expected
+});
+
+test("genuine block-comment body change with opener visible in patch → NOT significant", async () => {
+  // Context lines carry the `/**` opener and `*/` closer; the changed `*` lines
+  // are inside the observed open block → comment-only.
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/store.mjs", changes: 40, patch: patchOf(
+      " /**",
+      "- * old wording",
+      "+ * new wording",
+      "  */",
+    ) },
+  ] }) }), false);
+});
+
+test("`*`-leading changed line with NO opener in the patch → significant (conservative)", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/math.mjs", changes: 25, patch: patchOf("+  * b") },
+  ] }) }), true);
+});
+
+test("`+++counter;` content line (added `++counter;`) → significant (no header-skip on compare patches)", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/count.mjs", changes: 25, patch: patchOf("+++counter;") },
+  ] }) }), true);
+});
+
 // --- isCommentOnlyFileChange unit edges ---
 
 test("isCommentOnlyFileChange: conservative edges", () => {
-  // all comments/blank → true
-  assert.equal(isCommentOnlyFileChange({ filename: "x.ts", patch: patchOf("+// hi", "-/* bye */", "+ * cont", "+") }), true);
+  // all comments/blank (block opener observed → `*` continuation is comment) → true
+  assert.equal(isCommentOnlyFileChange({ filename: "x.ts", patch: patchOf("+// hi", "-/* bye", "+ * cont", "+ */", "+") }), true);
   // mixed code+comment on one line → false
   assert.equal(isCommentOnlyFileChange({ filename: "x.ts", patch: patchOf("+foo(); // note") }), false);
   // missing patch → false (treated as code)
