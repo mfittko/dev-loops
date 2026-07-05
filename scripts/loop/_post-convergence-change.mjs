@@ -108,7 +108,7 @@ function classifyLine(content, inBlock) {
 // Input contract: GitHub compare `files[].patch` starts at `@@` and never
 // contains `---`/`+++` file headers, so `+`/`-` prefixes are always content
 // (`+++counter;` is the real added line `++counter;`, not a header).
-// ponytail: line-scanner heuristic, upgrade to a real tokenizer only if string-literal misreads ever bite.
+// Note: line-scanner heuristic, upgrade to a real tokenizer only if string-literal misreads ever bite.
 export function isCommentOnlyFileChange(file) {
   const filename = typeof file?.filename === "string" ? file.filename : "";
   const lower = filename.toLowerCase();
