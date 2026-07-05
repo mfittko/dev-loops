@@ -49,9 +49,8 @@ const DOD_SECTION_PATTERNS = Object.freeze([
 
 /**
  * Fenced-code-span tracker. Given the previous fence state and the current
- * line, returns { fence, isFenceLine, insideFence } where:
+ * line, returns { fence, insideFence } where:
  *   - `fence` is the next state ({ char, len } while open, else null)
- *   - `isFenceLine` is true when the line is itself a fence open/close marker
  *   - `insideFence` is true when the line's CONTENT is inside a code span
  *     (i.e. a fence line, or a line between an open and its close)
  *
@@ -69,14 +68,14 @@ function stepFence(fence, line) {
     // (CommonMark: no mixed markers, no info string).
     const isBareRun = new RegExp(`^\\s*${char}+\\s*$`, "u").test(line);
     if (fence === null) {
-      return { fence: { char, len }, isFenceLine: true, insideFence: true };
+      return { fence: { char, len }, insideFence: true };
     }
     if (fence.char === char && len >= fence.len && isBareRun) {
-      return { fence: null, isFenceLine: true, insideFence: true };
+      return { fence: null, insideFence: true };
     }
-    return { fence, isFenceLine: true, insideFence: true };
+    return { fence, insideFence: true };
   }
-  return { fence, isFenceLine: false, insideFence: fence !== null };
+  return { fence, insideFence: fence !== null };
 }
 
 /**
