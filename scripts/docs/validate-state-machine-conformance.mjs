@@ -308,18 +308,14 @@ verified("waiting_for_copilot_review->merge_conflict_resolution", () => {
 // time (`upsert-checkpoint-verdict.mjs`'s unsettled-review refusal), not at *gate entry* here. This
 // is intentionally NOT fixed by #1148 (own issue, tracked below) — encoded as an expected-fail so a
 // future accidental "fix" (or regression) is visible instead of silently passing either way.
-// ponytail: KNOWN_GAP_TRACKING_ISSUE is a placeholder — subagent execution is hook-blocked from
-// `gh issue create` (reserved for the main agent/operator). Replace with the real issue number
-// once created (see this PR's description for the exact `gh issue create` command to run), then
-// update the `issue` value below to `https://github.com/mfittko/dev-loops/issues/<n>`.
-const KNOWN_GAP_TRACKING_ISSUE = null;
+const KNOWN_GAP_TRACKING_ISSUE = "https://github.com/mfittko/dev-loops/issues/1190";
 PR_GATE_TRANSITION_CHECKS.set("waiting_for_copilot_review->final_local_preapproval_gate", {
   status: "known_gap",
   issue: KNOWN_GAP_TRACKING_ISSUE,
   note: "Gate entry into pre_approval_gate trusts caller-supplied sameHeadCleanConverged with no "
     + "independent reviewed-head-SHA check; the fail-closed guard is at verdict-post "
     + "(upsert-checkpoint-verdict.mjs), not at gate entry (pr-gate-coordination.mjs). See epic #1104 "
-    + "comment thread; tracking issue pending creation (see harness header note).",
+    + "comment thread; tracked in #1190.",
 });
 
 // final_local_preapproval_gate -> final_gate_remediation: pre-approval gate findings require changes.
