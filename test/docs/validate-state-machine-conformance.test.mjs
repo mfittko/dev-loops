@@ -187,7 +187,7 @@ test("pr-gate-coordination reference machine: completeness, liveness, and confor
 test("every registered machine passes its full conformance report", () => {
   const machines = getRegisteredMachines();
   const names = machines.map((m) => m.name);
-  for (const required of ["pr-gate-coordination", "conductor-routing"]) {
+  for (const required of ["pr-gate-coordination", "conductor-routing", "copilot-loop-state", "reviewer-loop-state"]) {
     assert.ok(names.includes(required), `machine "${required}" must be registered (got: ${names.join(", ")})`);
   }
   for (const machine of machines) {
@@ -351,5 +351,82 @@ test("pr-gate-coordination adversarial probe: clean pre_approval_gate WITHOUT dr
   // no-final-approval-without-both-gates-clean rule must hold on it too.
   const machine = getRegisteredMachines().find((m) => m.name === "pr-gate-coordination");
   const safety = checkSafetyRules([result], machine.safetyRules);
+  assert.equal(safety.ok, true);
+});
+
+// ---------------------------------------------------------------------------
+// copilot-loop-state and reviewer-loop-state (issue #1157): registered machines,
+// with one adversarial probe each per COPILOT-STATE-UNRESOLVED-PRIORITY /
+// the reviewer-loop fail-closed guarantee — a real code call, not a fixture
+// constructed to already satisfy the rule.
+// ---------------------------------------------------------------------------
+
+test("copilot-loop-state reference machine: completeness, liveness, conformance, and safety all pass", () => {
+  const machine = getRegisteredMachines().find((m) => m.name === "copilot-loop-state");
+  assert.ok(machine, "copilot-loop-state machine must be registered");
+  const report = runMachineConformance(machine);
+  assert.equal(report.ok, true, JSON.stringify({
+    deadEnds: report.completeness.deadEnds,
+    stuck: report.liveness.stuck,
+    unresolved: report.conformance.results.filter((r) => r.status === "missing" || r.status === "divergent" || r.status === "unreferenced"),
+    safety: report.safety.violations,
+  }));
+});
+
+test("copilot-loop-state adversarial probe: unresolved feedback outranks an active review request wait (COPILOT-STATE-UNRESOLVED-PRIORITY)", async () => {
+  const { interpretLoopState, STATE } = await import("@dev-loops/core/loop/copilot-loop-state");
+
+  // Copilot is still actively requested/in-progress AND unresolved threads already exist —
+  // per the doc rule, unresolved feedback must still win and route to fix/reply-resolve,
+  // never to the wait state.
+  const interpretation = interpretLoopState({
+    prExists: true,
+    prDraft: false,
+    copilotReviewRequestStatus: "requested",
+    unresolvedThreadCount: 3,
+  });
+
+  assert.equal(interpretation.state, STATE.UNRESOLVED_FEEDBACK_PRESENT);
+  assert.notEqual(interpretation.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+
+  const machine = getRegisteredMachines().find((m) => m.name === "copilot-loop-state");
+  const safety = checkSafetyRules(
+    [{ state: interpretation.state, unresolvedThreadCount: 3, copilotReviewRequestStatus: "requested" }],
+    machine.safetyRules,
+  );
+  assert.equal(safety.ok, true);
+});
+
+test("reviewer-loop-state reference machine: completeness, liveness, conformance, and safety all pass", () => {
+  const machine = getRegisteredMachines().find((m) => m.name === "reviewer-loop-state");
+  assert.ok(machine, "reviewer-loop-state machine must be registered");
+  const report = runMachineConformance(machine);
+  assert.equal(report.ok, true, JSON.stringify({
+    deadEnds: report.completeness.deadEnds,
+    stuck: report.liveness.stuck,
+    unresolved: report.conformance.results.filter((r) => r.status === "missing" || r.status === "divergent" || r.status === "unreferenced"),
+    safety: report.safety.violations,
+  }));
+});
+
+test("reviewer-loop-state adversarial probe: a local failure fails closed even alongside a draft-posted signal", async () => {
+  const { interpretReviewerLoopState, REVIEWER_STATE } = await import("@dev-loops/core/loop/reviewer-loop-state");
+
+  // localMergeStatus "failed" alongside a draftReviewPosted signal that would otherwise tempt
+  // a DRAFT_REVIEW_POSTED / WAITING_FOR_USER_SUBMIT branch — the failure check must still win.
+  const interpretation = interpretReviewerLoopState({
+    prExists: true,
+    prDraft: false,
+    draftReviewPosted: true,
+    draftReviewNotificationStatus: "notified",
+    prHeadSha: "abc1234",
+    draftReviewCommitSha: "abc1234",
+    localMergeStatus: "failed",
+  });
+
+  assert.equal(interpretation.state, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION);
+
+  const machine = getRegisteredMachines().find((m) => m.name === "reviewer-loop-state");
+  const safety = checkSafetyRules([{ state: interpretation.state, failed: true }], machine.safetyRules);
   assert.equal(safety.ok, true);
 });

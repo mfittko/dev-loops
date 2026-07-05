@@ -25,18 +25,17 @@ Use the machines to answer:
 - what the next required action is
 - when to stop instead of guessing
 
-Each machine captures an observable snapshot from GitHub facts (plus explicit bounded local loop
-metadata when required) and interprets it into exactly one current state plus allowed next
-transitions. In the `dev-loops` source repository, the supporting source-authority references are [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md) and [Reviewer Loop State Graph](../../docs/reviewer-loop-state-graph.md) under `../../docs/` relative to `skills/copilot-pr-followup/SKILL.md`. Treat those links as source-repo references, not bundled installed-skill docs.
+Each machine's snapshot-to-state mapping is defined in its owner doc (see the Overview of
+[Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md) and
+[Reviewer Loop State Graph](../../docs/reviewer-loop-state-graph.md)), under `../../docs/`
+relative to `skills/copilot-pr-followup/SKILL.md` in the `dev-loops` source repository. Treat
+those links as source-repo references, not bundled installed-skill docs.
 
 For tracker-first MVP `story -> PR -> tracker sync` work, the source-repo reference is [Tracker-First Story-to-PR Contract](../../docs/tracker-story-pr-contract.md). That source doc inherits source-of-truth ownership, the required work item <-> PR link, and reverse-sync semantics from `#21`; it only adds the mutually exclusive workflow-family states and post-merge sync-verification states for this narrower MVP slice.
 
 ## Key guarantees from the state machine
 
-- `unresolvedThreadCount > 0` always routes to fix/reply-resolve — never to a wait/watch state
-- `snapshot.copilotReviewRequestStatus === "unavailable"` or `snapshot.copilotReviewRequestStatus === "failed"` routes to a terminal stop state — never to sleep or watch
-- `agentFixStatus === "applied"` with unresolved threads routes to `already_fixed_needs_reply_resolve` — reply/resolve on GitHub is required before re-requesting review
-- Copilot being in `requested_reviewers` (`"requested"` or `"already-requested"`) routes to `waiting_for_copilot_review`
+These routing guarantees are owned by [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md); see `COPILOT-STATE-UNRESOLVED-PRIORITY`, `COPILOT-STATE-TERMINAL-STOP`, `COPILOT-STATE-REPLY-BEFORE-REREQUEST`, and `COPILOT-STATE-ACTIVE-REQUEST-WAIT` there for the routing rules driving `unresolvedThreadCount`, `copilotReviewRequestStatus`, and `agentFixStatus`.
 
 ## How to use the state machine in practice
 
@@ -64,10 +63,7 @@ For tracker-first MVP `story -> PR -> tracker sync` work, the source-repo refere
 
 ## Judgment calls that remain in the agent layer
 
-- Whether a comment should be accepted, deferred, or disagreed with
-- Whether the code change is already sufficient (→ sets `agentFixStatus: "applied"`)
-- What the narrowest valid fix is
-- Whether another Copilot pass is desired (→ triggers re-request or selects `done`)
+See [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md)'s "Agent judgment boundary" for the bounded list of decisions the state machine leaves to the agent.
 
 ## Workflow overview
 

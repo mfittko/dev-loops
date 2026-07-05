@@ -32,6 +32,56 @@ Implementation:
 | `review_invalidated` | Pending draft review is stale for current head SHA |
 | `blocked_needs_user_decision` | Failure state requiring explicit user decision |
 
+## Required transitions
+
+Terminal state with no outgoing transitions: `blocked_needs_user_decision`.
+
+- `waiting_for_review_request` -> `review_requested`
+  - explicit review request received
+- any active reviewer-pass state -> `blocked_needs_user_decision`
+  - unexpected failure in planning, local review runs, merge synthesis, or submission
+- `review_requested` -> `determine_review_plan`
+  - review angles are being selected
+- `determine_review_plan` -> `reviews_running`
+  - bounded local review passes start
+- `reviews_running` -> `merge_results`
+  - all bounded local review runs complete
+- `merge_results` -> `draft_review_ready`
+  - merged review package is ready to stage
+- `draft_review_ready` -> `draft_review_posted`
+  - pending GitHub draft review is created
+- `draft_review_posted` -> `waiting_for_user_submit`
+  - pending review link is surfaced
+- `draft_review_posted` -> `review_invalidated`
+  - draft review commit SHA no longer matches the PR head SHA
+- `draft_review_posted` -> `submitted_review`
+  - review submission settles as submitted before the surfaced-link wait is observed
+- `waiting_for_user_submit` -> `submitted_review`
+  - review submission settles as submitted
+- `waiting_for_user_submit` -> `review_invalidated`
+  - draft review commit SHA no longer matches the PR head SHA
+- `submitted_review` -> `review_requested`
+  - author/Copilot pushed a new head and a fresh review was explicitly re-requested
+- `submitted_review` -> `waiting_for_review_request`
+  - no active re-request yet
+- `review_invalidated` -> `review_requested`
+  - stale pending draft review is discarded and a new pass restarts
+- `waiting_for_author_followup` -> `submitted_review`
+  - legacy compatibility re-entry
+- `waiting_for_author_followup` -> `review_requested`
+  - legacy compatibility re-entry
+- `waiting_for_author_followup` -> `waiting_for_review_request`
+  - legacy compatibility re-entry
+- `waiting_for_re_request` -> `review_requested`
+  - legacy compatibility re-entry
+- `waiting_for_re_request` -> `submitted_review`
+  - legacy compatibility re-entry
+
+`waiting_for_author_followup` and `waiting_for_re_request` are legacy external-wait
+compatibility states: they are not produced by `interpretReviewerLoopState`, so the five
+re-entry transitions above are owned by the outer-loop compatibility layer that consumes
+this graph, not by this reviewer-loop machine itself.
+
 ## Snapshot Contract
 
 `normalizeReviewerSnapshot` canonicalizes this schema:
@@ -58,19 +108,20 @@ The contract separates observable current state (`submittedReviewPresent`, `subm
 - default fan-out is 3
 - output is deterministic (`runId` sequence + angle ordering)
 
-For `dev-loops`, the default pre-approval gate before calling a branch/PR
+<!-- rule: REVIEWER-STATE-GATE-ANGLE-MAPPING -->
+`REVIEWER-STATE-GATE-ANGLE-MAPPING`: For `dev-loops`, the default pre-approval gate before calling a branch/PR
 review-complete, approval-ready, merge-ready, or ready for final handoff uses
 review angles resolved from config (`resolveGateAngles(config, "preApproval")`
 from `@dev-loops/core/config`). Default config ships `dry`, `kiss`, `yagni`.
-These are workflow lenses that reviewer
-runs must cover for the change; they do not replace the state machine's supported
-review-angle taxonomy (`correctness`, `tests`, `maintainability`, `security`,
-`scope`). Instead, map the config-resolved lens passes onto that existing taxonomy when
-planning or merging reviewer runs so the workflow gate stays aligned with the
-deterministic review-plan contract. Run those lens passes in fresh context and in
-parallel when practical. If true parallelism is impractical, all configured
-angles still require coverage and the limitation must be explicitly recorded in
-the merged review artifact/verdict.
+These are workflow lenses that reviewer runs must cover for the change; they do
+not replace the state machine's supported review-angle taxonomy (`correctness`,
+`tests`, `maintainability`, `security`, `scope`). The config-resolved lens
+passes MUST map onto that existing taxonomy when planning or merging reviewer
+runs so the workflow gate stays aligned with the deterministic review-plan
+contract. Run those lens passes in fresh context and in parallel when
+practical; if true parallelism is impractical, all configured angles MUST
+still be covered and the limitation MUST be explicitly recorded in the merged
+review artifact/verdict.
 
 ## Deterministic Merge/Synthesis Contract
 
@@ -90,11 +141,10 @@ the merged review artifact/verdict.
 
 ## Reviewer-Boundary Contract (Review vs Remediation)
 
-- A pure internal reviewer pass must end in a concrete review result boundary (`submitted_review`) rather than generic post-review waiting.
-- After submission, author/Copilot remediation belongs to a separate remediation/fix loop handoff boundary (see broader remediation-loop work in #26).
-- A new review request after fixes starts a new reviewer-pass context (`review_requested`) rather than extending the old pass indefinitely.
+<!-- rule: REVIEWER-BOUNDARY-CONTRACT -->
+`REVIEWER-BOUNDARY-CONTRACT`: A pure internal reviewer pass MUST end in a concrete review result boundary (`submitted_review`) rather than generic post-review waiting. After submission, author/Copilot remediation belongs to a separate remediation/fix loop handoff boundary (see broader remediation-loop work in #26). A new review request after fixes MUST start a new reviewer-pass context (`review_requested`) rather than extending the old pass indefinitely. If a wait state is used, it MUST be an explicit named external-participant boundary (for example author/Copilot follow-up, human approval wait, or external Copilot review wait), never a catch-all continuation state for internal reviewer logic. See [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) for the family-local lifecycle that consumes this boundary.
+
 - A newly opened or still-forming draft PR head is not automatically review-ready; while the intended initial slice is still being authored, treat that as external follow-up/remediation boundary work, not a formal reviewer-verdict moment.
-- If a wait state is used, it must be an explicit named external-participant boundary (for example author/Copilot follow-up, human approval wait, or external Copilot review wait), never a catch-all continuation state for internal reviewer logic.
 - Default forward-progress rule at this boundary: continue to the next relevant approval gate or explicit handoff boundary. Early stop is only valid for one of:
   - `blocked_needs_user_decision`
   - true external wait with named actor boundary
@@ -127,11 +177,8 @@ Failure output:
 
 ## Key Deterministic Guarantees
 
-- planning/running/merge-ready states are explicitly represented
-- draft-ready vs draft-posted vs waiting-for-submit vs submitted are distinct
-- pending draft reviews are invalidated when `draftReviewCommitSha !== prHeadSha`
-- submitted review is the internal reviewer-loop terminal/handoff boundary
-- review re-entry requires an explicit re-request in a new review pass context
-- `waiting_for_author_followup` / `waiting_for_re_request` are legacy external-wait compatibility states, not preferred internal loop terminals
-- unexpected failures fail closed into `blocked_needs_user_decision`
+State distinctness, invalidation, terminal/handoff boundary, and fail-closed guarantees are
+defined by [State Definitions](#state-definitions), [Required transitions](#required-transitions),
+and `REVIEWER-BOUNDARY-CONTRACT` above; this section does not restate them.
+
 - round-cap exhaustion in a concluded Copilot cycle is not a blanket stop: significant post-convergence logic/test changes on a newer head open a new Copilot cycle and require re-request before pre-approval
