@@ -51,7 +51,7 @@ jobs:
       # fail on the package that already made it to the registry.
       - name: Publish core package to npm
         run: |
-          VERSION=$(npm pkg get version | tr -d '"')
+          VERSION=$(cd packages/core && npm pkg get version | tr -d '"')
           if npm view "@dev-loops/core@${VERSION}" version >/dev/null 2>&1; then
             echo "::notice::@dev-loops/core@${VERSION} already published; skipping."
           else
