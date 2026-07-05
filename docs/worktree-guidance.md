@@ -114,9 +114,10 @@ merge-completion flow.
 
 <!-- rule: WORKTREE-DEFAULT-USE -->
 `WORKTREE-DEFAULT-USE`: Non-trivial local edits, PR follow-up, or
-delegated/parallel work MUST use a dedicated git worktree, created or reused
-from a freshly fetched `origin/main`, not the main checkout. The main checkout
-is reserved for inspection, control, and lightweight status checks.
+delegated/parallel work MUST use a dedicated git worktree, not the main
+checkout. The default base is `origin/main` (the tooling fetches it first,
+best-effort, and honors an explicit `--base` override). The main checkout is
+reserved for inspection, control, and lightweight status checks.
 
 ## Create or reuse flow
 
