@@ -186,7 +186,10 @@ test("pr-gate-coordination reference machine: completeness, liveness, and confor
 // and safety rules only ever run via the CLI, which no npm script executes.
 test("every registered machine passes its full conformance report", () => {
   const machines = getRegisteredMachines();
-  assert.ok(machines.length >= 2, "expected at least pr-gate-coordination and conductor-routing");
+  const names = machines.map((m) => m.name);
+  for (const required of ["pr-gate-coordination", "conductor-routing"]) {
+    assert.ok(names.includes(required), `machine "${required}" must be registered (got: ${names.join(", ")})`);
+  }
   for (const machine of machines) {
     const report = runMachineConformance(machine);
     assert.equal(report.ok, true, `${machine.name}: ${JSON.stringify({
