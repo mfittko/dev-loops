@@ -385,10 +385,20 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath) {
  * Enforcement is ON by default (opt-out via gates.requireFanoutEvidence: false).
  * Returns { required: false } when enforcement is disabled OR when config is
  * unavailable (config == null — null or undefined — after a failed load) — config-unavailable must
- * fail open and never enable enforcement. When enabled, records per-required-gate
- * executionMode and whether the deterministic findings-log ledger exists for the
- * reviewed head SHA so the pre-merge check can fail closed on inline verdicts or
- * missing ledgers.
+ * fail open and never enable enforcement. When enabled, returns
+ * { required: true, requireProvenance, lightMode, hasFullLabel, gates } where
+ * each per-required-gate entry records executionMode, inlineReason,
+ * scopeUnderThreshold, and whether the deterministic findings-log ledger exists
+ * for the reviewed head SHA, so the pre-merge check can fail closed on inline
+ * verdicts or missing ledgers.
+ *
+ * Light mode (#1174): when gates.lightMode is configured, `hasFullLabel`
+ * (gate:full PR label) and `baseRef` feed a fail-closed merge-base scope
+ * re-derivation for inline verdicts. A gate's scopeUnderThreshold is true only
+ * when light mode is on, the PR has no gate:full label, a base ref is known,
+ * and the reviewed head's merge-base diff is genuinely under threshold — which
+ * lets the pre-merge check accept an inline single-agent verdict for a
+ * small-scope PR instead of always rejecting inline evidence.
  */
 export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null }) {
   // Fail open when config could not be loaded/validated. `== null` covers both
