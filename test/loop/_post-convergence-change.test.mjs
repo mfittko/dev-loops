@@ -157,6 +157,16 @@ test("patch field MISSING on a non-doc code file → significant (fail toward re
   ] }) }), true);
 });
 
+test("patch field MISSING but below thresholds (single file, 10 lines) → NOT significant", async () => {
+  // Intentional: a missing patch only blocks the comment-only classification —
+  // the file stays in the significance math under the PRE-EXISTING size/count
+  // thresholds (single non-doc file <20 lines → not significant). It does NOT
+  // escalate to significant on its own; that would change pre-#1137 behavior.
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/loop/foo.mjs", changes: 10 },
+  ] }) }), false);
+});
+
 test("multi-file: 2 files both comment-only → NOT significant", async () => {
   assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
     { filename: "a.mjs", changes: 30, patch: patchOf("+// a", "-// b") },

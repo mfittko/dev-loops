@@ -100,8 +100,9 @@ function classifyLine(content, inBlock) {
 //     with no observed opener in the same hunk is treated as CODE (conservative:
 //     bare `*` counts as comment ONLY inside an observed open `/* ... */` block).
 // Conservative by construction — every ambiguous case returns false (= NOT
-// comment-only = treated as code = keeps the file in the significance math):
-//   - patch missing (binary / too large to diff)    → false
+// classifiable as comment-only; the file remains subject to the existing
+// size/count thresholds, it is NOT auto-escalated to significant):
+//   - patch missing (binary / oversized to diff)     → false
 //   - extension we cannot classify (non-JS/TS code)  → false
 //   - a changed line mixing code + comment           → false
 //   - a patch with no parseable added/removed lines  → false
