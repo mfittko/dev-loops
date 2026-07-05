@@ -8,6 +8,7 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
+import { assertRuleOwned } from "./_rule-helpers.mjs";
 
 test("copilot skill does not contain known imported blocker phrases", async () => {
   const content = await readRepo("skills/copilot-pr-followup/SKILL.md");
@@ -117,7 +118,7 @@ test("consolidated PR lifecycle contract freezes the family-local lifecycle boun
   assert.match(lifecycleContract, /final_gate_remediation/i);
   assert.match(lifecycleContract, /merge_conflict_resolution/i);
   assert.match(lifecycleContract, /waiting_for_human_pr_approval/i);
-  assert.match(lifecycleContract, /must not be treated as `waiting_for_human_pr_approval`, `waiting_for_merge`, or merge-ready/i);
+  assertRuleOwned("LIFECYCLE-CONFLICT-BLOCKS-PROGRESS", "skills/docs/pr-lifecycle-contract.md");
 
   assert.match(copilotGraph, /skills\/docs\/pr-lifecycle-contract\.md/i);
   assert.match(gateContract, /skills\/docs\/pr-lifecycle-contract\.md/i);
