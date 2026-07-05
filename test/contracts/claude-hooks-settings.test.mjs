@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 // Hook scripts live under the plugin root (.claude/hooks) so the Claude plugin can bundle them
@@ -12,10 +13,12 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)))
 const hooksDir = path.join(repoRoot, ".claude", "hooks");
 
 function runHook(script, payload, env = {}) {
-  // Build a clean env with the run-id marker explicitly removed (not set to `undefined`, whose
+  // Build a clean env with the run-id markers explicitly removed (not set to `undefined`, whose
   // spawnSync handling is version-dependent and could coerce to the string "undefined").
+  // Marker names come from the adapter (run-context) so this file names no harness env vars —
+  // the cli-harness-agnostic contract confines those literals to the adapter boundary.
   const childEnv = { ...process.env };
-  delete childEnv.DEVLOOPS_RUN_ID;
+  for (const marker of RUN_ID_MARKERS) delete childEnv[marker];
   const res = spawnSync("node", [path.join(hooksDir, script)], {
     input: JSON.stringify(payload),
     encoding: "utf8",
