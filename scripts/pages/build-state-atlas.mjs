@@ -109,7 +109,12 @@ const gateDiagram = renderGateFlowchart(PUBLIC_DEV_LOOP_GATE_CONTRACT);
 
 // PR lifecycle: the 13-state vocabulary + required transitions from
 // skills/docs/pr-lifecycle-contract.md.
-const prLifecycleStates = [
+// Exported (not just local) so the L2/L3 state-machine conformance harness
+// (scripts/docs/validate-state-machine-conformance.mjs) can reuse this same
+// hand-derived doc table as its "doc side" for the pr-gate-coordination
+// reference machine, instead of re-deriving it — see that harness's header
+// comment for the registration path.
+export const PR_LIFECYCLE_STATES = [
   'draft_local_review_gate',
   'draft_local_remediation',
   'ready_state_needs_copilot_request',
@@ -124,7 +129,7 @@ const prLifecycleStates = [
   'terminal_slice_complete',
   'stopped_needs_user_decision',
 ];
-const prLifecycleDiagram = renderStateDiagram([
+export const PR_LIFECYCLE_TRANSITIONS = [
   ['draft_local_review_gate', 'draft_local_remediation'],
   ['draft_local_review_gate', 'ready_state_needs_copilot_request'],
   ['draft_local_review_gate', 'stopped_needs_user_decision'],
@@ -145,7 +150,8 @@ const prLifecycleDiagram = renderStateDiagram([
   ['waiting_for_merge', 'terminal_slice_complete'],
   ['terminal_slice_complete', '[*]'],
   ['stopped_needs_user_decision', '[*]'],
-], prLifecycleStates);
+];
+const prLifecycleDiagram = renderStateDiagram(PR_LIFECYCLE_TRANSITIONS, PR_LIFECYCLE_STATES);
 
 // Release pipeline: the fail-closed gate chain from .github/workflows/release.yml.
 const releasePipelineNodes = [
