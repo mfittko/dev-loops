@@ -374,9 +374,14 @@ function extractClosingIssueNumbers(body) {
     if (step.insideFence) continue;
     unfenced.push(line);
   }
+  // Inline `code` spans don't auto-close on GitHub either: blank out any
+  // backtick-run-delimited span (equal-length runs pair, so ``a `b` c`` works).
+  // ponytail: not full CommonMark span matching; an unbalanced stray backtick
+  // over-strips toward fail-closed, which is the safe direction for this gate.
+  const text = unfenced.join("\n").replace(/(`+)[\s\S]*?\1/gu, " ");
   const seen = new Set();
   const numbers = [];
-  for (const match of unfenced.join("\n").matchAll(CLOSING_ISSUE_REFERENCE_PATTERN)) {
+  for (const match of text.matchAll(CLOSING_ISSUE_REFERENCE_PATTERN)) {
     const n = Number(match[1]);
     if (Number.isInteger(n) && n > 0 && !seen.has(n)) {
       seen.add(n);

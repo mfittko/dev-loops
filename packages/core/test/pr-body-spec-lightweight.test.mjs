@@ -140,6 +140,32 @@ test("validatePrBodySpec: a fenced Closes #N does NOT satisfy the gate (no spoof
   assert.ok(result.errors.some((e) => e.code === "missing_closing_issue_reference"));
 });
 
+test("validatePrBodySpec: an inline-code-span-only `Closes #N` does NOT satisfy the gate (no spoof)", () => {
+  // GitHub does not auto-close from code-quoted keywords; neither may the gate.
+  const body = COMPLETE_BODY.replace("Closes #123", "`Closes #999`");
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "missing_closing_issue_reference"));
+  assert.deepEqual(result.closesIssues, []);
+});
+
+test("validatePrBodySpec: a real Closes plus an inline-quoted one extracts ONLY the real reference", () => {
+  const body = COMPLETE_BODY.replace(
+    "Closes #123",
+    "Closes #1181\n\nSee also the literal text `Closes #999` in the docs.",
+  );
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.closesIssues, [1181]);
+});
+
+test("validatePrBodySpec: a multi-backtick inline span (``a `b` c``) is stripped as one span", () => {
+  const body = COMPLETE_BODY.replace("Closes #123", "``example: `Closes #999` quoted``");
+  const result = validatePrBodySpec({ body });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.closesIssues, []);
+});
+
 const ALL_MISSING = [
   "missing_acceptance_criteria",
   "missing_closing_issue_reference",
