@@ -181,6 +181,23 @@ test("pr-gate-coordination reference machine: completeness, liveness, and confor
   assert.equal(report.ok, true);
 });
 
+// Every registered machine's full L2/L3 report must pass in CI — not just the
+// reference machine. Without this, a second machine's compareDocCodeTransitions
+// and safety rules only ever run via the CLI, which no npm script executes.
+test("every registered machine passes its full conformance report", () => {
+  const machines = getRegisteredMachines();
+  assert.ok(machines.length >= 2, "expected at least pr-gate-coordination and conductor-routing");
+  for (const machine of machines) {
+    const report = runMachineConformance(machine);
+    assert.equal(report.ok, true, `${machine.name}: ${JSON.stringify({
+      deadEnds: report.completeness.deadEnds,
+      stuck: report.liveness.stuck,
+      unresolved: report.conformance.results.filter((r) => r.status === "missing" || r.status === "divergent" || r.status === "unreferenced").map((r) => `${r.from}->${r.to}`),
+      safety: report.safety.violations.map((v) => v.rule),
+    })}`);
+  }
+});
+
 // AC3: the pre_approval_gate entry-ordering divergence is a tracked known-gap, not a silent pass.
 test("pr-gate-coordination known gap: pre_approval_gate entry ordering is tracked, not silently passed", () => {
   const machine = getRegisteredMachines().find((m) => m.name === "pr-gate-coordination");

@@ -625,8 +625,10 @@ function routeOuter(input) {
   return evaluateConductorRouting({ target: TARGET, ...input });
 }
 
-// One fixture per reachable outer state, drawn verbatim from the doc's own Scenario
-// matrix (scenarios 1-7) so no new behavior is invented for this registration.
+// One fixture per reachable outer state. Inputs are doc-described routing-policy
+// combinations (mostly the doc's Scenario matrix; CONTINUE_CURRENT_WAIT and
+// HANDOFF_TO_COPILOT_LOOP use equivalent doc-described input pairs where the
+// literal scenario rows were repurposed for other states) — no invented behavior.
 const OUTER_TO_FIXTURE = new Map([
   [OUTER_STATE.CONTINUE_CURRENT_WAIT, () => routeOuter({ copilotState: "waiting_for_copilot_review", reviewerState: "waiting_for_author_followup" })],
   [OUTER_STATE.HANDOFF_TO_COPILOT_LOOP, () => routeOuter({ copilotState: "pr_draft", reviewerState: "waiting_for_review_request" })],
