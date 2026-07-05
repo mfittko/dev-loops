@@ -96,7 +96,8 @@ MUST stay concise by default — command names plus pass/fail status, aggregate 
 current-head CI/check status, never raw passing log streams. Any included command output
 MUST be truncated to a deterministic retained-prefix length (a short truncation marker
 suffix is allowed); a failure MUST show only a focused relevant excerpt, not an unbounded
-raw log dump. When a pass reached `clean` only after corrective changes, the findings
+raw log dump. Detailed logs may live in local/session artifacts or linked GitHub logs
+instead of the visible audit comment. When a pass reached `clean` only after corrective changes, the findings
 summary should briefly say what gap was found, what changed, and why the current head now
 satisfies the gate.
 
