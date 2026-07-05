@@ -146,6 +146,83 @@ test("ensure: reuses an existing branch when no worktree occupies it", async () 
 });
 
 // ---------------------------------------------------------------------------
+// Workspace self-link (#1144): node_modules/@dev-loops/core resolves to the
+// fresh worktree's OWN packages/core, not the main checkout's — and the link
+// stays untracked (git-ignored).
+// ---------------------------------------------------------------------------
+
+test("ensure: node_modules/@dev-loops/core resolves to the worktree's OWN packages/core, untracked", async () => {
+  const repo = makeRepo();
+  try {
+    // A tracked packages/core in main — git worktree add checks out its own
+    // on-disk copy, so main's and the worktree's copies are distinct
+    // directories even though both are tracked at the same path.
+    mkdirSync(path.join(repo.root, "packages/core/src"), { recursive: true });
+    writeFileSync(path.join(repo.root, "packages/core/package.json"), '{"name":"@dev-loops/core"}\n');
+    writeFileSync(path.join(repo.root, ".gitignore"), "node_modules/\n");
+    repo.git("add", "-A");
+    repo.git("commit", "-q", "-m", "add packages/core");
+    repo.git("fetch", "-q", "origin");
+
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1144, base: "origin/main" });
+    assert.equal(res.ok, true);
+
+    const linkPath = path.join(res.path, "node_modules/@dev-loops/core");
+    assert.ok(existsSync(linkPath), "self-link exists");
+    const { realpathSync, lstatSync } = await import("node:fs");
+    assert.ok(lstatSync(linkPath).isSymbolicLink());
+    assert.equal(
+      realpathSync(linkPath),
+      realpathSync(path.join(res.path, "packages/core")),
+      "resolves to the worktree's OWN packages/core",
+    );
+    assert.notEqual(
+      realpathSync(linkPath),
+      realpathSync(path.join(repo.root, "packages/core")),
+      "must NOT resolve to the main checkout's packages/core",
+    );
+
+    // Untracked: node_modules is gitignored repo-wide (asserted, not changed).
+    const ignored = repo.git("-C", res.path, "check-ignore", "-q", "node_modules/@dev-loops/core");
+    // execFileSync throws on non-zero exit; reaching here means exit 0 (ignored).
+    assert.equal(ignored, "");
+    const statusInWorktree = execFileSync("git", ["status", "--porcelain"], {
+      cwd: res.path,
+      encoding: "utf8",
+    });
+    assert.ok(
+      !statusInWorktree.includes("node_modules"),
+      `node_modules must not show up in git status, got: ${statusInWorktree}`,
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: workspace self-link survives re-provisioning an existing worktree (idempotent)", async () => {
+  const repo = makeRepo();
+  try {
+    mkdirSync(path.join(repo.root, "packages/core"), { recursive: true });
+    writeFileSync(path.join(repo.root, "packages/core/package.json"), '{"name":"@dev-loops/core"}\n');
+    repo.git("add", "-A");
+    repo.git("commit", "-q", "-m", "add packages/core");
+    repo.git("fetch", "-q", "origin");
+
+    const first = await ensureWorktree({ repoRoot: repo.root, issue: 42, base: "origin/main" });
+    const linkPath = path.join(first.path, "node_modules/@dev-loops/core");
+    assert.ok(existsSync(linkPath));
+
+    // Re-provision (reuse path) must not fail and must keep the link valid.
+    const second = await ensureWorktree({ repoRoot: repo.root, issue: 42, base: "origin/main" });
+    assert.equal(second.reused, true);
+    const { realpathSync } = await import("node:fs");
+    assert.equal(realpathSync(linkPath), realpathSync(path.join(second.path, "packages/core")));
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Provisioning is invoked (injected core) and fails soft
 // ---------------------------------------------------------------------------
 
