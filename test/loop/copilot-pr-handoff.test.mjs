@@ -1469,6 +1469,100 @@ test("copilot-pr-handoff stays at round_cap_clean_fallback when the last reviewe
   }
 });
 
+// #1165 (in-flight-rerequest race): at the round cap with all threads clean and
+// a Copilot review REQUESTED and pending on the current head (a --force-rerequest
+// in flight for a significant post-convergence change), handoff must surface
+// waiting_for_copilot_review — NOT round_cap_clean_fallback. Proceeding to
+// pre_approval_gate would skip the pending review; detect-pr-gate-coordination-state
+// gates pre-approval here, so both authorities now gate until the review lands.
+test("copilot-pr-handoff waits for the pending Copilot review (in-flight force-rerequest) instead of the clean fallback (#1165)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-inflight-rerequest-"));
+
+  try {
+    const { env } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({
+          isDraft: false, state: "OPEN", number: 17, headRefOid: "newsha",
+          reviews: CAP_REVIEWS,
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+        }) + "\n",
+      },
+      // Copilot IS present in requested_reviewers — a force-rerequest is in flight
+      // and its review has not yet landed on the current head.
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      // The request is newer than any submitted review → pending on the current head.
+      { assertArgs: ["api", "repos/owner/repo/issues/17/timeline"], stdout: JSON.stringify([{ login: "Copilot", created_at: "2026-06-03T00:00:00Z" }]) + "\n" },
+    ], { matchMode: "claims" });
+    env.DEVLOOPS_RUN_ID = "";
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    // Pending review on the current head → wait, never proceed to pre_approval.
+    assert.equal(output.action, "watch");
+    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.roundCapCleanEligible, false);
+    assert.equal(output.terminal, false);
+    assert.ok(output.watchArgs, "expected watchArgs while waiting for the pending review");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1165 (fail-closed reconciliation): the SAME in-flight state, but handoff's
+// secondary escape-hatch fetch (fetchReopenCycleFacts / gh compare) fails — the
+// exact production shape where handoff previously dropped to round_cap_clean_fallback
+// (proceed) while detect-pr-gate-coordination-state, reusing its already-validated
+// facts, gated pre-approval. Handoff must still WAIT (fail closed on the pending
+// request), never skip the review.
+test("copilot-pr-handoff waits (fail closed) when a review is pending and the escape-hatch fetch fails (#1165)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-inflight-failclosed-"));
+
+  try {
+    const { env } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({
+          isDraft: false, state: "OPEN", number: 17, headRefOid: "newsha",
+          reviews: CAP_REVIEWS,
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+        }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/issues/17/timeline"], stdout: JSON.stringify([{ login: "Copilot", created_at: "2026-06-03T00:00:00Z" }]) + "\n" },
+      // Escape-hatch fetch fails — significance cannot be positively determined.
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"], stdout: "", stderr: "boom", exitCode: 1 },
+    ], { matchMode: "claims" });
+    env.DEVLOOPS_RUN_ID = "";
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    // The pending-request guard fires before the fragile escape-hatch fetch, so a
+    // fetch failure can no longer silently downgrade to "proceed".
+    assert.equal(output.action, "watch");
+    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.roundCapCleanEligible, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Handoff: unresolved feedback → fix
 // ---------------------------------------------------------------------------

@@ -614,6 +614,63 @@ test("interpretLoopState (handoff baseline) and evaluatePrGateCoordination (dete
   assert(gateResult.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
+// Parity (#1165 — in-flight-rerequest race): the SAME snapshot at the cap, clean,
+// but with a Copilot review REQUESTED and pending on the CURRENT head (a
+// --force-rerequest in flight) plus a significant post-convergence change. Both
+// authorities must gate pre_approval_gate until the fresh review lands.
+//
+// Note the interpreter (handoff's base) deliberately routes a pending at-cap
+// request to ROUND_CAP_CLEAN_FALLBACK — it cannot see significance (that needs gh
+// compare I/O). copilot-pr-handoff.mjs therefore flips this to
+// waiting_for_copilot_review when a review is pending on the current head (proven
+// by the "in-flight force-rerequest" integration tests). detect's evaluator, fed
+// the shared significant-change signal, forbids run_pre_approval_gate here. Both
+// gate pre-approval — no divergence.
+test("interpretLoopState (handoff) and evaluatePrGateCoordination (detect) both gate pre_approval with a pending review + significant change at the cap (#1165)", () => {
+  const refinementConfig = { maxCopilotRounds: 2 };
+  const snapshot = {
+    prExists: true,
+    prNumber: 503,
+    // Force-rerequest in flight: Copilot review is requested and pending on the current head.
+    copilotReviewRequestStatus: "requested",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 2, // == cap
+    ciStatus: "success",
+  };
+
+  // handoff's base interpretation: the interpreter ignores the pending at-cap
+  // request and resolves the clean fallback. runHandoff flips this to
+  // waiting_for_copilot_review (integration tests) so it never proceeds.
+  const handoffInterpretation = interpretLoopState(snapshot, refinementConfig);
+  assert.equal(handoffInterpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+
+  // detect's path with the shared significant-change signal = true.
+  const gateResult = evaluatePrGateCoordination({
+    pr: 503,
+    currentHeadSha: "cafef00dbeef",
+    prDraft: false,
+    lifecycleState: handoffInterpretation.state,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: handoffInterpretation.sameHeadCleanConverged,
+    ciStatus: snapshot.ciStatus,
+    copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+    maxCopilotRounds: refinementConfig.maxCopilotRounds,
+    postConvergenceSignificantChange: true,
+    draftGate: gate({ visible: true, headSha: "cafef00", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "cafef00", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  // Both gate pre-approval: detect forbids run_pre_approval_gate outright; handoff
+  // waits for the pending review (never advancing to pre_approval).
+  assert.equal(gateResult.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  assert(gateResult.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
 test("missing ciStatus fails closed to wait_for_ci instead of reopening gate progression", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,

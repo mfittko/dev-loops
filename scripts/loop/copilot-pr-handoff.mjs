@@ -459,6 +459,36 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
     }
   }
 
+  // In-flight-rerequest race (#1165): the interpreter routes to
+  // ROUND_CAP_CLEAN_FALLBACK even when a Copilot review is REQUESTED and pending
+  // on the current head, because at the cap it treats any assignment as a stale
+  // leftover (copilot-loop-state.mjs). But a request pending on THIS head means a
+  // fresh review is genuinely coming (e.g. a force-rerequest for a significant
+  // post-convergence change). Proceeding to pre_approval_gate would skip that
+  // review — the exact gate-integrity gap #1126 closes — and
+  // detect-pr-gate-coordination-state gates pre-approval here. The reopen escape
+  // hatch below can only recover the wait verdict via a SECOND, fail-silent gh
+  // fetch (fetchReopenCycleFacts) whose failure/compare-miss silently drops back
+  // to "proceed", diverging from detect (which reused already-validated facts).
+  // Fail closed instead: while a review is pending on the current head, wait for
+  // it to land rather than stop. If it never lands, a --watch-status refresh
+  // (which skips this branch) re-resolves to the clean fallback, so this never
+  // dead-ends the loop.
+  const reviewPendingOnCurrentHead = snapshot.copilotReviewRequestStatus === "requested"
+    || snapshot.copilotReviewRequestStatus === "already-requested";
+  if (!internalOnlySkipCopilot
+      && options.watchStatus === undefined
+      && interpretation.state === STATE.ROUND_CAP_CLEAN_FALLBACK
+      && reviewPendingOnCurrentHead) {
+    interpretation = {
+      ...interpretation,
+      state: STATE.WAITING_FOR_COPILOT_REVIEW,
+      nextAction: NEXT_ACTIONS[STATE.WAITING_FOR_COPILOT_REVIEW],
+      allowedTransitions: [...(TRANSITIONS[STATE.WAITING_FOR_COPILOT_REVIEW] || [])],
+      roundCapCleanEligible: false,
+    };
+  }
+
   // Round-cap escape hatch (#1103, #1126): the interpreter resolves
   // ROUND_CAP_CLEAN_FALLBACK (stop, no re-request) at the cap. But when a
   // SIGNIFICANT post-convergence change (new product/test-logic since the last
