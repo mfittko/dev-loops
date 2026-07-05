@@ -5,10 +5,8 @@ boundaries: `draft_gate` and `pre_approval_gate`.
 
 ## Purpose
 
-Both gates share the same execution mechanism: a structured sub-loop that provides
-isolation, a build-once neutral context bundle, independent-reviewer fan-out,
-fan-in synthesis, and iterative fix-then-retry. Codifying the sub-loop once as a
-shared contract avoids inconsistent execution.
+Both gates share one structured sub-loop: a build-once neutral context bundle,
+independent-reviewer fan-out, fan-in synthesis, and iterative fix-then-retry.
 
 ### Execution model: build once, seed many (no fork)
 
@@ -31,22 +29,14 @@ Workflow tool. Concretely:
    anti-bias requirement.
 3. Fan-in consolidates the per-angle findings unchanged.
 
-The cost win is **work-dedup**: the diff + adjacent code is built once instead of
-re-derived by every reviewer. That saving is guaranteed regardless of caching; a
-shared-prefix prompt-cache across reviewers is an opportunistic bonus, not a
+The cost win is **work-dedup**: the diff + adjacent code is built once, not re-derived
+by every reviewer; a shared-prefix prompt-cache is an opportunistic bonus, not a
 requirement.
 
 This contract owns the **execution shape** of gate-review work. It does not own:
 - which review angles a specific gate runs (that stays in the skill)
-- the visible gate-review PR comment format (owned by [Gate Review Comment Contract](./gate-review-comment-contract.md))
+- the visible gate-review PR comment format (owned by [Gate Review Comment Contract](./gate-review-comment-contract.md), whose evidence is also required for a gate to be satisfied)
 - the broader PR lifecycle sequencing (owned by the workflow skill and [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md))
-
-## Relationship to the checkpoint verdict comment contract
-
-This contract owns **how** the review work is structured and executed; [Gate Review
-Comment Contract](gate-review-comment-contract.md) owns **what** visible PR-comment
-evidence proves the sub-loop completed for a head SHA. Both are required for a gate to
-be satisfied.
 
 ## Separate chains per gate
 
@@ -54,19 +44,14 @@ be satisfied.
 `GATE-EXEC-SEPARATE-CHAINS`: Each gate (`draft_gate`, `pre_approval_gate`) MUST run its
 own independent review chain with its own review angles, its own disposition ledger, its
 own fix cycle, and its own exit conditions. The chains are not interchangeable; each
-gate's execution is a complete, self-contained sub-loop pass.
-
-| Property | `draft_gate` chain | `pre_approval_gate` chain |
-|---|---|---|
-| Review angles | Resolved from `gates.draft.angles` | Resolved from `gates.preApproval.angles` |
-| Disposition ledger | Gate-specific findings log | Gate-specific findings log |
-| Fix cycle scope | Only findings that block the draft→ready transition | Only findings that block final approval readiness |
-| Exit condition | Clean verdict for the reviewed head | Clean verdict for the reviewed head |
+gate's execution is a complete, self-contained sub-loop pass. The `draft_gate` fix cycle
+covers only findings that block the draft→ready transition; the `pre_approval_gate` fix
+cycle covers only findings that block final approval readiness. Angles and blocking
+severities per gate are in [Gate-specific configuration](#gate-specific-configuration).
 
 ## Sub-loop phases
 
-The sub-loop is a single reusable shape. Both gates run it with their own review angles,
-but the execution phases are identical.
+Both gates run the identical phases with their own review angles.
 
 ### Phase 1 — Preamble: context-builder
 
@@ -205,17 +190,14 @@ malformed/missing, and `toFindingsLogShape` maps the result into the
 - collate findings from all review angles
 - classify each finding: `must-fix`, `worth-fixing-now`, `defer`
 - write the disposition ledger: every finding receives a severity classification and a
-  disposition (accepted-for-fix, deferred, disputed, or operator_acknowledged). The disposition ledger is the
-  durable record of what the gate found and what was decided.
+  disposition (accepted-for-fix, deferred, disputed, or operator_acknowledged)
 - produce a merged findings artifact
 - determine the overall gate verdict:
   - `clean`: no findings with a severity in the gate's `blockCleanOnFindingSeverities` list remain
   - `findings_present`: one or more findings with a blocking severity remain
   - `blocked`: the gate could not complete or a hard blocker prevented a verdict
-- write the durable final-findings log via `write-gate-findings-log.mjs` under
-  deterministic `tmp/` paths before posting the visible PR comment
 
-Disposition-ledger sequencing (write before the visible comment) is owned by
+Ledger content and write-before-comment sequencing are owned by
 `GATE-EXEC-DISPOSITION-LEDGER` below.
 
 <!-- rule: GATE-EXEC-POST-BEFORE-FIX -->
@@ -288,8 +270,7 @@ The sub-loop execution shape can be referenced programmatically via these fields
 
 ## Gate-specific configuration
 
-Each gate configures the sub-loop with its own review angles and blocking severities.
-The execution phases are identical; only the review angles and blocking severity policy differ.
+Only the review angles and blocking severity policy differ per gate:
 
 | Gate | Review angles | Blocking severities | Owned by |
 |---|---|---|---|
@@ -300,9 +281,8 @@ The execution phases are identical; only the review angles and blocking severity
 
 <!-- rule: GATE-EXEC-NON-SUBSTITUTION -->
 `GATE-EXEC-NON-SUBSTITUTION`: A clean sub-loop pass for one gate does not satisfy the other gate.
-Each gate MUST run its own complete sub-loop execution with its own review
-angles, its own disposition ledger, and its own visible checkpoint verdict comment on the
-PR for the reviewed head SHA.
+Each gate MUST run its own complete sub-loop execution (`GATE-EXEC-SEPARATE-CHAINS`) with
+its own visible checkpoint verdict comment on the PR for the reviewed head SHA.
 
 ## Disposition ledger and durable logging
 
@@ -421,7 +401,7 @@ recording + enforcement + fail-closed signal that land independently.
 
 ## See also
 
-- [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md) — visible PR comment evidence format
+- [Checkpoint Verdict Comment Contract](gate-review-comment-contract.md) — visible PR comment evidence format
 - [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) — broader lifecycle state machine
 - [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md) — skill that owns gate execution
 - [Local Implementation](../skills/local-implementation/SKILL.md) — uses chain pattern for local phase plan audits

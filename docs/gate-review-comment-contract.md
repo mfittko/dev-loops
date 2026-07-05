@@ -97,9 +97,9 @@ MUST stay concise by default — command names plus pass/fail status, aggregate 
 current-head CI/check status, never raw passing log streams. Any included command output
 MUST be truncated to a deterministic retained-prefix length (a short truncation marker
 suffix is allowed); a failure MUST show only a focused relevant excerpt, not an unbounded
-raw log dump. Detailed logs may live in local/session artifacts or linked GitHub logs
+raw log dump. Detailed logs MAY live in local/session artifacts or linked GitHub logs
 instead of the visible audit comment. When a pass reached `clean` only after corrective changes, the findings
-summary should briefly say what gap was found, what changed, and why the current head now
+summary SHOULD briefly say what gap was found, what changed, and why the current head now
 satisfies the gate.
 
 ## Behavior requirements
@@ -128,8 +128,6 @@ normal review/fix loops and the recurring per-head `pre_approval_gate`.
   the PR MUST receive a visible checkpoint verdict comment.
 - If the `draft_gate` verdict is `findings_present` or `blocked`, the comment MUST
   state that the PR stays draft and fixes are required before retrying.
-- The PR MUST NOT leave draft (`gh pr ready`) unless a visible `clean` `draft_gate`
-  checkpoint verdict comment exists for the current head SHA.
 - A checkpoint verdict comment for an older head SHA does not satisfy this requirement for
   the current head while the PR is still draft.
 - After the PR leaves draft, existing clean `draft_gate` evidence remains valid as a
@@ -149,8 +147,6 @@ comment is the required auditable evidence, per the rules below.
 - When the `pre_approval_gate` runs, the PR MUST receive a visible checkpoint verdict comment.
 - If the `pre_approval_gate` verdict is `findings_present` or `blocked`, the comment
   MUST state that follow-up fixes are required before final approval.
-- Final-approval readiness MUST NOT rely only on local or hidden artifacts; the
-  visible PR comment is the required auditable evidence.
 - A checkpoint verdict comment for an older head SHA does not satisfy this requirement for
   the current head.
 

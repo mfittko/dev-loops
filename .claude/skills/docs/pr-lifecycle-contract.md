@@ -45,7 +45,7 @@ It does not redefine helper transport mechanics, reviewer-loop internals, conduc
 - The lifecycle MUST fail closed when required evidence is missing, stale, ambiguous, or unparsable (see [Fail-closed rules](#fail-closed-rules), `LIFECYCLE-FAIL-CLOSED`).
 - Every gate-crossing decision is for the **current PR head SHA**.
 - Draft existence alone is **not** draft-gate readiness.
-- A PR must clear the draft-stage gate for the current head before Copilot review may be requested.
+- A PR MUST clear the draft-stage gate for the current head before Copilot review may be requested.
 - Ready -> draft resets the lifecycle back into draft-stage gating.
 - A merge-blocking marker in the PR **title** (`WIP`/`[WIP]`/`DRAFT`/`DO NOT MERGE`/`🚧`, case-insensitive) blocks the draft -> ready transition and, for non-draft PRs, blocks entry to the pre-approval gate and final approval (`title_marker_blocked`). Markers are permitted only while the PR remains draft. See [Merge preconditions](merge-preconditions.md#title-markers).
 - Human approval / merge are explicit external waits, not hidden remediation states.
