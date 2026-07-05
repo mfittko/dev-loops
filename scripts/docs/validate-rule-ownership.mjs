@@ -16,7 +16,6 @@ import { isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const REQUIRED_RULES_PATH = path.join(REPO_ROOT, "skills", "docs", "required-rules.json");
 
 const SOURCE_ROOTS = ["skills", "agents", "commands", "docs"];
 const MARKER_RE = /<!--\s*rule:\s*([A-Z][A-Z0-9-]*)\s*-->/g;

@@ -10,7 +10,12 @@ function readRepo(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
+// ponytail: process-lifetime memo — test process is short-lived and the repo
+// tree doesn't change mid-run, so a single walk is safe to reuse everywhere.
+let ruleDefinitionsCache = null;
+
 function collectRuleDefinitions() {
+  if (ruleDefinitionsCache) return ruleDefinitionsCache;
   const roots = ["skills", "agents", "commands", "docs"];
   const defs = new Map();
   const walk = (dir) => {
@@ -30,6 +35,7 @@ function collectRuleDefinitions() {
     }
   };
   for (const root of roots) walk(path.join(repoRoot, root));
+  ruleDefinitionsCache = defs;
   return defs;
 }
 
@@ -43,13 +49,32 @@ export function assertRuleOwned(id, ownerPath) {
   assert.deepEqual(defs.get(id), [ownerPath], `expected ${id} to be owned only by ${ownerPath}`);
 }
 
+function ownedTextFrom(line, marker) {
+  return line.replace(marker, "").replace(/`[A-Z][A-Z0-9-]*`/g, "").replace(/[|]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Exported for direct unit testing of the marker-on-its-own-line fallback,
+// without needing a real repo fixture file.
+export function extractOwnedText(content, id) {
+  const marker = new RegExp(`<!--\\s*rule:\\s*${id}\\s*-->`);
+  const lines = content.split(/\r?\n/);
+  const markerLineIndex = lines.findIndex((line) => marker.test(line));
+  const ownerLine = markerLineIndex === -1 ? "" : lines[markerLineIndex];
+  let ownedText = ownedTextFrom(ownerLine, marker);
+  // The marker may sit alone on its own line immediately above the rule
+  // prose (an allowed style) — fall back to the next non-empty line so the
+  // restatement check doesn't silently no-op on an empty owned text.
+  if (!ownedText && markerLineIndex !== -1) {
+    const nextLine = lines.slice(markerLineIndex + 1).find((line) => line.trim().length > 0) || "";
+    ownedText = ownedTextFrom(nextLine, marker);
+  }
+  return ownedText;
+}
+
 export function assertNotRestated(id, otherDocs) {
   const ownerPath = collectRuleDefinitions().get(id)?.[0];
   assert.ok(ownerPath, `expected ${id} to be present before restatement check`);
-  const owner = readRepo(ownerPath);
-  const marker = new RegExp(`<!--\\s*rule:\\s*${id}\\s*-->`);
-  const ownerLine = owner.split(/\r?\n/).find((line) => marker.test(line)) || "";
-  const ownedText = ownerLine.replace(marker, "").replace(/`[A-Z][A-Z0-9-]*`/g, "").replace(/[|]/g, " ").replace(/\s+/g, " ").trim();
+  const ownedText = extractOwnedText(readRepo(ownerPath), id);
   if (ownedText.length < 24) return;
   for (const doc of otherDocs) {
     const content = readRepo(doc);
