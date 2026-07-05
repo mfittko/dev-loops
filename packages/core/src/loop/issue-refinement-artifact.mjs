@@ -353,6 +353,44 @@ export const PR_BODY_SPEC_NARRATIVE_SECTIONS = Object.freeze({
   },
 });
 
+/**
+ * GitHub's accepted closing-keyword issue references (close/closes/closed,
+ * fix/fixes/fixed, resolve/resolves/resolved), case-insensitive, followed by
+ * `#N` or the cross-repo `owner/repo#N` form. Mirrors the linkage the
+ * lightweight path (#1025) requires the PR body to carry (issue #1181: five
+ * lightweight PRs merged without this and none auto-closed their issue).
+ */
+const CLOSING_ISSUE_REFERENCE_PATTERN =
+  /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[\w.-]+\/[\w.-]+)?#(\d+)/giu;
+
+function extractClosingIssueNumbers(body) {
+  // Same fence-skip as sectionHasBody: a `Closes #N` line quoted inside a
+  // ```fenced``` example (e.g. a PR-template sample) must not spoof the gate.
+  let fence = null;
+  const unfenced = [];
+  for (const line of body.split("\n")) {
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) continue;
+    unfenced.push(line);
+  }
+  // Inline `code` spans don't auto-close on GitHub either: blank out any
+  // backtick-run-delimited span (equal-length runs pair, so ``a `b` c`` works).
+  // ponytail: not full CommonMark span matching; an unbalanced stray backtick
+  // over-strips toward fail-closed, which is the safe direction for this gate.
+  const text = unfenced.join("\n").replace(/(`+)[\s\S]*?\1/gu, " ");
+  const seen = new Set();
+  const numbers = [];
+  for (const match of text.matchAll(CLOSING_ISSUE_REFERENCE_PATTERN)) {
+    const n = Number(match[1]);
+    if (Number.isInteger(n) && n > 0 && !seen.has(n)) {
+      seen.add(n);
+      numbers.push(n);
+    }
+  }
+  return numbers;
+}
+
 function sectionHasBody(section) {
   // A real body needs >=1 non-whitespace line OUTSIDE any fenced code span —
   // a section whose only content is a ```fenced``` block is treated as empty so
@@ -373,16 +411,20 @@ function sectionHasBody(section) {
  * Validate that a PR body carries every invariant required to serve as the
  * lightweight spec-of-record: Objective/why, in-scope, explicit non-goals,
  * testable Acceptance criteria (>=1 checklist item), Definition of done
- * (>=1 checklist item), and Open questions/risks. Reuses the generic markdown
- * logic (parseMarkdownSections / AC + DoD patterns / extractChecklistItems) so
- * there is no parallel validator. Fails closed: every missing invariant is
- * reported under its distinct `missing_*` code. Pure; no side effects.
+ * (>=1 checklist item), Open questions/risks, and a GitHub closing-keyword
+ * issue reference (`Closes #N` and GitHub's other accepted forms — the
+ * lightweight path's `Closes #N` linkage, issue #1181). Reuses the generic
+ * markdown logic (parseMarkdownSections / AC + DoD patterns /
+ * extractChecklistItems) so there is no parallel validator. Fails closed:
+ * every missing invariant is reported under its distinct `missing_*` code.
+ * Pure; no side effects.
  *
- * @param {{ body?: string }} input
- * @returns {{ checker: "validate-pr-body-spec", ok: boolean, errors: { code: string, message: string }[], sections: string[], acItems: string[], dodItems: string[] }}
+ * @param {{ body?: string, expectedIssue?: number }} input
+ * @returns {{ checker: "validate-pr-body-spec", ok: boolean, errors: { code: string, message: string }[], sections: string[], acItems: string[], dodItems: string[], closesIssues: number[] }}
  */
-export function validatePrBodySpec({ body = "" } = {}) {
-  const sections = parseMarkdownSections(typeof body === "string" ? body : "");
+export function validatePrBodySpec({ body = "", expectedIssue = null } = {}) {
+  const bodyText = typeof body === "string" ? body : "";
+  const sections = parseMarkdownSections(bodyText);
   const errors = [];
 
   for (const { code, label, patterns } of Object.values(PR_BODY_SPEC_NARRATIVE_SECTIONS)) {
@@ -410,6 +452,19 @@ export function validatePrBodySpec({ body = "" } = {}) {
     });
   }
 
+  const closesIssues = extractClosingIssueNumbers(bodyText);
+  if (closesIssues.length === 0) {
+    errors.push({
+      code: "missing_closing_issue_reference",
+      message: "Missing a GitHub closing-keyword issue reference (e.g. `Closes #123`).",
+    });
+  } else if (Number.isInteger(expectedIssue) && !closesIssues.includes(expectedIssue)) {
+    errors.push({
+      code: "closes_wrong_issue",
+      message: `PR body closes ${closesIssues.map((n) => `#${n}`).join(", ")}, not the expected #${expectedIssue}.`,
+    });
+  }
+
   return {
     checker: "validate-pr-body-spec",
     ok: errors.length === 0,
@@ -417,6 +472,7 @@ export function validatePrBodySpec({ body = "" } = {}) {
     sections: sections.map((s) => s.name),
     acItems,
     dodItems,
+    closesIssues,
   };
 }
 

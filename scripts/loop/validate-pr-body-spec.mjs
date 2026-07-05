@@ -20,16 +20,21 @@ import { validatePrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifa
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
-  validate-pr-body-spec.mjs --repo <owner/name> --pr <number>
-  validate-pr-body-spec.mjs --input <path>
+  validate-pr-body-spec.mjs --repo <owner/name> --pr <number> [--expected-issue <n>]
+  validate-pr-body-spec.mjs --input <path> [--expected-issue <n>]
 Validate that a PR body carries the lightweight spec-of-record invariants
 (Objective/why, In scope, Explicit non-goals, testable Acceptance criteria,
-Definition of done, Open questions/risks).
+Definition of done, Open questions/risks, and a GitHub closing-keyword issue
+reference such as \`Closes #123\`).
 Required (exactly one):
   --repo <owner/name> --pr <number>   Fetch the PR body via gh and validate it
   --input <path>                      Path to a JSON file with { "body": "..." }
                                       (optional "repo" and "pr" fields are echoed
                                       back in the result when present)
+Optional:
+  --expected-issue <n>                Positive integer; the referenced closing
+                                      issue(s) must include this number, else
+                                      "closes_wrong_issue".
 Success output (stdout, JSON):
   {
     "ok": true | false,
@@ -39,7 +44,8 @@ Success output (stdout, JSON):
     "errors": [ { "code": "missing_...", "message": "..." } ],
     "sections": [...],
     "acItems": [...],
-    "dodItems": [...]
+    "dodItems": [...],
+    "closesIssues": [...]
   }
 Exit: 0 when every invariant is present; 1 (fail closed) when any is missing.
 Error output (stderr, JSON):
@@ -54,6 +60,7 @@ export function parseValidatePrBodySpecCliArgs(argv) {
     repo: undefined,
     pr: undefined,
     input: undefined,
+    expectedIssue: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -62,6 +69,7 @@ export function parseValidatePrBodySpecCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       input: { type: "string" },
+      "expected-issue": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -93,6 +101,14 @@ export function parseValidatePrBodySpecCliArgs(argv) {
     }
     if (token.name === "input") {
       options.input = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "expected-issue") {
+      const value = requireTokenValue(token, parseError);
+      if (!/^\d+$/.test(value) || Number(value) === 0) {
+        throw parseError("--expected-issue must be a positive integer");
+      }
+      options.expectedIssue = Number(value);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -147,11 +163,15 @@ export async function validatePrBodySpecFromOptions(options, { env = process.env
     const body = typeof payload.body === "string" ? payload.body : "";
     const repo = typeof payload.repo === "string" ? payload.repo : options.repo ?? null;
     const pr = Number.isInteger(payload.pr) ? payload.pr : options.pr ?? null;
-    return { ...validatePrBodySpec({ body }), repo, pr };
+    return { ...validatePrBodySpec({ body, expectedIssue: options.expectedIssue ?? null }), repo, pr };
   }
   parseRepoSlug(options.repo);
   const body = await fetchPrBody({ repo: options.repo, pr: options.pr }, { env, ghCommand });
-  return { ...validatePrBodySpec({ body }), repo: options.repo, pr: options.pr };
+  return {
+    ...validatePrBodySpec({ body, expectedIssue: options.expectedIssue ?? null }),
+    repo: options.repo,
+    pr: options.pr,
+  };
 }
 
 export async function runCli(
