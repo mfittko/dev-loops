@@ -31,6 +31,34 @@ test("decideBashGate denies ungated gh pr merge in the target repo", () => {
   assert.match(d.reason, /#1/);
 });
 
+// #1172: PreToolUse blocks pre-execution, so a compound write+merge command never runs the write —
+// the ledger looks like it "vanished". Hint the split when the command also writes gate evidence.
+test("decideBashGate hints the write/merge split when the compound command also writes gate evidence", () => {
+  const d = decideBashGate({
+    command: "node scripts/loop/write-gate-findings-log.mjs --pr 1 && gh pr merge 1 --squash",
+    repoSlug: TARGET,
+    gatePassed: false,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr merge blocked/);
+  assert.match(d.reason, /hooks evaluate before the command runs/);
+
+  const d2 = decideBashGate({
+    command: "node scripts/github/upsert-checkpoint-verdict.mjs --pr 1 && gh pr merge 1",
+    repoSlug: TARGET,
+    gatePassed: false,
+  });
+  assert.equal(d2.decision, "deny");
+  assert.match(d2.reason, /hooks evaluate before the command runs/);
+});
+
+test("decideBashGate keeps the standard message for a bare gh pr merge (no evidence write)", () => {
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr merge blocked/);
+  assert.doesNotMatch(d.reason, /hooks evaluate before the command runs/);
+});
+
 test("decideBashGate allows gh pr merge when pre-merge evidence passed", () => {
   assert.equal(
     decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: true }).decision,
