@@ -34,3 +34,4 @@ Use `&lt;!-- rule-ref: RULE-ID --&gt;` next to a cross-reference when a machine-
 ## Cross-references
 
 - [Stop conditions](stop-conditions.md)
+- [State-machine conformance + invariant harness](../../scripts/docs/validate-state-machine-conformance.mjs) — L2 (doc ↔ code) conformance and L3 (completeness/safety/liveness) graph invariants; its header comment documents the registration path for adding a machine
