@@ -8,6 +8,7 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, parse as parsePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildStateAtlasHtml } from './build-state-atlas.mjs';
 
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -46,10 +47,15 @@ export const DECKS = [
 // Resolve a deck's published filename: distinct outFile when set, else file.
 const deckOut = (deck) => deck.outFile ?? deck.file;
 
+// The State atlas: a generated page (site/state-atlas.html) rendering every
+// dev-loops state machine as mermaid diagrams straight from the code's tables.
+export const STATE_ATLAS = { file: 'state-atlas.html', label: 'State atlas' };
+
 // The other resources linked from the navigation, in order.
 export const NAV_LINKS = [
   ...ARTICLES.map((a) => ({ file: a.file, label: a.navLabel })),
   ...DECKS.map((d) => ({ file: deckOut(d), label: d.navLabel })),
+  { file: STATE_ATLAS.file, label: STATE_ATLAS.label },
 ];
 
 // Nav styling, appended to each article page's own <style> block so it reuses
@@ -144,9 +150,25 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
     await cp(join(decksDir, deck.file), join(out, deckOut(deck)));
   }
 
+  // State atlas: generated from the core state tables at build time, then given
+  // the same shared nav as the article pages so it can never drift from the code.
+  await writeFile(join(out, STATE_ATLAS.file), injectNav(buildStateAtlasHtml(), repoUrl), 'utf8');
+
+  // Vendored mermaid runtime the atlas page references (Pages has no CSP, so we
+  // load it as an external asset rather than inlining ~3MB into the page).
+  const mermaidSrc = join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js');
+  await mkdir(join(out, 'assets'), { recursive: true });
+  await cp(mermaidSrc, join(out, 'assets', 'mermaid.min.js'));
+
   return {
     out,
-    files: ['index.html', ...ARTICLES.map((a) => a.file), ...DECKS.map((d) => deckOut(d))],
+    files: [
+      'index.html',
+      ...ARTICLES.map((a) => a.file),
+      ...DECKS.map((d) => deckOut(d)),
+      STATE_ATLAS.file,
+      'assets/mermaid.min.js',
+    ],
   };
 }
 

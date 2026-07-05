@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, NAV_LINKS } from '../../scripts/pages/build-site.mjs';
+import { buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
 
 // A deck publishes under its outFile when set (the deep-dive article and deck
 // share the source basename), else its source file name.
@@ -57,11 +57,54 @@ test('build-site: index is the intro article, all resources published, nav links
 
     assert.deepEqual(
       result.files.sort(),
-      ['index.html', ...ARTICLES.map((a) => a.file), ...DECKS.map((d) => deckOut(d))].sort(),
+      [
+        'index.html',
+        ...ARTICLES.map((a) => a.file),
+        ...DECKS.map((d) => deckOut(d)),
+        STATE_ATLAS.file,
+        'assets/mermaid.min.js',
+      ].sort(),
     );
   } finally {
     await rm(out, { recursive: true, force: true });
   }
+});
+
+test('build-site: state atlas is generated from the code tables, navigable, with the mermaid asset', async () => {
+  const out = await mkdtemp(join(tmpdir(), 'pages-atlas-'));
+  try {
+    await buildSite({ outDir: out });
+
+    // The vendored mermaid runtime is copied so the atlas page can load it.
+    await stat(join(out, 'assets', 'mermaid.min.js')); // throws if missing
+
+    const atlas = await readFile(join(out, STATE_ATLAS.file), 'utf8');
+
+    // The atlas carries the shared nav (so it is part of the navigable set) and
+    // references the mermaid asset rather than inlining it.
+    assert.ok(atlas.includes('class="site-nav"'), 'atlas carries the nav bar');
+    assert.ok(atlas.includes('src="assets/mermaid.min.js"'), 'atlas references the mermaid asset');
+
+    // Mermaid sources emitted straight from the code tables — sentinel states
+    // from each of the four core tables must appear verbatim. `round_cap_clean_fallback`
+    // is a terminal copilot state, so it renders as a `-->` edge to [*].
+    assert.ok(atlas.includes('round_cap_clean_fallback -->'), 'copilot STATE/TRANSITIONS rendered');
+    assert.ok(atlas.includes('waiting_for_review_request'), 'reviewer REVIEWER_STATE rendered');
+    assert.ok(atlas.includes('handoff_to_copilot_loop'), 'outer OUTER_STATE rendered');
+    assert.ok(atlas.includes('copilot_pr_followup'), 'public dev-loop gate contract rendered');
+
+    // The nav on the landing page links the atlas as a top-level menu item.
+    const index = await readFile(join(out, 'index.html'), 'utf8');
+    assert.ok(index.includes(`href="${STATE_ATLAS.file}"`), 'landing nav links the atlas');
+    assert.ok(index.includes(`>${STATE_ATLAS.label}</a>`), 'landing nav shows the atlas label');
+  } finally {
+    await rm(out, { recursive: true, force: true });
+  }
+});
+
+test('build-state-atlas: generator is pure and deterministic (identical bytes across builds)', async () => {
+  const { buildStateAtlasHtml } = await import('../../scripts/pages/build-state-atlas.mjs');
+  assert.equal(buildStateAtlasHtml(), buildStateAtlasHtml(), 'atlas HTML is byte-identical across calls');
 });
 
 test('injectNav fails closed when a page lacks the expected structure', () => {
