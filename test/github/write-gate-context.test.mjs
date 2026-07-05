@@ -928,22 +928,28 @@ test("CLI without --base emits an explicit thin-briefing posture, not a silent f
 test("CLI --base <ref> that fails to resolve fails closed (no artifact written, non-zero exit)", async () => {
   const { repoRoot, headSha } = await makeBaseDiffRepo();
   try {
+    // Nested try/finally: main() sets the GLOBAL process.exitCode on fail-closed,
+    // so restore it even if an assertion below throws — otherwise the mutated
+    // global leaks into subsequent tests and cascades false failures.
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
-    await main([
-      "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate",
-      "--head-sha", headSha,
-      "--angles", '["scope"]',
-      "--base", "this-ref-does-not-exist",
-    ], { repoRoot });
+    try {
+      await main([
+        "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate",
+        "--head-sha", headSha,
+        "--angles", '["scope"]',
+        "--base", "this-ref-does-not-exist",
+      ], { repoRoot });
 
-    assert.equal(process.exitCode, 1, "fails closed with a non-zero exit rather than degrading to a thin bundle");
-    process.exitCode = priorExitCode;
+      assert.equal(process.exitCode, 1, "fails closed with a non-zero exit rather than degrading to a thin bundle");
 
-    const artifact = await readGateContext({
-      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha,
-    }, { repoRoot });
-    assert.equal(artifact, null, "no artifact written on a fail-closed --base resolution failure");
+      const artifact = await readGateContext({
+        repo: "owner/repo", pr: 42, gate: "draft_gate", headSha,
+      }, { repoRoot });
+      assert.equal(artifact, null, "no artifact written on a fail-closed --base resolution failure");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
