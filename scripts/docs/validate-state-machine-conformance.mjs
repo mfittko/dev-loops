@@ -61,7 +61,7 @@ import { fileURLToPath } from "node:url";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
-import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from "../pages/build-state-atlas.mjs";
+import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from "./_pr-lifecycle-tables.mjs";
 
 const USAGE = `Usage: validate-state-machine-conformance.mjs [--help]
 
@@ -183,7 +183,9 @@ export function checkSafetyRules(observations, safetyRules) {
  * checks. `transitionChecks` is a Map keyed by `"from->to"`. Bidirectional:
  * a doc transition with no check is "missing"; a check key no doc transition
  * references is "unreferenced" (a stale check, or a code-side transition the
- * doc dropped) — both fail.
+ * doc dropped) — both fail. A `verify()` that throws is caught per-transition
+ * and reported as "divergent" (fail-closed) rather than aborting the run, so
+ * every other transition still gets checked and surfaces in the same report.
  */
 export function compareDocCodeTransitions(docTransitions, transitionChecks) {
   const results = [];
@@ -198,9 +200,16 @@ export function compareDocCodeTransitions(docTransitions, transitionChecks) {
       continue;
     }
     if (check.status === "verified") {
-      const outcome = check.verify();
-      if (outcome && outcome.result !== undefined) observations.push(outcome.result);
-      results.push({ from, to, status: outcome.ok ? "verified" : "divergent", detail: outcome.detail });
+      // A throwing verify() is itself a divergence (fail-closed), not a reason to abort the
+      // whole run: report this transition as divergent with the error and keep checking the
+      // rest so other missing/unreferenced edges still surface in the same report.
+      try {
+        const outcome = check.verify();
+        if (outcome && outcome.result !== undefined) observations.push(outcome.result);
+        results.push({ from, to, status: outcome.ok ? "verified" : "divergent", detail: outcome.detail });
+      } catch (err) {
+        results.push({ from, to, status: "divergent", detail: `verify() threw: ${err.message}` });
+      }
     } else {
       results.push({ from, to, status: check.status, issue: check.issue ?? null, note: check.note ?? null });
     }
@@ -263,9 +272,10 @@ export function runMachineConformance(machine) {
 // bullets, parsed at load time via parseRequiredTransitions so a doc edit is
 // immediately visible to the harness. The two abstract (non-backtick) rows are
 // mapped explicitly to their concrete representatives below. The parsed table
-// is additionally asserted to bind 1:1 to build-state-atlas.mjs's
-// PR_LIFECYCLE_TRANSITIONS (the state-atlas diagram source), so that constant
-// cannot drift from the doc either.
+// is additionally asserted to bind 1:1 to _pr-lifecycle-tables.mjs's
+// PR_LIFECYCLE_TRANSITIONS (the shared pure-data table also consumed by
+// build-state-atlas.mjs's diagram), so that constant cannot drift from the doc
+// either.
 //
 // Code side: packages/core/src/loop/pr-gate-coordination.mjs exports
 // PR_CHECKPOINT / PR_CHECKPOINT_ACTION but no state-to-state table in the

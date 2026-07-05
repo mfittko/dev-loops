@@ -79,29 +79,33 @@ test("checkSafetyRules fails (negative case) on a rule-violating observation", (
 
 // ---------------------------------------------------------------------------
 // AC4: registration-only extensibility — a second machine needs zero engine
-// changes, only a `registerMachine()` call with its own doc/code tables.
+// changes: runMachineConformance() takes a machine object directly, so a demo
+// machine can be checked without registering it into the shared module-level
+// registry (registerMachine() has no unregister; leaking a demo entry there
+// would make this test's outcome depend on run order relative to any other
+// test importing this module in the same process).
 // ---------------------------------------------------------------------------
 
-test("registerMachine + runMachineConformance supports a second machine with no engine changes", () => {
+test("runMachineConformance supports a second machine with no engine changes and no registration", () => {
   const before = getRegisteredMachines().length;
   const demoChecks = new Map([
     ["start->end", { status: "verified", verify: () => ({ ok: true, detail: "demo", result: { demo: true } }) }],
   ]);
-  const demoMachine = registerMachine({
+  const demoMachine = {
     name: "demo-extensibility-machine",
     states: ["start", "end"],
     terminalStates: ["end"],
     transitions: [["start", "end"]],
     docTransitions: [["start", "end"]],
     transitionChecks: demoChecks,
-  });
+  };
 
-  assert.equal(getRegisteredMachines().length, before + 1);
   const report = runMachineConformance(demoMachine);
   assert.equal(report.ok, true);
   assert.equal(report.completeness.ok, true);
   assert.equal(report.liveness.ok, true);
   assert.equal(report.conformance.ok, true);
+  assert.equal(getRegisteredMachines().length, before, "the demo machine must not leak into the shared registry");
 });
 
 // ---------------------------------------------------------------------------
@@ -129,6 +133,21 @@ test("compareDocCodeTransitions fails (mutation test) when the doc table is doct
   assert.equal(report.results[0].status, "missing");
 });
 
+test("compareDocCodeTransitions fails closed (not throws) when a check's verify() throws, and still checks the rest", () => {
+  const checks = new Map([
+    ["a->b", { status: "verified", verify: () => { throw new Error("boom"); } }],
+    ["b->c", { status: "verified", verify: () => ({ ok: true, result: {} }) }],
+  ]);
+  const report = compareDocCodeTransitions([["a", "b"], ["b", "c"]], checks);
+  assert.equal(report.ok, false);
+  const thrown = report.results.find((r) => r.from === "a" && r.to === "b");
+  assert.equal(thrown.status, "divergent");
+  assert.match(thrown.detail, /boom/);
+  // The throwing check must not abort the run: the other transition still resolves.
+  const other = report.results.find((r) => r.from === "b" && r.to === "c");
+  assert.equal(other.status, "verified");
+});
+
 test("compareDocCodeTransitions fails when the code check itself reports divergence", () => {
   const checks = new Map([
     ["a->b", { status: "verified", verify: () => ({ ok: false, detail: "code disagrees", result: { ok: false } }) }],
@@ -141,7 +160,8 @@ test("compareDocCodeTransitions fails when the code check itself reports diverge
 // ---------------------------------------------------------------------------
 // Reference machine: pr-gate-coordination, wired against the real
 // skills/docs/pr-lifecycle-contract.md-derived table (imported via
-// scripts/pages/build-state-atlas.mjs) and the real exported
+// scripts/docs/_pr-lifecycle-tables.mjs, the shared pure-data module also used
+// by scripts/pages/build-state-atlas.mjs) and the real exported
 // evaluatePrGateCoordination function.
 // ---------------------------------------------------------------------------
 

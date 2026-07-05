@@ -15,6 +15,7 @@ import { STATE, TRANSITIONS } from '../../packages/core/src/loop/copilot-loop-st
 import { REVIEWER_STATE, REVIEWER_TRANSITIONS } from '../../packages/core/src/loop/reviewer-loop-state.mjs';
 import { OUTER_STATE, OUTER_TRANSITIONS } from '../../packages/core/src/loop/conductor-routing.mjs';
 import { PUBLIC_DEV_LOOP_GATE_CONTRACT } from '../../packages/core/src/loop/public-dev-loop-routing-contract.mjs';
+import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from '../docs/_pr-lifecycle-tables.mjs';
 
 // Classify a state/gate id by name into one of four visual classes. Colors are
 // drawn from the site's own dark palette (accent violet, kicker blue,
@@ -108,49 +109,13 @@ const gateDiagram = renderGateFlowchart(PUBLIC_DEV_LOOP_GATE_CONTRACT);
 // --- Statically-authored diagrams (documented, table-less sources) ---
 
 // PR lifecycle: the 13-state vocabulary + required transitions from
-// skills/docs/pr-lifecycle-contract.md.
-// Exported (not just local) so the L2/L3 state-machine conformance harness
-// (scripts/docs/validate-state-machine-conformance.mjs) can reuse this same
-// hand-derived doc table as its "doc side" for the pr-gate-coordination
-// reference machine, instead of re-deriving it — see that harness's header
-// comment for the registration path.
-export const PR_LIFECYCLE_STATES = [
-  'draft_local_review_gate',
-  'draft_local_remediation',
-  'ready_state_needs_copilot_request',
-  'waiting_for_copilot_review',
-  'copilot_feedback_remediation',
-  'copilot_reply_resolve_pending',
-  'merge_conflict_resolution',
-  'final_local_preapproval_gate',
-  'final_gate_remediation',
-  'waiting_for_human_pr_approval',
-  'waiting_for_merge',
-  'terminal_slice_complete',
-  'stopped_needs_user_decision',
-];
-export const PR_LIFECYCLE_TRANSITIONS = [
-  ['draft_local_review_gate', 'draft_local_remediation'],
-  ['draft_local_review_gate', 'ready_state_needs_copilot_request'],
-  ['draft_local_review_gate', 'stopped_needs_user_decision'],
-  ['draft_local_remediation', 'draft_local_review_gate'],
-  ['ready_state_needs_copilot_request', 'waiting_for_copilot_review'],
-  ['ready_state_needs_copilot_request', 'stopped_needs_user_decision'],
-  ['waiting_for_copilot_review', 'copilot_feedback_remediation'],
-  ['copilot_feedback_remediation', 'copilot_reply_resolve_pending'],
-  ['copilot_reply_resolve_pending', 'ready_state_needs_copilot_request'],
-  ['waiting_for_copilot_review', 'merge_conflict_resolution'],
-  ['merge_conflict_resolution', 'waiting_for_copilot_review'],
-  ['waiting_for_copilot_review', 'final_local_preapproval_gate'],
-  ['final_local_preapproval_gate', 'final_gate_remediation'],
-  ['final_local_preapproval_gate', 'waiting_for_human_pr_approval'],
-  ['final_gate_remediation', 'final_local_preapproval_gate'],
-  ['waiting_for_human_pr_approval', 'waiting_for_merge'],
-  ['waiting_for_human_pr_approval', 'draft_local_review_gate'],
-  ['waiting_for_merge', 'terminal_slice_complete'],
-  ['terminal_slice_complete', '[*]'],
-  ['stopped_needs_user_decision', '[*]'],
-];
+// skills/docs/pr-lifecycle-contract.md, imported from the shared pure-data
+// module (see scripts/docs/_pr-lifecycle-tables.mjs) and re-exported here so
+// this module's public surface is unchanged. The L2/L3 state-machine
+// conformance harness (scripts/docs/validate-state-machine-conformance.mjs)
+// imports the same shared module directly rather than through this one, so it
+// never pulls in this page generator's diagram-rendering work at load time.
+export { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS };
 const prLifecycleDiagram = renderStateDiagram(PR_LIFECYCLE_TRANSITIONS, PR_LIFECYCLE_STATES);
 
 // Release pipeline: the fail-closed gate chain from .github/workflows/release.yml.
