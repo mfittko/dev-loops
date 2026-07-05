@@ -170,9 +170,9 @@ Clean up promptly after merge so stale worktrees do not accumulate under
 
 <!-- rule: WORKTREE-FALLBACK -->
 `WORKTREE-FALLBACK`: If `git worktree` is unavailable or the local environment
-cannot create a worktree, say so explicitly and use a dedicated branch in the
-current checkout instead of failing closed — treated as an exception path, never
-the normal default for mutating local work.
+cannot create a worktree, the agent MUST say so explicitly and MUST use a
+dedicated branch in the current checkout instead of failing closed — an
+exception path that MUST NOT become the normal default for mutating local work.
 
 ## Non-goals
 
