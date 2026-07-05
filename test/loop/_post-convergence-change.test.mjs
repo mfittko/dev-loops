@@ -8,8 +8,14 @@ import { writeGhStub } from "../_helpers.mjs";
 import {
   detectPostConvergenceSignificantChange,
   getLatestSubmittedCopilotReviewHeadSha,
+  isCommentOnlyFileChange,
   isTrivialDocumentationOnlyPath,
 } from "../../scripts/loop/_post-convergence-change.mjs";
+
+// Minimal unified-diff patch builder: each line is prefixed with +/- (added/removed).
+function patchOf(...lines) {
+  return ["@@ -1,3 +1,3 @@", ...lines].join("\n");
+}
 
 const COPILOT = "copilot-pull-request-reviewer[bot]";
 
@@ -117,6 +123,77 @@ test("additions/deletions fallback aggregates when file.changes is non-finite", 
   assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [{ filename: "a.mjs", additions: 15, deletions: 10 }] }) }), true);
   // changes present but small; single file, no files>=2 → false
   assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [{ filename: "a.mjs", additions: 3, deletions: 1 }] }) }), false);
+});
+
+// --- content-aware significance filter (#1137) ---
+
+test("comment-only .mjs change (every changed line blank/comment) → NOT significant", async () => {
+  // 40 changed lines, but all are JSDoc/inline comments → filtered out before thresholds.
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/loop/foo.mjs", changes: 40, patch: patchOf(
+      "+// tweak the wording",
+      "-// old wording",
+      "+/* block open */",
+      "+ * jsdoc continuation",
+      "+ */",
+      "+",
+    ) },
+  ] }) }), false);
+});
+
+test("mixed change (one real code line among comments) → significant", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/loop/foo.mjs", changes: 20, patch: patchOf(
+      "+// a comment",
+      "+const x = compute(); // note",
+    ) },
+  ] }) }), true);
+});
+
+test("patch field MISSING on a non-doc code file → significant (fail toward review)", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "packages/core/src/loop/foo.mjs", changes: 40 },
+  ] }) }), true);
+});
+
+test("multi-file: 2 files both comment-only → NOT significant", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "a.mjs", changes: 30, patch: patchOf("+// a", "-// b") },
+    { filename: "b.ts", changes: 30, patch: patchOf("+// c", "-// d") },
+  ] }) }), false);
+});
+
+test("multi-file: one comment-only + one small code file → NOT significant (only 1 code file <20 remains)", async () => {
+  // The comment-only file is filtered out; the surviving code file has <20 lines
+  // and is the only remaining file, so neither the size nor files>=2 gate trips.
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "comments.mjs", changes: 30, patch: patchOf("+// a", "-// b") },
+    { filename: "code.mjs", changes: 5, patch: patchOf("+const x = 1;") },
+  ] }) }), false);
+});
+
+test("multi-file: one comment-only + one large code file (>=20) → significant", async () => {
+  assert.equal(await runWithCompare({ stdout: JSON.stringify({ files: [
+    { filename: "comments.mjs", changes: 30, patch: patchOf("+// a", "-// b") },
+    { filename: "code.mjs", changes: 25, patch: patchOf("+const x = doWork();") },
+  ] }) }), true);
+});
+
+// --- isCommentOnlyFileChange unit edges ---
+
+test("isCommentOnlyFileChange: conservative edges", () => {
+  // all comments/blank → true
+  assert.equal(isCommentOnlyFileChange({ filename: "x.ts", patch: patchOf("+// hi", "-/* bye */", "+ * cont", "+") }), true);
+  // mixed code+comment on one line → false
+  assert.equal(isCommentOnlyFileChange({ filename: "x.ts", patch: patchOf("+foo(); // note") }), false);
+  // missing patch → false (treated as code)
+  assert.equal(isCommentOnlyFileChange({ filename: "x.ts" }), false);
+  // un-classifiable extension → false
+  assert.equal(isCommentOnlyFileChange({ filename: "x.py", patch: patchOf("+# comment") }), false);
+  // string literal starting with // is the known ceiling → mis-read as comment
+  assert.equal(isCommentOnlyFileChange({ filename: "x.mjs", patch: patchOf('+// looks like a comment') }), true);
+  // no parseable changed lines (context only) → false (ambiguous → code)
+  assert.equal(isCommentOnlyFileChange({ filename: "x.mjs", patch: "@@ -1,1 +1,1 @@\n unchanged context" }), false);
 });
 
 // --- helper units ---
