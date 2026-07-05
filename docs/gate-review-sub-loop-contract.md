@@ -120,9 +120,18 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     emit a full-looking bundle: it warns and stamps `scope.diffSource: "none"` — an
     explicit **thin briefing** (`scope.diffPath: null`, `scope.changedFiles: []`, no
     `adjacentCode`) that reviewers detect and fall back from (re-derive via `git diff`). A
-    `--base` that fails to resolve fails closed (non-zero exit, no artifact) rather than
-    degrading to a thin briefing. Programmatic `buildGateContext({ diff })` callers are
-    unaffected and omit `scope.diffSource` entirely.
+    `--base` that fails to resolve (its `git diff --name-status` fails) fails closed
+    (non-zero exit, no artifact) rather than degrading to a thin briefing. Programmatic
+    `buildGateContext({ diff })` callers are unaffected and omit `scope.diffSource` entirely.
+  - **Partial `"base"` (best-effort full-diff).** `scope.diffSource: "base"` can co-occur
+    with `scope.diffPath: null`: the required `git diff --name-status` succeeded (so
+    `scope.changedFiles` + `adjacentCode` are present — it IS a base-derived bundle) but the
+    best-effort FULL-diff capture degraded (e.g. output exceeded the buffer, a render error),
+    so no persisted `.diff` was written. Reviewers MUST therefore key their diff-fallback on
+    `scope.diffPath` (null → re-derive via `git diff`), NOT on `scope.diffSource`:
+    `diffSource` distinguishes a base-derived bundle (`"base"`) from a thin briefing
+    (`"none"`), while `diffPath` independently signals whether the persisted full diff is
+    available.
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,

@@ -1019,6 +1019,10 @@ test("CLI --base degrades to scope.diffPath=null but STILL writes the artifact w
     }, { repoRoot });
     assert.ok(artifact, "artifact still written despite the .diff write failure");
     assert.equal(artifact.scope.diffPath, null, "diffPath degrades to null on write failure");
+    // Partial "base": the CLI still stamps diffSource="base" (name-status succeeded, so it
+    // IS a base-derived bundle) even though the persisted full diff is absent. Reviewers key
+    // their diff-fallback on diffPath (null), NOT on diffSource. Locked in end-to-end here.
+    assert.equal(artifact.scope.diffSource, "base", "diffSource stays 'base' when only the full-diff persist degrades");
     // changedFiles (from name-status) and adjacentCode are unaffected by the diff-write failure.
     assert.deepEqual(artifact.scope.changedFiles, ["src/changed.mjs"]);
     assert.ok(artifact.adjacentCode, "adjacentCode still built from changedFiles");
@@ -1068,10 +1072,12 @@ test("captureDiffFromBase: --name-status failure fails closed (throws)", async (
   }
 });
 
-test("CLI --base with a failing full diff still writes the artifact (changedFiles + adjacentCode present, diffPath null, diffSource stays 'base')", async () => {
-  // Downstream proof of the best-effort split: an empty diffOutput (what a failed
-  // full-diff capture returns) leaves diffPath null while changedFiles +
-  // adjacentCode are still built, and the posture marker stays "base".
+test("buildGateContext with an empty diffOutput leaves diffPath null but still builds changedFiles + adjacentCode, and (programmatic) omits diffSource", async () => {
+  // Downstream proof of the best-effort split at the LIBRARY layer: an empty
+  // diffOutput (what a failed full-diff capture returns) leaves diffPath null
+  // while changedFiles + adjacentCode are still built. Programmatic callers do
+  // NOT get a diffSource field — that posture marker is CLI-only (backward
+  // compat); the CLI-driven partial-"base" case is asserted separately above.
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-partial-"));
   try {
     const files = {
@@ -1098,6 +1104,8 @@ test("CLI --base with a failing full diff still writes the artifact (changedFile
       { repoRoot },
     );
     assert.equal(result.artifact.scope.diffPath, null);
+    // Programmatic callers omit diffSource entirely (CLI-only marker, backward compat).
+    assert.equal(result.artifact.scope.diffSource, undefined);
     assert.deepEqual(result.artifact.scope.changedFiles, ["src/changed.mjs"]);
     assert.ok(result.artifact.adjacentCode, "adjacentCode still built from changedFiles");
     const byPath = Object.fromEntries(result.artifact.adjacentCode.files.map((f) => [f.path, f]));
