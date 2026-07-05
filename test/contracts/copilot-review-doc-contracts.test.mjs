@@ -8,6 +8,7 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
+import { assertRuleOwned } from "./_rule-helpers.mjs";
 
 async function readCopilotSkillSurface() {
   const [skill, operationsDoc, intakeDoc] = await Promise.all([
@@ -18,10 +19,7 @@ async function readCopilotSkillSurface() {
   return [skill, operationsDoc, intakeDoc].join("\n\n");
 }
 test("copilot review gates keep phase-specific angle ownership in one canonical internal skill", async () => {
-  const [copilotPrFollowupSkill, gateContract] = await Promise.all([
-    readRepo("skills/copilot-pr-followup/SKILL.md"),
-    readRepo("docs/gate-review-comment-contract.md"),
-  ]);
+  const copilotPrFollowupSkill = await readRepo("skills/copilot-pr-followup/SKILL.md");
   const devLoopStep7Match = copilotPrFollowupSkill.match(/## Step 7: Pi review\/fix follow-up loop[\s\S]*?(?=\n## Step 8|$)/);
   const devLoopStep7 = devLoopStep7Match ? devLoopStep7Match[0] : "";
   assert.ok(devLoopStep7.length > 0, "copilot-pr-followup Step 7 section not found");
@@ -33,7 +31,7 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
   assert.ok(devLoopPreApproval.length > 0, "copilot-pr-followup pre-approval gate section not found inside Step 7");
   assert.match(copilotPrFollowupSkill, /canonical internal `copilot_pr_followup` route behind the public `dev-loop` façade/i);
   assert.match(copilotPrFollowupSkill, /canonical internal owner of the shared post-PR mechanics/i);
-  assert.match(gateContract, /visible checkpoint verdict comment evidence contract only/i);
+  assertRuleOwned("GATE-COMMENT-SCOPE-ONLY", "docs/gate-review-comment-contract.md");
   const expectedDevLoopShape = [/Gate name:/i, /Trigger \/ boundary:/i, /Review angles:/i, /Pass criteria:/i, /Next step after passing:/i];
   for (const [label, section] of [
     ["copilot-pr-followup draft gate", devLoopDraftGate],
@@ -397,46 +395,21 @@ test("docs index separates active docs and presentations", async () => {
   assert.match(content, /presentations\/applied-dev-loops-presentation\.md/i);
   assert.match(content, /presentations\/style\.css/i);
 });
-test("checkpoint verdict comment contract documents required fields, verdict values, rerun rules, and fail-closed behavior", async () => {
-  const contractContent = await readRepo("docs/gate-review-comment-contract.md");
-  assert.match(contractContent, /visible checkpoint verdict comment evidence contract only/i);
-  assert.match(contractContent, /does[\s\S]*not restate the full PR follow-up procedure/i);
-  // Required fields
-  assert.match(contractContent, /gate name/i);
-  assert.match(contractContent, /head SHA/i);
-  assert.match(contractContent, /verdict/i);
-  assert.match(contractContent, /\bclean\b/);
-  assert.match(contractContent, /findings_present/);
-  assert.match(contractContent, /\bblocked\b/);
-  assert.match(contractContent, /findings summary|no issues found/i);
-  assert.match(contractContent, /next action/i);
-  assert.match(contractContent, /stay draft and fix/i);
-  assert.match(contractContent, /rerun gate/i);
-  assert.match(contractContent, /mark ready for review/i);
-  assert.match(contractContent, /await final human approval/i);
-  // Both gate names must appear
-  assert.match(contractContent, /draft_gate/);
-  assert.match(contractContent, /pre_approval_gate/);
-  // Rerun rules: same-head idempotent, new-head → new comment
-  assert.match(contractContent, /same.head/i);
-  assert.match(contractContent, /idempotent/i);
-  assert.match(contractContent, /new.head/i);
-  assert.match(contractContent, /new.*comment|comment.*new/i);
-  assert.match(contractContent, /command names.*pass.fail status|pass.fail status.*command names/i);
-  assert.match(contractContent, /aggregate counts/i);
-  assert.match(contractContent, /CI\/check status|current.head CI/i);
-  assert.match(contractContent, /raw passing log streams|raw passing test output/i);
-  assert.match(contractContent, /deterministic retained-prefix length/i);
-  assert.match(contractContent, /focused relevant excerpt/i);
-  // Findings-specific and fail-closed behavior
-  assert.match(contractContent, /stays draft and fixes are required before retrying/i);
-  assert.match(contractContent, /follow-up fixes are required before final approval/i);
-  assert.match(contractContent, /fail.closed|cannot be posted/i);
-  assert.match(contractContent, /do not run `gh pr ready`|do not mark the PR ready/i);
-  assert.match(contractContent, /do not declare final.approval readiness/i);
-  // Draft vs pre-approval distinction must stay explicit
-  assert.match(contractContent, /A clean `draft_gate` comment does \*\*not\*\* satisfy `pre_approval_gate` requirements/i);
-  assert.match(contractContent, /A clean `pre_approval_gate` comment does \*\*not\*\* retroactively replace the required `draft_gate` evidence/i);
+test("checkpoint verdict comment contract owns its comment-field rules by ID (single owner)", () => {
+  const ownerPath = "docs/gate-review-comment-contract.md";
+  for (const id of [
+    "GATE-COMMENT-SCOPE-ONLY",
+    "GATE-COMMENT-REQUIRED-FIELDS",
+    "GATE-COMMENT-VERDICT-VALUES",
+    "GATE-COMMENT-RERUN-RULES",
+    "GATE-COMMENT-FAIL-CLOSED",
+    "GATE-COMMENT-NON-SUBSTITUTION",
+    "GATE-COMMENT-VALIDATION-REPORTING",
+    "GATE-COMMENT-DRAFT-REQUIREMENTS",
+    "GATE-COMMENT-PREAPPROVAL-REQUIREMENTS",
+  ]) {
+    assertRuleOwned(id, ownerPath);
+  }
 });
 test("checkpoint verdict comment ownership stays explicit in the canonical internal skill file", async () => {
   const copilotPrFollowupSkill = await readRepo("skills/copilot-pr-followup/SKILL.md");

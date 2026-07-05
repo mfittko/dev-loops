@@ -15,6 +15,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { assertRuleOwned } from "./_rule-helpers.mjs";
+
 const contractUrl = new URL("../../docs/gate-review-sub-loop-contract.md", import.meta.url);
 
 // Strip markdown emphasis so "does **not** fork" reads as "does not fork".
@@ -57,11 +59,7 @@ test("gate-review sub-loop contract contains no positive 'fork' claim (#895)", a
   );
 });
 
-test("gate-review sub-loop contract explicitly describes the build-once neutral-bundle model (#895)", async () => {
-  const text = await readFile(contractUrl, "utf8");
-  // Must affirmatively describe the corrected model so the honesty fix is durable.
-  assert.match(text, /build once/i);
-  assert.match(text, /neutral context bundle/i);
-  assert.match(text, /seed(?:ed|s)?\b/i);
-  assert.match(text, /work-dedup/i);
+test("gate-review sub-loop contract owns the build-once neutral-bundle rule by ID (#895)", () => {
+  // The honesty fix (#895) is durable via single-owner rule ID, not phrase-pinned prose.
+  assertRuleOwned("GATE-EXEC-BUILD-ONCE-SEED", "docs/gate-review-sub-loop-contract.md");
 });

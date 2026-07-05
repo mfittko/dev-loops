@@ -1,6 +1,7 @@
 # PR lifecycle contract
 
-This document defines the deterministic **family-local PR lifecycle contract** for the GitHub/Copilot workflow family in `dev-loops`.
+Canonical owner for **PR state vocabulary** rules for the GitHub/Copilot workflow family
+in `dev-loops` — the deterministic family-local PR lifecycle contract.
 
 The canonical contract lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree.
 
@@ -38,23 +39,27 @@ It does not redefine helper transport mechanics, reviewer-loop internals, conduc
 
 ## Core rules
 
-- Exactly **one current lifecycle state** must apply at a time.
-- The lifecycle must fail closed when required evidence is missing, stale, ambiguous, or unparsable.
+<!-- rule: LIFECYCLE-ONE-STATE -->
+`LIFECYCLE-ONE-STATE`: Exactly **one current lifecycle state** MUST apply at a time.
+
+- The lifecycle MUST fail closed when required evidence is missing, stale, ambiguous, or unparsable (see [Fail-closed rules](#fail-closed-rules), `LIFECYCLE-FAIL-CLOSED`).
 - Every gate-crossing decision is for the **current PR head SHA**.
 - Draft existence alone is **not** draft-gate readiness.
-- A PR must clear the draft-stage gate for the current head before Copilot review may be requested.
+- A PR MUST clear the draft-stage gate for the current head before Copilot review may be requested.
 - Ready -> draft resets the lifecycle back into draft-stage gating.
 - A merge-blocking marker in the PR **title** (`WIP`/`[WIP]`/`DRAFT`/`DO NOT MERGE`/`🚧`, case-insensitive) blocks the draft -> ready transition and, for non-draft PRs, blocks entry to the pre-approval gate and final approval (`title_marker_blocked`). Markers are permitted only while the PR remains draft. See [Merge preconditions](merge-preconditions.md#title-markers).
 - Human approval / merge are explicit external waits, not hidden remediation states.
 
 ## Two required local gates
 
-Each gate runs an independent review chain with its own disposition ledger, review angles,
-and exit conditions. The chains are not interchangeable; see [Checkpoint Review Chain Contract](../../docs/gate-review-sub-loop-contract.md).
+Each gate runs an independent review chain (`GATE-EXEC-SEPARATE-CHAINS`); see
+[Checkpoint Review Chain Contract](../../docs/gate-review-sub-loop-contract.md). Every gate
+pass writes a durable disposition ledger (`GATE-EXEC-DISPOSITION-LEDGER`) before the
+visible comment defined by [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md).
 
 ### 1. `draft_gate`
 
-Applies while the PR is draft.
+<!-- term: gate:draft_gate --> Applies while the PR is draft.
 
 Purpose:
 - decide whether the current draft head is materially reviewable
@@ -64,8 +69,6 @@ Purpose:
 Boundary note:
 - `draft_gate` governs only the draft -> ready-for-review boundary for the reviewed head
 - a clean verdict requires no findings at any severity in the gate's `blockCleanOnFindingSeverities` (resolved from config via `resolveGateConfig(config, "draft").blockCleanOnFindingSeverities`)
-- every gate pass writes a durable disposition ledger via `write-gate-findings-log.mjs` under `tmp/gate-findings/`
-- visible comment schema/evidence rules stay in [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md)
 - `gates.draft.requireCi=false` does **not** relax `pre_approval_gate`; final approval and merge readiness still require green current-head CI
 
 ### 2. `pre_approval_gate`
@@ -77,9 +80,7 @@ This gate uses review angles resolved from config (`resolveGateAngles(config, "p
 Boundary note:
 - `pre_approval_gate` governs only final approval readiness for the reviewed head
 - a clean verdict requires no findings at any severity in the gate's `blockCleanOnFindingSeverities` (resolved from config via `resolveGateConfig(config, "preApproval").blockCleanOnFindingSeverities`)
-- every gate pass writes a durable disposition ledger via `write-gate-findings-log.mjs` under `tmp/gate-findings/`
 - non-draft PRs do not need visible `draft_gate` evidence to enter the post-draft review / `pre_approval_gate` lifecycle; only the draft -> ready transition depends on `draft_gate`
-- visible comment schema/evidence rules stay in [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md)
 
 ## Lifecycle states
 
@@ -87,19 +88,19 @@ The family-local lifecycle should be modeled in this vocabulary. These state ide
 
 | State | Meaning |
 |---|---|
-| `draft_local_review_gate` | draft PR is at the local draft-stage gate boundary |
-| `draft_local_remediation` | draft-stage findings require more local remediation while the PR remains draft |
-| `ready_state_needs_copilot_request` | draft gate is clear for the current head; Copilot request is the next legal step |
+| <!-- term: state:draft_local_review_gate --> `draft_local_review_gate` | draft PR is at the local draft-stage gate boundary |
+| <!-- term: state:draft_local_remediation --> `draft_local_remediation` | draft-stage findings require more local remediation while the PR remains draft |
+| <!-- term: state:ready_state_needs_copilot_request --> `ready_state_needs_copilot_request` | draft gate is clear for the current head; Copilot request is the next legal step |
 | `waiting_for_copilot_review` | Copilot request/re-review is observably in progress for the current head |
-| `copilot_feedback_remediation` | unresolved Copilot feedback exists; fixes are the next active step |
-| `copilot_reply_resolve_pending` | fixes were applied, but GitHub thread reply/resolve work still remains |
-| `merge_conflict_resolution` | current PR head conflicts with base or local reconcile is in progress; resolve conflicts before any further gate progression |
-| `final_local_preapproval_gate` | current-head post-Copilot convergence is ready for the final local gate |
-| `final_gate_remediation` | Pre-approval gate findings require more remediation after the final gate |
-| `waiting_for_human_pr_approval` | local gates are satisfied; waiting for explicit human approval |
-| `waiting_for_merge` | approval exists; waiting for merge / merge-triggering external action |
-| `terminal_slice_complete` | merged/closed and no further owned step remains |
-| `stopped_needs_user_decision` | blocked/ambiguous state requiring explicit human decision |
+| <!-- term: state:copilot_feedback_remediation --> `copilot_feedback_remediation` | unresolved Copilot feedback exists; fixes are the next active step |
+| <!-- term: state:copilot_reply_resolve_pending --> `copilot_reply_resolve_pending` | fixes were applied, but GitHub thread reply/resolve work still remains |
+| <!-- term: state:merge_conflict_resolution --> `merge_conflict_resolution` | current PR head conflicts with base or local reconcile is in progress; resolve conflicts before any further gate progression |
+| <!-- term: state:final_local_preapproval_gate --> `final_local_preapproval_gate` | current-head post-Copilot convergence is ready for the final local gate |
+| <!-- term: state:final_gate_remediation --> `final_gate_remediation` | Pre-approval gate findings require more remediation after the final gate |
+| <!-- term: state:waiting_for_human_pr_approval --> `waiting_for_human_pr_approval` | local gates are satisfied; waiting for explicit human approval |
+| <!-- term: state:waiting_for_merge --> `waiting_for_merge` | approval exists; waiting for merge / merge-triggering external action |
+| <!-- term: state:terminal_slice_complete --> `terminal_slice_complete` | merged/closed and no further owned step remains |
+| <!-- term: state:stopped_needs_user_decision --> `stopped_needs_user_decision` | blocked/ambiguous state requiring explicit human decision |
 
 ## Required transitions
 
@@ -145,7 +146,7 @@ At minimum, the lifecycle must enforce these transitions:
 - no Copilot request before clean current-head `draft_gate` evidence
 - no direct skip from fix-applied to Copilot re-request while reply/resolve remains incomplete
 - no reuse of ready-side or gate evidence after ready -> draft
-- a conflicted PR must not be treated as `waiting_for_human_pr_approval`, `waiting_for_merge`, or merge-ready, even if older gate comments and CI were previously green
+- <!-- rule: LIFECYCLE-CONFLICT-BLOCKS-PROGRESS --> `LIFECYCLE-CONFLICT-BLOCKS-PROGRESS`: a conflicted PR MUST NOT be treated as `waiting_for_human_pr_approval`, `waiting_for_merge`, or merge-ready, even if older gate comments and CI were previously green
 - no implicit fallthrough from approval/merge waits into remediation without a triggering event
 
 ## Remediation ownership boundary
@@ -164,7 +165,7 @@ Reviewer-loop reminder:
 
 ## Required evidence classes
 
-The lifecycle distinguishes two evidence classes:
+The lifecycle distinguishes three evidence classes:
 
 1. **observable GitHub state**
    - PR draft/non-draft/merged/closed state
@@ -176,10 +177,8 @@ The lifecycle distinguishes two evidence classes:
    - current-head `draft_gate` evidence when draft-gate clearance is required
    - current-head `pre_approval_gate` evidence when final approval readiness is required
 
-3. **durable disposition ledger**
-   - every gate pass logs findings and dispositions under `tmp/gate-findings/<repo-slug>/pr-<N>/`
-   - the ledger is the durable record of what each gate found and what was decided
-   - the visible PR comment is a summary; the disposition ledger is the complete record
+3. **durable disposition ledger** — owned by `GATE-EXEC-DISPOSITION-LEDGER`
+   (see [Checkpoint Review Chain Contract](../../docs/gate-review-sub-loop-contract.md#disposition-ledger-and-durable-logging))
 
 ### Precedence rules
 
@@ -189,7 +188,8 @@ The lifecycle distinguishes two evidence classes:
 
 ## Fail-closed rules
 
-The lifecycle must stop or reconcile rather than advance when:
+<!-- rule: LIFECYCLE-FAIL-CLOSED -->
+`LIFECYCLE-FAIL-CLOSED`: The lifecycle MUST stop or reconcile rather than advance when:
 - current head SHA cannot be determined
 - required current-head `draft_gate` evidence is missing
 - required current-head `pre_approval_gate` evidence is missing
@@ -207,4 +207,11 @@ In those cases the workflow must not:
 - request or re-request Copilot review
 - declare final approval readiness
 - silently fall through to a more permissive state
+
+## Cross-references
+
+- [Checkpoint Review Chain Contract](../../docs/gate-review-sub-loop-contract.md) — `GATE-EXEC-*` execution-shape rules
+- [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md) — `GATE-COMMENT-*` PR-comment field rules
+- [Merge preconditions](merge-preconditions.md)
+- [Contract style guide](contract-style-guide.md)
 
