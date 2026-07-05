@@ -15,10 +15,11 @@ hint — not as a database or transactional state store.
 - **Board state is authoritative when configured** — a configured board is the source of queue membership and ordering; the queue runner reconciles its `Next Up` items into `.pi/dev-loop-queue.json` before running. When no board is configured, the local queue file's entry order is used.
 - **No local queue file duplication** — the board drives membership/ordering while `.pi/dev-loop-queue.json` tracks entry lifecycle; the board does not introduce a second local file
 
-When a board **is** configured, `Next Up` is the authoritative, **fail-closed** pickup source:
-the driver picks only `Next Up` members by position and, if the board query fails, **stops**
-rather than falling back (see the pickup-behavior list below and the contract). When **no** board
-is configured, the queue falls back to its local entry order (`.pi/dev-loop-queue.json`).
+When a board **is** configured, `Next Up` is the authoritative, fail-closed pickup source per
+`QUEUE-NEXTUP-SOURCE` (see [How dev-loop treats board state](#how-dev-loop-treats-board-state)
+below and the [Projects Queue Contract](./projects-queue-contract.md#queue-pickup-ordering) for
+the full rule set). When **no** board is configured, the queue falls back to its local entry
+order (`.pi/dev-loop-queue.json`).
 
 ## How to opt in
 
@@ -130,44 +131,25 @@ Exit codes:
 
 ### Idempotent bootstrap exception
 
-The `dev-loops project ensure` bootstrap wrapper is the only helper allowed to **create**
-project structure. It safely re-runs: if the board and Status field already exist, it exits
-clean with the existing project details. Runtime helpers (list, move, add, reorder) never
-create or modify project/field structure.
+`QUEUE-BOOTSTRAP-ONLY-MUTATOR` (see the [Projects Queue Contract](./projects-queue-contract.md#idempotent-bootstrap-exception))
+applies here: `dev-loops project ensure` is the only helper allowed to **create** project
+structure, and it safely re-runs — if the board and Status field already exist, it exits clean
+with the existing project details.
 
 ## How dev-loop treats board state
 
 When a board is **configured** (`queue.projectNumber` or `queue.boardTitle` in `.devloops`),
-it is the **authoritative source of queue membership and ordering** — not just status:
-
-- **Configured and reachable**: `dev-loops queue run` resolves the board's `Next Up` column and
-  reconciles those items into `.pi/dev-loop-queue.json` (appending a queued entry for any
-  `Next Up` issue not already present) before running. `Next Up` is the **normative, fail-closed
-  pickup source**: the driver picks **only** `Next Up`
-  members, by POSITION ascending, and **never** auto-pulls from Backlog. **Backlog is
-  unprioritized intake and is never auto-picked** — promote an item to `Next Up` (the deliberate
-  prioritization step) to schedule it. Enqueue work for immediate pickup via
-  `dev-loops queue add ... --next-up` rather than hand-editing the queue file. See the
-  "Queue pickup ordering" section of `docs/projects-queue-contract.md` for the full MUST-level
-  contract (including the empty-`Next Up` fail-closed idle and why a single-issue/PR run — which
-  runs via the dev-loop routing path, not the queue driver — is unaffected by `Next Up` gating).
-- **Configured but unreachable (API error)**: the driver **fails closed** and stops with
-  `reason: "board-query-error"` (see the contract). It does **not** fall back to Backlog or to
-  local queue order — an outage never silently drains Backlog. (The separate membership-reconcile
-  pre-step is fail-open and attempts no board mutations on error, but the driver then re-queries
-  `Next Up` itself and stops on the same error, so the net outcome is a halted run, not a
-  local-order run.)
-- **Configured but `Next Up` is empty**: the run reports the canonical fail-closed outcome
-  `reason: "next-up-empty"`, message "queue empty — prioritize Backlog items into Next Up"
-  (the same string the driver emits, so operators see one message regardless of which layer
-  detects it), distinct from the unconfigured "Queue is empty".
-- **Configured but a `Next Up` target is missing locally**: when `Next Up` lists an item with no
-  matching entry in `.pi/dev-loop-queue.json` (reconcile not run/persisted, or the board changed
-  since reconcile), the driver **fails closed** and stops with `reason: "next-up-target-missing-locally"`
-  (the offending numbers in `missingTargets`) rather than silently skipping the item. Run membership
-  reconcile / re-add the items. No Backlog pickup.
-- **Not configured**: the queue falls back to its local entry order (`.pi/dev-loop-queue.json`),
-  and the legacy "Queue is empty" message applies when that file has no pending entries.
+it is the **authoritative source of queue membership and ordering** — not just status.
+`dev-loops queue run` resolves the board's `Next Up` column and reconciles those items into
+`.pi/dev-loop-queue.json` (appending a queued entry for any `Next Up` issue not already
+present) before running, then dispatches under `QUEUE-NEXTUP-SOURCE`. Enqueue work for
+immediate pickup via `dev-loops queue add ... --next-up` rather than hand-editing the queue
+file. See [Queue pickup ordering](./projects-queue-contract.md#queue-pickup-ordering) for the
+full fail-closed rule set (`QUEUE-NEXTUP-EMPTY-FAIL-CLOSED`, `QUEUE-BOARD-QUERY-FAIL-CLOSED`,
+`QUEUE-NEXTUP-TARGET-MISSING-FAIL-CLOSED`) — an outage or an empty `Next Up` halts the run
+rather than falling back to Backlog or local order. When **not** configured, the queue falls
+back to its local entry order (`.pi/dev-loop-queue.json`), and the legacy "Queue is empty"
+message applies when that file has no pending entries.
 
 > **Limitation:** the normative `Next Up` rule (and `--next-up`, `queue add`/`list`/`move`)
 > currently assumes the **default** `Next Up` display name. Renaming the logical column via
@@ -175,21 +157,13 @@ it is the **authoritative source of queue membership and ordering** — not just
 > ordering + projects-script layer, so a renamed Next Up column is not fully supported here.
 > Honoring `statusColumns` across those layers is tracked in #1098.
 
-Board state is read at dispatch time; the queue does not continuously sync local state to board
-state. When a board is configured, the pickup posture is deliberately **fail-closed**: a transient
-GitHub API outage or unresolvable board halts the run (`board-query-error`) rather than dispatching
-an unprioritized or stale set — an outage never silently drains Backlog. Only the **unconfigured**
-case falls back to local entry order.
-
 ### Live pickup path (`/loop-continue`)
 
-The operator-facing pickup path (bare `/loop-continue`) enforces the same `Next Up` source via
-`scripts/projects/resolve-active-board-item.mjs`. It continues the single **In Progress** item; if
-there is none, it picks the **HEAD of `Next Up` by position** (`source: "next-up"`). It **fails
-closed** when `Next Up` is empty (canonical `"queue empty — prioritize Backlog items into Next Up"`)
-and when there is more than one In-Progress item (pass an explicit `/loop-continue #N`). A `Next Up`
-query error is surfaced and stops the pickup. This path **never** pulls from Backlog. So the live
-continue path enforces `Next Up` just like the queue driver does for the orchestrated path.
+The operator-facing pickup path (bare `/loop-continue`) enforces `QUEUE-LIVE-PICKUP-SOURCE` via
+`scripts/projects/resolve-active-board-item.mjs`: it continues the single **In Progress** item;
+if there is none, it picks the **HEAD of `Next Up` by position** (`source: "next-up"`), failing
+closed on an empty `Next Up`, more than one In-Progress item (pass an explicit
+`/loop-continue #N`), or a `Next Up` query error — see the contract for the exact outcomes.
 
 ### Completion is reflected, never fabricated
 

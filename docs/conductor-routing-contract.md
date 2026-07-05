@@ -16,8 +16,10 @@ This contract starts **after**:
 - ownership/idempotency classification is optional (the `conductor-ownership.mjs` module and its issue #32 have been retired; designs archived in git history); when supplied, `ownershipState` activates routing branches such as `stay_with_current_live_owner`
 - the copilot/reviewer inner-loop state-machine outputs have been detected (from `copilot-loop-state.mjs` and `reviewer-loop-state.mjs`) and are interpreted under the broader family-local PR lifecycle semantics frozen in [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md)
 
-The routing outcome is derived **directly from normalized state inputs** — the evaluator does not accept a
-pre-computed outer-loop action. It is the routing authority, not a remapper.
+<!-- rule: ROUTING-EVALUATOR-AUTHORITY -->
+The evaluator **MUST** derive the routing outcome directly from normalized state inputs; it
+**MUST NOT** accept a pre-computed outer-loop action. It is the routing authority, not a
+remapper.
 
 ## Relationship to other contracts
 
@@ -94,24 +96,12 @@ supply it** — the orchestrator does not yet resolve conductor ownership (the c
 The ownership-aware routing branches (`stay_with_current_live_owner`, duplicate-owner reconcile) are fully
 implemented and unit-tested; they become active when a caller that has already resolved ownership supplies
 `ownershipState`.
-### Sufficient signals for direct routing
+### Direct routing vs reconcile
 
-The following input combinations are sufficient for direct routing (no reconcile needed):
-
-| Input condition | Direct routing allowed |
-|---|---|
-| All required fields present and valid | ✓ |
-| `ownershipState` is absent or any value except `"duplicate_local_owners"` | ✓ |
-
-### Inputs that require reconcile first
-
-| Input condition | Why reconcile is required |
-|---|---|
-| `target` is missing or malformed | Cannot route without resolved target identity |
-| `copilotState` is missing or empty | Cannot route without family-local state |
-| `reviewerState` is missing or empty | Cannot route without family-local state |
-| `ownershipState === "duplicate_local_owners"` | Multiple local owners; ownership must be resolved first |
-| Unrecognized combined state (not mapped by routing policy) | Ambiguous inputs; reconcile before routing |
+Direct routing (no reconcile) needs all required fields present and valid, with
+`ownershipState` absent or any value except `"duplicate_local_owners"`. Every other input
+combination reconciles first per `ROUTING-FAIL-CLOSED-RECONCILE`
+(see [Conflict and fail-closed rules](#conflict-and-fail-closed-rules)).
 
 ---
 
@@ -142,6 +132,22 @@ The following input combinations are sufficient for direct routing (no reconcile
 
 ---
 
+## Required transitions
+
+The outer-loop graph (`OUTER_STATE` / `OUTER_TRANSITIONS` in `conductor-routing.mjs`) is
+stateless per cycle: each evaluation is independent, so every non-terminal outcome can be
+followed, on the next cycle, by any of the 7 outcomes.
+
+- `continue_current_wait` -> any outer state
+- `handoff_to_copilot_loop` -> any outer state
+- `handoff_to_reviewer_loop` -> any outer state
+- `stay_with_current_live_owner` -> any outer state
+
+Terminal states (`stop_needs_human`, `done_terminal`, `needs_reconcile`) have no outgoing
+transitions — reaching one ends the current evaluation cycle.
+
+---
+
 ## Handoff envelope
 
 Every routing decision emits a `handoffEnvelope` with the following fields:
@@ -169,7 +175,8 @@ Every routing decision emits a `handoffEnvelope` with the following fields:
 
 ## Routing policy (priority order)
 
-The evaluator applies the following first-match-wins priority order:
+<!-- rule: ROUTING-PRIORITY-ORDER -->
+The evaluator **MUST** apply the following first-match-wins priority order:
 
 | Priority | Condition | Routing outcome |
 |---|---|---|
@@ -199,7 +206,8 @@ The evaluator applies the following first-match-wins priority order:
 
 **Reviewer active states needing local execution**: `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, `draft_review_ready`
 
-When `requiresLocalIsolation=true`, those local-execution states do **not** become terminal stop outcomes by themselves. The routing result stays on the owning loop family and carries `handoffEnvelope.requiresLocalIsolation=true` so the caller can re-enter from a safe isolated checkout/worktree.
+<!-- rule: ROUTING-LOCAL-ISOLATION-PASSTHROUGH -->
+When `requiresLocalIsolation=true`, those local-execution states **MUST NOT** become terminal stop outcomes by themselves. The routing result **MUST** stay on the owning loop family and **MUST** carry `handoffEnvelope.requiresLocalIsolation=true` so the caller can re-enter from a safe isolated checkout/worktree.
 
 **Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_copilot_review`, `waiting_for_ci` (copilot); `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
 
@@ -209,12 +217,17 @@ When `requiresLocalIsolation=true`, those local-execution states do **not** beco
 
 ## Conflict and fail-closed rules
 
-The evaluator fails closed to `needs_reconcile` rather than guessing a handoff when:
+<!-- rule: ROUTING-FAIL-CLOSED-RECONCILE -->
+The evaluator **MUST** fail closed to `needs_reconcile` rather than guessing a handoff when:
 
 1. **Target is unresolved**: `target` is missing, `null`, or missing required `repo`/`pr` fields.
 2. **State inputs are absent**: `copilotState` or `reviewerState` is missing or empty.
 3. **Ownership conflict**: `ownershipState === "duplicate_local_owners"`.
 4. **Unrecognized combined state**: the `copilotState`/`reviewerState` combination does not match any routing rule.
+
+A fail-closed result (`needs_reconcile` or `stop_needs_human`) **MUST NOT** carry a live
+handoff: `handoffEnvelope.loopFamily` and `handoffEnvelope.entrypoint` are `null` — the
+routing-layer analog of "fail-closed states never dispatch a Backlog pull" (epic #1104).
 
 ### Non-goal: this rule does not apply to noise fields
 

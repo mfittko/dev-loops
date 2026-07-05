@@ -47,14 +47,10 @@ dev-loops queue ensure --repo mfittko/dev-loops --title "My Queue"
 
 ### 2. Verify the Status field
 
-The wrapper creates a **Status** single-select field with these columns:
-
-| Column | Meaning |
-| --- | --- |
-| **Backlog** | Not yet scheduled |
-| **Next Up** | Next item(s) the queue should pick up |
-| **In Progress** | Currently running through the dev-loop |
-| **Done** | Completed (merged or explicitly closed) |
+The wrapper creates a **Status** single-select field with the four canonical columns defined
+by `QUEUE-COLUMN-CANONICAL` (Backlog, Next Up, In Progress, Done) — see
+[Conventional columns](./projects-queue-contract.md#conventional-columns) in the Projects
+Queue Contract for the owning definition.
 
 After creation, verify in the GitHub UI: open the project URL from the wrapper output, confirm the Status field exists with all four columns.
 
@@ -284,18 +280,13 @@ Rename equivalent columns after review:
 dev-loops queue ensure --repo mfittko/dev-loops --repair-rename
 ```
 
-This renames recognized equivalents (for example `Ready` -> `Next Up`) and adds any still-missing standard columns. It never removes existing columns. Irreconcilable conflicts (for example both `Ready` and `Next` mapping to `Next Up`) are reported in `repairs.conflicts` and no mutation is performed (no renames and no additive column creation).
+This renames recognized equivalents (for example `Ready` -> `Next Up`) and adds any still-missing standard columns. It never removes existing columns. Irreconcilable conflicts (for example both `Ready` and `Next` mapping to `Next Up`) fail closed per `QUEUE-RENAME-CONFLICT-NO-MUTATION` in the [Projects Queue Contract](./projects-queue-contract.md#conflicts).
 
 ### Fail-closed behavior
 
-Queue helpers never silently assume board state is correct:
-
-| What | Behavior |
-| --- | --- |
-| Board not found | Fall back to positional argument ordering; no board mutations |
-| Board found but Status field missing | Error — must be reconciled before queue operations |
-| Board found but Status column missing expected option | Error (exit code 3) — manual reconciliation needed; bootstrap wrapper fails closed |
-| GitHub API returns an error | Operation fails; queue continues with next item |
+Queue helpers never silently assume board state is correct — see the
+[Fail-closed behavior](./projects-queue-contract.md#fail-closed-behavior) table in the
+Projects Queue Contract for the situation/behavior/exit-code matrix.
 
 ## Configuration
 
