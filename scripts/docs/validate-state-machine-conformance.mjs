@@ -92,6 +92,13 @@ function realEdges(transitions) {
  * MUST be resolved via an explicit `abstractRows` mapping
  * (Map<"from->to raw text", [from, to][]>) — an unmapped abstract row throws,
  * never silently drops, so a new abstract bullet in the doc is loud.
+ *
+ * Caveat: a top-level line that does not match "- X -> Y" is treated as prose
+ * and skipped, so a malformed-but-intended bullet (unicode arrow, trailing
+ * annotation) drops out silently. For pr-gate-coordination the load-time 1:1
+ * doc<->atlas binding below catches every such drop; a second machine MUST
+ * pair this parser with an equivalent independent binding (or extend the
+ * parser with a "looks like a transition bullet but did not parse" check).
  */
 export function parseRequiredTransitions(markdown, { sectionHeading = "## Required transitions", abstractRows = new Map() } = {}) {
   const sectionStart = markdown.indexOf(`\n${sectionHeading}\n`);
@@ -292,11 +299,20 @@ const PR_LIFECYCLE_ABSTRACT_ROWS = new Map([
 // doc ever gains the bullet.
 const PR_LIFECYCLE_IMPLIED_EDGES = [["final_gate_remediation", "final_local_preapproval_gate"]];
 
+const PR_LIFECYCLE_PARSED_DOC_TRANSITIONS = parseRequiredTransitions(
+  readFileSync(path.join(REPO_ROOT, "skills", "docs", "pr-lifecycle-contract.md"), "utf8"),
+  { abstractRows: PR_LIFECYCLE_ABSTRACT_ROWS },
+);
+
+// Self-retiring seam: once the doc bullets an implied edge, this entry is stale.
+for (const [from, to] of PR_LIFECYCLE_IMPLIED_EDGES) {
+  if (PR_LIFECYCLE_PARSED_DOC_TRANSITIONS.some(([a, b]) => a === from && b === to)) {
+    throw new Error(`implied edge ${from}->${to} now appears in the doc — remove it from PR_LIFECYCLE_IMPLIED_EDGES`);
+  }
+}
+
 const PR_LIFECYCLE_DOC_TRANSITIONS = [
-  ...parseRequiredTransitions(
-    readFileSync(path.join(REPO_ROOT, "skills", "docs", "pr-lifecycle-contract.md"), "utf8"),
-    { abstractRows: PR_LIFECYCLE_ABSTRACT_ROWS },
-  ),
+  ...PR_LIFECYCLE_PARSED_DOC_TRANSITIONS,
   ...PR_LIFECYCLE_IMPLIED_EDGES,
 ];
 
