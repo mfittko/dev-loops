@@ -28,6 +28,7 @@
  * Path scheme mirrors write-gate-findings-log.mjs `buildLogPath`:
  *   <tmpRoot>/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json
  */
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -103,7 +104,7 @@ export function rationaleFromResolver(resolverResult) {
   return { resolvedAngles: [...recommended], rationale };
 }
 
-const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --angles <json> [--rationale <json>] [--branch <name>] [--touched-files <json>] [--acceptance-criteria <pointer>] [--validation-posture <text>] [--tmp-root <path>]
+const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --angles <json> [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--validation-posture <text>] [--tmp-root <path>]
 Write a deterministic gate-review context-builder handoff artifact under tmp/ paths.
 Required:
   --repo <owner/name>
@@ -114,7 +115,8 @@ Required:
 Optional:
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
-  --touched-files <json>         JSON array of changed file path strings
+  --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
+  --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see docs/gate-review-sub-loop-contract.md.
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL)
   --validation-posture <text>    Short description of the validation posture
   --tmp-root <path>              Root tmp directory (default: tmp/)
@@ -135,6 +137,22 @@ function normalizeGate(value) {
 function normalizeHeadSha(value) {
   const normalized = String(value).trim().toLowerCase();
   return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
+}
+
+// ponytail: a DENYLIST, not an allowlist — the `git diff` call runs via
+// execFileSync's argv array (no shell), so `base` cannot inject shell syntax
+// and we don't need to enumerate every valid git revision grammar. We reject
+// only what is genuinely unsafe or malformed for OUR use, and let `git diff`
+// itself resolve validity (a syntactically-allowed but nonexistent ref fails
+// closed via the unresolvable-base path). Rejected: empty/whitespace-only; a
+// leading "-" (flag-injection shape, never a valid ref); and ".." (ambiguous
+// with our own "<base>...HEAD" triple-dot construction). Everything else —
+// including HEAD@{upstream}, main@{1}, tag-peel v1.0.0^{commit}, HEAD~3 — is
+// accepted.
+function normalizeBaseRef(value) {
+  const trimmed = String(value).trim();
+  if (trimmed.length === 0 || trimmed.startsWith("-") || trimmed.includes("..")) return null;
+  return trimmed;
 }
 
 const VALID_ACTIONS = new Set(["kept", "added", "dropped", "joined"]);
@@ -210,6 +228,7 @@ export function parseWriteGateContextCliArgs(argv) {
       rationale: { type: "string" },
       branch: { type: "string" },
       "touched-files": { type: "string" },
+      base: { type: "string" },
       "acceptance-criteria": { type: "string" },
       "validation-posture": { type: "string" },
       "tmp-root": { type: "string" },
@@ -228,6 +247,7 @@ export function parseWriteGateContextCliArgs(argv) {
     rationale: [],
     branch: null,
     touchedFiles: [],
+    base: null,
     acceptanceCriteria: null,
     validationPosture: null,
     tmpRoot: "tmp",
@@ -276,6 +296,12 @@ export function parseWriteGateContextCliArgs(argv) {
     }
     if (token.name === "touched-files") {
       options.touchedFiles = parseStringArrayJson(requireTokenValue(token, parseError), "--touched-files");
+      continue;
+    }
+    if (token.name === "base") {
+      const base = normalizeBaseRef(requireTokenValue(token, parseError));
+      if (!base) throw parseError("--base must be a plausible git ref (no leading '-', no '..')");
+      options.base = base;
       continue;
     }
     if (token.name === "acceptance-criteria") {
@@ -460,6 +486,14 @@ export function buildGateContextArtifact(options) {
       validationPosture: options.validationPosture ?? null,
     },
   };
+  // ADD (#1140): an explicit posture marker distinguishing a full build-once
+  // bundle from a thin briefing. Only set by the CLI (`--base` present → "base";
+  // absent → "none"); programmatic `buildGateContext`/`writeGateContext` callers
+  // that never pass `diffSource` leave the field out entirely, so this stays
+  // backward compatible with the artifact shape they already assert on.
+  if (typeof options.diffSource === "string" && options.diffSource.length > 0) {
+    artifact.scope.diffSource = options.diffSource;
+  }
   // ADD (#895): the deterministic, neutral adjacent-code bundle. Only present
   // when the context-builder computed it — keeps the artifact shape backward
   // compatible for callers that build the artifact without an adjacency pass.
@@ -467,6 +501,134 @@ export function buildGateContextArtifact(options) {
     artifact.adjacentCode = options.adjacentCode;
   }
   return artifact;
+}
+
+/**
+ * Resolve the diff-derived scope fields shared by `buildGateContext` (the
+ * programmatic `{ diff }` path) and the CLI `--base` path (#1140): the FULL
+ * diff persisted to a deterministic `.diff` file, the parsed `changedFiles`,
+ * and the neutral `adjacentCode` bundle built once from those changed files.
+ * Extracted to a single function so both callers stay in sync — see the
+ * doc comment on {@link buildGateContext} for the field semantics.
+ *
+ * @param {object} input
+ * @param {{ nameStatusOutput: string, diffOutput?: string }} [input.diff]
+ * @param {string} input.repo
+ * @param {number|string} input.pr
+ * @param {string} input.gate
+ * @param {string} input.headSha
+ * @param {string} input.tmpRoot
+ * @param {number} [input.maxFileBytes]
+ * @param {{ repoRoot: string }} opts
+ * @returns {Promise<{ diffPath: string|null, changedFiles: string[], adjacentCode: object|null }>}
+ */
+async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes }, { repoRoot }) {
+  const diffOutput = diff?.diffOutput;
+  let diffPath = null;
+  const changedFiles = parseChangedFiles(diff?.nameStatusOutput);
+  if (typeof diffOutput === "string" && diffOutput.length > 0) {
+    diffPath = buildGateDiffPath({ repo, pr, gate, headSha, tmpRoot });
+    const fullDiffPath = path.resolve(repoRoot, diffPath);
+    try {
+      await mkdir(path.dirname(fullDiffPath), { recursive: true });
+      await writeFile(fullDiffPath, diffOutput.endsWith("\n") ? diffOutput : diffOutput + "\n", "utf8");
+    } catch (err) {
+      // Best-effort: a diff-file write failure (disk, permissions) must not block
+      // the context artifact. Degrade to diffPath=null; reviewers reconstruct the
+      // diff with `git diff`. changedFiles (from nameStatusOutput) is unaffected.
+      process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
+      diffPath = null;
+    }
+  }
+
+  // Build the deterministic, neutral adjacent-code bundle ONCE (#895): for each
+  // changed source file, include its 1-hop import out-edges (files it imports)
+  // and in-edges (files that import it), with size guards (skip
+  // lockfiles/generated/binary/minified; cap per-file bytes; truncate the long
+  // tail) recorded in a stripped/truncated manifest. Every independent reviewer
+  // is seeded with this identical bundle instead of re-deriving it — work-dedup.
+  // Best-effort: bundle computation must never block the context artifact.
+  let adjacentCode = null;
+  if (changedFiles.length > 0) {
+    try {
+      adjacentCode = await buildAdjacentBundle({
+        changedFiles,
+        repoRoot,
+        maxFileBytes: typeof maxFileBytes === "number" && maxFileBytes > 0 ? maxFileBytes : DEFAULT_MAX_FILE_BYTES,
+      });
+    } catch (err) {
+      process.stderr.write(`[gate-context] adjacent-code bundle failed (continuing without adjacentCode): ${err?.message ?? err}\n`);
+      adjacentCode = null;
+    }
+  }
+
+  return { diffPath, changedFiles, adjacentCode };
+}
+
+/**
+ * Capture a diff against `base` for the CLI `--base <ref>` flag: `git diff
+ * --name-status <base>...HEAD` and `git diff <base>...HEAD`, shaped as the
+ * `{ nameStatusOutput, diffOutput }` input `resolveDiffScope`/`buildGateContext`
+ * expect. Uses execFileSync with an argv array (no shell), so `base` cannot
+ * inject shell syntax; `parseWriteGateContextCliArgs` additionally validates it
+ * looks like a plausible ref before this runs.
+ *
+ * Split posture:
+ * - the `--name-status` capture is FAIL-CLOSED: it drives scope.changedFiles +
+ *   the adjacentCode bundle, so an unresolvable base / non-git-repo throws and
+ *   the CLI writes NO artifact (never a silent thin briefing).
+ * - the FULL diff capture is BEST-EFFORT: if it fails (output exceeds maxBuffer,
+ *   a rendering error, etc.) we warn and return an EMPTY diffOutput. downstream
+ *   resolveDiffScope then leaves scope.diffPath null while still populating
+ *   changedFiles + adjacentCode; reviewers fall back to re-deriving the diff
+ *   (the existing safety net). scope.diffSource stays "base" — it IS a
+ *   base-derived bundle, just without the persisted full diff.
+ *
+ * @param {string} base
+ * @param {{ repoRoot: string, maxBuffer?: number }} opts — maxBuffer overridable for tests
+ * @returns {{ nameStatusOutput: string, diffOutput: string }}
+ */
+export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024 }) {
+  const range = `${base}...HEAD`;
+  // Isolate the persisted .diff BYTES from ambient global/system gitconfig so
+  // every reviewer is seeded with an IDENTICAL neutral bundle (the whole point
+  // of build-once). Without this isolation, an operator/CI with
+  // color.diff=always, a configured diff.external/difftool, or non-default
+  // prefix settings would make scope.diffPath environment-dependent.
+  // color.ui=false + color.diff=false strip ANSI; core.pager=cat neutralizes a
+  // configured pager; diff.noprefix=false + diff.mnemonicPrefix=false pin the
+  // a/ b/ prefixes; the --no-ext-diff flag (below) disables any external diff
+  // driver (NOT `-c diff.external=`, which makes git try to exec the empty
+  // string and die).
+  const isolation = [
+    "-c", "color.ui=false",
+    "-c", "color.diff=false",
+    "-c", "core.pager=cat",
+    "-c", "diff.noprefix=false",
+    "-c", "diff.mnemonicPrefix=false",
+  ];
+  const runGit = (args) => execFileSync("git", [...isolation, ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer,
+  });
+  // FAIL-CLOSED: --name-status feeds changedFiles + adjacentCode (the bundle's core).
+  let nameStatusOutput;
+  try {
+    nameStatusOutput = runGit(["diff", "--no-ext-diff", "--name-status", range]);
+  } catch (err) {
+    throw new Error(`git diff against --base ${JSON.stringify(base)} failed: ${err?.message ?? err}`);
+  }
+  // BEST-EFFORT: the full diff only feeds the persisted scope.diffPath; on
+  // failure degrade to an empty diffOutput (diffPath becomes null downstream).
+  let diffOutput = "";
+  try {
+    diffOutput = runGit(["diff", "--no-ext-diff", range]);
+  } catch (err) {
+    process.stderr.write(`[gate-context] full-diff capture against --base ${JSON.stringify(base)} failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
+    diffOutput = "";
+  }
+  return { nameStatusOutput, diffOutput };
 }
 
 export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
@@ -526,58 +688,13 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
 
   const tmpRoot = input.tmpRoot || "tmp";
 
-  // Best-effort full-diff capture: when the resolver was handed a diff with
-  // `diffOutput`, persist the ENTIRE diff to a deterministic `.diff` file next
-  // to the context artifact so scoped reviewers can read the full change set
-  // (not just hunks) and trace adjacent code. Reference it from `scope.diffPath`
-  // (relative) and record full repo-relative `scope.changedFiles` parsed from
-  // the diff's `nameStatusOutput`. We do NOT inline the diff in the JSON.
-  const diffOutput = input.diff?.diffOutput;
-  let diffPath = null;
-  let changedFiles = parseChangedFiles(input.diff?.nameStatusOutput);
-  if (typeof diffOutput === "string" && diffOutput.length > 0) {
-    diffPath = buildGateDiffPath({
-      repo: input.repo,
-      pr: input.pr,
-      gate: input.gate,
-      headSha: input.headSha,
-      tmpRoot,
-    });
-    const fullDiffPath = path.resolve(repoRoot, diffPath);
-    try {
-      await mkdir(path.dirname(fullDiffPath), { recursive: true });
-      await writeFile(fullDiffPath, diffOutput.endsWith("\n") ? diffOutput : diffOutput + "\n", "utf8");
-    } catch (err) {
-      // Best-effort: a diff-file write failure (disk, permissions) must not block
-      // the context artifact. Degrade to diffPath=null; reviewers reconstruct the
-      // diff with `git diff`. changedFiles (from nameStatusOutput) is unaffected.
-      process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
-      diffPath = null;
-    }
-  }
-
-  // Build the deterministic, neutral adjacent-code bundle ONCE (#895): for each
-  // changed source file, include its 1-hop import out-edges (files it imports)
-  // and in-edges (files that import it), with size guards (skip
-  // lockfiles/generated/binary/minified; cap per-file bytes; truncate the long
-  // tail) recorded in a stripped/truncated manifest. Every independent reviewer
-  // is seeded with this identical bundle instead of re-deriving it — work-dedup.
-  // Best-effort: bundle computation must never block the context artifact.
-  let adjacentCode = null;
-  if (changedFiles.length > 0) {
-    try {
-      adjacentCode = await buildAdjacentBundle({
-        changedFiles,
-        repoRoot,
-        maxFileBytes: typeof input.maxFileBytes === "number" && input.maxFileBytes > 0
-          ? input.maxFileBytes
-          : DEFAULT_MAX_FILE_BYTES,
-      });
-    } catch (err) {
-      process.stderr.write(`[gate-context] adjacent-code bundle failed (continuing without adjacentCode): ${err?.message ?? err}\n`);
-      adjacentCode = null;
-    }
-  }
+  // Diff-derived scope: persisted FULL diff (scope.diffPath), parsed
+  // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
+  // the shared resolveDiffScope helper (also used by the CLI --base path, #1140).
+  const { diffPath, changedFiles, adjacentCode } = await resolveDiffScope(
+    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes },
+    { repoRoot },
+  );
 
   const writeResult = await writeGateContext(
     {
@@ -627,10 +744,17 @@ export async function readGateContext(input, { repoRoot = process.cwd() } = {}) 
   }
 }
 
-async function main() {
+/**
+ * CLI entrypoint. Exported (argv + repoRoot both overridable) so tests can
+ * drive the `--base` diff-capture path against a throwaway git repo fixture
+ * without spawning a subprocess.
+ * @param {string[]} [argv]
+ * @param {{ repoRoot?: string }} [runtime]
+ */
+export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd() } = {}) {
   let options;
   try {
-    options = parseWriteGateContextCliArgs(process.argv.slice(2));
+    options = parseWriteGateContextCliArgs(argv);
   } catch (error) {
     process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
     process.exitCode = 1;
@@ -641,7 +765,31 @@ async function main() {
     return;
   }
   try {
-    const result = await writeGateContext(options);
+    // AC3 (#1140): the CLI only produces the full build-once bundle
+    // (scope.diffPath + scope.changedFiles + adjacentCode) when it has a
+    // resolvable diff source. --base is OPTIONAL rather than required — making
+    // it required would break any existing caller that only ever passed
+    // --touched-files (angles + scope already resolved elsewhere) — so a run
+    // without --base does not fail closed; it explicitly WARNS and records the
+    // thin-briefing posture in scope.diffSource so it is never mistaken for a
+    // full bundle. A run WITH --base that then fails to resolve (bad ref, not a
+    // git repo, etc.) DOES fail closed: the caller opted into the full bundle,
+    // so a silent thin degrade there would be a worse surprise than an error.
+    if (options.base) {
+      const diff = captureDiffFromBase(options.base, { repoRoot });
+      const scope = await resolveDiffScope(
+        { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
+        { repoRoot },
+      );
+      options.changedFiles = scope.changedFiles;
+      options.diffPath = scope.diffPath;
+      options.adjacentCode = scope.adjacentCode;
+      options.diffSource = "base";
+    } else {
+      process.stderr.write("[write-gate-context] warning: no --base given; emitting a THIN briefing (scope.diffPath=null, scope.changedFiles=[], no adjacentCode). Pass --base <ref> for the full build-once bundle.\n");
+      options.diffSource = "none";
+    }
+    const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
     process.stderr.write(JSON.stringify({

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,8 @@ import {
   buildGateContextArtifact,
   buildGateContextPath,
   buildGateDiffPath,
+  captureDiffFromBase,
+  main,
   mapGateToConfigKey,
   parseChangedFiles,
   parseWriteGateContextCliArgs,
@@ -18,6 +21,48 @@ import {
   readGateContext,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
+
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8" });
+}
+
+// A git repo fixture with a `base` commit and a later HEAD commit that adds an
+// import chain (changed.mjs <- caller.mjs, changed.mjs -> dep.mjs), so a
+// `--base <baseSha>` diff exercises the full scope.diffPath + changedFiles +
+// adjacentCode build (mirrors the buildGateContext adjacentCode fixture above).
+async function makeBaseDiffRepo() {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cli-"));
+  git(repoRoot, ["init", "-q"]);
+  git(repoRoot, ["config", "user.email", "test@example.com"]);
+  git(repoRoot, ["config", "user.name", "Test"]);
+  // Base commit: dep.mjs and caller.mjs already exist (unchanged after this),
+  // so the later diff isolates changed.mjs as the only changed file, leaving
+  // dep.mjs/caller.mjs to be resolved purely via the adjacent-code 1-hop scan.
+  const files = {
+    "src/changed.mjs": 'import { helper } from "./dep.mjs";\nexport function changed() { return helper(); }\n',
+    "src/dep.mjs": "export function helper() { return 1; }\n",
+    "src/caller.mjs": 'import { changed } from "./changed.mjs";\nchanged();\n',
+  };
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(repoRoot, rel);
+    await mkdir(path.dirname(abs), { recursive: true });
+    await writeFile(abs, content, "utf8");
+  }
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "base"]);
+  const baseSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+
+  await writeFile(
+    path.join(repoRoot, "src/changed.mjs"),
+    'import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 1; }\n',
+    "utf8",
+  );
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "modify changed.mjs"]);
+  const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+
+  return { repoRoot, baseSha, headSha };
+}
 
 function draftConfig(overrides = {}) {
   return {
@@ -771,6 +816,307 @@ test("buildGateContext leaves scope.diffPath null and changedFiles empty when no
     );
     assert.equal(result.artifact.scope.diffPath, null);
     assert.deepEqual(result.artifact.scope.changedFiles, []);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CLI --base flag (#1140) — the CLI-driven "build once, seed many" bundle
+// ---------------------------------------------------------------------------
+
+test("parseWriteGateContextCliArgs parses --base", () => {
+  const result = parseWriteGateContextCliArgs([
+    "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate",
+    "--head-sha", "abc1234", "--angles", '["scope"]',
+    "--base", "origin/main",
+  ]);
+  assert.equal(result.base, "origin/main");
+});
+
+test("parseWriteGateContextCliArgs defaults --base to null", () => {
+  const result = parseWriteGateContextCliArgs([
+    "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate",
+    "--head-sha", "abc1234", "--angles", '["scope"]',
+  ]);
+  assert.equal(result.base, null);
+});
+
+test("parseWriteGateContextCliArgs rejects only the genuinely-unsafe/malformed --base refs (denylist)", () => {
+  // Leading "-" (flag-injection shape), ".." (ambiguous with <base>...HEAD),
+  // and empty/whitespace-only are the ONLY rejected shapes.
+  for (const bad of ["--evil-flag", "a..b", "   "]) {
+    assert.throws(() => parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc1234", "--angles", '["scope"]',
+      "--base", bad,
+    ]), /--base/, `${JSON.stringify(bad)} should be rejected`);
+  }
+});
+
+test("parseWriteGateContextCliArgs accepts valid git revision syntaxes (denylist lets git resolve validity)", () => {
+  // Ancestry, reflog/upstream selectors, and tag-peel — all argv-safe under
+  // execFileSync (no shell), so the parser accepts them and defers resolution
+  // to `git diff` (a nonexistent-but-well-shaped ref fails closed downstream).
+  for (const ref of ["HEAD~3", "main^", "HEAD~2^2", "release/1.0~1", "HEAD@{upstream}", "main@{1}", "v1.0.0^{commit}"]) {
+    const result = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc1234", "--angles", '["scope"]',
+      "--base", ref,
+    ]);
+    assert.equal(result.base, ref, `${ref} should be accepted`);
+  }
+});
+
+test("CLI --base <ref> produces a full build-once bundle: non-null diffPath, populated changedFiles, adjacentCode present", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "40", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+      "--base", baseSha,
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 40, gate: "draft_gate", headSha,
+    }, { repoRoot });
+
+    assert.ok(artifact, "artifact written");
+    assert.equal(artifact.scope.diffSource, "base");
+    assert.ok(artifact.scope.diffPath, "scope.diffPath is non-null");
+    assert.deepEqual(artifact.scope.changedFiles, ["src/changed.mjs"]);
+
+    // The .diff file was actually written and contains the real diff.
+    const diffOnDisk = await readFile(path.resolve(repoRoot, artifact.scope.diffPath), "utf8");
+    assert.ok(diffOnDisk.includes("src/changed.mjs"));
+
+    // adjacentCode bundle present, with the 1-hop import edges resolved.
+    assert.ok(artifact.adjacentCode, "adjacentCode bundle attached");
+    const byPath = Object.fromEntries(artifact.adjacentCode.files.map((f) => [f.path, f]));
+    assert.equal(byPath["src/changed.mjs"].role, "changed");
+    assert.equal(byPath["src/dep.mjs"].role, "imports");
+    assert.equal(byPath["src/caller.mjs"].role, "importedBy");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI without --base emits an explicit thin-briefing posture, not a silent full-looking bundle", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "41", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 41, gate: "draft_gate", headSha,
+    }, { repoRoot });
+
+    assert.ok(artifact, "artifact still written (warn, not fail-closed, when --base is simply absent)");
+    assert.equal(artifact.scope.diffSource, "none");
+    assert.equal(artifact.scope.diffPath, null);
+    assert.deepEqual(artifact.scope.changedFiles, []);
+    assert.equal(Object.prototype.hasOwnProperty.call(artifact, "adjacentCode"), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base <ref> that fails to resolve fails closed (no artifact written, non-zero exit)", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    // Nested try/finally: main() sets the GLOBAL process.exitCode on fail-closed,
+    // so restore it even if an assertion below throws — otherwise the mutated
+    // global leaks into subsequent tests and cascades false failures.
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await main([
+        "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate",
+        "--head-sha", headSha,
+        "--angles", '["scope"]',
+        "--base", "this-ref-does-not-exist",
+      ], { repoRoot });
+
+      assert.equal(process.exitCode, 1, "fails closed with a non-zero exit rather than degrading to a thin bundle");
+
+      const artifact = await readGateContext({
+        repo: "owner/repo", pr: 42, gate: "draft_gate", headSha,
+      }, { repoRoot });
+      assert.equal(artifact, null, "no artifact written on a fail-closed --base resolution failure");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base accepts an ancestry ref (HEAD~1) and resolves it end-to-end", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    // HEAD~1 is the base commit; the range HEAD~1...HEAD is the single change.
+    await main([
+      "--repo", "owner/repo", "--pr", "43", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+      "--base", "HEAD~1",
+    ], { repoRoot });
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 43, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assert.equal(artifact.scope.diffSource, "base");
+    assert.deepEqual(artifact.scope.changedFiles, ["src/changed.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base isolates git config: persisted diff is color-free even with color.diff=always in the repo config (determinism)", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    // Force git to want color regardless of tty; the -c isolation in
+    // captureDiffFromBase must override this so the persisted .diff bytes are
+    // environment-independent (the neutral-bundle determinism guarantee).
+    git(repoRoot, ["config", "color.ui", "always"]);
+    git(repoRoot, ["config", "color.diff", "always"]);
+
+    await main([
+      "--repo", "owner/repo", "--pr", "44", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+      "--base", "HEAD~1",
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 44, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    const diffOnDisk = await readFile(path.resolve(repoRoot, artifact.scope.diffPath), "utf8");
+    // No ANSI escape sequences (ESC, \x1b) leaked into the persisted diff.
+    assert.ok(!diffOnDisk.includes("\x1b"), "persisted diff must contain no ANSI color codes");
+    assert.deepEqual(artifact.scope.changedFiles, ["src/changed.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base degrades to scope.diffPath=null but STILL writes the artifact when the .diff write fails (best-effort)", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    // Force the .diff writeFile to fail without touching the .json write: occupy
+    // the deterministic .diff path with a DIRECTORY so writeFile throws EISDIR.
+    // The sibling .json context write (different filename) still succeeds.
+    const diffRel = buildGateDiffPath({ repo: "owner/repo", pr: 45, gate: "draft_gate", headSha });
+    const diffAbs = path.resolve(repoRoot, diffRel);
+    await mkdir(diffAbs, { recursive: true });
+
+    await main([
+      "--repo", "owner/repo", "--pr", "45", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+      "--base", "HEAD~1",
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 45, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assert.ok(artifact, "artifact still written despite the .diff write failure");
+    assert.equal(artifact.scope.diffPath, null, "diffPath degrades to null on write failure");
+    // Partial "base": the CLI still stamps diffSource="base" (name-status succeeded, so it
+    // IS a base-derived bundle) even though the persisted full diff is absent. Reviewers key
+    // their diff-fallback on diffPath (null), NOT on diffSource. Locked in end-to-end here.
+    assert.equal(artifact.scope.diffSource, "base", "diffSource stays 'base' when only the full-diff persist degrades");
+    // changedFiles (from name-status) and adjacentCode are unaffected by the diff-write failure.
+    assert.deepEqual(artifact.scope.changedFiles, ["src/changed.mjs"]);
+    assert.ok(artifact.adjacentCode, "adjacentCode still built from changedFiles");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// captureDiffFromBase — split posture: --name-status fail-closed, full diff best-effort
+// ---------------------------------------------------------------------------
+
+test("captureDiffFromBase: full-diff overflow (tiny maxBuffer) degrades to empty diffOutput while --name-status still resolves", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cap-"));
+  try {
+    git(repoRoot, ["init", "-q"]);
+    git(repoRoot, ["config", "user.email", "test@example.com"]);
+    git(repoRoot, ["config", "user.name", "Test"]);
+    await mkdir(path.join(repoRoot, "src"), { recursive: true });
+    await writeFile(path.join(repoRoot, "src/big.mjs"), "export const x = 0;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "base"]);
+    // A large single-file change: name-status stays one tiny line, the full diff
+    // is many KB — so a small maxBuffer overflows ONLY the full-diff capture.
+    const bigBody = Array.from({ length: 4000 }, (_, i) => `export const v${i} = ${i};`).join("\n") + "\n";
+    await writeFile(path.join(repoRoot, "src/big.mjs"), bigBody, "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "grow"]);
+
+    const { nameStatusOutput, diffOutput } = captureDiffFromBase("HEAD~1", { repoRoot, maxBuffer: 512 });
+    assert.match(nameStatusOutput, /src\/big\.mjs/, "--name-status resolved under the tiny buffer");
+    assert.equal(diffOutput, "", "full diff degraded to empty on overflow (best-effort)");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("captureDiffFromBase: --name-status failure fails closed (throws)", async () => {
+  const { repoRoot } = await makeBaseDiffRepo();
+  try {
+    assert.throws(
+      () => captureDiffFromBase("this-ref-does-not-exist", { repoRoot }),
+      /git diff against --base .* failed/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext with an empty diffOutput leaves diffPath null but still builds changedFiles + adjacentCode, and (programmatic) omits diffSource", async () => {
+  // Downstream proof of the best-effort split at the LIBRARY layer: an empty
+  // diffOutput (what a failed full-diff capture returns) leaves diffPath null
+  // while changedFiles + adjacentCode are still built. Programmatic callers do
+  // NOT get a diffSource field — that posture marker is CLI-only (backward
+  // compat); the CLI-driven partial-"base" case is asserted separately above.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-partial-"));
+  try {
+    const files = {
+      "src/changed.mjs": 'import { helper } from "./dep.mjs";\nexport function changed() { return helper(); }\n',
+      "src/dep.mjs": "export function helper() { return 1; }\n",
+      "src/caller.mjs": 'import { changed } from "./changed.mjs";\nchanged();\n',
+    };
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = path.join(repoRoot, rel);
+      await mkdir(path.dirname(abs), { recursive: true });
+      await writeFile(abs, content, "utf8");
+    }
+    const config = draftConfig({ dynamicAngles: false });
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        // diffOutput:"" == what captureDiffFromBase returns on a best-effort full-diff failure.
+        diff: { nameStatusOutput: "M\tsrc/changed.mjs\n", diffOutput: "" },
+        repo: "owner/repo",
+        pr: 46,
+        headSha: "abc1234567890",
+      },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.scope.diffPath, null);
+    // Programmatic callers omit diffSource entirely (CLI-only marker, backward compat).
+    assert.equal(result.artifact.scope.diffSource, undefined);
+    assert.deepEqual(result.artifact.scope.changedFiles, ["src/changed.mjs"]);
+    assert.ok(result.artifact.adjacentCode, "adjacentCode still built from changedFiles");
+    const byPath = Object.fromEntries(result.artifact.adjacentCode.files.map((f) => [f.path, f]));
+    assert.equal(byPath["src/dep.mjs"].role, "imports");
+    assert.equal(byPath["src/caller.mjs"].role, "importedBy");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
