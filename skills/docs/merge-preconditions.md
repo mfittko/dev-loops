@@ -49,6 +49,20 @@ doing manually; it is not a general conflict-resolution engine.
 
 > Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
 
+### Evidence writes and `gh pr merge` MUST be separate tool calls (#1172)
+
+The PreToolUse Bash gate evaluates `gh pr merge` **before** the Bash tool call executes. A compound
+command that both writes gate evidence (the findings-log ledger, `upsert-checkpoint-verdict`) and
+merges in the same call is blocked at hook-evaluation time — the write never runs. This can look
+like the ledger "vanished" between writing and merging; it was never written. The block message
+names this when it detects an evidence-writing invocation in the same command string.
+
+Documented pattern — **write, verify, then merge alone**:
+
+1. Write the gate evidence (findings-log ledger / checkpoint verdict) in its own Bash call.
+2. Verify it landed (e.g. `ls tmp/gate-findings/<slug>/pr-<n>/`) in a separate call.
+3. Run `gh pr merge` alone, with no other command chained via `&&`/`;`/newline.
+
 ## Title markers
 
 The PR title is a contract surface, so a merge-blocking marker in the title is enforced

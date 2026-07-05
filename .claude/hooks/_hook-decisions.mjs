@@ -34,6 +34,16 @@ import {
 const ALLOW = Object.freeze({ decision: "allow" });
 
 /**
+ * Whether the command string also invokes an evidence-writing script (findings-log ledger or
+ * checkpoint-verdict upsert). Used only to enrich the merge-block message (#1172) — a compound
+ * command combining an evidence write with `gh pr merge` is blocked pre-execution, so the write
+ * never runs; this substring check has no false-negative cost (worst case: the plain message).
+ */
+function commandContainsEvidenceWrite(command) {
+  return command.includes("write-gate-findings-log") || command.includes("upsert-checkpoint-verdict");
+}
+
+/**
  * The agent type (Claude `agent_type` / the canonical agent name) that owns repo mutations.
  * Only this subagent — not arbitrary subagents (Explore, Plan, generic Task agents) — may
  * bypass the main-agent read-only boundary.
@@ -176,11 +186,25 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   }
 
   if (!gatePassed) {
+    if (isMerge) {
+      // This hook evaluates PreToolUse — BEFORE the Bash tool call runs. A compound command that
+      // writes gate evidence (findings-log ledger, checkpoint verdict) and merges in the same call
+      // is blocked here with the write never having executed, which looks like the evidence
+      // "vanished" (#1172). Hint the split when the command carries an evidence-writing invocation
+      // alongside the merge, so the failure is self-explaining instead of looking like data loss.
+      const alsoWritesEvidence = commandContainsEvidenceWrite(command);
+      return {
+        decision: "deny",
+        reason:
+          `gh pr merge blocked: missing pre-merge gate evidence for PR #${prNumber} (need clean current-head draft_gate + pre_approval_gate; inline verdicts are not accepted). Run the dev-loop gates instead of merging directly.` +
+          (alsoWritesEvidence
+            ? " This command also writes gate evidence, but hooks evaluate before the command runs — write the evidence in a separate call, then merge alone."
+            : ""),
+      };
+    }
     return {
       decision: "deny",
-      reason: isMerge
-        ? `gh pr merge blocked: missing pre-merge gate evidence for PR #${prNumber} (need clean current-head draft_gate + pre_approval_gate; inline verdicts are not accepted). Run the dev-loop gates instead of merging directly.`
-        : `gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #${prNumber}.`,
+      reason: `gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #${prNumber}.`,
     };
   }
 
