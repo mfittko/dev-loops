@@ -209,8 +209,7 @@ When unresolved feedback exists, use a narrow follow-up loop:
    - source `<headRefName>` from authoritative PR state (`headRefName`), not from a local branch guess
    - if the guard exits non-zero (`branch_mismatch`), stop and realign to the expected branch before staging or committing
 7. if files changed, push the resolving commit before any thread reply claims the fix is present
-<!-- rule: COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER -->
-8. `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER`: When a comment or thread is actually addressed, the agent MUST reply on GitHub with a short resolution note that references the resolving commit SHA or commit URL when applicable, using the deterministic helpers below rather than ad hoc thread mutations:
+8. <!-- rule: COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER --> `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER`: When a comment or thread is actually addressed, the agent MUST reply on GitHub with a short resolution note that references the resolving commit SHA or commit URL when applicable, using the deterministic helpers below rather than ad hoc thread mutations:
    - for one thread, must use the deterministic helper `reply-resolve-review-thread.mjs` from the resolved skill scripts directory
    - when the same bounded resolution note applies to multiple matching unresolved threads, use `reply-resolve-review-threads.mjs` instead of ad hoc inline `gh api` / `gh api graphql` mutations
    - when using the single-thread helper, pair `--comment-id` and `--thread-id` from the same fresh PR thread snapshot rather than mixing ids across review rounds
@@ -227,8 +226,7 @@ When unresolved feedback exists, use a narrow follow-up loop:
     - do not stop at a local fix if GitHub-side reply/resolve is authorized
 11. after completing reply/resolve for a pass, verify zero unresolved threads remain via `dev-loops gate capture-threads` before proceeding
     - if the refreshed snapshot reports unresolved threads, re-enter the reply/resolve loop for the missed threads
-<!-- rule: COPILOT-FOLLOWUP-ROUND-CAP -->
-12. `COPILOT-FOLLOWUP-ROUND-CAP`: The agent MUST decide whether another Copilot pass is desired, applying the round-cap/signal-gating rules below, only after GitHub-side reply/resolve work is done for the addressed threads and the refreshed thread snapshot proves zero unresolved threads remain
+12. <!-- rule: COPILOT-FOLLOWUP-ROUND-CAP --> `COPILOT-FOLLOWUP-ROUND-CAP`: The agent MUST decide whether another Copilot pass is desired, applying the round-cap/signal-gating rules below, only after GitHub-side reply/resolve work is done for the addressed threads and the refreshed thread snapshot proves zero unresolved threads remain
     - resolve the review-round cap from config via `resolveRefinementConfig(config, "maxCopilotRounds")` from `@dev-loops/core/config`; default config ships `maxCopilotRounds: 5`
     - **Opt out entirely:** `maxCopilotRounds: 0` disables the external Copilot review gate for the repo — the loop runs `draft_gate → pre_approval_gate` with the local harness only, never requesting or waiting on Copilot. Use this when the repo has no Copilot reviewer configured or prefers local-harness-only review.
     - use the completed Copilot review-round count from `detect-copilot-loop-state.mjs` / `copilot-pr-handoff.mjs` as the current PR's review-round count
