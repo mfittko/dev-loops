@@ -32,13 +32,13 @@ Definitions:
 
 ## Claude-Code-path test inventory
 
-When a change targets a Claude-Code-specific seam, the following suites are the baseline that MUST stay green, and are the first place to add coverage for a Pi-originated change that must not regress Claude Code:
+When a change targets a Claude-Code-specific seam, the following suites are the baseline that MUST stay green, and are the first place to add coverage for a Pi-originated change that MUST NOT regress Claude Code:
 
 - `npm run test:assets` — runs `test/contracts/*.test.mjs`, including `test/contracts/claude-assets-reproducible.test.mjs`, `test/contracts/claude-headless-smoke.test.mjs`, `test/contracts/claude-plugin-manifest.test.mjs`, `test/contracts/claude-plugin-marketplace.test.mjs`, `test/contracts/claude-hooks-settings.test.mjs`, and `test/contracts/cli-harness-agnostic.test.mjs`
 - `npm run smoke:headless` — runs `scripts/claude/headless-info-smoke.mjs`; this is a manual/local-only check, not part of `npm test` or `npm run verify` and not run by CI — run it directly when a change touches Claude Code headless-info behavior
 - `npm run test:core` — runs `packages/core/test/*.test.mjs`, including `packages/core/test/claude-headless-entry.test.mjs`, `packages/core/test/claude-hook-decisions.test.mjs`, `packages/core/test/run-context.test.mjs`, `packages/core/test/async-start-contract.test.mjs`
 
-Symmetrically, for a change targeting the Claude-Code-specific seam that must not regress Pi, `npm run test:extension` (which runs `test/extension-*.test.mjs`, including `test/extension-pi-adapter.test.mjs`, the Pi-side adapter inventory) is the baseline suite to check and extend.
+Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NOT regress Pi, `npm run test:extension` (which runs `test/extension-*.test.mjs`, including `test/extension-pi-adapter.test.mjs`, the Pi-side adapter inventory) is the baseline suite to check and extend.
 
 ## How to add coverage
 

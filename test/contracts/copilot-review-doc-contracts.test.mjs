@@ -178,12 +178,10 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
   );
   // The "must be entered and completed before merge-ready" requirement is owned by
   // GATE-COMMENT-FAIL-CLOSED (rule-ID reference asserted below) rather than pinned as
-  // prose here; "not recoverable by asserting convergence" is skill-local framing not
-  // yet promoted to a rule ID, so check it via keyword tokens, not an exact sentence (#1154).
+  // prose here; "not recoverable by asserting convergence" is now GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE (#1159).
   assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "docs/gate-review-comment-contract.md");
   assert.match(step7, /GATE-COMMENT-FAIL-CLOSED/, "pre-approval gate sequencing should reference the fail-closed rule ID");
-  assert.match(step7, /\bnot recoverable\b/i, "pre-approval gate sequencing should reject convergence-only claims");
-  assert.match(step7, /\bconvergence\b/i, "pre-approval gate sequencing should reject convergence-only claims");
+  assertRuleOwned("GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE", "skills/copilot-pr-followup/SKILL.md");
   assert.match(
     step7,
     /### Merge-ready preconditions/i,
@@ -342,12 +340,15 @@ test("public dev-loop agent is a thin executable entrypoint that defers to the p
   assert.match(agentContent, /name:\s*"dev-loop"/);
   assert.match(agentContent, /user-invocable:\s*true/);
   assert.match(agentContent, /skills\/dev-loop\/SKILL\.md/);
+  // Entrypoint-thinness is agent-surface routing guidance (agents own no rules);
+  // the loose /must stay thin/i token is the structural check (#1159).
   assert.match(agentContent, /must stay thin/i);
-  assert.match(agentContent, /do not restate the skill's phase sequencing or workflow policy here/i);
   assert.match(agentContent, /deterministic public routing contract/i);
   assert.doesNotMatch(agentContent, /compatibility\/internal entrypoints during migration/i);
+  // Disagreeing-facts fail-closed semantics are owned by STOP-RECONCILE-001;
+  // the agent surface keeps a loose stop-and-ask token, not the exact sentence (#1159).
+  assertRuleOwned("STOP-RECONCILE-001", "skills/docs/stop-conditions.md");
   assert.match(agentContent, /stop and ask for human direction rather than guessing/i);
-  assert.match(agentContent, /local facts, GitHub facts, and helper\/state-machine output do not agree/i);
   assert.match(skillContent, /public `dev-loop` façade/i);
 });
 test("thin pointer docs reference canonical contract content", async () => {
@@ -454,10 +455,8 @@ test("checkpoint verdict comment ownership stays explicit in the canonical inter
   assert.match(devLoopPreApprovalGate, /does \*\*not\*\* replace the required `draft_gate` evidence|does not replace the required `draft_gate` evidence/i);
   // The "must be entered and completed before merge-ready" gate-boundary requirement is
   // owned by GATE-COMMENT-FAIL-CLOSED (asserted below); the "not recoverable by asserting
-  // convergence" caution is skill-local framing not yet promoted to a rule ID, so check
-  // for it via keyword tokens rather than pinning the exact sentence (#1154).
-  assert.match(devLoopPreApprovalGate, /\bnot recoverable\b/i);
-  assert.match(devLoopPreApprovalGate, /\bconvergence\b/i);
+  // convergence" caution is now GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE (#1159).
+  assertRuleOwned("GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE", "skills/copilot-pr-followup/SKILL.md");
   assertRuleOwned("GATE-COMMENT-PREAPPROVAL-REQUIREMENTS", "docs/gate-review-comment-contract.md");
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-VALIDATION-REPORTING/);
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-PREAPPROVAL-REQUIREMENTS/);

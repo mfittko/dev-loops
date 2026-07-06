@@ -84,7 +84,7 @@ Boundary note:
 
 ## Lifecycle states
 
-The family-local lifecycle should be modeled in this vocabulary. These state identifiers are part of the stable contract surface for this lifecycle, even if adjacent helper implementations evolve around them:
+The family-local lifecycle SHOULD be modeled in this vocabulary. These state identifiers are part of the stable contract surface for this lifecycle, even if adjacent helper implementations evolve around them:
 
 | State | Meaning |
 |---|---|
@@ -104,7 +104,7 @@ The family-local lifecycle should be modeled in this vocabulary. These state ide
 
 ## Required transitions
 
-At minimum, the lifecycle must enforce these transitions:
+At minimum, the lifecycle MUST enforce these transitions:
 
 - `draft_local_review_gate` -> `draft_local_remediation`
   - blocking `draft_gate` findings
@@ -151,12 +151,12 @@ At minimum, the lifecycle must enforce these transitions:
 
 ## Remediation ownership boundary
 
-The lifecycle must keep the next action class explicit:
+The lifecycle MUST keep the next action class explicit:
 - draft-stage local findings route to `draft_local_remediation`
 - unresolved Copilot feedback routes to `copilot_feedback_remediation`
 - fixes applied but unresolved GitHub reply/resolve work remains route to `copilot_reply_resolve_pending`
 - pre-approval gate findings route to `final_gate_remediation`
-- merge conflicts route to `merge_conflict_resolution` and must be reconciled locally on the PR branch before lifecycle re-entry
+- merge conflicts route to `merge_conflict_resolution` and MUST be reconciled locally on the PR branch before lifecycle re-entry
 - human approval / merge remain explicit external waits
 
 Reviewer-loop reminder:
@@ -202,7 +202,7 @@ The lifecycle distinguishes three evidence classes:
 - a boundary that is already CI/validation-dependent cannot confirm current-head freshness because the relevant status is pending, none, unknown, or stale
 - a required visible gate comment could not be confirmed posted
 
-In those cases the workflow must not:
+In those cases the workflow MUST NOT:
 - leave draft
 - request or re-request Copilot review
 - declare final approval readiness
