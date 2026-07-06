@@ -4,7 +4,7 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
-import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
 import { detectInternalOnly as detectPrInternalOnly } from "./detect-internal-only-pr.mjs";
@@ -38,6 +38,13 @@ Optional:
   --watch-status <status>   Refresh deterministic loop state after a prior
                            watcher result (changed|timeout|idle). This mode
                            never requests review; it only re-detects state.
+  --lightweight         This PR is light-dispatched (#1210): compose the
+                        Copilot round cap with localImplementation.lightMode.
+                        maxCopilotRounds (default 1) via
+                        min(lightMode.maxCopilotRounds, refinement.maxCopilotRounds)
+                        instead of using refinement.maxCopilotRounds alone.
+                        refinement.maxCopilotRounds: 0 still disables Copilot
+                        rounds even with --lightweight.
 Output (stdout, JSON):
   { "ok": true, "action": "watch"|"fix"|"stop", "state": "...",
     "allowedTransitions": [...], "nextAction": "...", "snapshot": {...},
@@ -138,6 +145,7 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
     repo: undefined,
     pr: undefined,
     watchStatus: undefined,
+    lightweight: false,
     jq: undefined,
     silent: false,
   };
@@ -148,6 +156,7 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
       repo: { type: "string" },
       pr: { type: "string" },
       "watch-status": { type: "string" },
+      lightweight: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -182,6 +191,10 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
         throw parseError(`--watch-status must be one of: ${[...VALID_WATCH_STATUSES].join(", ")}`);
       }
       options.watchStatus = watchStatus;
+      continue;
+    }
+    if (token.name === "lightweight") {
+      options.lightweight = true;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -358,6 +371,15 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
   const refinementConfig = config.errors?.length > 0
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(config.config);
+  if (options.lightweight) {
+    // Compose (not replace) the round cap for light-dispatched PRs (#1210):
+    // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
+    // maxCopilotRounds: 0 still disables Copilot rounds everywhere.
+    refinementConfig.maxCopilotRounds = resolveEffectiveCopilotRoundCap(
+      config.errors?.length > 0 ? { version: 1 } : config.config,
+      { lightweight: true },
+    );
+  }
   let interpretation = interpretLoopState(snapshot, refinementConfig);
 
   // Check for human comments since last subagent action
