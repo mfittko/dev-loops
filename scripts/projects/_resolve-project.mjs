@@ -31,16 +31,21 @@ function resolveSettings(cwd) {
   return null;
 }
 
+// Shape of a GitHub GraphQL global node ID: a type prefix (e.g. "PVT",
+// "PVTI", "I", "PR") followed by "_" and a base64url-ish payload. The payload
+// alphabet includes "-" and "_" (base64url), which a plain [A-Za-z0-9_] class
+// rejects — the exact shape that broke real PVTI_ ids containing a hyphen.
+const NODE_ID_RE = /^[A-Za-z]+_[A-Za-z0-9_-]+$/;
+
 // Parse a --project value into { kind:"id"|"number"|"uri", ... }. Throws
 // INVALID_PROJECT on empty/malformed input (bare "0" is rejected too).
 //
 // Supported forms:
 //   <n>           positive integer  → { kind:"number", value:<n> }
-//   <NODE_ID>     alphanumeric/_ ID → { kind:"id", value:<NODE_ID> }
+//   <NODE_ID>     GraphQL node ID    → { kind:"id", value:<NODE_ID> }
 //   https://github.com/users/<login>/projects/<n>
 //   https://github.com/orgs/<login>/projects/<n>
 //                 board URI        → { kind:"uri", number:<n>, owner:<login>, ownerKind:"user"|"org" }
-const GLOBAL_NODE_ID_RE = /^[A-Za-z0-9_]+$/;
 
 // GitHub Projects V2 board URI pattern (user- or org-scoped boards).
 const BOARD_URI_RE = /^https:\/\/github\.com\/(users|orgs)\/([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\/projects\/(\d+)$/;
@@ -78,13 +83,39 @@ function parseProjectRef(raw) {
       { code: "INVALID_PROJECT" },
     );
   }
-  if (GLOBAL_NODE_ID_RE.test(trimmed)) {
+  if (NODE_ID_RE.test(trimmed)) {
     return { kind: "id", value: trimmed };
   }
   throw Object.assign(
     new Error(`--project must be a positive integer, a node ID, or a board URI, got "${raw}"`),
     { code: "INVALID_PROJECT" },
   );
+}
+
+// Parse a --item value into { kind:"id"|"number" }. Throws INVALID_ITEM on
+// empty/malformed input (bare "0" is rejected too). Shared by every --item
+// consumer (move-queue-item, reorder-queue-item) so the accepted node-ID
+// alphabet is defined once.
+//
+// Supported forms:
+//   <n>           positive integer → { kind:"number", value:<n> }
+//   <NODE_ID>     GraphQL node ID   → { kind:"id", value:<NODE_ID> }
+function parseItemRef(raw) {
+  if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
+    throw Object.assign(new Error("--item is required"), { code: "INVALID_ITEM" });
+  }
+  const trimmed = raw.trim();
+  const asNum = Number(trimmed);
+  if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
+    return { kind: "number", value: asNum };
+  }
+  if (trimmed === "0") {
+    throw Object.assign(new Error(`--item must be a positive integer or an item node ID, got "${raw}"`), { code: "INVALID_ITEM" });
+  }
+  if (NODE_ID_RE.test(trimmed)) {
+    return { kind: "id", value: trimmed };
+  }
+  throw Object.assign(new Error(`--item must be a positive integer or an item node ID, got "${raw}"`), { code: "INVALID_ITEM" });
 }
 
 // Selector precedence: explicit --project ref wins; else resolve by board title
@@ -145,4 +176,4 @@ function applyDevloopsBoard(args, cwd) {
   }
 }
 
-export { resolveSettings, parseProjectRef, resolveProjectSelector, findProject, applyDevloopsBoard };
+export { resolveSettings, parseProjectRef, parseItemRef, resolveProjectSelector, findProject, applyDevloopsBoard };
