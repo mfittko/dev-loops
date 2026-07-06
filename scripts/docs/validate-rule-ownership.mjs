@@ -9,6 +9,13 @@
  * (exit 1). Behavioral contradictions belong to the L2/L3 harness; semantic
  * contradictions belong to the gate contradiction lens.
  *
+ * Also gates corpus→manifest completeness: every defined rule must be listed
+ * in required-rules.json's requiredRules or its optOutRules (unregistered_rule),
+ * the optOutRules manifest itself must be internally consistent (no ID in both
+ * lists — conflicting_manifest_entry; no opt-out for an undefined rule —
+ * dead_opt_out_entry), and the duplicate-sentence allowlist must not contain
+ * stale entries (dead_allowlist_entry).
+ *
  * Subsumes former scripts/docs/validate-no-duplicate-rules.mjs (retired):
  * the duplicate-imperative-sentence scan below ports its unique check,
  * widened from skills/ only to every SOURCE_ROOTS directory.
@@ -58,7 +65,12 @@ const USAGE = `Usage: validate-rule-ownership.mjs [--help]
 
 Validate rule markers, required IDs, rule references, term definitions,
 near-duplicate/modality-conflict findings, and duplicated imperative
-sentences. All findings are gating (exit 1).
+sentences. Also validates corpus→manifest completeness (every defined rule
+must be in requiredRules or explicitly opted out via optOutRules in
+required-rules.json), optOutRules manifest hygiene (no rule listed as both
+required and opted-out; no opt-out for an undefined rule), and that the
+duplicate-sentence allowlist has no stale (dead) entries. All findings are
+gating (exit 1).
 
 Options:
   --help, -h   Show this help`.trim();
@@ -370,6 +382,11 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
     if (!requiredSet.has(id) && !optOutSet.has(id)) {
       errors.push({ kind: "unregistered_rule", id, location: defs.map(({ file, line }) => `${file}:${line}`).join(", ") });
     }
+  }
+  // optOutRules manifest hygiene, in file order for deterministic error ordering.
+  for (const id of optOutRules) {
+    if (requiredSet.has(id)) errors.push({ kind: "conflicting_manifest_entry", id });
+    if (!byId.has(id)) errors.push({ kind: "dead_opt_out_entry", id });
   }
 
   for (const ref of references) {
