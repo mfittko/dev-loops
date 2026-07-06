@@ -163,6 +163,8 @@ An issue-less lightweight PR (`resolve-dev-loop-startup.mjs --lightweight` alone
 [ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE](../skills/docs/artifact-authority-contract.md#lightweight-pr-body-as-spec))
 has no tracker issue, so it appears on the board as a **PR item only** — there is no
 issue-backed board entry to reconcile or close for it.
+`scripts/github/create-pr.mjs --lightweight` owns enqueuing that PR item on creation
+(In Progress, on a board-configured repo); a tracker-backed PR never triggers this call.
 
 ### Live pickup path (`/loop-continue`)
 

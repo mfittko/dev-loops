@@ -2,6 +2,10 @@
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { resolveSettings, applyDevloopsBoard } from "../projects/_resolve-project.mjs";
+import { main as addQueueItemMain } from "../projects/add-queue-item.mjs";
+import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
 tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
@@ -11,6 +15,16 @@ Behavior:
   - honors an explicit \`--assignee <login>\` / \`-a <login>\` when supplied (no default injected)
   - rejects \`--ready\` before invoking \`gh\`
   - detects missing \`Closes #N\` / \`Fixes #N\` in \`--body\` or \`--body-file\` content (non-fatal stderr warning)
+  - \`--lightweight\` (consumed here in every form — bare or \`=true/1/false/0\`, last
+    occurrence wins — never forwarded to \`gh\`): when an explicit \`--body\`/
+    \`--body-file\` also carries no \`Closes #N\`/\`Fixes #N\`, the new PR is issue-less
+    lightweight and is auto-enqueued as a board PR item in the configured In Progress column
+    (reuses \`queue.projectNumber\` / \`queue.boardTitle\` from \`.devloops\`, same as the queue
+    scripts). Requires an explicit \`--repo owner/name\` (space or = form). A trailing stdout
+    line reports the outcome: \`{"board":{"enqueued":bool,...}}\`. No board configured, no
+    \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
+    that line; exit code unaffected). Omitting \`--lightweight\`, or a body that already
+    carries a closing keyword (tracker-backed), never calls the board.
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
 Examples:
@@ -26,8 +40,17 @@ Exit codes:
   N  same non-zero exit code returned by \`gh pr create\``.trim();
 const parseError = buildParseError(USAGE);
 const READY_FLAG_PATTERN = /^--ready(?:$|=)/u;
+// Bare and inline-boolean forms, mirroring DRAFT_FLAG_PATTERN below: every
+// matching token is consumed (never forwarded to gh, which rejects unknown
+// flags), and the LAST occurrence decides — bare or =true/=1 enables,
+// anything else (=false, =0, ...) disables.
+const LIGHTWEIGHT_FLAG_PATTERN = /^--lightweight(?:=(.*))?$/iu;
+// Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
+const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
+const PR_URL_NUMBER_PATTERN = /\/pull\/(\d+)(?:\D|$)/u;
 const DRAFT_FLAG_PATTERN = /^--draft(?:=(.*))?$/iu;
-const DRAFT_TRUE_VALUE_PATTERN = /^(?:true|1)$/iu;
+// Shared inline-boolean truthiness for --draft= and --lightweight= values.
+const TRUE_FLAG_VALUE_PATTERN = /^(?:true|1)$/iu;
 // Detect both the long `--assignee`/`--assignee=<login>` forms and the `-a`
 // short flag that `gh pr create` documents, so an explicit assignee in either
 // form suppresses the `--assignee @me` default (otherwise a caller passing
@@ -56,14 +79,55 @@ async function resolveBody(args) {
   }
   return null; // unreadable → warn
 }
-async function warnMissingClosingKeyword(args) {
-  const body = await resolveBody(args);
+function warnMissingClosingKeyword(body) {
   if (body === null) return; // no --body or --body-file, skip
   if (!detectClosingKeyword(body)) {
     process.stderr.write(
       "[create-pr] Warning: PR body missing `Closes #N` or `Fixes #N`. " +
         "GitHub will not auto-close the linked issue on merge.\n",
     );
+  }
+}
+// A plain string value for a single-value flag, in both the space form
+// (`--repo owner/name`) and the inline form (`--repo=owner/name`); unlike
+// resolveBody, never reads a file. Returns null when the flag is absent.
+function getFlagValue(args, flagPattern) {
+  const idx = args.findIndex((token) => flagPattern.test(token));
+  if (idx === -1) return null;
+  const eq = args[idx].indexOf("=");
+  if (eq !== -1) return args[idx].slice(eq + 1);
+  return idx + 1 < args.length ? args[idx + 1] : null;
+}
+function parsePrNumberFromOutput(stdout) {
+  const match = PR_URL_NUMBER_PATTERN.exec(stdout ?? "");
+  return match ? Number(match[1]) : null;
+}
+// Auto-enqueue an issue-less lightweight PR as a board PR item in the configured
+// In Progress column. Reuses the same .devloops queue.projectNumber /
+// queue.boardTitle resolution and add-queue-item's idempotent add — never
+// reimplements the board API calls. Never throws: an unconfigured board, a
+// missing --repo, an unparsed PR number, or an enqueue failure are all
+// non-fatal no-ops reported in the returned shape.
+export async function enqueueIssuelessLightweightPr({ repo, prNumber, cwd, env, runChild }) {
+  if (!repo) return { enqueued: false, reason: "repo-not-specified" };
+  if (!Number.isInteger(prNumber) || prNumber < 1) return { enqueued: false, reason: "pr-number-not-parsed" };
+  const settings = resolveSettings(cwd);
+  if (!settings?.project && !settings?.title) {
+    return { enqueued: false, reason: "no-board-configured" };
+  }
+  const { columnNames, error: columnError } = loadStateColumnMap(cwd);
+  if (columnError) {
+    return { enqueued: false, reason: `config-error: ${columnError}` };
+  }
+  const args = { repo, item: prNumber };
+  applyDevloopsBoard(args, cwd);
+  args.column = columnNames[LOGICAL_COLUMN.IN_PROGRESS];
+  try {
+    const result = await addQueueItemMain(args, { env, runChild, cwd });
+    const { itemId, prNumber: itemPrNumber, status, alreadyPresent } = result.item;
+    return { enqueued: true, itemId, prNumber: itemPrNumber, status, alreadyPresent };
+  } catch (err) {
+    return { enqueued: false, reason: `enqueue-error: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 export function buildCreatePrArgs(argv) {
@@ -79,7 +143,7 @@ export function buildCreatePrArgs(argv) {
   }
   const draftTokens = args.filter((token) => DRAFT_FLAG_PATTERN.test(token));
   const lastDraftToken = draftTokens.length > 0 ? draftTokens.at(-1) : null;
-  const lastDraftSuppliesDraft = lastDraftToken === "--draft" || (typeof lastDraftToken === "string" && DRAFT_TRUE_VALUE_PATTERN.test(lastDraftToken.slice("--draft=".length)));
+  const lastDraftSuppliesDraft = lastDraftToken === "--draft" || (typeof lastDraftToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastDraftToken.slice("--draft=".length)));
   const hasAssignee = args.some((token) => ASSIGNEE_FLAG_PATTERN.test(token));
   return {
     help: false,
@@ -92,26 +156,71 @@ export function buildCreatePrArgs(argv) {
     ],
   };
 }
-export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = {}) {
+// captureStdout tees gh's stdout to a buffer (still writing it straight through to
+// process.stdout, unbuffered) so the PR URL can be parsed once gh exits, without
+// changing what a caller/terminal sees. Only enabled for the issue-less lightweight
+// path; every other caller keeps the plain "inherit" byte-identical behavior.
+export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = {}, { captureStdout = false } = {}) {
   return new Promise((resolve, reject) => {
+    // `gh pr create` never reads stdin (body comes from --body/--body-file), so
+    // the captured path ignores it rather than inheriting: inheriting a
+    // never-closing stdin (e.g. an in-process test runner) would hang any child
+    // that waits for stdin to end.
     const child = spawn(ghCommand, ghArgs, {
       env,
-      stdio: "inherit",
+      stdio: captureStdout ? ["ignore", "pipe", "inherit"] : "inherit",
     });
+    let stdout = "";
+    if (captureStdout) {
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+        process.stdout.write(chunk);
+      });
+    }
     child.on("error", reject);
     child.on("close", (code) => {
-      resolve(typeof code === "number" ? code : 1);
+      resolve({ code: typeof code === "number" ? code : 1, stdout });
     });
   });
 }
 export async function main(argv = process.argv.slice(2), runtime = {}) {
-  const { help, ghArgs } = buildCreatePrArgs(argv);
+  // Last occurrence wins, same as the --draft handling in buildCreatePrArgs.
+  const lastLightweightToken = argv.filter((token) => LIGHTWEIGHT_FLAG_PATTERN.test(token)).at(-1) ?? null;
+  const lightweight = lastLightweightToken === "--lightweight" ||
+    (typeof lastLightweightToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastLightweightToken.slice("--lightweight=".length)));
+  const forwardedArgv = argv.filter((token) => !LIGHTWEIGHT_FLAG_PATTERN.test(token));
+  const { help, ghArgs } = buildCreatePrArgs(forwardedArgv);
   if (help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
-  await warnMissingClosingKeyword(argv);
-  return spawnCreatePr(ghArgs, runtime);
+  const body = await resolveBody(forwardedArgv);
+  warnMissingClosingKeyword(body);
+  // Issue-less lightweight: caller signals lightweight AND an explicit body
+  // source (--body/--body-file) carries no closing keyword. A tracker-backed
+  // lightweight PR (closing keyword present) never reaches the board — its
+  // issue already owns the board entry. A null body (no explicit source) is
+  // NOT classified issue-less: the body may come from elsewhere (editor,
+  // template) and could carry a closing keyword this wrapper never saw, so it
+  // fails toward not enqueuing and reports body-not-provided instead.
+  const issueLess = lightweight && body !== null && !detectClosingKeyword(body);
+  const { code, stdout } = await spawnCreatePr(ghArgs, runtime, { captureStdout: issueLess });
+  if (lightweight && code === 0 && (issueLess || body === null)) {
+    const board = issueLess
+      ? await enqueueIssuelessLightweightPr({
+          repo: getFlagValue(forwardedArgv, REPO_FLAG_PATTERN),
+          prNumber: parsePrNumberFromOutput(stdout),
+          cwd: runtime.cwd ?? process.cwd(),
+          env: runtime.env ?? process.env,
+          runChild: runtime.runChild ?? _runChild,
+        })
+      : { enqueued: false, reason: "body-not-provided" };
+    if (!board.enqueued) {
+      process.stderr.write(`[create-pr] Board note: PR not enqueued (${board.reason}).\n`);
+    }
+    process.stdout.write(`${JSON.stringify({ board })}\n`);
+  }
+  return code;
 }
 if (isDirectCliRun(import.meta.url)) {
   try {
