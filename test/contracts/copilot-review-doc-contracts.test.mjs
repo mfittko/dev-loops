@@ -8,7 +8,7 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
-import { assertRuleOwned } from "./_rule-helpers.mjs";
+import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
 
 async function readCopilotSkillSurface() {
   const [skill, operationsDoc, intakeDoc] = await Promise.all([
@@ -176,16 +176,14 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     /if the refreshed snapshot reports unresolved threads, re-enter the reply\/resolve loop for the missed threads/i,
     "Step 7 should require re-entering the reply-resolve loop when unresolved threads remain",
   );
-  assert.match(
-    step7,
-    /The `pre_approval_gate` procedure must be entered and completed \(visible comment posted\) before any merge-ready or approval-ready declaration/i,
-    "pre-approval gate sequencing should forbid skipping the gate",
-  );
-  assert.match(
-    step7,
-    /Skipping the gate is not recoverable by asserting convergence/i,
-    "pre-approval gate sequencing should reject convergence-only claims",
-  );
+  // The "must be entered and completed before merge-ready" requirement is owned by
+  // GATE-COMMENT-FAIL-CLOSED (rule-ID reference asserted below) rather than pinned as
+  // prose here; "not recoverable by asserting convergence" is skill-local framing not
+  // yet promoted to a rule ID, so check it via keyword tokens, not an exact sentence (#1154).
+  assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "docs/gate-review-comment-contract.md");
+  assert.match(step7, /GATE-COMMENT-FAIL-CLOSED/, "pre-approval gate sequencing should reference the fail-closed rule ID");
+  assert.match(step7, /\bnot recoverable\b/i, "pre-approval gate sequencing should reject convergence-only claims");
+  assert.match(step7, /\bconvergence\b/i, "pre-approval gate sequencing should reject convergence-only claims");
   assert.match(
     step7,
     /### Merge-ready preconditions/i,
@@ -310,6 +308,23 @@ test("copilot-pr-followup skill caps Copilot re-review rounds via config and sna
   assert.match(step7, /if completed review rounds have reached the maximum/i);
   assert.match(step7, /`deferred to follow-up` note/i);
   assert.match(step7, /stop and report that the Copilot round limit was reached/i);
+  assertRuleOwned("COPILOT-FOLLOWUP-ROUND-CAP", "skills/copilot-pr-followup/SKILL.md");
+});
+
+test("copilot-pr-followup skill owns its procedural mechanics by rule ID (#1154)", async () => {
+  // These are the loop procedure/round-cap/wait-semantics/re-request mechanics this
+  // skill genuinely owns (per #1154); everything else routes to the state-graph,
+  // gate-comment, or gate-exec owner docs by ID instead of restating.
+  for (const id of [
+    "COPILOT-FOLLOWUP-WAIT-TOOLS",
+    "COPILOT-FOLLOWUP-REQUEST-BRANCHING",
+    "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
+    "COPILOT-FOLLOWUP-ROUND-CAP",
+    "COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING",
+  ]) {
+    assertRulePresent(id);
+    assertRuleOwned(id, "skills/copilot-pr-followup/SKILL.md");
+  }
 });
 
 test("legacy copilot workflow entrypoint agents are removed from normal executable surfaces", async () => {
@@ -419,31 +434,34 @@ test("checkpoint verdict comment ownership stays explicit in the canonical inter
   assert.match(devLoopDraftGate, /Required PR comment/i);
   assert.match(devLoopDraftGate, /`draft_gate`/);
   assert.match(devLoopDraftGate, /head SHA/i);
-  assert.match(devLoopDraftGate, /fail.closed|cannot be posted/i);
-  assert.match(devLoopDraftGate, /older head SHA does not satisfy/i);
-  assert.match(devLoopDraftGate, /stays draft and needs fixes/i);
-  assert.match(devLoopDraftGate, /visible `clean` `draft_gate` checkpoint verdict comment exists for the current head SHA/i);
-  assert.match(devLoopDraftGate, /post a new checkpoint verdict comment for the new head/i);
   assert.match(devLoopDraftGate, /does \*\*not\*\* satisfy `pre_approval_gate`|does not satisfy `pre_approval_gate`/i);
-  assert.match(devLoopDraftGate, /command names with pass.fail status/i);
-  assert.match(devLoopDraftGate, /raw passing test output/i);
-  assert.match(devLoopDraftGate, /truncate it to a deterministic retained-prefix length/i);
+  // Comment field content, the draft-boundary requirement, and fail-closed behavior are
+  // single-owner rules in the checkpoint verdict comment contract; this skill references
+  // them by ID rather than restating the phrase-pinned prose (#1154).
+  assertRuleOwned("GATE-COMMENT-VALIDATION-REPORTING", "docs/gate-review-comment-contract.md");
+  assertRuleOwned("GATE-COMMENT-DRAFT-REQUIREMENTS", "docs/gate-review-comment-contract.md");
+  assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "docs/gate-review-comment-contract.md");
+  assert.match(devLoopDraftGate, /GATE-COMMENT-VALIDATION-REPORTING/);
+  assert.match(devLoopDraftGate, /GATE-COMMENT-DRAFT-REQUIREMENTS/);
+  assert.match(devLoopDraftGate, /GATE-COMMENT-FAIL-CLOSED/);
+
   const devLoopPreApprovalGateMatch = copilotPrFollowupSkill.match(/### Pre-approval gate contract[\s\S]*?(?=\n### |\n## |$)/);
   const devLoopPreApprovalGate = devLoopPreApprovalGateMatch ? devLoopPreApprovalGateMatch[0] : "";
   assert.ok(devLoopPreApprovalGate.length > 0, "copilot-pr-followup pre-approval gate section not found");
   assert.match(devLoopPreApprovalGate, /Required PR comment/i);
   assert.match(devLoopPreApprovalGate, /`pre_approval_gate`/);
   assert.match(devLoopPreApprovalGate, /head SHA/i);
-  assert.match(devLoopPreApprovalGate, /fail.closed|cannot be posted/i);
-  assert.match(devLoopPreApprovalGate, /older head SHA does not satisfy/i);
-  assert.match(devLoopPreApprovalGate, /follow-up fixes are required before final approval/i);
-  assert.match(devLoopPreApprovalGate, /visible `clean` `pre_approval_gate` checkpoint verdict comment exists for the current head SHA/i);
-  assert.match(devLoopPreApprovalGate, /must not rely only on local or hidden artifacts/i);
-  assert.match(devLoopPreApprovalGate, /post a new checkpoint verdict comment for the new head/i);
   assert.match(devLoopPreApprovalGate, /does \*\*not\*\* replace the required `draft_gate` evidence|does not replace the required `draft_gate` evidence/i);
-  assert.match(devLoopPreApprovalGate, /command names with pass.fail status/i);
-  assert.match(devLoopPreApprovalGate, /raw passing test output/i);
-  assert.match(devLoopPreApprovalGate, /truncate it to a deterministic retained-prefix length/i);
+  // The "must be entered and completed before merge-ready" gate-boundary requirement is
+  // owned by GATE-COMMENT-FAIL-CLOSED (asserted below); the "not recoverable by asserting
+  // convergence" caution is skill-local framing not yet promoted to a rule ID, so check
+  // for it via keyword tokens rather than pinning the exact sentence (#1154).
+  assert.match(devLoopPreApprovalGate, /\bnot recoverable\b/i);
+  assert.match(devLoopPreApprovalGate, /\bconvergence\b/i);
+  assertRuleOwned("GATE-COMMENT-PREAPPROVAL-REQUIREMENTS", "docs/gate-review-comment-contract.md");
+  assert.match(devLoopPreApprovalGate, /GATE-COMMENT-VALIDATION-REPORTING/);
+  assert.match(devLoopPreApprovalGate, /GATE-COMMENT-PREAPPROVAL-REQUIREMENTS/);
+  assert.match(devLoopPreApprovalGate, /GATE-COMMENT-FAIL-CLOSED/);
 });
 test("issue-intake skill documents epic decomposition with GitHub sub-issue trees", async () => {
   const skillContent = await readCopilotSkillSurface();
