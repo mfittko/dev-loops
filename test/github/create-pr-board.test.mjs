@@ -259,6 +259,65 @@ test("create-pr --lightweight on a no-board repo is a silent no-op noted in the 
   });
 });
 
+test("create-pr --lightweight without --body/--body-file never enqueues: reason body-not-provided (no explicit body source)", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeDevloopsProjectNumber(tempDir, 7);
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/42\n" }], { logCalls: true });
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--fill", "--lightweight"],
+      { env, cwd: tempDir },
+    );
+
+    assert.equal(result.code, 0);
+    const boardLine = result.stdout.trim().split("\n").at(-1);
+    assert.deepEqual(JSON.parse(boardLine), { board: { enqueued: false, reason: "body-not-provided" } });
+    const ghCalls = (await readFile(ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+    assert.equal(ghCalls.length, 1); // gh pr create only — no board calls
+  });
+});
+
+test("create-pr --lightweight with --repo=owner/repo (equals form) enqueues the PR board item", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeDevloopsProjectNumber(tempDir, 7);
+    const { env } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/42\n" }]);
+
+    const responses = [
+      userPayload(),
+      listUserProjectsResponse([PROJECT]),
+      getFieldsResponse([STATUS_FIELD]),
+      itemsByContentResponse([]),
+      resolvePrResponse("PR_kwDO_42"),
+      addItemResponse("PVTI_new"),
+      updateFieldResponse(),
+    ];
+
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    let captured = "";
+    process.stdout.write = (chunk) => {
+      captured += chunk;
+      return true;
+    };
+    let code;
+    try {
+      code = await main(
+        // --base directly after --repo= proves the value comes from the inline
+        // token, not the next argv element.
+        ["--repo=owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", "no closing keyword here", "--lightweight"],
+        { env, cwd: tempDir, runChild: mockRunChild(responses) },
+      );
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    assert.equal(code, 0);
+    const boardLine = captured.trim().split("\n").at(-1);
+    assert.deepEqual(JSON.parse(boardLine), {
+      board: { enqueued: true, itemId: "PVTI_new", prNumber: 42, status: "In Progress", alreadyPresent: false },
+    });
+  });
+});
+
 test("create-pr without --lightweight never calls the board and never prints a board JSON line", async () => {
   await withTempDir(async (tempDir) => {
     await writeDevloopsProjectNumber(tempDir, 7);

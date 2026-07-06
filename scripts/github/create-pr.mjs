@@ -15,14 +15,15 @@ Behavior:
   - honors an explicit \`--assignee <login>\` / \`-a <login>\` when supplied (no default injected)
   - rejects \`--ready\` before invoking \`gh\`
   - detects missing \`Closes #N\` / \`Fixes #N\` in \`--body\` or \`--body-file\` content (non-fatal stderr warning)
-  - \`--lightweight\` (consumed here, never forwarded to \`gh\`): when the body also carries no
-    \`Closes #N\`/\`Fixes #N\`, the new PR is issue-less lightweight and is auto-enqueued as a
-    board PR item in the configured In Progress column (reuses \`queue.projectNumber\` /
-    \`queue.boardTitle\` from \`.devloops\`, same as the queue scripts). Requires an explicit
-    \`--repo owner/name\`. A trailing stdout line reports the outcome:
-    \`{"board":{"enqueued":bool,...}}\`. No board configured, no \`--repo\`, or an enqueue error
-    is a non-fatal no-op (noted in that line; exit code unaffected). Omitting \`--lightweight\`,
-    or a body that already carries a closing keyword (tracker-backed), never calls the board.
+  - \`--lightweight\` (consumed here, never forwarded to \`gh\`): when an explicit \`--body\`/
+    \`--body-file\` also carries no \`Closes #N\`/\`Fixes #N\`, the new PR is issue-less
+    lightweight and is auto-enqueued as a board PR item in the configured In Progress column
+    (reuses \`queue.projectNumber\` / \`queue.boardTitle\` from \`.devloops\`, same as the queue
+    scripts). Requires an explicit \`--repo owner/name\` (space or = form). A trailing stdout
+    line reports the outcome: \`{"board":{"enqueued":bool,...}}\`. No board configured, no
+    \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
+    that line; exit code unaffected). Omitting \`--lightweight\`, or a body that already
+    carries a closing keyword (tracker-backed), never calls the board.
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
 Examples:
@@ -39,7 +40,8 @@ Exit codes:
 const parseError = buildParseError(USAGE);
 const READY_FLAG_PATTERN = /^--ready(?:$|=)/u;
 const LIGHTWEIGHT_FLAG_PATTERN = /^--lightweight$/u;
-const REPO_FLAG_PATTERN = /^--repo$/u;
+// Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
+const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
 const PR_URL_NUMBER_PATTERN = /\/pull\/(\d+)(?:\D|$)/u;
 const DRAFT_FLAG_PATTERN = /^--draft(?:=(.*))?$/iu;
 const DRAFT_TRUE_VALUE_PATTERN = /^(?:true|1)$/iu;
@@ -80,12 +82,15 @@ function warnMissingClosingKeyword(body) {
     );
   }
 }
-// A plain string value for a single-value flag (e.g. `--repo owner/name`); unlike
+// A plain string value for a single-value flag, in both the space form
+// (`--repo owner/name`) and the inline form (`--repo=owner/name`); unlike
 // resolveBody, never reads a file. Returns null when the flag is absent.
 function getFlagValue(args, flagPattern) {
   const idx = args.findIndex((token) => flagPattern.test(token));
-  if (idx === -1 || idx + 1 >= args.length) return null;
-  return args[idx + 1];
+  if (idx === -1) return null;
+  const eq = args[idx].indexOf("=");
+  if (eq !== -1) return args[idx].slice(eq + 1);
+  return idx + 1 < args.length ? args[idx + 1] : null;
 }
 function parsePrNumberFromOutput(stdout) {
   const match = PR_URL_NUMBER_PATTERN.exec(stdout ?? "");
@@ -182,21 +187,25 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   }
   const body = await resolveBody(forwardedArgv);
   warnMissingClosingKeyword(body);
-  // Issue-less lightweight: caller signals lightweight AND the body carries no
-  // closing keyword. A tracker-backed lightweight PR (closing keyword present)
-  // never reaches the board — its issue already owns the board entry.
-  const issueLess = lightweight && !detectClosingKeyword(body ?? "");
+  // Issue-less lightweight: caller signals lightweight AND an explicit body
+  // source (--body/--body-file) carries no closing keyword. A tracker-backed
+  // lightweight PR (closing keyword present) never reaches the board — its
+  // issue already owns the board entry. A null body (no explicit source) is
+  // NOT classified issue-less: the body may come from elsewhere (editor,
+  // template) and could carry a closing keyword this wrapper never saw, so it
+  // fails toward not enqueuing and reports body-not-provided instead.
+  const issueLess = lightweight && body !== null && !detectClosingKeyword(body);
   const { code, stdout } = await spawnCreatePr(ghArgs, runtime, { captureStdout: issueLess });
-  if (issueLess && code === 0) {
-    const repo = getFlagValue(forwardedArgv, REPO_FLAG_PATTERN);
-    const prNumber = parsePrNumberFromOutput(stdout);
-    const board = await enqueueIssuelessLightweightPr({
-      repo,
-      prNumber,
-      cwd: runtime.cwd ?? process.cwd(),
-      env: runtime.env ?? process.env,
-      runChild: runtime.runChild ?? _runChild,
-    });
+  if (lightweight && code === 0 && (issueLess || body === null)) {
+    const board = issueLess
+      ? await enqueueIssuelessLightweightPr({
+          repo: getFlagValue(forwardedArgv, REPO_FLAG_PATTERN),
+          prNumber: parsePrNumberFromOutput(stdout),
+          cwd: runtime.cwd ?? process.cwd(),
+          env: runtime.env ?? process.env,
+          runChild: runtime.runChild ?? _runChild,
+        })
+      : { enqueued: false, reason: "body-not-provided" };
     if (!board.enqueued) {
       process.stderr.write(`[create-pr] Board note: PR not enqueued (${board.reason}).\n`);
     }
