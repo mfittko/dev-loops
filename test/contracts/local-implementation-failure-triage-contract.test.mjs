@@ -13,7 +13,11 @@ test("local-implementation skill owns the narrow failure-triage order by rule ID
   assertRuleOwned("LOCAL-FAILURE-TRIAGE-ORDER", SKILL_PATH);
 
   const content = await readRepo(SKILL_PATH);
-  const section = content.slice(content.indexOf("## Narrow failure-triage fast path"));
+  const headingIndex = content.indexOf("## Narrow failure-triage fast path");
+  assert.ok(headingIndex !== -1, "the Narrow failure-triage fast path section must exist");
+  const afterHeading = content.slice(headingIndex + 1);
+  const nextHeading = afterHeading.search(/^## /m);
+  const section = afterHeading.slice(0, nextHeading === -1 ? undefined : nextHeading);
   const numberedSteps = section.match(/^\d+\.\s/gm) ?? [];
 
   assert.ok(numberedSteps.length >= 7, "narrow failure-triage fast path should keep its 7 ordered steps");
