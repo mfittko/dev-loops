@@ -261,8 +261,10 @@ export function detectNearDuplicates(definitions) {
 }
 
 export function detectModalityConflicts(definitions) {
+  // Order-insensitive: group every definition per normalized subject first,
+  // then compare all pairs, so file-walk order can never mask a conflict
+  // (this scan gates the build).
   const bySubject = new Map();
-  const findings = [];
   for (const def of definitions) {
     const modalities = [...def.body.matchAll(MODAL_RE)].map((m) => m[1]);
     if (modalities.length === 0) continue;
@@ -273,14 +275,21 @@ export function detectModalityConflicts(definitions) {
       .toLowerCase()
       .trim();
     if (!subject) continue;
-    const prior = bySubject.get(subject);
-    if (prior) {
-      const priorNegative = prior.modalities.some((m) => m.endsWith("NOT"));
-      const currentNegative = modalities.some((m) => m.endsWith("NOT"));
-      const weaker = prior.modalities.includes("MUST") && modalities.some((m) => m === "SHOULD" || m === "MAY");
-      if (priorNegative !== currentNegative || weaker) findings.push({ kind: "modality_conflict", a: prior.def, b: def });
-    } else {
-      bySubject.set(subject, { def, modalities });
+    if (!bySubject.has(subject)) bySubject.set(subject, []);
+    bySubject.get(subject).push({ def, modalities });
+  }
+  const findings = [];
+  for (const entries of bySubject.values()) {
+    for (let i = 0; i < entries.length; i += 1) {
+      for (let j = i + 1; j < entries.length; j += 1) {
+        const a = entries[i];
+        const b = entries[j];
+        const aNegative = a.modalities.some((m) => m.endsWith("NOT"));
+        const bNegative = b.modalities.some((m) => m.endsWith("NOT"));
+        const weaker = (a.modalities.includes("MUST") && b.modalities.some((m) => m === "SHOULD" || m === "MAY"))
+          || (b.modalities.includes("MUST") && a.modalities.some((m) => m === "SHOULD" || m === "MAY"));
+        if (aNegative !== bNegative || weaker) findings.push({ kind: "modality_conflict", a: a.def, b: b.def });
+      }
     }
   }
   return findings;

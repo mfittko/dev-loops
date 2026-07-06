@@ -110,6 +110,22 @@ test("near-duplicate and modality conflict scan helpers detect findings", () => 
   ]).length, 1);
 });
 
+test("modality conflict scan is order-insensitive (gating must not depend on file-walk order)", () => {
+  const mustFirst = [
+    { id: "A-001", body: "The agent MUST stop before merge." },
+    { id: "A-002", body: "The agent SHOULD stop before merge." },
+  ];
+  const shouldFirst = [...mustFirst].reverse();
+  assert.equal(detectModalityConflicts(mustFirst).length, 1, "MUST-then-SHOULD downgrade must be flagged");
+  assert.equal(detectModalityConflicts(shouldFirst).length, 1, "SHOULD-then-MUST (reverse order) must be flagged identically");
+  const threeWay = [
+    { id: "B-001", body: "The loop MAY retry the request." },
+    { id: "B-002", body: "The loop MUST retry the request." },
+    { id: "B-003", body: "The loop MUST NOT retry the request." },
+  ];
+  assert.ok(detectModalityConflicts(threeWay).length >= 2, "all conflicting pairs in a subject group are reported");
+});
+
 test("validateRuleOwnership gates on a modality conflict (no longer advisory)", async () => {
   const dir = await fixture({
     "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The agent MUST stop before merge and report the gate. |",
