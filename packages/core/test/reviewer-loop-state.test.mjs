@@ -229,39 +229,56 @@ test("interpretReviewerLoopState routes failures to blocked_needs_user_decision"
   }
 });
 
-// #1200: reviewSubmissionStatus:"failed" on draft_review_posted/waiting_for_user_submit-shaped
-// snapshots must fail closed too, and REVIEWER_TRANSITIONS must declare those edges so the
-// interpreter's output stays reachable via the declared graph (see property test below).
-test("interpretReviewerLoopState fails closed on submission failure from posted/waiting-submit shapes", () => {
-  const posted = interpretReviewerLoopState({
-    prExists: true,
-    prNumber: 1,
-    prHeadSha: "abc",
-    draftReviewPosted: true,
-    draftReviewCommitSha: "abc",
-    reviewSubmissionStatus: "failed",
-  });
-  assert.equal(posted.state, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION);
-  assert.ok(REVIEWER_TRANSITIONS[REVIEWER_STATE.DRAFT_REVIEW_POSTED].includes(REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION));
+// Property test (#1200 AC1): interpreter outputs are always reachable via declared
+// REVIEWER_TRANSITIONS edges. Sweep: one representative snapshot per interpreter-producible
+// state x every reviewSubmissionStatus value; every non-identity (before, after) pair the
+// interpreter produces must be a declared edge. The reviewSubmissionStatus guards are
+// global-precedence in the interpreter, so this sweep is exactly what forced the
+// blocked/submitted edges into the table; it fails on the pre-#1200 table.
+test("interpretReviewerLoopState outputs stay reachable via REVIEWER_TRANSITIONS across a reviewSubmissionStatus sweep", () => {
+  // Base fixtures leave reviewSubmissionStatus at its "none" default so the sweep mutation
+  // never clobbers a state-defining field; the blocked representative uses the
+  // localPlanningStatus variant for the same reason. Legacy compatibility states
+  // (waiting_for_author_followup / waiting_for_re_request) are never interpreter outputs
+  // and have no snapshot shape, so they are intentionally absent.
+  const representatives = [
+    { prExists: false },
+    { prExists: true, prNumber: 1, prDraft: true },
+    { prExists: true, prNumber: 1, prMerged: true },
+    { prExists: true, prNumber: 1 }, // idle open non-draft PR
+    { prExists: true, prNumber: 1, reviewRequested: true },
+    { prExists: true, prNumber: 1, localPlanningStatus: "determining" },
+    { prExists: true, prNumber: 1, localReviewRunsStatus: "running" },
+    { prExists: true, prNumber: 1, localReviewRunsStatus: "completed" },
+    { prExists: true, prNumber: 1, draftReviewPrepared: true },
+    { prExists: true, prNumber: 1, prHeadSha: "abc", draftReviewPosted: true, draftReviewCommitSha: "abc" },
+    { prExists: true, prNumber: 1, prHeadSha: "abc", draftReviewPosted: true, draftReviewCommitSha: "abc", draftReviewNotificationStatus: "notified" },
+    { prExists: true, prNumber: 1, prHeadSha: "def", draftReviewPosted: true, draftReviewCommitSha: "abc" },
+    { prExists: true, prNumber: 1, prHeadSha: "abc", submittedReviewPresent: true, submittedReviewCommitSha: "abc" },
+    { prExists: true, prNumber: 1, localPlanningStatus: "failed" },
+  ];
 
-  const waitingSubmit = interpretReviewerLoopState({
-    prExists: true,
-    prNumber: 1,
-    prHeadSha: "abc",
-    draftReviewPosted: true,
-    draftReviewCommitSha: "abc",
-    draftReviewNotificationStatus: "notified",
-    reviewSubmissionStatus: "failed",
-  });
-  assert.equal(waitingSubmit.state, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION);
-  assert.ok(REVIEWER_TRANSITIONS[REVIEWER_STATE.WAITING_FOR_USER_SUBMIT].includes(REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION));
+  const seenStates = new Set();
+  for (const base of representatives) {
+    const before = interpretReviewerLoopState(base).state;
+    seenStates.add(before);
+    for (const status of ["none", "submitted", "failed"]) {
+      const after = interpretReviewerLoopState({ ...base, reviewSubmissionStatus: status }).state;
+      if (after === before) continue;
+      assert.ok(
+        REVIEWER_TRANSITIONS[before].includes(after),
+        `${before} -> ${after} (reviewSubmissionStatus=${status}) must be a declared REVIEWER_TRANSITIONS edge`,
+      );
+    }
+  }
+
+  // Sweep completeness: every interpreter-producible state is represented.
+  const producible = Object.values(REVIEWER_STATE).filter(
+    (state) => state !== REVIEWER_STATE.WAITING_FOR_AUTHOR_FOLLOWUP
+      && state !== REVIEWER_STATE.WAITING_FOR_RE_REQUEST,
+  );
+  assert.deepEqual([...seenStates].sort(), [...producible].sort());
 });
-
-// The broader "every REVIEWER_TRANSITIONS-declared edge is exercised by a real fixture"
-// property test lives in test/docs/validate-state-machine-conformance.test.mjs (the
-// registered "reviewer-loop-state" machine's completeness/liveness/conformance/safety
-// report), which now covers the two edges added above; no need to duplicate that machinery
-// here.
 
 test("selectReviewerPlan keeps bounded deterministic angles", () => {
   assert.ok(Array.isArray(REVIEWER_SUPPORTED_ANGLES));

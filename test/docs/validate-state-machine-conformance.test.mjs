@@ -431,32 +431,22 @@ test("reviewer-loop-state adversarial probe: a local failure fails closed even a
   assert.equal(safety.ok, true);
 });
 
-test("reviewer-loop-state adversarial probe: submission failure fails closed from draft_review_posted/waiting_for_user_submit shapes (#1200)", async () => {
+test("reviewer-loop-state adversarial probe: submission failure fails closed even from a stale-draft race (#1200)", async () => {
   const { interpretReviewerLoopState, REVIEWER_STATE, REVIEWER_TRANSITIONS } = await import("@dev-loops/core/loop/reviewer-loop-state");
 
-  // Before #1200, these two shapes correctly interpreted to BLOCKED_NEEDS_USER_DECISION but
-  // REVIEWER_TRANSITIONS declared no draft_review_posted/waiting_for_user_submit -> blocked
-  // edge, so the interpreter's real output was unreachable via the declared graph.
-  const posted = interpretReviewerLoopState({
+  // The realistic race behind #1200: the submission fails precisely BECAUSE the head moved,
+  // so the snapshot simultaneously looks review_invalidated-shaped (stale draft SHA) and
+  // carries reviewSubmissionStatus:"failed". The global failure guard must outrank the
+  // invalidation branch, and review_invalidated -> blocked must be a declared edge so the
+  // interpreter's output is reachable via the graph.
+  const interpretation = interpretReviewerLoopState({
     prExists: true,
     prDraft: false,
     draftReviewPosted: true,
-    prHeadSha: "abc1234",
+    prHeadSha: "def5678",
     draftReviewCommitSha: "abc1234",
     reviewSubmissionStatus: "failed",
   });
-  assert.equal(posted.state, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION);
-  assert.ok(REVIEWER_TRANSITIONS[REVIEWER_STATE.DRAFT_REVIEW_POSTED].includes(REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION));
-
-  const waitingSubmit = interpretReviewerLoopState({
-    prExists: true,
-    prDraft: false,
-    draftReviewPosted: true,
-    draftReviewNotificationStatus: "notified",
-    prHeadSha: "abc1234",
-    draftReviewCommitSha: "abc1234",
-    reviewSubmissionStatus: "failed",
-  });
-  assert.equal(waitingSubmit.state, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION);
-  assert.ok(REVIEWER_TRANSITIONS[REVIEWER_STATE.WAITING_FOR_USER_SUBMIT].includes(REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION));
+  assert.equal(interpretation.state, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION);
+  assert.ok(REVIEWER_TRANSITIONS[REVIEWER_STATE.REVIEW_INVALIDATED].includes(REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION));
 });

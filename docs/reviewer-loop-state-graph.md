@@ -44,6 +44,24 @@ Terminal state with no outgoing transitions: `blocked_needs_user_decision`.
   - review submission fails (`reviewSubmissionStatus: "failed"`) before the surfaced-link wait is observed
 - `waiting_for_user_submit` -> `blocked_needs_user_decision`
   - review submission fails (`reviewSubmissionStatus: "failed"`) after the draft link is surfaced
+- `review_invalidated` -> `blocked_needs_user_decision`
+  - review submission fails while the pending draft is already stale for the current head; the failure signal outranks invalidation handling
+- `submitted_review` -> `blocked_needs_user_decision`
+  - a submission-failure signal arrives alongside a recorded submitted review; fail closed pending explicit user decision
+- `waiting_for_review_request` -> `blocked_needs_user_decision`
+  - a lingering failure signal (planning, run, merge, or submission `failed`) on an open non-draft PR fails closed even with no otherwise-active pass
+- `waiting_for_review_request` -> `submitted_review`
+  - a recorded submitted outcome (`reviewSubmissionStatus: "submitted"`) settles with no other active pass signal
+- `review_requested` -> `submitted_review`
+  - a recorded submitted outcome outranks the request signal until an explicit new pass begins
+- `determine_review_plan` -> `submitted_review`
+  - a recorded submitted outcome outranks stale planning metadata
+- `reviews_running` -> `submitted_review`
+  - a recorded submitted outcome outranks stale run metadata
+- `merge_results` -> `submitted_review`
+  - a recorded submitted outcome outranks stale merge metadata
+- `draft_review_ready` -> `submitted_review`
+  - a recorded submitted outcome outranks a stale prepared-draft signal
 - `review_requested` -> `determine_review_plan`
   - review angles are being selected
 - `determine_review_plan` -> `reviews_running`
