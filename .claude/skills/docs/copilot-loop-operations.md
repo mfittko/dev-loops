@@ -230,7 +230,7 @@ A watcher sleeping between polls is expected behavior, not a blocker.
 ## Hard rule: no inline interpreters
 
 <!-- rule: OPS-NO-INLINE-INTERPRETER -->
-`OPS-NO-INLINE-INTERPRETER`: Coordinator and agent flows MUST NOT invoke an inline interpreter (`node -e`/`node --eval`, `python3 -c`, `python3 - <<heredoc`, or equivalent) to (a) parse any dev-loops tool output, or (b) mutate repository files. Sanctioned paths: a tool's `--jq`/`--silent` output flags (or `gh ... --jq`) for (a); the editor/patch tools, or `gh ... --body-file` composed from a `--jq` read, for (b). This rule applies to ALL repos using the dev-loop workflow, not just the source repo.
+`OPS-NO-INLINE-INTERPRETER`: Coordinator and agent flows MUST NOT invoke an inline interpreter (`node -e`/`node --eval`, `python3 -c`, `python3 - <<EOF` heredocs, or equivalent) to (a) parse any dev-loops tool output, or (b) mutate repository files. Sanctioned paths: a tool's `--jq`/`--silent` output flags (or `gh ... --jq`) for (a); the editor/patch tools, or `gh ... --body-file` composed from a `--jq` read, for (b). This rule applies to ALL repos using the dev-loop workflow, not just the source repo.
 
 Post-watch read pattern: after a probe/watch settles, do not parse its output — re-read state via `detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>` and, for thread bodies/ids, `list-review-threads.mjs --repo <owner/name> --pr <number> --unresolved-only` (see [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md) Step 6).
 
