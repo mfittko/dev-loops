@@ -143,10 +143,9 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
 - **completion is detected via the harness completion notification, or by the presence of the reviewer's findings artifact at its deterministic output path — never by reading the reviewer's transcript.** The orchestrator awaits fan-in on those artifact paths (or the completion notification) and joins via `consolidateFanin` (Phase 3); it must not tail/parse a reviewer's JSONL transcript, use `node -e`/`python3` to parse tool JSON, or `sleep`-poll a shell loop for completion (forbidden — see [anti-patterns](../skills/docs/anti-patterns.md)).
 
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
-`GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Reviewers run in parallel when practical. When
-parallel execution is impractical (for example due to tooling or resource constraints),
-the fan-out MUST run all reviewers sequentially and MUST record why parallel execution
-was impractical.
+`GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Reviewers SHOULD run in parallel when practical; when parallel execution is impractical
+(for example due to tooling or resource constraints), the fan-out MUST run all reviewers
+sequentially and MUST record why parallel execution was impractical.
 
 **Re-run rule:** In subsequent retry cycles (Phase 5), only re-run reviewers that
 produced `findings_present` in the previous pass. Reviewers that returned `clean`
