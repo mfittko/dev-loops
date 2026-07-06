@@ -232,6 +232,6 @@ A watcher sleeping between polls is expected behavior, not a blocker.
 <!-- rule: OPS-NO-INLINE-INTERPRETER -->
 `OPS-NO-INLINE-INTERPRETER`: Coordinator and agent flows MUST NOT invoke an inline interpreter (`node -e`/`node --eval`, `python3 -c`, `python3 - <<heredoc`, or equivalent) to (a) parse any dev-loops tool output, or (b) mutate repository files. Sanctioned paths: a tool's `--jq`/`--silent` output flags (or `gh ... --jq`) for (a); the editor/patch tools, or `gh ... --body-file` composed from a `--jq` read, for (b). This rule applies to ALL repos using the dev-loop workflow, not just the source repo.
 
-Post-watch read pattern: after a probe/watch settles, do not parse its output — re-read state via `detect-copilot-loop-state.mjs` and, for thread bodies/ids, `list-review-threads.mjs --unresolved-only` (see [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md) Step 6).
+Post-watch read pattern: after a probe/watch settles, do not parse its output — re-read state via `detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>` and, for thread bodies/ids, `list-review-threads.mjs --repo <owner/name> --pr <number> --unresolved-only` (see [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md) Step 6).
 
 If the polling interval is 1 minute, do not treat silence shorter than one full poll interval as suspicious, and do not configure needs-attention thresholds close to a few seconds for this loop.
