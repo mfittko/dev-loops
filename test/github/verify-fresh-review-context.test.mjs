@@ -384,6 +384,97 @@ test("verify-fresh-review-context --context-path with a flag-like value fails cl
   }
 });
 
+// ---------------------------------------------------------------------------
+// #1207: GATE-EXEC-BRIEFING-PREFIX enforcement — record a hash of the
+// invariant briefing block on the reviewer's sentinel so
+// verify-briefing-prefixes.mjs can compare it across reviewers.
+// ---------------------------------------------------------------------------
+
+test("--prefix-hash is recorded on the sentinel and echoed in the result", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "a".repeat(64);
+    const result = runScript(["--scope", "coverage", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.fresh, true);
+    assert.equal(output.prefixHash, hash);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--prefix-hash rejects a non-sha256-shaped value", async () => {
+  const result = runScript(["--scope", "coverage", "--prefix-hash", "not-a-hash"]);
+  assert.equal(result.status, 2, result.stderr);
+});
+
+test("--prefix-hash uppercase input is normalized to lowercase on the sentinel", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "AB".repeat(32);
+    const result = runScript(["--scope", "coverage", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout.trim()).prefixHash, hash.toLowerCase());
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--prefix-file hashes the file's bytes (sha256) and records the digest", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    await writeFile(path.join(tmpDir, "prefix.txt"), "invariant block content", "utf8");
+    const result = runScript(["--scope", "coverage", "--prefix-file", "prefix.txt"], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.match(output.prefixHash, /^[0-9a-f]{64}$/);
+
+    // Deterministic: hashing the same bytes again (different scope, same file)
+    // yields the SAME digest — the positive case verify-briefing-prefixes.mjs relies on.
+    const result2 = runScript(["--scope", "other-angle", "--prefix-file", "prefix.txt"], { cwd: tmpDir });
+    assert.equal(result2.status, 0, result2.stderr);
+    assert.equal(JSON.parse(result2.stdout.trim()).prefixHash, output.prefixHash);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--prefix-file fails closed when the file is missing", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const result = runScript(["--scope", "coverage", "--prefix-file", "missing.txt"], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.fresh, false);
+    assert.ok(output.reason.includes("not found"));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--prefix-hash and --prefix-file are mutually exclusive", async () => {
+  const result = runScript(["--scope", "coverage", "--prefix-hash", "a".repeat(64), "--prefix-file", "x.txt"]);
+  assert.equal(result.status, 2, result.stderr);
+});
+
+test("without --prefix-hash/--prefix-file, no prefixHash field is recorded (backward compatible)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const result = runScript(["--scope", "coverage"], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal("prefixHash" in output, false);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("head round: a stale pre-round (scope-only) sentinel does NOT block a new head (#1108)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   const git = makeGit(tmpDir);

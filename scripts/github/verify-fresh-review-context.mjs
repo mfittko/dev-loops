@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
+       [--prefix-hash <sha256>|--prefix-file <path>]
 Verify that the current scoped-reviewer session has fresh context.
 
 "Fresh" means the reviewer's context is the neutral gate-context builder
@@ -45,6 +47,18 @@ Options:
                   means either a stale/isolated checkout or a skipped
                   preamble, and the reviewer must refuse to proceed
                   rather than silently reviewing without seeded context.
+  --prefix-hash <sha256>  A 64-character lowercase hex SHA-256 digest of the
+                  invariant briefing block this reviewer was seeded with
+                  (GATE-EXEC-BRIEFING-PREFIX in
+                  docs/gate-review-sub-loop-contract.md). Recorded on the
+                  reviewer's sentinel so \`verify-briefing-prefixes.mjs\` can
+                  fail closed when reviewers of the same gate pass were
+                  seeded with different invariant blocks. Mutually exclusive
+                  with --prefix-file.
+  --prefix-file <path>  Path to the invariant briefing block text; the tool
+                  hashes its raw bytes (sha256) and records the digest same
+                  as --prefix-hash. Fails closed (exit 1) if the file is
+                  missing. Mutually exclusive with --prefix-hash.
 Output (stdout, JSON):
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>" }
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "gateContextPath": "...", "gateContextPresent": true }
@@ -57,9 +71,12 @@ Exit codes:
   0  Clean (first run)
   1  Refuse to review: contaminated (prior session detected), OR (with
      --context-path) the seeded gate-context artifact is missing or resolves
-     outside the reviewer's working directory
-  2  Usage or internal error, or invalid --jq filter`.trim();
+     outside the reviewer's working directory, OR (with --prefix-file) the
+     prefix file is missing
+  2  Usage or internal error, invalid --jq filter, or invalid/conflicting
+     --prefix-hash/--prefix-file`.trim();
 const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const parseError = buildParseError(USAGE);
 // Resolve a `--flag <value>` argument. Returns null when the flag is absent,
 // "" when it is present but the value is missing/empty/flag-like (a following
@@ -89,6 +106,12 @@ function resolveValidatedScope(argv) {
 }
 function resolveContextPath(argv) {
   return resolveFlagValue(argv, "--context-path");
+}
+function resolvePrefixHash(argv) {
+  return resolveFlagValue(argv, "--prefix-hash");
+}
+function resolvePrefixFile(argv) {
+  return resolveFlagValue(argv, "--prefix-file");
 }
 // Round = the current head SHA, so a retry on a new head gets a fresh key while
 // a same-head re-entry collides and fails closed. `git rev-parse HEAD` yields the
@@ -145,6 +168,32 @@ async function main(argv = process.argv.slice(2)) {
     )}\n`);
     return 2;
   }
+  const prefixHashArg = resolvePrefixHash(argv);
+  if (prefixHashArg === "") {
+    process.stderr.write(`${formatCliError(
+      parseError("Invalid --prefix-hash value: must be non-empty.")
+    )}\n`);
+    return 2;
+  }
+  const prefixFileArg = resolvePrefixFile(argv);
+  if (prefixFileArg === "") {
+    process.stderr.write(`${formatCliError(
+      parseError("Invalid --prefix-file value: must be non-empty.")
+    )}\n`);
+    return 2;
+  }
+  if (prefixHashArg !== null && prefixFileArg !== null) {
+    process.stderr.write(`${formatCliError(
+      parseError("--prefix-hash and --prefix-file are mutually exclusive — pass at most one.")
+    )}\n`);
+    return 2;
+  }
+  if (prefixHashArg !== null && !SHA256_HEX_RE.test(prefixHashArg.trim().toLowerCase())) {
+    process.stderr.write(`${formatCliError(
+      parseError(`Invalid --prefix-hash value "${prefixHashArg}": must be a 64-character lowercase hex SHA-256 digest.`)
+    )}\n`);
+    return 2;
+  }
   const jqArg = resolveFlagValue(argv, "--jq");
   if (jqArg === "") {
     process.stderr.write(`${formatCliError(
@@ -195,6 +244,26 @@ async function main(argv = process.argv.slice(2)) {
       }, false);
     }
   }
+  // Resolve the invariant-briefing prefix hash (GATE-EXEC-BRIEFING-PREFIX) before
+  // sentinel creation, same ordering rationale as --context-path above: a failure
+  // here must not burn the scope sentinel.
+  let prefixHash = prefixHashArg !== null ? prefixHashArg.trim().toLowerCase() : null;
+  if (prefixHash === null && prefixFileArg !== null) {
+    let prefixFileBytes;
+    try {
+      prefixFileBytes = await readFile(path.resolve(process.cwd(), prefixFileArg));
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+      return finish({
+        ok: true,
+        fresh: false,
+        sentinelCreated: false,
+        round: round ?? null,
+        reason: `--prefix-file "${prefixFileArg}" not found — cannot compute the invariant-briefing prefix hash (GATE-EXEC-BRIEFING-PREFIX).`,
+      }, false);
+    }
+    prefixHash = createHash("sha256").update(prefixFileBytes).digest("hex");
+  }
   const sentinelPath = path.resolve(process.cwd(), sentinelRelative(scope, round));
   try {
     await mkdir(path.dirname(sentinelPath), { recursive: true });
@@ -217,6 +286,7 @@ async function main(argv = process.argv.slice(2)) {
     pid: process.pid,
     ...(scope ? { scope } : {}),
     ...(round ? { round } : {}),
+    ...(prefixHash ? { prefixHash } : {}),
   };
   try {
     await writeFile(sentinelPath, JSON.stringify(sentinel, null, 2) + "\n", {
@@ -242,6 +312,7 @@ async function main(argv = process.argv.slice(2)) {
     sentinelCreated: true,
     round: round ?? null,
     ...(contextPathArg !== null ? { gateContextPath: contextPathArg, gateContextPresent: true } : {}),
+    ...(prefixHash ? { prefixHash } : {}),
   }, true);
 }
 if (isDirectCliRun(import.meta.url)) {

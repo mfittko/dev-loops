@@ -31,7 +31,9 @@ Workflow tool. Concretely:
 
 The cost win is **work-dedup**: the diff + adjacent code is built once, not re-derived
 by every reviewer; a shared-prefix prompt-cache is an opportunistic bonus, not a
-requirement.
+requirement. The exact LAYOUT of the seeded briefing text (what precedes what, and what
+must be byte-identical across reviewers to make prompt-cache reuse possible at all) is
+owned by `GATE-EXEC-BRIEFING-PREFIX` in [Phase 2](#phase-2--fan-out-independent-reviewers-seeded-with-the-neutral-bundle) below.
 
 This contract owns the **execution shape** of gate-review work. It does not own:
 - which review angles a specific gate runs (that stays in the skill)
@@ -59,7 +61,7 @@ Before fanning out reviewers, run a preamble pass that produces review handoff c
 in the PR's actual worktree/head — the same checkout the reviewers will run in — so the
 gitignored, worktree-local `tmp/gate-context` bundle it writes is present for them:
 
-- the context-builder runs in fresh context and emits a NEUTRAL artifact; that artifact (never the parent session's chat history or state) is what each downstream reviewer subagent is later seeded with. **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs --scope <angle> --context-path <path>` at startup and refuse to proceed on contamination or a missing gate-context artifact. Use `--scope <angle>` so each reviewer writes its own sentinel, and `--context-path` to the artifact this phase writes below.
+- the context-builder runs in fresh context and emits a NEUTRAL artifact; that artifact (never the parent session's chat history or state) is what each downstream reviewer subagent is later seeded with. **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs --scope <angle> --context-path <path> --prefix-hash <sha256>` (or `--prefix-file <path>`) at startup and refuse to proceed on contamination or a missing gate-context artifact. Use `--scope <angle>` so each reviewer writes its own sentinel, `--context-path` to the artifact this phase writes below, and `--prefix-hash`/`--prefix-file` to record the invariant-briefing prefix hash enforced by `GATE-EXEC-BRIEFING-PREFIX`.
 - **Worktree isolation is PROHIBITED for per-angle gate reviewers.** They are read-only
   (they never mutate files), so filesystem isolation buys nothing and actively breaks the
   "build once, seed many" contract: a fresh worktree is checked out from `main`, not the
@@ -130,7 +132,7 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
 
 Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../agents/review.agent.md)), spawned once per resolved angle via the plain Agent tool. Reviewers are **independent and seeded with the identical neutral context bundle verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the loaded context of, the main agent or a sibling reviewer. Parallelism is capped at `gates.maxFanoutReviewers` (default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
 
-- starts in fresh context. **Mandatory:** run `scripts/github/verify-fresh-review-context.mjs --scope <angle> --context-path <path>` at startup (the same invocation Phase 1 mandates); refuse to proceed on contamination or a missing gate-context artifact. Use `--scope` so parallel reviewers in the same working directory do not trigger false contamination from each other's sentinels, and `--context-path` (pointing at the Phase 1 artifact) so a reviewer in the wrong/isolated checkout fails closed. The sentinel is keyed per review ROUND by the current head SHA (`git rev-parse HEAD`), so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle, and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
+- starts in fresh context. **Mandatory:** run `scripts/github/verify-fresh-review-context.mjs --scope <angle> --context-path <path> --prefix-hash <sha256>` (or `--prefix-file <path>`) at startup (the same invocation Phase 1 mandates); refuse to proceed on contamination or a missing gate-context artifact. Use `--scope` so parallel reviewers in the same working directory do not trigger false contamination from each other's sentinels, `--context-path` (pointing at the Phase 1 artifact) so a reviewer in the wrong/isolated checkout fails closed, and `--prefix-hash`/`--prefix-file` to record the hash of THIS reviewer's invariant briefing block (`GATE-EXEC-BRIEFING-PREFIX`) for the fan-in's cross-reviewer comparison. The sentinel is keyed per review ROUND by the current head SHA (`git rev-parse HEAD`), so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle, and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
 - is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when its single angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph
 - is scoped to exactly one review angle
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
@@ -141,6 +143,32 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
   reviewer's cwd.
 - produces a focused findings artifact with verdict (clean/findings_present) and file references
 - **completion is detected via the harness completion notification, or by the presence of the reviewer's findings artifact at its deterministic output path — never by reading the reviewer's transcript.** The orchestrator awaits fan-in on those artifact paths (or the completion notification) and joins via `consolidateFanin` (Phase 3); it must not tail/parse a reviewer's JSONL transcript, use `node -e`/`python3` to parse tool JSON, or `sleep`-poll a shell loop for completion (forbidden — see [anti-patterns](../skills/docs/anti-patterns.md)).
+
+#### Briefing composition: invariant prefix first
+
+<!-- rule: GATE-EXEC-BRIEFING-PREFIX -->
+`GATE-EXEC-BRIEFING-PREFIX`: Every per-angle reviewer briefing MUST be composed as an
+**invariant block** followed by an **angle-specific prompt**, in that order — never
+angle-first. The invariant block MUST be byte-identical across every reviewer of the same
+gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and worktree path; the
+`write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`), with the
+heavy content — the full diff and PR description — inlined verbatim when shared-prefix
+prompt-cache reuse across the fan-out is desired; and the mandatory
+`verify-fresh-review-context.mjs` instruction above. Angle identity MUST appear ONLY in the
+suffix (the angle-specific prompt, e.g. `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`'s persona
+prompt) and the reviewer's `--scope` flag — never inside the invariant block, or the
+byte-identity requirement is violated by construction and the shared-prefix prompt-cache
+opportunity is destroyed byte one.
+
+**Enforcement.** Each reviewer passes `--prefix-hash <sha256>` (or `--prefix-file <path>`,
+hashed by the tool) to `verify-fresh-review-context.mjs`, which persists the hash on the
+reviewer's per-scope sentinel. Before Phase 3 consolidation, the fan-in MUST run
+`scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>`, which fails closed (exit 1)
+when sentinels for the same round record two or more DISTINCT prefix hashes, or when any
+sentinel for the round records no prefix hash at all — a missing hash means the
+invariant-prefix proof was never established for that reviewer and is treated the same as
+a mismatch, never grandfathered in. The check is deterministic and offline: it only reads
+sentinel files already on disk.
 
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Reviewers SHOULD run in parallel when practical; when parallel execution is impractical
@@ -180,6 +208,11 @@ manual chore:
   and are simply ignored.
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
+
+Before consolidating, run `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>`
+(the `GATE-EXEC-BRIEFING-PREFIX` enforcement check); a fail-closed result (mismatched or
+missing prefix hashes across this round's reviewer sentinels) MUST stop the pass rather
+than proceed to consolidation.
 
 Merge the parallel reviewer findings into one consolidated fix plan using the
 pure `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` (not manual

@@ -1,0 +1,166 @@
+#!/usr/bin/env node
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+
+const USAGE = `Usage: verify-briefing-prefixes.mjs --head-sha <sha> [--help]
+Fan-in enforcement for GATE-EXEC-BRIEFING-PREFIX (docs/gate-review-sub-loop-contract.md):
+fails closed when this gate-review round's per-scope reviewer sentinels (written by
+verify-fresh-review-context.mjs --prefix-hash/--prefix-file) do not all record the SAME
+invariant-briefing prefix hash. Deterministic and offline: reads only the sentinel files
+already on disk under tmp/, keyed by the given head SHA.
+
+Required:
+  --head-sha <sha>  The reviewed head SHA (git rev-parse HEAD); sentinels are read from
+                     tmp/checkpoint-context-sentinel-<scope>-<headSha>.json.
+
+Output (stdout, JSON):
+  { "ok": true, "verified": true, "headSha": "...", "reviewerCount": <n>, "prefixHash": "..." }
+  { "ok": true, "verified": true, "headSha": "...", "reviewerCount": 0, "reason": "no sentinels found for this round" }
+  { "ok": true, "verified": false, "headSha": "...", "reviewerCount": <n>, "reason": "...", "missing": [...], "mismatched": [...] }
+  On error (stderr, JSON):
+  { "ok": false, "error": "...", "usage": "..." }
+${JQ_OUTPUT_USAGE}
+Exit codes:
+  0  Verified: 0/1 sentinels found (nothing to compare), or all reviewers share one hash
+  1  Fail closed: two or more sentinels record DIFFERENT prefix hashes, or at least one
+     sentinel for the round is missing a prefix hash (treated as a mismatch, never
+     grandfathered)
+  2  Usage or internal error, or invalid --jq filter`.trim();
+
+const HEAD_SHA_RE = /^[0-9a-f]{7,64}$/i;
+const SENTINEL_PREFIX = "checkpoint-context-sentinel-";
+const parseError = buildParseError(USAGE);
+
+function resolveFlagValue(argv, flag) {
+  const idx = argv.indexOf(flag);
+  if (idx === -1) return null;
+  const val = argv[idx + 1];
+  if (val === undefined || val === "" || (val.length > 0 && val[0] === "-")) {
+    return ""; // provided but missing/empty/flag-like
+  }
+  return val;
+}
+
+/**
+ * Read every sentinel for the given round (head SHA) from `<tmpRoot>/`, extracting
+ * the reviewer scope (from the filename) and recorded `prefixHash` (from the JSON
+ * body, when present). Malformed sentinel JSON is skipped (not fatal) rather than
+ * treated as a false mismatch — a corrupt sentinel is a different failure mode than
+ * a genuine prefix disagreement and is out of this check's scope.
+ * @param {string} tmpRoot
+ * @param {string} headSha — lowercase hex, already validated
+ * @returns {Promise<Array<{ scope: string, prefixHash: string|null }>>}
+ */
+async function readRoundSentinels(tmpRoot, headSha) {
+  const suffix = `-${headSha}.json`;
+  let entries;
+  try {
+    entries = await readdir(tmpRoot, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+  const matches = entries
+    .filter((e) => e.isFile() && e.name.startsWith(SENTINEL_PREFIX) && e.name.endsWith(suffix))
+    .map((e) => ({
+      file: e.name,
+      scope: e.name.slice(SENTINEL_PREFIX.length, -suffix.length),
+    }))
+    .filter((m) => m.scope.length > 0); // exclude the round-only (no-scope) sentinel name shape
+  const results = [];
+  for (const { file, scope } of matches) {
+    let prefixHash = null;
+    try {
+      const raw = await readFile(path.join(tmpRoot, file), "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.prefixHash === "string" && parsed.prefixHash.length > 0) {
+        prefixHash = parsed.prefixHash;
+      }
+    } catch {
+      // Malformed/unreadable sentinel: treat as no recorded hash rather than crashing.
+    }
+    results.push({ scope, prefixHash });
+  }
+  return results;
+}
+
+/**
+ * Pure comparison: given the round's sentinels, decide verified/reason/missing/mismatched.
+ * Exported for direct unit testing without touching the filesystem.
+ * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
+ * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}> }}
+ */
+export function evaluateBriefingPrefixes(sentinels) {
+  if (sentinels.length <= 1) {
+    return { verified: true, reason: sentinels.length === 0 ? "no sentinels found for this round" : undefined };
+  }
+  const missing = sentinels.filter((s) => s.prefixHash === null).map((s) => s.scope);
+  if (missing.length > 0) {
+    return {
+      verified: false,
+      reason: `${missing.length} of ${sentinels.length} reviewer sentinel(s) for this round have no recorded prefix hash — the invariant-briefing-prefix proof (GATE-EXEC-BRIEFING-PREFIX) was never established for them. Missing hashes are treated as a mismatch, not grandfathered in.`,
+      missing,
+    };
+  }
+  const distinct = new Map();
+  for (const { scope, prefixHash } of sentinels) {
+    if (!distinct.has(prefixHash)) distinct.set(prefixHash, []);
+    distinct.get(prefixHash).push(scope);
+  }
+  if (distinct.size > 1) {
+    const mismatched = sentinels.map(({ scope, prefixHash }) => ({ scope, prefixHash }));
+    return {
+      verified: false,
+      reason: `Reviewer sentinels for this round recorded ${distinct.size} DIFFERENT invariant-briefing prefix hashes — the seeded briefings were not byte-identical (GATE-EXEC-BRIEFING-PREFIX).`,
+      mismatched,
+    };
+  }
+  return { verified: true, prefixHash: sentinels[0].prefixHash };
+}
+
+export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(process.cwd(), "tmp") } = {}) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+  const headShaArg = resolveFlagValue(argv, "--head-sha");
+  if (headShaArg === null || headShaArg === "" || !HEAD_SHA_RE.test(headShaArg)) {
+    process.stderr.write(`${formatCliError(
+      parseError(`--head-sha is required and must be a 7-64 character hex SHA${headShaArg ? ` (got ${JSON.stringify(headShaArg)})` : ""}.`)
+    )}\n`);
+    return 2;
+  }
+  const headSha = headShaArg.toLowerCase();
+  const jqArg = resolveFlagValue(argv, "--jq");
+  if (jqArg === "") {
+    process.stderr.write(`${formatCliError(parseError("Invalid --jq value: must be non-empty."))}\n`);
+    return 2;
+  }
+  const jq = jqArg === null ? undefined : jqArg;
+  const silent = argv.includes("--silent") || argv.includes("-s");
+
+  const sentinels = await readRoundSentinels(tmpRoot, headSha);
+  const verdict = evaluateBriefingPrefixes(sentinels);
+  const payload = {
+    ok: true,
+    verified: verdict.verified,
+    headSha,
+    reviewerCount: sentinels.length,
+    ...(verdict.reason ? { reason: verdict.reason } : {}),
+    ...(verdict.missing ? { missing: verdict.missing } : {}),
+    ...(verdict.mismatched ? { mismatched: verdict.mismatched } : {}),
+    ...(verdict.prefixHash ? { prefixHash: verdict.prefixHash } : {}),
+  };
+  return emitResult(payload, { jq, silent, ok: verdict.verified });
+}
+
+if (isDirectCliRun(import.meta.url)) {
+  try {
+    process.exitCode = await main();
+  } catch (err) {
+    process.stderr.write(`${formatCliError(err)}\n`);
+    process.exitCode = 2;
+  }
+}
