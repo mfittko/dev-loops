@@ -330,6 +330,13 @@ not — leaving today's rejection byte-identical:
   scope is not even measured);
 - the verdict records a non-empty `--inline-reason`.
 
+Escalation is two-trigger: besides the `gate:full` label override, an inline pass that
+surfaces a finding at a severity in the gate's `blockCleanOnFindingSeverities` MUST
+escalate to the full fan-out (`resolveGateDispatchMode` returns `escalated`) — the
+inline verdict never absorbs a blocking finding. When `lightMode` is enabled without
+explicit thresholds, the built-in defaults apply (`maxFiles: 3` / `maxLines: 200`); the
+shipped default is `enabled: false`.
+
 Evidence retention stays uniform: a light-accepted inline verdict **still requires a
 findings-log ledger** for the reviewed head (the single-agent path's
 `write-gate-findings-log.mjs` writes it). `requireFanoutProvenance`, when enabled, is

@@ -17,6 +17,26 @@ test("local-implementation skill owns the narrow failure-triage order by rule ID
   const numberedSteps = section.match(/^\d+\.\s/gm) ?? [];
 
   assert.ok(numberedSteps.length >= 7, "narrow failure-triage fast path should keep its 7 ordered steps");
+
+  // The ORDER is the rule's semantics: startup → inspect → reproduce →
+  // narrow search → minimal patch → focused smoke → default verification.
+  const orderedKeySteps = [
+    /startup once/i,
+    /`git status`/,
+    /reproduce[^\n]*failing command/i,
+    /exact-pattern search/i,
+    /minimum call sites/i,
+    /focused smoke checks/i,
+    /default verification/i,
+  ];
+  let lastPos = -1;
+  for (const pattern of orderedKeySteps) {
+    const match = section.match(pattern);
+    assert.ok(match, `failure-triage section should match ${pattern}`);
+    assert.ok(match.index > lastPos, `failure-triage step ${pattern} (at ${match.index}) should appear after the previous step (last at ${lastPos})`);
+    lastPos = match.index;
+  }
+
   assert.match(section, /general tooling-internals and duplicate-broad-search prohibition/i);
 });
 

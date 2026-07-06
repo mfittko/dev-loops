@@ -61,7 +61,7 @@ When the local spec already lives in a tracker issue:
 - sync durable scope / acceptance / status changes back to the tracker issue rather than maintaining a duplicate local phase doc
 - keep `tmp/` as temporary local execution state only; it does not become a second durable spec surface
 - for tracker-backed sessions, the handoff path is always: push the working branch → open a PR → merge via GitHub
-- <!-- rule: LOCAL-PR-CREATE-CANONICAL --> for tracker-backed sessions, always open PRs through the canonical `dev-loops pr create` path, which is ALWAYS draft and always assigned — self-assigned by default (`--assignee @me` when none is given; honors an explicit `--assignee <login>` / `-a <login>`), never via raw `gh pr create`. The PR body must contain `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge. When `.devloops` sets `workflow.requireDraftFirst` to true, use `dev-loops pr create --assignee @me ...`. Do not create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy for the current PR scope. The draft gate inspection is a real workflow boundary.
+- <!-- rule: LOCAL-PR-CREATE-CANONICAL --> for tracker-backed sessions, you MUST open PRs through the canonical `dev-loops pr create` path — always draft and always assigned — self-assigned by default (`--assignee @me` when none is given; honors an explicit `--assignee <login>` / `-a <login>`) — and MUST NOT open them via raw `gh pr create`. The PR body MUST contain `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge. When `.devloops` sets `workflow.requireDraftFirst` to true, use `dev-loops pr create --assignee @me ...`. Do not create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy for the current PR scope. The draft gate inspection is a real workflow boundary.
 - do not suggest a direct local-main merge for tracker-backed sessions; do not merge the working branch into local `main` at phase completion
 
 ## Primary execution rules
@@ -88,7 +88,7 @@ This gate does **not** apply to other routed strategies (`copilot_pr_followup`, 
 ## Narrow failure-triage fast path
 
 <!-- rule: LOCAL-FAILURE-TRIAGE-ORDER -->
-When resuming local implementation with dirty work or an observed failing command, follow this ordered path before broad discovery:
+When resuming local implementation with dirty work or an observed failing command, you MUST follow this ordered path before broad discovery:
 
 1. run startup once from the relevant worktree/context
 2. inspect current state with `git status` and the changed files
@@ -102,9 +102,9 @@ Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-interna
 
 ### Step 1
 
-- <!-- rule: LOCAL-PHASE-ONE-AT-A-TIME --> Implement **one phase at a time**; do not refine later phases in detail before the current phase is complete.
+- <!-- rule: LOCAL-PHASE-ONE-AT-A-TIME --> You MUST implement **one phase at a time** and MUST NOT refine later phases in detail before the current phase is complete.
 - Use the `refiner` agent for phase-refinement work when subagents are available; escalate RFC-worthy technical decisions to the parent session / human operator.
-- <!-- rule: LOCAL-TEST-FIRST-COVERAGE --> Work **test-first** for all non-trivial logic and maintain **90% coverage** thresholds.
+- <!-- rule: LOCAL-TEST-FIRST-COVERAGE --> You MUST work **test-first** for all non-trivial logic and SHOULD maintain **90% coverage** thresholds (coverage is not enforced by the shipped verify config; treat it as the working target).
 - Log detailed iteration artifacts under `tmp/` using the required structure below.
 - Spec-of-record split (phase-doc-backed vs. tracker-backed vs. lightweight): see [Tracker-backed local implementation](#tracker-backed-local-implementation) above.
 - When a phase changes durable product truth in ways `PLAN.md` should express (for example command surface, accepted product decisions, resolved open questions, or scope changes), update [Project Plan](../../PLAN.md) before closing the phase.
@@ -119,7 +119,7 @@ Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review
 ## Light mode (small changes)
 
 <!-- rule: LOCAL-LIGHT-MODE-CONFIG-SURFACE -->
-`localImplementation.lightMode` (`.devloops` field; this repo sets `maxLines: 20`, `maxFiles: 2`) is this skill's config surface for light-mode gate dispatch. Gate-collapse mechanics, escalation, and dispatch resolution (`resolveGateDispatchMode`, `scripts/loop/resolve-gate-dispatch.mjs`) are owned by [Light-mode inline acceptance](../../docs/gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs) — this skill does not redefine them.
+`localImplementation.lightMode` (`.devloops` field; this repo sets `maxLines: 20`, `maxFiles: 2`) is this skill's config surface for light-mode gate dispatch. Gate-collapse mechanics, escalation, and dispatch resolution (`resolveGateDispatchMode`, `scripts/loop/resolve-gate-dispatch.mjs`) are owned by [Light-mode inline acceptance](../../docs/gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs); this skill MUST NOT redefine them.
 
 Use `scripts/loop/detect-change-scope.mjs` to determine scope:
 ```sh
@@ -372,7 +372,7 @@ If the review finds real issues, revise the merged plan and briefly update the r
 ### 6. Only then start implementation
 
 <!-- rule: LOCAL-PLAN-REVIEW-GATE -->
-Do not begin coding before the merged phase plan has passed review.
+You MUST NOT begin coding before the merged phase plan has passed review.
 Update `manifest.json` to show that phase implementation has started.
 
 ## Task breakdown & delegation
@@ -392,7 +392,7 @@ into parallel executable tasks and dispatch them to the right specialist subagen
 ### Delegation contract
 
 <!-- rule: LOCAL-DELEGATION-TABLE -->
-Dispatch implementation tasks to dedicated specialist agents:
+Implementation tasks MUST be dispatched to dedicated specialist agents per this table:
 
 | Task type | Delegate to |
 |---|---|
@@ -521,7 +521,7 @@ The retrospective must capture:
 - what a fresh session should know before the next phase
 
 <!-- rule: LOCAL-RETROSPECTIVE-REQUIRED -->
-This is the infrastructure for self-improvement. Do not skip it.
+This is the infrastructure for self-improvement; you MUST NOT skip it.
 
 ## Dev mode
 
@@ -543,7 +543,7 @@ Dev mode is still phase-bounded: it improves the loop around the completed phase
 ## tmp/ logging requirements
 
 <!-- rule: LOCAL-TMP-EPHEMERAL-STATE -->
-The required durable-doc + `tmp/` artifact set for a phase is defined once in [Deterministic logging structure](#deterministic-logging-structure); do not duplicate that list here. Those artifacts are normally temporary and do not need to be checked into git. Also log validation output summaries and notable decisions if they help evaluate the local dev loop later.
+The required durable-doc + `tmp/` artifact set for a phase is defined once in [Deterministic logging structure](#deterministic-logging-structure); this section MUST NOT duplicate that list. Those artifacts are normally temporary and do not need to be checked into git; do not force-add them unless the user explicitly wants checked-in examples or fixtures. Also log validation output summaries and notable decisions if they help evaluate the local dev loop later.
 
 Additionally, append every bash call that exits with code `1` to `tmp/phases/phase-x/bash-exit-1.jsonl` using the deterministic helper `../dev-loop/scripts/log-bash-exit-1.mjs`. Each line is one JSON object with at least `timestamp`, `phase`, `cwd`, `command`, `exitCode`, `purpose`, `summary` (optionally truncated `stdout`/`stderr` or a path to a larger saved artifact). This log improves the local dev loop itself, so do not skip it just because the command was exploratory.
 
@@ -557,7 +557,7 @@ See [Stop Conditions](../docs/stop-conditions.md). Local-specific stops: phase c
 - Use atomic local commits to log progress, but only for coherent reviewable slices — [Commit policy](#commit-policy) below governs commit timing/authorization.
 - Before merging, run a full parallel review / fix loop and resolve accepted findings on the same branch; rerun validation after review-driven fixes.
 - A phase is not operationally closed until its branch state is captured in commit history and the reviewed branch has been finalized according to session type (merged into local `main` for phase-doc-backed sessions; merged via GitHub PR for tracker-backed sessions); when authorization for that finalization is still pending, record the phase as `awaiting-finalization` and describe the exact missing step.
-- For tracker-backed sessions, the handoff path is always: push the working branch → open a PR → merge via GitHub; never merge the working branch into local `main`. PR creation follows [LOCAL-PR-CREATE-CANONICAL](#tracker-backed-local-implementation) above; the draft gate inspection is a real workflow boundary, so a new PR must exist in draft before `gh pr ready` is eligible.
+- For tracker-backed sessions, the handoff path is always: push the working branch → open a PR → merge via GitHub; never merge the working branch into local `main`. PR creation follows [LOCAL-PR-CREATE-CANONICAL](#tracker-backed-local-implementation) above; a new PR must exist in draft before `gh pr ready` is eligible.
 - For phase-doc-backed sessions, merge the fully reviewed, locally validated branch back into local `main` when authorized.
 - Behind-branch integration before merge (for example a sibling PR merged first and both touch shared files): prefer a merge commit (`git merge origin/main`) over rebase + force-push. Since dev-loop PRs are squash-merged, intermediate branch history is discarded at merge time, so a merge commit lands an identical result on `main` while avoiding a non-fast-forward push to the remote. Force-push (`--force-with-lease` only, never bare `--force`) remains acceptable only for a branch the loop solely owns and where no integration alternative exists (rare); document that carve-out rather than leaving it implicit. After any integration that changes the head SHA, re-verify gate evidence at the new head (existing behavior — see [Merge Preconditions](../docs/merge-preconditions.md#required-before-merge)).
 
