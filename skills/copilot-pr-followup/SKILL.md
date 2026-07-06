@@ -123,7 +123,8 @@ Inspect: PR body/title (must satisfy [PR description contract](../docs/copilot-l
 
 At the issue-assignment seam, use `detect-initial-copilot-pr-state.mjs` and keep waiting when `waiting_for_initial_copilot_implementation`.
 
-When confirming whether Copilot is requested as a reviewer, do not rely solely on `gh pr view --json reviewRequests`. Use `request-copilot-review.mjs` (see [Operational cookbook](#operational-cookbook)). Do **not** request Copilot by posting literal `/copilot` or `/copilot re-review` PR comments. After draft→ready or fix push, explicitly decide whether another pass is desired; if yes, ensure green/credibly green posture first.
+<!-- rule: COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY -->
+`COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY`: Copilot review requests MUST go through `request-copilot-review.mjs` (see [Operational cookbook](#operational-cookbook)); the agent MUST NOT request Copilot by posting literal `/copilot` or `/copilot re-review` PR comments, and MUST NOT rely solely on `gh pr view --json reviewRequests` to confirm a request. After draft→ready or fix push, explicitly decide whether another pass is desired; if yes, ensure green/credibly green posture first.
 
 <!-- rule: COPILOT-FOLLOWUP-REQUEST-BRANCHING -->
 `COPILOT-FOLLOWUP-REQUEST-BRANCHING`: The agent MUST branch on the `request-copilot-review.mjs` machine-readable result exactly as follows, and MUST NOT treat an attempted request as equivalent to a confirmed request:

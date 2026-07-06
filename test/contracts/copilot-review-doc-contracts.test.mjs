@@ -69,7 +69,8 @@ test("copilot-pr-followup skill routes review requests and wait seams through de
   assert.ok(requestSection.length > 0, "request/wait section not found");
   assert.match(requestSection, /request-copilot-review\.mjs/i);
   assert.match(requestSection, /--force-rerequest-review/i);
-  assert.match(requestSection, /Do \*\*not\*\* request Copilot by posting literal `\/copilot` or `\/copilot re-review` PR comments\./i);
+  assertRuleOwned("COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY", "skills/copilot-pr-followup/SKILL.md");
+  assert.match(requestSection, /MUST NOT request Copilot by posting literal/i);
   assert.match(requestSection, /`requested`:/i);
   assert.match(requestSection, /`already-requested`:/i);
   assert.match(requestSection, /`suppressed_same_head_clean`:/i);
