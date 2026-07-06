@@ -32,8 +32,8 @@ Exit codes:
   2  Usage or internal error, or invalid --jq filter
 
 Caveat: rounds are keyed by head SHA only. Two different gates reviewed at the
-SAME head share one sentinel namespace, so run this check (and clear/advance the
-head) per gate pass; legitimately different per-gate prefixes at an identical
+SAME head share one sentinel namespace, so run this check per gate pass (the head
+advances between gate passes per GATE-EXEC-REGATE-MANDATORY; never manually clear sentinels); legitimately different per-gate prefixes at an identical
 head would otherwise flag as a mismatch (conservative fail-closed, never
 fail-open).`.trim();
 
