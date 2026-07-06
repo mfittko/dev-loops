@@ -375,7 +375,7 @@ export function buildStateAtlasHtml() {
   .diagram .mermaid { text-align: center; }
   .diagram .mermaid svg { max-width: 100%; height: auto; }
   .diagram { position: relative; }
-  .diagram .expand { position: absolute; top: 0.6rem; right: 0.6rem; z-index: 2; font: 600 0.72rem var(--font); color: var(--copy); background: rgba(15, 23, 42, 0.85); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.35rem 0.6rem; cursor: pointer; }
+  .diagram .expand { position: sticky; float: right; top: 0.6rem; right: 0.6rem; margin: 0 0 -2rem; z-index: 2; font: 600 0.72rem var(--font); color: var(--copy); background: rgba(15, 23, 42, 0.85); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.35rem 0.6rem; cursor: pointer; }
   .diagram .expand:hover { color: var(--heading); border-color: var(--accent); }
   .diagram .mermaid { cursor: zoom-in; }
   .diagram .mermaid:fullscreen { cursor: zoom-out; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 2rem; }
@@ -394,10 +394,13 @@ ${sections}
     </main>
     <script src="assets/mermaid.min.js"></script>
     <script>
+      let fsInFlight = false;
       document.addEventListener('click', async (e) => {
+        if (fsInFlight) return;
         const btn = e.target.closest('.diagram .expand');
         const box = btn ? btn.parentElement.querySelector('.mermaid') : e.target.closest('.diagram .mermaid');
         if (!box) return;
+        fsInFlight = true;
         try {
           const fsElement = document.fullscreenElement || document.webkitFullscreenElement;
           if (fsElement === box) {
@@ -409,6 +412,7 @@ ${sections}
           if (request) await request.call(box);
           else box.classList.add('fs-fallback'); // iOS Safari: CSS overlay fallback
         } catch { /* fullscreen denied: fall back to the CSS overlay */ box.classList.add('fs-fallback'); }
+        finally { fsInFlight = false; }
       });
       mermaid.initialize({
         startOnLoad: true,
