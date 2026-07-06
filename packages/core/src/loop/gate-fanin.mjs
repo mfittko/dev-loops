@@ -117,6 +117,51 @@ export function provenanceConsistencyError(prov) {
 }
 
 /**
+ * Base angle name for a delta-suffixed re-review entry (`<angle>-delta-at-...`,
+ * e.g. `pr-checklist-matrix-delta-at-current-head`): a re-review scoped to only
+ * the current head's delta still counts toward its base angle for both
+ * mandatory-angle coverage and pool-membership checks.
+ *
+ * @param {string} angle
+ * @returns {string}
+ */
+function baseAngleName(angle) {
+  return angle.replace(/-delta-at-.+$/, "");
+}
+
+/**
+ * Validate a recorded fan-out angle list against a gate's configured angle
+ * contract: every mandatory angle must be represented, and — when a pool is
+ * supplied — every recorded angle must be a member of it (delta-suffixed
+ * angles count toward their {@link baseAngleName}). Pure; shared by the write
+ * path (write-gate-findings-log's `provenance.perAngle`, upsert-checkpoint-verdict's
+ * `--findings-json` per-angle results) and the merge-evidence read path
+ * (detect-checkpoint-evidence re-validating the ledger's `provenance.perAngle`)
+ * so all three enforce identically.
+ *
+ * @param {unknown} recordedAngles — array of `{ angle: string, ... }` entries (provenance.perAngle or normalized per-angle findings)
+ * @param {object} [gateAngleContract]
+ * @param {string[]} [gateAngleContract.mandatoryAngles] — angles that must always be represented
+ * @param {string[]|null} [gateAngleContract.pool] — configured angle pool; null/omitted skips the foreign-angle check
+ * @returns {{ missingMandatory: string[], foreignAngles: string[] }}
+ */
+export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [], pool = null } = {}) {
+  const recorded = Array.isArray(recordedAngles)
+    ? recordedAngles
+      .map((e) => (e && typeof e === "object" && typeof e.angle === "string" ? e.angle.trim() : ""))
+      .filter((a) => a.length > 0)
+    : [];
+  const recordedBases = new Set(recorded.map(baseAngleName));
+  const missingMandatory = mandatoryAngles.filter((a) => !recordedBases.has(a));
+  let foreignAngles = [];
+  if (Array.isArray(pool) && pool.length > 0) {
+    const poolSet = new Set(pool);
+    foreignAngles = [...new Set(recorded.filter((a) => !poolSet.has(baseAngleName(a))))];
+  }
+  return { missingMandatory, foreignAngles };
+}
+
+/**
  * Default cap on parallel fan-out reviewers when a caller does not supply one.
  * Mirrors the config default (gates.maxFanoutReviewers).
  */

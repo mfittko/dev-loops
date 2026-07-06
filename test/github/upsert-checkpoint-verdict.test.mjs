@@ -2813,6 +2813,154 @@ test("upsert-checkpoint-verdict --findings-json rejects an unrecognizable non-em
   }
 });
 
+// --- Angle-coverage enforcement (#1196: mandatory angles + pool membership) ---
+
+test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-json is missing the gate's mandatory angle (AC1)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-coverage-missing-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    // draft_gate's configured mandatory angle (pr-description) is absent.
+    await writeFile(findingsPath, JSON.stringify([{ angle: "scope", verdict: "clean", findings: [] }]), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /missing mandatory angle\(s\): pr-description/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-json names an angle outside the configured pool (AC2)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-coverage-foreign-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
+        { angle: "acceptance-criteria", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
+        { angle: "contradiction-lens", verdict: "clean", findings: [] },
+        { angle: "made-up-angle", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "abc1234" } }],
+      }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /outside the configured pool: made-up-angle/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict rejects an angle-less flat finding in fanout mode with a dedicated error (not a confusing `general` pool error)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angleless-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    // Flat finding without .angle: normalization would bucket it under the
+    // synthetic `general` label, which would surface as a foreign-angle error.
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { severity: "must-fix", summary: "finding with angle" , angle: "pr-description" },
+        { severity: "must-fix", summary: "finding with no angle attribution" },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /lack a non-empty \.angle/);
+    assert.doesNotMatch(result.stderr, /outside the configured pool/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angle when gates.rejectForeignAngles is false", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-warn-"));
+  try {
+    // Repo config opting into warn mode; extension defaults still supply the
+    // draft pool + mandatory pr-description.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  rejectForeignAngles: false\n", "utf8");
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "totally-made-up", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-json", findingsPath,
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stderr, /WARNING: .*outside the configured pool: totally-made-up/);
+    assert.match(result.stderr, /rejectForeignAngles is false/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict does NOT enforce angle coverage for an inline_single_agent verdict (AC3 exemption)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-coverage-inline-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    // No mandatory angle present at all — must still pass because executionMode
+    // is inline_single_agent (angle coverage is a fanout_fanin-only concern).
+    await writeFile(findingsPath, JSON.stringify([{ angle: "scope", verdict: "clean", findings: [] }]), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix then re-gate", "--inline-reason", "small change",
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict --findings-json renders structured per-angle findings end-to-end (#898)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-"));
   try {
@@ -2825,7 +2973,10 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
           verdict: "findings_present",
           findings: [{ severity: "must-fix", summary: "broken edge case", file: "a.mjs", line: 7 }],
         },
-        { angle: "tests", verdict: "clean", findings: [] },
+        { angle: "coverage", verdict: "clean", findings: [] },
+        // draft_gate's configured mandatory angle (gates.draft.mandatoryAngles):
+        // a fanout_fanin verdict's structured per-angle results must cover it.
+        { angle: "pr-description", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -2837,8 +2988,8 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
           "**Execution mode:** fanout_fanin",
           "- `correctness` → findings_present",
           "  - [must-fix] broken edge case (`a.mjs:7`)",
-          "- `tests` → clean",
-          "**Findings summary:** 2 angles reviewed; 1 finding (see per-angle breakdown below).",
+          "- `coverage` → clean",
+          "**Findings summary:** 3 angles reviewed; 1 finding (see per-angle breakdown below).",
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
       },
@@ -2871,10 +3022,16 @@ test("upsert-checkpoint-verdict --findings-json structured verdict carries the g
       findingsPath,
       JSON.stringify([
         {
-          angle: "correctness",
+          angle: "dry",
           verdict: "findings_present",
           findings: [{ severity: "worth-fixing-now", summary: "minor nit worth noting" }],
         },
+        // pre_approval_gate's configured mandatory angles (gates.preApproval.mandatoryAngles):
+        // a fanout_fanin verdict's structured per-angle results must cover them.
+        { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
+        { angle: "acceptance-criteria", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
+        { angle: "contradiction-lens", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -2931,9 +3088,9 @@ test("upsert-checkpoint-verdict --findings-json structured verdict carries the g
         assertArgContains: [
           "body=### Gate review: `pre_approval_gate`",
           "**Execution mode:** fanout_fanin",
-          "- `correctness` → findings_present",
+          "- `dry` → findings_present",
           // The structured single-line digest carries the gateEvidenceNote.
-          `**Findings summary:** 1 angle reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`,
+          `**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`,
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
       },

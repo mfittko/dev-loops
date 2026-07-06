@@ -98,6 +98,12 @@ const GatesConfig = z.strictObject({
   // and every angle configured across this config's own draft/preApproval/
   // spike gates (angles + mandatoryAngles).
   anglePool: z.array(z.string().trim().min(1)).optional(),
+  // Fail-closed enforcement that a fanout_fanin gate's recorded per-angle
+  // provenance names only angles in the gate's configured pool (angles +
+  // mandatoryAngles) — ad-hoc/foreign angle labels are rejected rather than
+  // silently accepted. Default true (reject); set false to warn instead of
+  // fail. See resolveRejectForeignAngles / docs/gate-review-sub-loop-contract.md.
+  rejectForeignAngles: z.boolean().default(true),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -197,6 +203,7 @@ const FileGatesConfig = z.strictObject({
   maxFanoutReviewers: z.number().int().min(1).max(64).optional(),
   postFindingsComments: z.boolean().optional(),
   anglePool: z.array(z.string().trim().min(1)).optional(),
+  rejectForeignAngles: z.boolean().optional(),
 });
 
 // Partial persona entries for file-level config (allows omitting fields)
@@ -1026,6 +1033,17 @@ export function resolveRequireFanoutProvenance(config) {
 }
 
 /**
+ * Resolve whether a fan-out provenance entry naming an angle outside the
+ * gate's configured pool should FAIL (default) or only WARN.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {boolean}
+ */
+export function resolveRejectForeignAngles(config) {
+  return config?.gates?.rejectForeignAngles !== false;
+}
+
+/**
  * Resolve whether the consolidated gate fan-out findings should be posted as a
  * visible, marker-tagged PR comment.
  *
@@ -1190,6 +1208,36 @@ export function resolveAnglePool(config) {
     return [...(gateConfig.angles ?? []), ...gateConfig.mandatoryAngles];
   });
   return [...new Set([...Object.keys(BUILTIN_PERSONAS), ...configured])];
+}
+
+/**
+ * Resolve a gate's ANGLE ENFORCEMENT CONTRACT: the mandatory angles a
+ * fanout_fanin verdict must cover and the pool its recorded angles must stay
+ * within. Single source of truth for all angle-coverage enforcement consumers
+ * (ledger write, verdict-comment write, merge-evidence read) so they agree.
+ *
+ * - `mandatoryAngles` is filtered through `excludeAngles`: a config that
+ *   excludes a mandatory angle must not deadlock every fanout write (the
+ *   angle would be missing-mandatory if omitted yet foreign if recorded).
+ * - `pool` is `resolveGateAngles` (configured angles ∪ mandatoryAngles, minus
+ *   excludeAngles); when `additiveAngles` is enabled it widens to the global
+ *   lens catalog (`resolveAnglePool`) too — dynamic resolution may
+ *   legitimately dispatch catalog angles then — with `excludeAngles` still a
+ *   hard ceiling. A null pool skips the foreign-angle check entirely.
+ *
+ * @param {DevLoopConfig} config
+ * @param {"draft"|"preApproval"|"spike"} gate
+ * @returns {{ mandatoryAngles: string[], pool: string[]|null }}
+ */
+export function resolveGateAngleContract(config, gate) {
+  const gateConfig = resolveGateConfig(config, gate);
+  const excluded = new Set(gateConfig.excludeAngles);
+  const mandatoryAngles = gateConfig.mandatoryAngles.filter((a) => !excluded.has(a));
+  let pool = resolveGateAngles(config, gate);
+  if (gateConfig.additiveAngles && pool !== null) {
+    pool = [...new Set([...pool, ...resolveAnglePool(config)])].filter((a) => !excluded.has(a));
+  }
+  return { mandatoryAngles, pool };
 }
 
 /**

@@ -1,14 +1,43 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
+  checkProvenanceAngleCoverage,
   parseProvenanceJson,
   parseWriteGateFindingsLogCliArgs,
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
+
+// A repo config with a fully controlled, minimal angle contract (independent
+// of the shipped extension defaults) so mandatory-angle / pool assertions
+// below are exact.
+const ANGLE_CONTRACT_DEVLOOPS = [
+  "version: 1",
+  "gates:",
+  "  draft:",
+  "    angles: [scope, coverage]",
+  "    mandatoryAngles: [pr-description]",
+  "  preApproval:",
+  "    angles: [dry, kiss]",
+  "    mandatoryAngles: [pr-checklist-matrix]",
+  "",
+].join("\n");
+
+async function withAngleContractRepo(fn, { rejectForeignAngles } = {}) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-angle-contract-"));
+  try {
+    const devloops = rejectForeignAngles === false
+      ? `${ANGLE_CONTRACT_DEVLOOPS}  rejectForeignAngles: false\n`
+      : ANGLE_CONTRACT_DEVLOOPS;
+    await writeFile(path.join(repoRoot, ".devloops"), devloops, "utf8");
+    return await fn(repoRoot);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+}
 
 test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
   const result = parseWriteGateFindingsLogCliArgs([
@@ -446,9 +475,13 @@ test("writeGateFindingsLog records provenance in the ledger when passed", async 
       headSha: "abc1234567890abcdef",
       verdict: "clean",
       findings: "[]",
-      provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-b" }, { angle: "perf", reviewer: "review-c" }] }),
+      // Angles must cover the shipped extension-defaults preApproval mandatory
+      // angle (pr-checklist-matrix) and stay within its configured pool — this
+      // test isolates repoRoot from any repo-local .devloops via tmpDir, but
+      // the packaged extension defaults still apply regardless of repoRoot.
+      provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
       tmpRoot: tmpDir,
-    });
+    }, { repoRoot: tmpDir });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "pre_approval_gate-abc1234567890abcdef.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
     assert.equal(parsed.provenance.distinctReviewers, 3);
@@ -490,4 +523,145 @@ test("writeGateFindingsLog rejects malformed provenance", async () => {
       provenance: JSON.stringify({ distinctReviewers: -1, perAngle: [] }),
     });
   }, /distinctReviewers must be a non-negative integer/);
+});
+
+// --- Angle-coverage enforcement (#1196: mandatory angles + pool membership) ---
+
+test("checkProvenanceAngleCoverage rejects a missing mandatory angle (fail-closed, AC1)", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    await assert.rejects(
+      () => checkProvenanceAngleCoverage({ perAngle: [{ angle: "dry" }] }, "pre_approval_gate", { repoRoot }),
+      /missing mandatory angle\(s\) for pre_approval_gate: pr-checklist-matrix/,
+    );
+  });
+});
+
+test("writeGateFindingsLog rejects a fanout_fanin ledger missing a mandatory angle (AC1, write time)", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "a/b", pr: 1, gate: "draft_gate", headSha: "abc12345", verdict: "clean", findings: "[]",
+        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "scope", reviewer: "r1" }] }),
+      }, { repoRoot }),
+      /missing mandatory angle\(s\) for draft_gate: pr-description/,
+    );
+  });
+});
+
+test("checkProvenanceAngleCoverage rejects an angle outside the configured pool by default (AC2)", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    await assert.rejects(
+      () => checkProvenanceAngleCoverage(
+        { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix" }, { angle: "made-up-angle" }] },
+        "pre_approval_gate",
+        { repoRoot },
+      ),
+      /names angle\(s\) outside the configured pool for pre_approval_gate: made-up-angle/,
+    );
+  });
+});
+
+test("checkProvenanceAngleCoverage warns (does not fail) on a foreign angle when gates.rejectForeignAngles is false", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const result = await checkProvenanceAngleCoverage(
+      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix" }, { angle: "made-up-angle" }] },
+      "pre_approval_gate",
+      { repoRoot },
+    );
+    assert.match(result.warning, /made-up-angle/);
+  }, { rejectForeignAngles: false });
+});
+
+test("writeGateFindingsLog surfaces the foreign-angle warning on the result when rejectForeignAngles is false", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-warn-"));
+    try {
+      const result = await writeGateFindingsLog({
+        repo: "a/b", pr: 1, gate: "pre_approval_gate", headSha: "abc12345", verdict: "clean", findings: "[]",
+        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "dry", reviewer: "r1" }, { angle: "pr-checklist-matrix" }, { angle: "made-up-angle" }] }),
+        tmpRoot,
+      }, { repoRoot });
+      assert.equal(result.ok, true);
+      assert.match(result.warning, /made-up-angle/);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  }, { rejectForeignAngles: false });
+});
+
+test("checkProvenanceAngleCoverage: a delta-suffixed angle (<angle>-delta-at-current-head) satisfies its base mandatory angle", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const result = await checkProvenanceAngleCoverage(
+      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix-delta-at-current-head" }] },
+      "pre_approval_gate",
+      { repoRoot },
+    );
+    assert.equal(result.warning, null);
+  });
+});
+
+test("checkProvenanceAngleCoverage passes for a fully-covered draft_gate and pre_approval_gate shape", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const draft = await checkProvenanceAngleCoverage(
+      { perAngle: [{ angle: "scope" }, { angle: "pr-description" }] },
+      "draft_gate",
+      { repoRoot },
+    );
+    assert.equal(draft.warning, null);
+    const preApproval = await checkProvenanceAngleCoverage(
+      { perAngle: [{ angle: "dry" }, { angle: "kiss" }, { angle: "pr-checklist-matrix" }] },
+      "pre_approval_gate",
+      { repoRoot },
+    );
+    assert.equal(preApproval.warning, null);
+  });
+});
+
+test("checkProvenanceAngleCoverage: excluding a mandatory angle does not deadlock the write (excludeAngles filters mandatoryAngles)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-exclude-deadlock-"));
+  try {
+    // The deadlock config: yagni is mandatory AND excluded. Without filtering,
+    // every write would fail — missing-mandatory if omitted, foreign if recorded.
+    await writeFile(path.join(repoRoot, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  preApproval:",
+      "    angles: [dry, kiss]",
+      "    mandatoryAngles: [pr-checklist-matrix, yagni]",
+      "    excludeAngles: [yagni]",
+      "",
+    ].join("\n"), "utf8");
+    const result = await checkProvenanceAngleCoverage(
+      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix" }] },
+      "pre_approval_gate",
+      { repoRoot },
+    );
+    assert.equal(result.warning, null);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("checkProvenanceAngleCoverage: additiveAngles widens the enforcement pool to the catalog (catalog angle is not foreign)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-additive-"));
+  try {
+    await writeFile(path.join(repoRoot, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  anglePool: [dry, catalog-extra]",
+      "  preApproval:",
+      "    angles: [dry]",
+      "    mandatoryAngles: []",
+      "    additiveAngles: true",
+      "",
+    ].join("\n"), "utf8");
+    const result = await checkProvenanceAngleCoverage(
+      { perAngle: [{ angle: "dry" }, { angle: "catalog-extra" }] },
+      "pre_approval_gate",
+      { repoRoot },
+    );
+    assert.equal(result.warning, null);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });

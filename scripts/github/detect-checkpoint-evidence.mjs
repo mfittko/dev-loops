@@ -14,8 +14,8 @@ import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateConfig, resolveLightMode, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
-import { FANOUT_UNAVAILABLE_MESSAGE, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
+import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
@@ -240,6 +240,7 @@ function normalizeGateMarkerSummary(summary) {
 }
 export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null) {
   const failures = [];
+  const warnings = [];
   if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
     failures.push("missing visible clean draft_gate comment");
   }
@@ -310,6 +311,42 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
           );
         }
       }
+      // Angle-coverage enforcement: independent of requireFanoutProvenance.
+      // When the gate configures mandatory angles, a fanout_fanin ledger MUST
+      // record internally-consistent provenance — otherwise a shadow ledger
+      // that simply omits provenance would bypass mandatory-angle coverage.
+      // Recorded provenance is then re-validated: perAngle must cover every
+      // mandatory angle and (default) stay within the configured pool. Gates
+      // without mandatory angles keep today's behavior (absent provenance adds
+      // no failure; that stricter gap is requireFanoutProvenance's opt-in).
+      if (gate.executionMode === "fanout_fanin") {
+        const mandatoryAngles = gate.mandatoryAngles ?? [];
+        const provValid = gate.provenance != null && provenanceConsistencyError(gate.provenance) === null;
+        if (mandatoryAngles.length > 0 && !provValid) {
+          failures.push(
+            `${gate.name}: mandatory angle coverage is configured (${mandatoryAngles.join(", ")}) but the findings-log ledger records no valid fan-out provenance to verify it against; write the ledger with --provenance covering the mandatory angles; ${FANOUT_UNAVAILABLE_MESSAGE}`,
+          );
+        } else if (provValid) {
+          const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(gate.provenance.perAngle, {
+            mandatoryAngles,
+            pool: gate.anglePool ?? null,
+          });
+          if (missingMandatory.length > 0) {
+            failures.push(
+              `${gate.name}: fan-out provenance is missing mandatory angle(s): ${missingMandatory.join(", ")}; ${FANOUT_UNAVAILABLE_MESSAGE}`,
+            );
+          }
+          if (foreignAngles.length > 0) {
+            const message = `${gate.name}: fan-out provenance names angle(s) outside the configured pool: ${foreignAngles.join(", ")}`;
+            if (fanoutEnforcement.rejectForeignAngles ?? true) {
+              failures.push(`${message}; ${FANOUT_UNAVAILABLE_MESSAGE}`);
+            } else {
+              // rejectForeignAngles: false is WARNING mode, not silence.
+              warnings.push(`${message} (gates.rejectForeignAngles is false; recorded as a warning)`);
+            }
+          }
+        }
+      }
     }
   }
   if (typeof unresolvedThreadCount === "number" && unresolvedThreadCount !== 0) {
@@ -327,6 +364,8 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   return {
     ok: failures.length === 0,
     failures,
+    // Additive: only present when non-empty, preserving the existing {ok, failures} shape.
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 async function ledgerExists(fullPath) {
@@ -354,14 +393,27 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
  * Read the recorded fan-out `provenance` object from a ledger across the
  * enumerated checkouts. Mirrors ledgerExistsInAny's "ANY checkout satisfies"
  * semantics: prefers the FIRST checkout whose ledger provenance actually
- * SATISFIES enforcement (internally consistent AND distinctReviewers >= floor),
- * so a below-floor or provenance-less ledger in an earlier-enumerated checkout
- * cannot SHADOW a valid one in the PR worktree (which would falsely fail closed).
- * Falls back to the first non-null provenance (for a useful diagnostic message)
- * only when NO checkout satisfies, and null only when none is present. Only
- * called when requireFanoutProvenance is enabled so the default path pays no I/O.
+ * SATISFIES the FULL active enforcement — internally consistent, meeting the
+ * distinctReviewers floor when requireFanoutProvenance is on, AND passing the
+ * gate's angle contract (mandatory-angle coverage; pool membership when
+ * foreign angles are rejected) — so a stale checkout's below-floor,
+ * provenance-less, or angle-contract-failing ledger cannot SHADOW a valid one
+ * in the PR worktree (which would falsely fail closed). Falls back to the
+ * first non-null provenance (for a useful diagnostic message) only when NO
+ * checkout satisfies, and null only when none is present. Called whenever
+ * requireFanoutProvenance is enabled OR the gate's verdict is fanout_fanin —
+ * inline verdicts never trigger this read.
  */
-async function readLedgerProvenanceInAny(checkouts, ledgerPath) {
+async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
+  const { requireProvenance = false, mandatoryAngles = [], anglePool = null, rejectForeignAngles = true } = criteria;
+  const satisfies = (prov) => {
+    if (provenanceConsistencyError(prov) !== null) return false;
+    if (requireProvenance && prov.distinctReviewers < FANOUT_PROVENANCE_MIN_REVIEWERS) return false;
+    const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
+    if (missingMandatory.length > 0) return false;
+    if (foreignAngles.length > 0 && rejectForeignAngles) return false;
+    return true;
+  };
   let firstNonNull = null;
   for (const root of checkouts) {
     const full = path.resolve(root, ledgerPath);
@@ -369,8 +421,8 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath) {
       const parsed = JSON.parse(await readFile(full, "utf8"));
       const prov = parsed && typeof parsed === "object" ? parsed.provenance : null;
       if (prov == null) continue; // ledger present but no provenance — keep scanning.
-      if (provenanceConsistencyError(prov) === null && prov.distinctReviewers >= FANOUT_PROVENANCE_MIN_REVIEWERS) {
-        return prov; // satisfying ledger — prefer it over any earlier below-floor one.
+      if (satisfies(prov)) {
+        return prov; // satisfying ledger — prefer it over any earlier failing one.
       }
       if (firstNonNull === null) firstNonNull = prov; // remember for diagnostics.
     } catch {
@@ -413,17 +465,33 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // Provenance enforcement is opt-in and layered ON TOP of fan-out evidence: it
   // only takes effect while evidence enforcement (above) is active.
   const requireProvenance = resolveRequireFanoutProvenance(config);
+  // Angle-coverage enforcement (mandatory angles + pool membership) is layered
+  // independently of requireProvenance: it re-validates whatever provenance a
+  // fanout_fanin ledger actually recorded, regardless of that opt-in flag.
+  const rejectForeignAngles = resolveRejectForeignAngles(config);
   // Light-mode facts (#1174): the threshold that a re-derived merge-base scope
   // must fall under for an inline verdict to be accepted. null when lightMode is
   // disabled → no inline verdict can ever be accepted (scopeUnderThreshold stays
   // false), preserving today's rejection.
   const lightThreshold = resolveLightMode(config);
   const lightMode = lightThreshold != null;
-  const draftRequired = resolveGateConfig(config, "draft").required;
-  const preApprovalRequired = resolveGateConfig(config, "preApproval").required;
+  const draftGateConfig = resolveGateConfig(config, "draft");
+  const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
+  // Shared angle-contract resolver (exclude-filtered mandatory angles +
+  // additive-aware pool) — the same contract the write paths enforce. The
+  // field names here (`mandatoryAngles`/`anglePool`) are exactly what
+  // buildPreMergeGateCheck reads off each gate entry.
+  const buildAngleFields = (gateKey) => {
+    const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
+    return { mandatoryAngles, anglePool: pool };
+  };
+  const GATE_ANGLE_CONFIG = {
+    draft_gate: buildAngleFields("draft"),
+    pre_approval_gate: buildAngleFields("preApproval"),
+  };
   const gateSpecs = [
-    { name: "draft_gate", marker: draftGateMarker, required: draftRequired },
-    { name: "pre_approval_gate", marker: preApprovalGateMarker, required: preApprovalRequired },
+    { name: "draft_gate", marker: draftGateMarker, required: draftGateConfig.required },
+    { name: "pre_approval_gate", marker: preApprovalGateMarker, required: preApprovalGateConfig.required },
   ].filter((spec) => spec.required && spec.marker.visible);
   const gates = [];
   const checkouts = resolveLedgerCheckouts(cwd);
@@ -444,6 +512,13 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       const scope = detectMergeBaseScope({ base: baseRef, head: headSha, cwd: repoRoot });
       scopeUnderThreshold = scope.ok === true && isEligibleForLightMode(scope, lightThreshold);
     }
+    // Read ledger provenance for ANY fanout_fanin gate (not just when
+    // requireProvenance is on): angle-coverage enforcement re-validates
+    // whatever provenance is recorded independently of that opt-in flag.
+    // The selection criteria mirror the full active enforcement so a stale
+    // checkout's contract-failing ledger cannot shadow a passing one.
+    const readProvenance = requireProvenance || spec.marker.executionMode === "fanout_fanin";
+    const angleFields = GATE_ANGLE_CONFIG[spec.name];
     gates.push({
       name: spec.name,
       executionMode: spec.marker.executionMode ?? null,
@@ -451,10 +526,13 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       scopeUnderThreshold,
       ledgerPath,
       ledgerExists: await ledgerExistsInAny(checkouts, ledgerPath),
-      provenance: requireProvenance ? await readLedgerProvenanceInAny(checkouts, ledgerPath) : null,
+      provenance: readProvenance
+        ? await readLedgerProvenanceInAny(checkouts, ledgerPath, { requireProvenance, rejectForeignAngles, ...angleFields })
+        : null,
+      ...angleFields,
     });
   }
-  return { required: true, requireProvenance, lightMode, hasFullLabel, gates };
+  return { required: true, requireProvenance, rejectForeignAngles, lightMode, hasFullLabel, gates };
 }
 export async function detectCheckpointEvidence(options, { env = process.env, ghCommand = "gh", cwd = process.cwd() } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
@@ -613,6 +691,13 @@ async function main() {
       })}\n`);
       process.exitCode = 1;
       return;
+    }
+    // Warnings (e.g. foreign angles under gates.rejectForeignAngles: false) do
+    // not fail the check but must not pass silently. Suppressed under --silent.
+    if (Array.isArray(preMergeGateCheck.warnings) && !options.silent) {
+      for (const warning of preMergeGateCheck.warnings) {
+        process.stderr.write(`WARNING: ${warning}\n`);
+      }
     }
     process.exitCode = emitResult(output, { jq: options.jq, silent: options.silent });
   } catch (error) {

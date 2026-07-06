@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
@@ -1146,6 +1147,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // multi-line per-angle breakdown and the `**Findings summary:**` line carries a
   // single-line digest (so the marker/parse contract still round-trips).
   let structuredFindings = null;
+  let rawFindingsInput = null;
   if (options.findingsJson) {
     let raw;
     try {
@@ -1164,6 +1166,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const candidate = Array.isArray(parsed)
       ? parsed
       : (Array.isArray(parsed?.angles) ? parsed.angles : (Array.isArray(parsed?.findings) ? parsed.findings : null));
+    rawFindingsInput = candidate;
     try {
       structuredFindings = normalizeStructuredFindings(candidate);
     } catch (err) {
@@ -1171,6 +1174,48 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     if (!structuredFindings) {
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
+    }
+  }
+  // Fan-out angle-coverage enforcement (fail closed): a fanout_fanin verdict's
+  // structured per-angle results must cover every configured mandatory angle,
+  // and (default) must not name an angle outside the gate's configured pool.
+  // Only applies when structured per-angle results were actually supplied —
+  // a free-text --findings-summary fanout_fanin verdict carries no per-angle
+  // data to validate.
+  if (structuredFindings && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
+    // Angle-less entries would be bucketed under the synthetic `general` label
+    // by normalization and then surface as a CONFUSING foreign-angle error.
+    // Fail first with a dedicated message naming the real problem instead.
+    const angleless = (rawFindingsInput ?? []).filter(
+      (e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0,
+    ).length;
+    if (angleless > 0) {
+      throw new Error(
+        `--findings-json for ${options.gate}: ${angleless} entr${angleless === 1 ? "y" : "ies"} lack a non-empty .angle — a fanout_fanin verdict must attribute every per-angle entry/finding to its review angle (use the nested [{ angle, verdict, findings }] shape, or add .angle to each flat finding)`,
+      );
+    }
+    const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
+    const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
+    const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(structuredFindings, {
+      mandatoryAngles,
+      pool,
+    });
+    if (missingMandatory.length > 0) {
+      throw new Error(
+        `--findings-json for ${options.gate} is missing mandatory angle(s): ${missingMandatory.join(", ")} (configured in gates.${gateKey}.mandatoryAngles; add a per-angle entry for each before posting a fanout_fanin verdict)`,
+      );
+    }
+    if (foreignAngles.length > 0) {
+      const message = `--findings-json for ${options.gate} names angle(s) outside the configured pool: ${foreignAngles.join(", ")}`;
+      if (resolveRejectForeignAngles(config)) {
+        throw new Error(
+          `${message} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`,
+        );
+      }
+      // rejectForeignAngles: false is WARNING mode, not silence — one line per call.
+      if (!options.silent) {
+        process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
+      }
     }
   }
   // --findings-json takes precedence; when structured findings are present, do not
