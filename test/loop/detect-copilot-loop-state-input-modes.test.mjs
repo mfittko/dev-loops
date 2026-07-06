@@ -207,6 +207,59 @@ test("detect-copilot-loop-state --input keeps clean exhausted rounds on current 
   }
 });
 
+test("detect-copilot-loop-state --input --lightweight: 1 completed round reaches round_cap_reached (lightweight cap defaults to 1, #1210)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-lightweight-cap-"));
+
+  try {
+    const snapshotPath = path.join(tempDir, "snapshot.json");
+    await writeJson(snapshotPath, {
+      prExists: true,
+      prNumber: 17,
+      copilotReviewRequestStatus: "none",
+      copilotReviewPresent: true,
+      unresolvedThreadCount: 1,
+      actionableThreadCount: 1,
+      copilotReviewRoundCount: 1,
+      ciStatus: "success",
+    });
+
+    const result = await runNode(["--input", snapshotPath, "--lightweight"]);
+
+    assert.equal(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.state, "round_cap_reached");
+    assert.equal(output.terminal, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-copilot-loop-state --input (no --lightweight): the same 1-round snapshot does NOT reach the round cap (full-PR default cap 5 unchanged, #1210)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-lightweight-cap-"));
+
+  try {
+    const snapshotPath = path.join(tempDir, "snapshot.json");
+    await writeJson(snapshotPath, {
+      prExists: true,
+      prNumber: 17,
+      copilotReviewRequestStatus: "none",
+      copilotReviewPresent: true,
+      unresolvedThreadCount: 1,
+      actionableThreadCount: 1,
+      copilotReviewRoundCount: 1,
+      ciStatus: "success",
+    });
+
+    const result = await runNode(["--input", snapshotPath]);
+
+    assert.equal(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    assert.notEqual(output.state, "round_cap_reached");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-copilot-loop-state --input routes blocked exhausted rounds to round_cap_reached", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-blocked-"));
 
