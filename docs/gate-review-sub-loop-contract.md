@@ -162,10 +162,15 @@ construction and the shared-prefix prompt-cache opportunity is destroyed byte on
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
 fixed section order: header (repo/PR/head/gate/worktree + the verify-fresh instruction),
 PR body, linked-issue body (when present), the full diff at the reviewed head, and a
-changed-files/adjacent-code summary. The diff SHOULD be inlined verbatim up to a size cap
-(`BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES`, a fixed constant); over the cap the prefix falls
-back to the `scope.diffPath` pointer form and discloses this in both the artifact
-(`prefixMode: "inline"|"pointer"`) and the prefix text itself. This is purely a
+changed-files/adjacent-code summary. The diff SHOULD be inlined up to a size cap
+(`BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES`, a fixed constant), carried inside a fenced
+markdown block — the fence and surrounding framing are part of the rendered prefix bytes,
+so "inline" means the diff content travels in the prefix, not that its raw bytes appear
+unframed. Over the cap the prefix falls back to pointer mode: it references
+`scope.diffPath` when the persisted `.diff` is present, and otherwise discloses that the
+diff pointer is unavailable (reviewers re-derive via `git diff`). Either way the mode is
+disclosed in both the artifact (`prefixMode: "inline"|"pointer"`) and the prefix text
+itself. This is purely a
 size/performance choice — reviewers spend many turns re-reading the same seeded content,
 so inlining it lets the FIRST turn's prompt-cache write serve every later turn cheaply —
 and is a zero-semantic change to the byte-identity requirement above: whichever mode ran,

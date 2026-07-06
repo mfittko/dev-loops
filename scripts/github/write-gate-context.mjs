@@ -465,8 +465,9 @@ export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot =
 
 /**
  * Size cap (bytes) above which the rendered briefing prefix falls back to
- * pointer mode for the diff section (scope.diffPath reference) instead of
- * inlining the diff text verbatim. No `gates.*` config knob exists for this
+ * pointer mode for the diff section (a scope.diffPath reference when present,
+ * else an explicit unavailable-pointer disclosure) instead of inlining the
+ * diff text in a fenced block. No `gates.*` config knob exists for this
  * yet — a named constant is the right size for a single fixed threshold;
  * promote to config only if a real need for tuning it emerges.
  */
@@ -645,9 +646,9 @@ export function buildGateContextArtifact(options) {
   if (options.adjacentCode && typeof options.adjacentCode === "object") {
     artifact.adjacentCode = options.adjacentCode;
   }
-  // Whether the rendered briefing prefix inlined the reviewed-head diff verbatim
-  // or fell back to the diffPath pointer (size cap). Only set when a caller
-  // actually rendered a prefix (writeGateContext does, always).
+  // Whether the rendered briefing prefix inlined the reviewed-head diff (in a
+  // fenced block) or fell back to the diffPath pointer (size cap). Only set
+  // when a caller actually rendered a prefix (writeGateContext does, always).
   if (typeof options.prefixMode === "string" && options.prefixMode.length > 0) {
     artifact.prefixMode = options.prefixMode;
   }
