@@ -176,16 +176,14 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     /if the refreshed snapshot reports unresolved threads, re-enter the reply\/resolve loop for the missed threads/i,
     "Step 7 should require re-entering the reply-resolve loop when unresolved threads remain",
   );
-  assert.match(
-    step7,
-    /The `pre_approval_gate` procedure must be entered and completed \(visible comment posted\) before any merge-ready or approval-ready declaration/i,
-    "pre-approval gate sequencing should forbid skipping the gate",
-  );
-  assert.match(
-    step7,
-    /Skipping the gate is not recoverable by asserting convergence/i,
-    "pre-approval gate sequencing should reject convergence-only claims",
-  );
+  // The "must be entered and completed before merge-ready" requirement is owned by
+  // GATE-COMMENT-FAIL-CLOSED (rule-ID reference asserted below) rather than pinned as
+  // prose here; "not recoverable by asserting convergence" is skill-local framing not
+  // yet promoted to a rule ID, so check it via keyword tokens, not an exact sentence (#1154).
+  assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "docs/gate-review-comment-contract.md");
+  assert.match(step7, /GATE-COMMENT-FAIL-CLOSED/, "pre-approval gate sequencing should reference the fail-closed rule ID");
+  assert.match(step7, /\bnot recoverable\b/i, "pre-approval gate sequencing should reject convergence-only claims");
+  assert.match(step7, /\bconvergence\b/i, "pre-approval gate sequencing should reject convergence-only claims");
   assert.match(
     step7,
     /### Merge-ready preconditions/i,
@@ -454,8 +452,12 @@ test("checkpoint verdict comment ownership stays explicit in the canonical inter
   assert.match(devLoopPreApprovalGate, /`pre_approval_gate`/);
   assert.match(devLoopPreApprovalGate, /head SHA/i);
   assert.match(devLoopPreApprovalGate, /does \*\*not\*\* replace the required `draft_gate` evidence|does not replace the required `draft_gate` evidence/i);
-  assert.match(devLoopPreApprovalGate, /The `pre_approval_gate` procedure must be entered and completed \(visible comment posted\) before any merge-ready or approval-ready declaration/i);
-  assert.match(devLoopPreApprovalGate, /Skipping the gate is not recoverable by asserting convergence/i);
+  // The "must be entered and completed before merge-ready" gate-boundary requirement is
+  // owned by GATE-COMMENT-FAIL-CLOSED (asserted below); the "not recoverable by asserting
+  // convergence" caution is skill-local framing not yet promoted to a rule ID, so check
+  // for it via keyword tokens rather than pinning the exact sentence (#1154).
+  assert.match(devLoopPreApprovalGate, /\bnot recoverable\b/i);
+  assert.match(devLoopPreApprovalGate, /\bconvergence\b/i);
   assertRuleOwned("GATE-COMMENT-PREAPPROVAL-REQUIREMENTS", "docs/gate-review-comment-contract.md");
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-VALIDATION-REPORTING/);
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-PREAPPROVAL-REQUIREMENTS/);
