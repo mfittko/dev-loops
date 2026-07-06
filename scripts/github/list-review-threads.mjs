@@ -227,11 +227,18 @@ export async function fetchAllReviewThreads(
 }
 
 export function filterThreads(threads, { unresolvedOnly = false, author = undefined } = {}) {
+  // "all" is a match-everything sentinel: bypass the author filter entirely so
+  // threads with a missing/ghost first-comment author (author null) still list.
+  // authorMatchesFilter deliberately rejects empty logins for its reply-resolve
+  // callers, so routing "all" through it would drop those threads.
+  const authorFilter = typeof author === "string" && author.trim().toLowerCase() === "all"
+    ? undefined
+    : author;
   return threads.filter((thread) => {
     if (unresolvedOnly && thread.isResolved) {
       return false;
     }
-    if (author !== undefined && !authorMatchesFilter(thread.author, author)) {
+    if (authorFilter !== undefined && !authorMatchesFilter(thread.author, authorFilter)) {
       return false;
     }
     return true;

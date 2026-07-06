@@ -140,6 +140,33 @@ test("list-review-threads --author filters by first-comment author (case-insensi
   }
 });
 
+test("list-review-threads --author all lists threads with a missing/ghost first-comment author", async () => {
+  // "all" is a match-everything sentinel: a thread whose first comment is gone
+  // (author null) must still list, not be dropped by the author filter.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-list-threads-all-"));
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "graphql", "--field", "pr=9"],
+        stdout: threadsPayload({
+          nodes: [
+            threadNode({ id: "THREAD_GHOST", comment: null }),
+            threadNode({ id: "THREAD_NAMED", comment: commentNode({ databaseId: 1, body: "named", login: "bob" }) }),
+          ],
+        }),
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "9", "--author", "all"], { env: gh.env });
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.deepEqual(parsed.threads.map((t) => t.threadId), ["THREAD_GHOST", "THREAD_NAMED"]);
+    assert.equal(parsed.threads[0].author, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("list-review-threads paginates past 100 threads", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-list-threads-page-"));
   try {
