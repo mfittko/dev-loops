@@ -1,17 +1,20 @@
 # Issue intake procedure
 
-This document is the canonical owner of the routed `issue_intake` procedure behind the public `dev-loop` façade.
+Canonical owner for the routed `issue_intake` procedure behind the public `dev-loop` façade: preflight, normalization, async refinement, epic decomposition, and Copilot handoff.
 
 Use it together with:
 - [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md)
-- [Public Dev Loop Contract](./public-dev-loop-contract.md)
+- [Public Dev Loop Contract](./public-dev-loop-contract.md) — owner of `FACADE-LINKED-PR-SINGLE-ARTIFACT`, `FACADE-BOOTSTRAP-WATCH-ROUTE`, `FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION`
 - [Retrospective Checkpoint Contract](./retrospective-checkpoint-contract.md) when the current step depends on async start/resume/status or retrospective enforcement
+- [Stop Conditions](./stop-conditions.md) — owner of `STOP-INITIAL-COPILOT-001` and the other strategy-wide stop/wait rules this procedure operationalizes
+- [Merge Preconditions](./merge-preconditions.md) — the merge gate this procedure defers to before `gh pr merge`
 
 When routed work is issue-first rather than already in active PR follow-up, use the procedure below before entering the shared post-PR loop. Treat this document as the issue-refinement specialist procedure for the routed `issue_intake` seam.
 
 ## New-idea safety layer (default contract in this repo)
 
-For **all new ideas** that are not already anchored to an existing issue (including abstract ideas such as plain-language requests without an issue number or plan-doc path), apply this procedure-owned intake contract before any GitHub mutation:
+<!-- rule: INTAKE-NEW-IDEA-SAFETY -->
+For **all new ideas** that are not already anchored to an existing issue (including abstract ideas such as plain-language requests without an issue number or plan-doc path), the procedure MUST apply this intake contract before any GitHub mutation:
 
 - procedure owns classification; human operator gates all mutations
 - run classification in fresh context by default
@@ -50,9 +53,11 @@ Proposal artifact contract:
 - machine-readable JSON snapshot
 - write temporary artifacts under `Proposal` (`tmp/new-idea-intake/<run-id>/proposal.md`) and `tmp/new-idea-intake/<run-id>/proposal.json`
 
-If the Phase 1 preflight verdict is `pause_for_clarification`, stop and ask.
-If the intake state machine stops at `stopped_overlap_needs_decision` or `stopped_low_confidence`, stop and ask.
-If the intake state machine stops at `stopped_explicit_reject`, stop and record that the proposal was rejected; do not mutate GitHub.
+<!-- rule: INTAKE-STOP-STATES -->
+If the Phase 1 preflight verdict is `pause_for_clarification`, the procedure MUST stop and ask.
+If the intake state machine stops at `stopped_overlap_needs_decision` or `stopped_low_confidence`, the procedure MUST stop and ask.
+If the intake state machine stops at `stopped_explicit_reject`, the procedure MUST stop and record that the proposal was rejected; it MUST NOT mutate GitHub.
+
 After approval, start a separate async mutation pass (dispatched via the procedure) that consumes the approved proposal and emits a post-mutation verification artifact. Emit a concise post-mutation verification artifact and record what the mutation pass actually changed and verify the resulting issue/artifact state.
 
 ## Unattended issue-first execution and automatic re-entry
@@ -110,7 +115,7 @@ Preflight verdicts:
 - do not re-implement linked-event query behavior, pagination, repo filtering, or tie-break logic
 - do not rely only on PR title/body containing a literal issue number
 - treat an open linked PR as the active implementation for this issue
-- once an open linked PR exists, that PR is the only canonical follow-up artifact for the issue; attach follow-up work to it and do not open another PR unless the prior PR was explicitly superseded and reconciled first
+- once an open linked PR exists, that PR is the only canonical follow-up artifact for the issue; attach follow-up work to it and do not open another PR unless the prior PR was explicitly superseded and reconciled first (this operationalizes [FACADE-LINKED-PR-SINGLE-ARTIFACT](public-dev-loop-contract.md) for the `issue_intake` strategy)
 - **follow-up-capture rule:** when a follow-up is discovered while working a PR/loop, note it on the originating issue (or the PR body); file a standalone issue only if the follow-up is genuinely independent of the PR **and** outlives it (a real separate bug/feature that would be lost as a note on a soon-closed issue). Prefer noting PR-scoped follow-ups on the originating artifact over spinning up standalone tracker items for work that is part of the same effort or will be resolved imminently. See [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md).
 - if a PR already exists, classify bootstrap-wait versus follow-up:
   `node <resolved-skill-scripts>/loop/detect-initial-copilot-pr-state.mjs --repo <resolved-repo> --issue <number>`
@@ -118,13 +123,13 @@ Preflight verdicts:
   ```sh
   node <resolved-skill-scripts>/loop/watch-initial-copilot-pr.mjs --repo <resolved-repo> --issue <number>
   ```
-  - must use the dedicated `watch-initial-copilot-pr.mjs` watcher and its default 1-hour watch budget
+  - must use the dedicated `watch-initial-copilot-pr.mjs` watcher and its default 1-hour watch budget (owner rule: [FACADE-BOOTSTRAP-WATCH-ROUTE](public-dev-loop-contract.md))
   - quiet/no-activity watch observations alone are non-terminal
   - `ready_for_followup`: linked PR has become substantive; resume from that PR
   - `timed_out`: observational first; refresh authoritative state
   - if refreshed state is still `waiting_for_initial_copilot_implementation`, remain attached to the same durable wait seam and continue waiting
   - if the refreshed state exits this seam, route based on that refreshed state instead of surfacing timeout attention
-  - when the refreshed state is `linked_pr_ready_for_followup`, re-enter normal PR follow-up; if the follow-up handoff carries `conductorRouting.handoffEnvelope.requiresLocalIsolation=true`, perform the expected isolated-checkout/worktree handoff and continue
+  - when the refreshed state is `linked_pr_ready_for_followup`, re-enter normal PR follow-up per [FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION](public-dev-loop-contract.md): if the follow-up handoff carries `conductorRouting.handoffEnvelope.requiresLocalIsolation=true`, perform the expected isolated-checkout/worktree handoff and continue
   - only surface timeout attention when the seam's durable watch budget is actually exhausted
   - for explicit inspect/status requests, report the still-waiting state and exit normally
 - carry that resolved repo slug through every later GitHub issue/PR command
@@ -232,9 +237,9 @@ The merge itself is gated, not implied by the lines above. Before any `gh pr mer
 gh pr merge <pr-number> --repo <resolved-repo> --squash --delete-branch
 ```
 
-Bootstrap-wait interpretation remains fail-closed and observational-first:
-- `ready_for_followup`: linked PR has become substantive; resume from that PR
-- `timed_out`: observational first; refresh authoritative state
-- if refreshed state is still `waiting_for_initial_copilot_implementation`, remain attached to the same durable wait seam and continue waiting
-- if refreshed state exits that seam, route based on refreshed state instead of surfacing timeout attention
+Bootstrap-wait interpretation remains fail-closed and observational-first — same seam as Phase 2's `waiting_for_initial_copilot_implementation` handling above: `ready_for_followup` resumes from the now-substantive linked PR; `timed_out` is observational first; refresh authoritative state and re-apply the Phase 2 branching (still-waiting vs. seam-exit) rather than re-deriving it here.
+
+## Cross-references
+
+See the "Use it together with" list at the top; additionally, [Epic Tree Refinement Procedure](./epic-tree-refinement-procedure.md) refines an existing sub-issue tree, while this procedure creates it (Phase 3b).
 

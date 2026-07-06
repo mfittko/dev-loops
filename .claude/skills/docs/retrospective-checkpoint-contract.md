@@ -1,6 +1,9 @@
 # Retrospective checkpoint contract
 
-This document defines the enforcement seam for the post-run behavioral retrospective checkpoint after qualifying async `dev-loop` completions in this repository. Whether a missing checkpoint blocks the next qualifying start/resume is controlled by `.devloops` at repo root `workflow.requireRetrospective`; shipped defaults remain permissive and this repo opts in.
+Canonical owner for the enforcement seam of the post-run behavioral retrospective checkpoint after qualifying async `dev-loop` completions in this repository.
+
+<!-- rule: RETRO-ENFORCEMENT-CONFIG-GATED -->
+Whether a missing checkpoint blocks the next qualifying start/resume MUST be controlled by `.devloops` at repo root `workflow.requireRetrospective`; shipped defaults remain permissive and this repo opts in.
 
 ## Relationship to formal dev mode
 
@@ -85,21 +88,24 @@ Callers have two supported integration options:
 4. Call `evaluateRetrospectiveGate({ checkpointState, proposedRouting })`.
 5. Use the gate result (not the raw routing result) as the effective routing decision when enforcement is enabled; otherwise keep the raw routing result and treat the checkpoint artifact as advisory context only.
 
-If the gate result is `needs_reconcile`, the caller must not proceed with the proposed routing. The `nextAction` field instructs the operator to complete or explicitly skip the retrospective.
+<!-- rule: RETRO-GATE-FAIL-CLOSED -->
+If the gate result is `needs_reconcile`, the caller MUST NOT proceed with the proposed routing. The `nextAction` field instructs the operator to complete or explicitly skip the retrospective.
 
 ## Advisory findings — never a merge gate (issue #1077, Reading B)
 
+<!-- rule: RETRO-ADVISORY-NEVER-GATE -->
 The retrospective is **advisory**: it runs, records flagged raw-call / discipline
 observations honestly, and passes them back to the conductor (main agent) to
-**decide** what to do with them — but it **NEVER blocks a merge or any lifecycle
-transition**. The pre-merge retrospective gate (`evaluateRetrospectiveMergeApproval`
+**decide** what to do with them — but it MUST NOT block a merge or any lifecycle
+transition. The pre-merge retrospective gate (`evaluateRetrospectiveMergeApproval`
 and the `requireRetrospectiveGate` / `requireRetrospectiveInternalTooling` config
 keys) has been **removed**. There is no `retrospective_gate_pending` / `blocked`
 disposition on account of the internal-tooling raw-call record.
 
 ### How findings travel (Reading B)
 
-1. **Deterministic return contract.** The loop subagent's handoff envelope carries
+<!-- rule: RETRO-FINDINGS-ENVELOPE-CARRY -->
+1. **Deterministic return contract.** The loop subagent's handoff envelope MUST carry
    the retrospective findings as a structured `retrospectiveFindings` field — the
    `check-retro-tooling.mjs` JSON output (`{ internalToolingOnly, rawCallViolations,
    allowedWriteOps }`), not prose. The conductor reads that field. This is a hard

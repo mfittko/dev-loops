@@ -298,6 +298,7 @@ test("issue-intake safety layer contract is documented", async () => {
   const planContent = await readRepo("PLAN.md");
 
   assert.match(skillContent, /New-idea safety layer \(default contract in this repo\)/);
+  assertRuleOwned("INTAKE-NEW-IDEA-SAFETY", "skills/docs/issue-intake-procedure.md");
   assert.match(skillContent, /procedure owns classification; human operator gates all mutations/i);
   assert.match(skillContent, /run classification in fresh context by default/i);
   assert.match(skillContent, /emit a proposal artifact before any GitHub state-changing mutation, including create\/edit\/retitle\/collapse\/link operations/i);
@@ -318,9 +319,14 @@ test("issue-intake safety layer contract is documented", async () => {
     "stopped_overlap_needs_decision",
   ]);
 
-  assert.match(skillContent, /If the Phase 1 preflight verdict is `pause_for_clarification`, stop and ask\./i);
-  assert.match(skillContent, /If the intake state machine stops at `stopped_overlap_needs_decision` or `stopped_low_confidence`, stop and ask\./i);
-  assert.match(skillContent, /If the intake state machine stops at `stopped_explicit_reject`, stop and record that the proposal was rejected; do not mutate GitHub\./i);
+  // Stop-state behavior is rule-owned (INTAKE-STOP-STATES) rather than phrase-pinned;
+  // structural check: the rule covers all three stop states plus the preflight verdict.
+  assertRuleOwned("INTAKE-STOP-STATES", "skills/docs/issue-intake-procedure.md");
+  const intakeDoc = await readRepo("skills/docs/issue-intake-procedure.md");
+  const stopStatesRuleBlock = intakeDoc.split("<!-- rule: INTAKE-STOP-STATES -->")[1]?.split(/\r?\n\r?\n/)[0] ?? "";
+  for (const token of ["pause_for_clarification", "stopped_overlap_needs_decision", "stopped_low_confidence", "stopped_explicit_reject", "MUST stop", "MUST NOT mutate GitHub"]) {
+    assert.ok(stopStatesRuleBlock.includes(token), `INTAKE-STOP-STATES rule block must cover ${token}`);
+  }
   assert.match(skillContent, /start a separate async mutation pass \(dispatched via the procedure\) that consumes the approved proposal and emits a post-mutation verification artifact/i);
   assert.match(skillContent, /record what the mutation pass actually changed and verify the resulting issue\/artifact state/i);
   assert.match(skillContent, /tmp\/new-idea-intake\/<run-id>\/proposal\.md/i);

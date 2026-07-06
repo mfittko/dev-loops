@@ -1,7 +1,8 @@
 # Tracker-First Story-to-PR Contract
 
-This document defines the adapter-agnostic MVP contract for the tracker-first
-story-to-PR workflow in `dev-loops`.
+Canonical owner for the adapter-agnostic MVP contract for the tracker-first
+story-to-PR workflow in `dev-loops`, and for the tracker-first loop state
+machine (#449).
 
 **MVP invariant: one tracker work item → one GitHub PR.**
 
@@ -30,7 +31,8 @@ Implementation for each:
 | Epic / PRD reference | Optional linked metadata only; no roll-up or automation in this slice |
 | ADR / RFC reference | Optional linked metadata only; no decision-sync in this slice |
 
-**Invariant:** For any single tracker work item in scope, there is at most
+<!-- rule: TRACKER-ONE-ACTIVE-PR -->
+For any single tracker work item in scope, there MUST be at most
 one active GitHub PR at a time. Multi-PR workflows and roll-up automation
 are out of scope for this slice.
 
@@ -57,6 +59,9 @@ already-correct PR leaves it unchanged.
 
 ### 3.1 Required PR Metadata
 
+<!-- rule: TRACKER-PROJECTION-REQUIRED-METADATA -->
+Every projected PR MUST carry the following fields:
+
 | Field | Rule |
 |---|---|
 | PR title | `[{TRACKER_ID}] {tracker item title}` — bracketed tracker identifier followed by the item title verbatim |
@@ -64,7 +69,7 @@ already-correct PR leaves it unchanged.
 | PR body — Summary section | Required. Brief description of the change implemented in this PR. |
 | PR body — Acceptance Criteria section | Required. Copied or linked from the tracker item's acceptance criteria. |
 | Labels | Required: `tracker:{TRACKER_ID}`. Optional reference labels: `epic:{EPIC_ID}`, `prd:{PRD_ID}` when references are present. |
-| Draft state | PR must start as a draft. It must not be marked ready-for-review until development work is complete. |
+| Draft state | PR MUST start as a draft. It MUST NOT be marked ready-for-review until development work is complete. |
 
 ### 3.2 Optional Reference Metadata
 
@@ -85,9 +90,9 @@ They are read-only metadata in this slice and do not trigger any automation:
 2. **On tracker item field change**: Re-apply projection rules to PR title,
    body, and labels. Leave any sections not covered by projection rules
    (e.g. reviewer-added review comments) intact.
-3. **Idempotent regeneration**: If the PR already has the correct title, body
-   sections, and labels, no mutation is performed. Projection is a no-op
-   when the current state already matches the target.
+3. <!-- rule: TRACKER-PROJECTION-IDEMPOTENT --> **Idempotent regeneration**: Projection MUST be a no-op when the PR already has the correct
+   title, body sections, and labels — re-applying the rules to an already-correct PR MUST NOT
+   mutate it.
 
 ### 3.4 PR Body Template
 
@@ -120,7 +125,7 @@ implementations map canonical action names to tracker-native field updates.
 | `pr_merged` — PR merged | `set_done` | Tracker moves to done/completed terminal state |
 | `pr_closed_unmerged` — PR closed without merge | `none` | No automatic terminal transition; human decision required |
 | `no_tracker_item` | `none` | No tracker item to update |
-| `blocked_needs_user_decision` | `none` | Stop and report; no automatic tracker update |
+| <!-- rule: TRACKER-BLOCKED-FAIL-CLOSED --> `blocked_needs_user_decision` | `none` | An unexpected or contradictory snapshot MUST stop and report; the helper MUST NOT apply an automatic tracker update |
 
 ### 4.2 Event Triggers
 
