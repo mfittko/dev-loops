@@ -166,9 +166,9 @@ AC/DoD matrix, and an explicit scope boundary in the format
 `"This issue owns X. It does NOT own Y (#NNN) or Z (#MMM)."`
 
 <!-- rule: EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE -->
-Write the refined body to `tmp/issues/<number>/refinement/` first. Show the diff and get
-confirmation before each `gh issue edit` mutation, unless running unattended with explicit
-authorization.
+`EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE`: The procedure MUST write the refined body to
+`tmp/issues/<number>/refinement/` first and MUST show the diff and get confirmation before
+each `gh issue edit` mutation, unless running unattended with explicit authorization.
 
 ---
 
