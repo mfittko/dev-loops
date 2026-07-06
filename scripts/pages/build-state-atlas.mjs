@@ -379,6 +379,8 @@ export function buildStateAtlasHtml() {
   .diagram .expand:hover { color: var(--heading); border-color: var(--accent); }
   .diagram .mermaid { cursor: zoom-in; }
   .diagram .mermaid:fullscreen { cursor: zoom-out; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 2rem; }
+  .diagram .mermaid:-webkit-full-screen { cursor: zoom-out; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 2rem; }
+  .diagram .mermaid:-webkit-full-screen svg { max-width: calc(100vw - 4rem); max-height: calc(100vh - 4rem); width: auto; height: auto; }
   .diagram .mermaid:fullscreen svg { max-width: calc(100vw - 4rem); max-height: calc(100vh - 4rem); width: auto; height: auto; }
   .diagram .mermaid.fs-fallback { position: fixed; inset: 0; z-index: 50; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 1rem; cursor: zoom-out; overflow: auto; }
   .diagram .mermaid.fs-fallback svg { max-width: calc(100vw - 2rem); max-height: calc(100vh - 2rem); width: auto; height: auto; }
@@ -397,8 +399,10 @@ ${sections}
       let fsInFlight = false;
       document.addEventListener('click', async (e) => {
         if (fsInFlight) return;
-        const btn = e.target.closest('.diagram .expand');
-        const box = btn ? btn.parentElement.querySelector('.mermaid') : e.target.closest('.diagram .mermaid');
+        const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+        if (!target) return;
+        const btn = target.closest('.diagram .expand');
+        const box = btn ? btn.parentElement.querySelector('.mermaid') : target.closest('.diagram .mermaid');
         if (!box) return;
         fsInFlight = true;
         try {
