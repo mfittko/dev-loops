@@ -21,7 +21,8 @@ import {
 } from "@dev-loops/core/loop/async-start-contract";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
-import { loadDevLoopConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { detectScope } from "./detect-change-scope.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { validatePlanFile } from "../refine/validate-plan-file.mjs";
 import {
@@ -65,6 +66,14 @@ Optional modifier:
                  heuristic (chore/fix commit type + no --plan-file + small change)
                  is a documented manual signal; --lightweight is the explicit,
                  deterministic trigger.
+                 Used ALONE (no --issue/--pr/--input/--plan-file/--spike):
+                 issue-less PR-first (#1210) — no tracker binding at all
+                 (canonicalSpecSource: pr_body, no issue-keyed worktree
+                 requirement). Gated on localImplementation.lightMode being
+                 enabled AND the live change scope (git diff) staying within
+                 its maxFiles/maxLines threshold; fails closed with a distinct
+                 reason (light mode disabled / scope undetectable / over
+                 threshold) requiring --issue above the threshold.
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
@@ -200,17 +209,23 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
   if (modeCount > 1) {
     throw parseError("--issue, --pr, --input, --plan-file, and --spike are mutually exclusive; provide exactly one");
   }
-  if (modeCount === 0) {
-    throw parseError("--input <path>, --issue <n>, --pr <n>, --plan-file <path>, or --spike <path> is required");
+  // --lightweight is normally a MODIFIER (not a 6th mode): it makes the PR body
+  // the spec-of-record for the --issue local path. Used ALONE (modeCount === 0,
+  // issue #1210) it is instead the issue-less PR-first trigger — no tracker
+  // binding at all — so the "no mode selected" error is skipped in that case.
+  if (modeCount === 0 && !options.lightweight) {
+    throw parseError("--input <path>, --issue <n>, --pr <n>, --plan-file <path>, --spike <path>, or --lightweight (issue-less PR-first) is required");
   }
-  // --lightweight is a MODIFIER (not a 6th mode): it makes the PR body the
-  // spec-of-record for the --issue local path. It is the opposite of --plan-file
-  // (which commits a durable plan doc as the spec) and only composes with --issue.
+  // --lightweight is the opposite of --plan-file (which commits a durable plan
+  // doc as the spec) regardless of mode.
   if (options.lightweight && options.planFile !== undefined) {
     throw parseError("--lightweight and --plan-file are opposites: --plan-file commits a durable plan doc as the spec-of-record, --lightweight makes the PR body the spec. Provide only one.");
   }
-  if (options.lightweight && options.issue === undefined) {
-    throw parseError("--lightweight is a modifier for the --issue path (the PR body becomes the spec-of-record). Combine it with --issue <n>.");
+  // When another mode IS selected, --lightweight only composes with --issue
+  // (not --pr/--input/--spike). Used with no mode selected at all, it is the
+  // issue-less PR-first trigger handled above.
+  if (options.lightweight && modeCount > 0 && options.issue === undefined) {
+    throw parseError("--lightweight is a modifier for the --issue path (the PR body becomes the spec-of-record). Combine it with --issue <n>, or use --lightweight alone (no other mode flag) for the issue-less PR-first path.");
   }
   return options;
 }
@@ -545,6 +560,79 @@ export function buildSpikeInput({ spikeFilePath }) {
     },
   };
 }
+/**
+ * Decide whether the live change scope (git diff, via detectScope) is eligible
+ * for issue-less lightweight PR-first (#1210): reuses the same
+ * localImplementation.lightMode threshold that gates inline vs full-fanout gate
+ * dispatch, so "genuinely small" means the same thing everywhere in the repo.
+ * Fails CLOSED on every negative path (disabled / undetectable / over
+ * threshold) with a distinct reason so the caller can report why --issue is
+ * required instead of silently defaulting one way or the other.
+ *
+ * @param {import("@dev-loops/core/config").DevLoopConfig} config
+ * @returns {{ eligible: true, scope: object, threshold: {maxFiles:number,maxLines:number} } | { eligible: false, reason: "light_mode_disabled"|"scope_detection_failed"|"over_threshold", scope?: object, threshold?: object, detail?: string }}
+ */
+export function resolveIssuelessLightweightEligibility(config) {
+  const threshold = resolveLightMode(config);
+  if (!threshold) {
+    return { eligible: false, reason: "light_mode_disabled" };
+  }
+  const scope = detectScope({});
+  if (scope.ok === false) {
+    return { eligible: false, reason: "scope_detection_failed", detail: scope.error };
+  }
+  if (scope.filesChanged > threshold.maxFiles || scope.linesChanged > threshold.maxLines) {
+    return { eligible: false, reason: "over_threshold", scope, threshold };
+  }
+  return { eligible: true, scope, threshold };
+}
+
+/**
+ * Build a `--lightweight` startup input with NO tracker binding at all
+ * (issue-less PR-first, #1210): `--lightweight` used alone, no --issue.
+ *
+ * Read-only: no tracker mutation, no GitHub calls, no issue/PR number. Gated
+ * by {@link resolveIssuelessLightweightEligibility} — an ineligible change
+ * throws so the CLI fails closed (exit 1, no readiness bundle) with a message
+ * naming the distinct reason, mirroring buildPlanFileInput/buildSpikeInput's
+ * fail-closed-on-invalid-input convention. Exempt from the worktree-isolation
+ * guard like the plan-file/spike paths: there is no issue number to key a
+ * worktree on.
+ *
+ * @param {{ config: import("@dev-loops/core/config").DevLoopConfig }} params
+ * @returns {object} startup input with canonicalSpecSource: "pr_body"
+ */
+export function buildLightweightIssuelessInput({ config }) {
+  const eligibility = resolveIssuelessLightweightEligibility(config);
+  if (!eligibility.eligible) {
+    if (eligibility.reason === "light_mode_disabled") {
+      throw new Error("--lightweight without --issue (issue-less PR-first) requires localImplementation.lightMode.enabled in .devloops; enable light mode or provide --issue <n>.");
+    }
+    if (eligibility.reason === "scope_detection_failed") {
+      throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Provide --issue <n> instead.`);
+    }
+    throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Provide --issue <n> for above-threshold changes.`);
+  }
+  return {
+    intent: "start_issue_locally",
+    mode: "bounded_handoff",
+    targetPreference: "prefer_local",
+    artifactState: "not_applicable",
+    issueLinkageResolution: "not_applicable",
+    issueReadiness: "not_applicable",
+    issueAssignmentState: "not_applicable",
+    loopState: "implementation_pending",
+    canonicalSpecSource: "pr_body",
+    planFileExempt: true,
+    currentState: {
+      target: { kind: "local_phase", issue: null, pr: null, linkedPr: null, branch: null, phase: null },
+      ownership: "local",
+      nextActor: "local",
+      status: "active",
+      authorization: "authorized",
+    },
+  };
+}
 export function summarizeCanonicalState(bundle) {
   return {
     target: bundle.canonicalState?.target ?? null,
@@ -746,6 +834,11 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     if (options.lightweight) {
       input = { ...input, canonicalSpecSource: "pr_body" };
     }
+  } else if (options.lightweight) {
+    // --lightweight used ALONE (no other mode flag): issue-less PR-first (#1210).
+    input = buildLightweightIssuelessInput({
+      config: configErrors.length === 0 ? devLoopConfig : { version: 1 },
+    });
   } else {
     input = buildAutoResolvedInput({
       pr: options.pr,
