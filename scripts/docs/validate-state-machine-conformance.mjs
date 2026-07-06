@@ -690,9 +690,38 @@ registerMachine(CONDUCTOR_ROUTING_MACHINE);
 // conductor-routing's OUTER_TO_FIXTURE).
 // ---------------------------------------------------------------------------
 
+// Independent doc<->code binding required by the parseRequiredTransitions header caveat:
+// the transitionChecks below are DERIVED from the parsed doc, so on their own they are
+// one-directional (a silently dropped/deleted doc bullet would just shrink both tables in
+// lockstep and keep passing). This load-time set-equality against the code's own transition
+// table (mirroring pr-gate-coordination's atlas binding) makes any dropped, mangled, or
+// deleted bullet throw loudly.
+function bindDocToCodeTable(machineName, docTransitions, codeEdges) {
+  const docSet = new Set(realEdges(docTransitions).map(([a, b]) => `${a}->${b}`));
+  const codeSet = new Set(codeEdges.map(([a, b]) => `${a}->${b}`));
+  const onlyDoc = [...docSet].filter((k) => !codeSet.has(k));
+  const onlyCode = [...codeSet].filter((k) => !docSet.has(k));
+  if (onlyDoc.length > 0 || onlyCode.length > 0) {
+    throw new Error(
+      `${machineName}: doc "Required transitions" and the code transition table have drifted apart. `
+      + `Only in doc: [${onlyDoc.join(", ")}]. Only in code: [${onlyCode.join(", ")}].`,
+    );
+  }
+}
+
+function tableEdges(table) {
+  return Object.entries(table).flatMap(([from, tos]) => tos.map((to) => [from, to]));
+}
+
+function tableTerminalStates(table) {
+  return Object.entries(table).filter(([, tos]) => tos.length === 0).map(([state]) => state);
+}
+
 const COPILOT_LOOP_STATE_DOC_TRANSITIONS = parseRequiredTransitions(
   readFileSync(path.join(REPO_ROOT, "docs", "copilot-loop-state-graph.md"), "utf8"),
 );
+
+bindDocToCodeTable("copilot-loop-state", COPILOT_LOOP_STATE_DOC_TRANSITIONS, tableEdges(TRANSITIONS));
 
 const COPILOT_LOOP_STATE_TO_FIXTURE = new Map([
   [STATE.PR_READY_NO_FEEDBACK, () => ({ prExists: true, prDraft: false, copilotReviewRequestStatus: "none", copilotReviewPresent: false, unresolvedThreadCount: 0, ciStatus: "success" })],
@@ -732,16 +761,8 @@ for (const [from, to] of realEdges(COPILOT_LOOP_STATE_DOC_TRANSITIONS)) {
 const COPILOT_LOOP_STATE_MACHINE = {
   name: "copilot-loop-state",
   states: Object.values(STATE),
-  terminalStates: [
-    STATE.NO_PR,
-    STATE.REVIEW_REQUEST_UNAVAILABLE,
-    STATE.BLOCKED_NEEDS_USER_DECISION,
-    STATE.DONE,
-    STATE.LOW_SIGNAL_CONVERGED,
-    STATE.ROUND_CAP_REACHED,
-    STATE.ROUND_CAP_CLEAN_FALLBACK,
-  ],
-  transitions: Object.entries(TRANSITIONS).flatMap(([from, tos]) => tos.map((to) => [from, to])),
+  terminalStates: tableTerminalStates(TRANSITIONS),
+  transitions: tableEdges(TRANSITIONS),
   docTransitions: COPILOT_LOOP_STATE_DOC_TRANSITIONS,
   transitionChecks: COPILOT_LOOP_STATE_TRANSITION_CHECKS,
   safetyRules: [
@@ -788,6 +809,8 @@ const REVIEWER_LOOP_STATE_DOC_TRANSITIONS = parseRequiredTransitions(
   { abstractRows: REVIEWER_LOOP_STATE_ABSTRACT_ROWS },
 );
 
+bindDocToCodeTable("reviewer-loop-state", REVIEWER_LOOP_STATE_DOC_TRANSITIONS, tableEdges(REVIEWER_TRANSITIONS));
+
 // Transitions owned by the outer-loop legacy-compatibility layer, not by this pure
 // interpreter (see header comment): interpretReviewerLoopState never assigns
 // WAITING_FOR_AUTHOR_FOLLOWUP or WAITING_FOR_RE_REQUEST as its own output state, so no
@@ -816,6 +839,12 @@ const REVIEWER_LOOP_STATE_TO_FIXTURE = new Map([
 
 const REVIEWER_LOOP_STATE_TRANSITION_CHECKS = new Map();
 for (const [from, to] of REVIEWER_LOOP_STATE_OWNED_ELSEWHERE_EDGES) {
+  // owned_elsewhere skips the behavioral verify(), but the cheap structural check still
+  // applies: the edge must exist in the real code table, so removing it from
+  // REVIEWER_TRANSITIONS surfaces here instead of passing silently.
+  if (!(REVIEWER_TRANSITIONS[from] || []).includes(to)) {
+    throw new Error(`reviewer-loop-state: owned_elsewhere edge ${from}->${to} is not in REVIEWER_TRANSITIONS`);
+  }
   REVIEWER_LOOP_STATE_TRANSITION_CHECKS.set(`${from}->${to}`, {
     status: "owned_elsewhere",
     note: "Legacy external-wait compatibility state re-entry is owned by the outer-loop "
@@ -852,8 +881,8 @@ for (const [from, to] of realEdges(REVIEWER_LOOP_STATE_DOC_TRANSITIONS)) {
 const REVIEWER_LOOP_STATE_MACHINE = {
   name: "reviewer-loop-state",
   states: Object.values(REVIEWER_STATE),
-  terminalStates: [REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
-  transitions: Object.entries(REVIEWER_TRANSITIONS).flatMap(([from, tos]) => tos.map((to) => [from, to])),
+  terminalStates: tableTerminalStates(REVIEWER_TRANSITIONS),
+  transitions: tableEdges(REVIEWER_TRANSITIONS),
   docTransitions: REVIEWER_LOOP_STATE_DOC_TRANSITIONS,
   transitionChecks: REVIEWER_LOOP_STATE_TRANSITION_CHECKS,
   safetyRules: [
