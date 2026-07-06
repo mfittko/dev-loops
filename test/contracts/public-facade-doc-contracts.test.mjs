@@ -8,7 +8,7 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
-import { assertRuleOwned } from "./_rule-helpers.mjs";
+import { assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
@@ -160,6 +160,8 @@ test("workflow-surface taxonomy stays explicit and guards the entrypoint asset s
   assert.match(publicContract, /Internal routed strategy modules/i);
   assert.match(publicContract, /Reusable role agents/i);
   assertRuleOwned("FACADE-COPILOT-INTERNAL-ONLY", PUBLIC_CONTRACT_PATH);
+  // Owned-text check — marker survival alone must not mask dropping the internal-only clause.
+  assert.match(extractOwnedText(publicContract, "FACADE-COPILOT-INTERNAL-ONLY"), /internal-only behind `dev-loop`/i);
   assertRuleOwned("FACADE-TAXONOMY-DRIFT-TEST", PUBLIC_CONTRACT_PATH);
 
   assert.match(devLoopAgent, /single public workflow entrypoint/i);
