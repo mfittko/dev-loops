@@ -172,6 +172,56 @@ test("runCli --input --expected-issue mismatched with the Closes reference fails
   }
 });
 
+test("parseValidatePrBodySpecCliArgs parses --no-issue", () => {
+  const opts = parseValidatePrBodySpecCliArgs(["--repo", "owner/name", "--pr", "7", "--no-issue"]);
+  assert.equal(opts.noIssue, true);
+});
+
+test("parseValidatePrBodySpecCliArgs rejects --no-issue combined with --expected-issue", () => {
+  assert.throws(
+    () => parseValidatePrBodySpecCliArgs(["--repo", "owner/name", "--pr", "7", "--no-issue", "--expected-issue", "123"]),
+    /mutually exclusive/i,
+  );
+});
+
+test("runCli --input --no-issue: a spec-complete body with NO Closes reference exits 0 (AC1)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pr-body-spec-"));
+  try {
+    const body = COMPLETE_BODY.replace("Closes #123\n\n", "");
+    const p = path.join(dir, "issueless.json");
+    await writeFile(p, JSON.stringify({ body }), "utf8");
+    let out = "";
+    const code = await runCli(["--input", p, "--no-issue"], {
+      stdout: { write: (s) => { out += s; } },
+      stderr: { write: () => {} },
+    });
+    assert.equal(code, 0);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.ok, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --input --no-issue: a Closes reference present fails closed with unexpected_closing_issue_reference", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pr-body-spec-"));
+  try {
+    const p = path.join(dir, "issueless-with-closes.json");
+    await writeFile(p, JSON.stringify({ body: COMPLETE_BODY }), "utf8");
+    let out = "";
+    const code = await runCli(["--input", p, "--no-issue"], {
+      stdout: { write: (s) => { out += s; } },
+      stderr: { write: () => {} },
+    });
+    assert.equal(code, 1);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.ok, false);
+    assert.ok(parsed.errors.some((e) => e.code === "unexpected_closing_issue_reference"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("runCli --input exits 0 for a complete body", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pr-body-spec-"));
   try {

@@ -24,8 +24,8 @@ const USAGE = `Usage:
   validate-pr-body-spec.mjs --input <path> [--expected-issue <n>]
 Validate that a PR body carries the lightweight spec-of-record invariants
 (Objective/why, In scope, Explicit non-goals, testable Acceptance criteria,
-Definition of done, Open questions/risks, and a GitHub closing-keyword issue
-reference such as \`Closes #123\`).
+Definition of done, Open questions/risks, and — unless --no-issue is given —
+a GitHub closing-keyword issue reference such as \`Closes #123\`).
 Required (exactly one):
   --repo <owner/name> --pr <number>   Fetch the PR body via gh and validate it
   --input <path>                      Path to a JSON file with { "body": "..." }
@@ -34,7 +34,14 @@ Required (exactly one):
 Optional:
   --expected-issue <n>                Positive integer; the referenced closing
                                       issue(s) must include this number, else
-                                      "closes_wrong_issue".
+                                      "closes_wrong_issue". Mutually exclusive
+                                      with --no-issue.
+  --no-issue                          Explicit issue-less mode (#1210): the PR
+                                      is the sole artifact, so a closing-issue
+                                      reference is FORBIDDEN rather than
+                                      required — one present fails closed under
+                                      "unexpected_closing_issue_reference".
+                                      Mutually exclusive with --expected-issue.
 Success output (stdout, JSON):
   {
     "ok": true | false,
@@ -61,6 +68,7 @@ export function parseValidatePrBodySpecCliArgs(argv) {
     pr: undefined,
     input: undefined,
     expectedIssue: undefined,
+    noIssue: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -70,6 +78,7 @@ export function parseValidatePrBodySpecCliArgs(argv) {
       pr: { type: "string" },
       input: { type: "string" },
       "expected-issue": { type: "string" },
+      "no-issue": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -111,11 +120,18 @@ export function parseValidatePrBodySpecCliArgs(argv) {
       options.expectedIssue = Number(value);
       continue;
     }
+    if (token.name === "no-issue") {
+      options.noIssue = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.help) {
     return options;
+  }
+  if (options.noIssue && Number.isInteger(options.expectedIssue)) {
+    throw parseError("--no-issue is mutually exclusive with --expected-issue; provide exactly one issue-linkage mode");
   }
   const hasInput = typeof options.input === "string" && options.input.length > 0;
   const hasAnyRemote = (typeof options.repo === "string" && options.repo.length > 0) || Number.isInteger(options.pr);
@@ -163,12 +179,12 @@ export async function validatePrBodySpecFromOptions(options, { env = process.env
     const body = typeof payload.body === "string" ? payload.body : "";
     const repo = typeof payload.repo === "string" ? payload.repo : options.repo ?? null;
     const pr = Number.isInteger(payload.pr) ? payload.pr : options.pr ?? null;
-    return { ...validatePrBodySpec({ body, expectedIssue: options.expectedIssue ?? null }), repo, pr };
+    return { ...validatePrBodySpec({ body, expectedIssue: options.expectedIssue ?? null, issueLess: options.noIssue }), repo, pr };
   }
   parseRepoSlug(options.repo);
   const body = await fetchPrBody({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   return {
-    ...validatePrBodySpec({ body, expectedIssue: options.expectedIssue ?? null }),
+    ...validatePrBodySpec({ body, expectedIssue: options.expectedIssue ?? null, issueLess: options.noIssue }),
     repo: options.repo,
     pr: options.pr,
   };
