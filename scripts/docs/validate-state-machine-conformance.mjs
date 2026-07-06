@@ -421,24 +421,46 @@ verified("waiting_for_copilot_review->merge_conflict_resolution", () => {
 // waiting_for_copilot_review -> final_local_preapproval_gate: the request/re-review cycle has settled
 // cleanly with no unresolved feedback and no further Copilot pass needed.
 //
-// KNOWN GAP (issue #1148 / epic #1104 comment thread): the guard above is what the CONTRACT requires,
-// but `evaluatePrGateCoordination` has no independent way to verify the reviewed head SHA actually
-// matches `currentHeadSha` — it trusts the caller-supplied `sameHeadCleanConverged` flag as-is. The
-// only fail-closed guard against an unsettled/unreviewed head lives downstream, at *verdict post*
-// time (`upsert-checkpoint-verdict.mjs`'s unsettled-review refusal), not at *gate entry* here. This
-// is intentionally NOT fixed by #1148 (own issue, tracked below) — encoded as an expected-fail so a
-// future accidental "fix" (or regression) is visible instead of silently passing either way.
-const KNOWN_GAP_TRACKING_ISSUE = "https://github.com/mfittko/dev-loops/issues/1190";
-PR_GATE_TRANSITION_CHECKS.set("waiting_for_copilot_review->final_local_preapproval_gate", {
-  status: "known_gap",
-  issue: KNOWN_GAP_TRACKING_ISSUE,
-  note: "Gate entry into pre_approval_gate trusts caller-supplied sameHeadCleanConverged with no "
-    + "independent reviewed-head-SHA check; the fail-closed guard is at verdict-post "
-    + "(upsert-checkpoint-verdict.mjs), not at gate entry (pr-gate-coordination.mjs). See epic #1104 "
-    + "comment thread; tracked in #1190. NOTE: this allowlist entry never fails the CLI — if #1190 "
-    + "lands a backward-compatible gate-entry guard, this run keeps passing silently; the loud guard "
-    + "is the known-gap regression test in test/docs/validate-state-machine-conformance.test.mjs, "
-    + "which starts failing the moment the gap closes and tells you to retire this entry.",
+// Fixed by #1190 (previously a tracked known_gap; issue #1148 / epic #1104 comment thread): gate
+// ENTRY used to trust the caller-supplied `sameHeadCleanConverged` flag as-is, with no independent
+// signal to catch an unsettled/unreviewed current head — the only fail-closed guard against that
+// lived downstream, at *verdict-post* time (`upsert-checkpoint-verdict.mjs`'s unsettled-review
+// refusal). `evaluatePrGateCoordination` now takes an independent `copilotReviewRequestStatus`
+// signal (not derived from `sameHeadCleanConverged`) and refuses `RUN_PRE_APPROVAL_GATE` outright
+// whenever a Copilot review request is still outstanding on the current head — asserted at gate
+// *entry*, mirroring the verdict-post predicate instead of only duplicating it after the fact.
+verified("waiting_for_copilot_review->final_local_preapproval_gate", () => {
+  // Even a caller that reports sameHeadCleanConverged: true (e.g. a stale/racy
+  // interpretation) must still be refused while a Copilot review request is
+  // outstanding on the current head — the entry guard is independent of that flag.
+  const unsettled = run({
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    ciStatus: "success",
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "requested",
+    preApprovalGate: gate({ visible: false }),
+  });
+  const unsettledOk = unsettled.gateBoundary === PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW
+    && unsettled.nextAction === PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW
+    && unsettled.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+
+  // Once the review request has genuinely settled (no outstanding request) and the
+  // current head converged cleanly, pre_approval_gate entry is legal — the fix does
+  // not regress the real transition the doc requires.
+  const settled = run({
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    ciStatus: "success",
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "none",
+    preApprovalGate: gate({ visible: false }),
+  });
+  const settledOk = settled.gateBoundary === PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW
+    && settled.nextAction === PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE;
+
+  const ok = unsettledOk && settledOk;
+  return { ok, detail: { unsettled, settled }, result: settled };
 });
 
 // final_local_preapproval_gate -> final_gate_remediation: pre-approval gate findings require changes.

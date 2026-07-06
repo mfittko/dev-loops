@@ -471,6 +471,110 @@ const TITLE_MARKER_GUARDED_BOUNDARIES = Object.freeze([
 ]);
 
 /**
+ * Independent gate-ENTRY re-check (issue #1190): even when the caller's
+ * lifecycleState/sameHeadCleanConverged claims a settled Copilot convergence,
+ * an outstanding (`requested`/`already-requested`) Copilot review request on
+ * the CURRENT head is a second, independent "unsettled" signal — not derived
+ * from sameHeadCleanConverged — that must refuse pre_approval_gate /
+ * final-approval entry outright.
+ *
+ * This mirrors the fail-closed predicate that previously only fired at
+ * *verdict-post* time (upsert-checkpoint-verdict.mjs, which refuses to post a
+ * pre_approval_gate verdict while this same evaluator forbids
+ * RUN_PRE_APPROVAL_GATE): asserting it here, at gate *entry*, refuses the
+ * pre-approval fan-out up front instead of only after reviewer tokens have
+ * already been spent.
+ *
+ * Skipped when Copilot review is not required at all — `reviewMode:
+ * "internal_only"` or `maxCopilotRounds: 0` — preserving the existing #613 /
+ * #1210 exemptions (internal-only and light-dispatched-with-disabled-review
+ * PRs never need a Copilot round in the first place).
+ */
+const PRE_APPROVAL_ENTRY_BOUNDARIES = Object.freeze([
+  PR_CHECKPOINT.PRE_APPROVAL_GATE_NEEDED,
+  PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  PR_CHECKPOINT.FINAL_APPROVAL_READY,
+]);
+
+function applyUnsettledCopilotReviewEntryGuard(input, result) {
+  if (!result || typeof result !== "object" || !PRE_APPROVAL_ENTRY_BOUNDARIES.includes(result.gateBoundary)) {
+    return null;
+  }
+  if (input.maxCopilotRounds === 0) {
+    return null;
+  }
+  const reviewMode = typeof input.reviewMode === "string" ? input.reviewMode.trim().toLowerCase() : null;
+  if (reviewMode === "internal_only") {
+    return null;
+  }
+  const copilotReviewRequestStatus = typeof input.copilotReviewRequestStatus === "string"
+    ? input.copilotReviewRequestStatus.trim().toLowerCase()
+    : "none";
+  if (copilotReviewRequestStatus !== "requested" && copilotReviewRequestStatus !== "already-requested") {
+    return null;
+  }
+  // Round-cap exemption (mirrors shouldGuardCopilotReviewRequest, #896/#848):
+  // past the cap a lingering requested/already-requested status is for a review
+  // that can never come (no further round is permitted), so treating it as
+  // "unsettled" here would re-introduce the infinite-wait dead-end the
+  // ROUND_CAP_CLEAN_FALLBACK routing exists to prevent. When the cap is reached
+  // and the head is clean — either sameHeadCleanConverged or the interpreter's
+  // round_cap_clean_fallback state — the pre_approval_gate proceeds unless
+  // significant post-convergence changes require a new review cycle.
+  const roundCapReached = isCopilotRoundCapReached({
+    copilotReviewRoundCount: input.copilotReviewRoundCount,
+    maxCopilotRounds: input.maxCopilotRounds,
+  });
+  const lifecycleState = typeof input.lifecycleState === "string" ? input.lifecycleState.trim().toLowerCase() : "";
+  const roundCapCleanFallback = lifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK;
+  if (
+    roundCapReached
+    && (input.sameHeadCleanConverged === true || roundCapCleanFallback)
+    && input.postConvergenceSignificantChange !== true
+  ) {
+    return null;
+  }
+
+  const allowedNextActions = [];
+  const forbiddenActions = [];
+  pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW]);
+  // Full postDraftForbidden set (matching the canonical WAITING_FOR_COPILOT_REVIEW
+  // result this guard synthesizes) plus the final-approval actions the replaced
+  // boundary result also forbade — dropping RUN_DRAFT_GATE/MARK_READY_FOR_REVIEW
+  // here would let a draft_gate verdict post on a non-draft PR slip through where
+  // the replaced result would have refused it.
+  pushUnique(forbiddenActions, [
+    PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+    PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+    PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+    PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+    PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+  ]);
+
+  return buildResult({
+    repo: input.repo ?? null,
+    pr: Number.isInteger(input.pr) ? input.pr : null,
+    currentHeadSha: result.currentHeadSha ?? null,
+    lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW,
+    loopDisposition: DISPOSITION.PENDING,
+    gateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+    draftGateAlreadySatisfied: result.draftGateAlreadySatisfied === true,
+    draftGate: result.draftGate,
+    preApprovalGate: result.preApprovalGate,
+    allowedNextActions,
+    forbiddenActions,
+    nextAction: PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
+    reason: "A Copilot review request is still outstanding on the current head (independent gate-entry "
+      + "re-check, issue #1190) — pre_approval_gate/final-approval entry is refused until the current-head "
+      + "review settles, even though the caller-reported convergence signal claims otherwise.",
+    mergeStateStatus: result.mergeStateStatus ?? null,
+    conflictFiles: result.conflictFiles ?? [],
+    refinementArtifact: result.refinementArtifact ?? null,
+    copilotReviewRoundCount: normalizeNonNegativeInteger(input.copilotReviewRoundCount),
+  });
+}
+
+/**
  * Evaluates PR gate coordination, then re-asserts the merge-blocking title guard
  * (issue #842) at the pre-approval / final-approval boundary for non-draft PRs.
  *
@@ -481,6 +585,11 @@ const TITLE_MARKER_GUARDED_BOUNDARIES = Object.freeze([
  */
 export function evaluatePrGateCoordination(input = {}) {
   const result = evaluatePrGateCoordinationCore(input);
+
+  const unsettledReviewResult = applyUnsettledCopilotReviewEntryGuard(input, result);
+  if (unsettledReviewResult) {
+    return unsettledReviewResult;
+  }
 
   const prDraft = input.prDraft === true;
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";

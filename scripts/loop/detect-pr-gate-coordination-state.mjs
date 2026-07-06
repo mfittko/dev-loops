@@ -584,6 +584,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount ?? 0,
     maxCopilotRounds,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
+    // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
+    // sameHeadCleanConverged, so an outstanding request on the current head refuses
+    // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
+    copilotReviewRequestStatus: context.snapshot?.copilotReviewRequestStatus ?? "none",
     draftGateRequireCi: draftGateConfig.requireCi,
     draftGate: context.gateEvidence.draftGate,
     draftGateMarker: context.gateEvidence.draftGateMarker,
