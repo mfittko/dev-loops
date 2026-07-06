@@ -1056,8 +1056,12 @@ const PUBLIC_DEV_LOOP_ROUTING_MACHINE = {
     {
       // Analog of "fail-closed states never dispatch a Backlog pull": a terminal
       // (stop / needs_reconcile) gate must never carry a routed internal strategy.
+      // Terminality is keyed off the gate contract's routeKind for the observed
+      // selectedGate, not the observation's own routeKind — non-terminal gates
+      // (e.g. issue_intake) can legitimately emit routeKind "stop" for
+      // clarification/assignment-confirmation seams while still routing a strategy.
       name: "terminal-gate-never-carries-strategy",
-      check: (observation) => !DEV_LOOP_TERMINAL_ROUTE_KINDS.has(observation.routeKind)
+      check: (observation) => !DEV_LOOP_TERMINAL_ROUTE_KINDS.has(DEV_LOOP_GATE_ROUTE_KIND.get(observation.selectedGate))
         || observation.selectedStrategy === INTERNAL_DEV_LOOP_STRATEGY.NONE,
     },
   ],
