@@ -768,7 +768,11 @@ registerMachine(COPILOT_LOOP_STATE_MACHINE);
 //
 // Doc side: docs/reviewer-loop-state-graph.md's "## Required transitions" bullets. The doc
 // bullets one abstract row for the five reviewer-pass states that all fail closed into
-// `blocked_needs_user_decision` on an unexpected failure, expanded below.
+// `blocked_needs_user_decision` on an unexpected failure, expanded below, plus two explicit
+// submission-failure edges (`draft_review_posted` / `waiting_for_user_submit` ->
+// `blocked_needs_user_decision`) fixed by #1200 — the interpreter's fail-closed
+// `reviewSubmissionStatus: "failed"` routing is deliberate, so the table gained the edges
+// rather than the interpreter losing the guard.
 //
 // Code side: packages/core/src/loop/reviewer-loop-state.mjs exports REVIEWER_STATE,
 // REVIEWER_TRANSITIONS, and interpretReviewerLoopState. Checked the same two ways as

@@ -39,7 +39,11 @@ Terminal state with no outgoing transitions: `blocked_needs_user_decision`.
 - `waiting_for_review_request` -> `review_requested`
   - explicit review request received
 - any active reviewer-pass state -> `blocked_needs_user_decision`
-  - unexpected failure in planning, local review runs, or merge synthesis; "any active reviewer-pass state" means the five states `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, and `draft_review_ready` (submission-failure fail-closed edges from later states are a tracked table gap: #1200)
+  - unexpected failure in planning, local review runs, or merge synthesis; "any active reviewer-pass state" means the five states `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, and `draft_review_ready`
+- `draft_review_posted` -> `blocked_needs_user_decision`
+  - review submission fails (`reviewSubmissionStatus: "failed"`) before the surfaced-link wait is observed
+- `waiting_for_user_submit` -> `blocked_needs_user_decision`
+  - review submission fails (`reviewSubmissionStatus: "failed"`) after the draft link is surfaced
 - `review_requested` -> `determine_review_plan`
   - review angles are being selected
 - `determine_review_plan` -> `reviews_running`

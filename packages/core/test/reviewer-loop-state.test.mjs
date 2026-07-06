@@ -229,6 +229,40 @@ test("interpretReviewerLoopState routes failures to blocked_needs_user_decision"
   }
 });
 
+// #1200: reviewSubmissionStatus:"failed" on draft_review_posted/waiting_for_user_submit-shaped
+// snapshots must fail closed too, and REVIEWER_TRANSITIONS must declare those edges so the
+// interpreter's output stays reachable via the declared graph (see property test below).
+test("interpretReviewerLoopState fails closed on submission failure from posted/waiting-submit shapes", () => {
+  const posted = interpretReviewerLoopState({
+    prExists: true,
+    prNumber: 1,
+    prHeadSha: "abc",
+    draftReviewPosted: true,
+    draftReviewCommitSha: "abc",
+    reviewSubmissionStatus: "failed",
+  });
+  assert.equal(posted.state, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION);
+  assert.ok(REVIEWER_TRANSITIONS[REVIEWER_STATE.DRAFT_REVIEW_POSTED].includes(REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION));
+
+  const waitingSubmit = interpretReviewerLoopState({
+    prExists: true,
+    prNumber: 1,
+    prHeadSha: "abc",
+    draftReviewPosted: true,
+    draftReviewCommitSha: "abc",
+    draftReviewNotificationStatus: "notified",
+    reviewSubmissionStatus: "failed",
+  });
+  assert.equal(waitingSubmit.state, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION);
+  assert.ok(REVIEWER_TRANSITIONS[REVIEWER_STATE.WAITING_FOR_USER_SUBMIT].includes(REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION));
+});
+
+// The broader "every REVIEWER_TRANSITIONS-declared edge is exercised by a real fixture"
+// property test lives in test/docs/validate-state-machine-conformance.test.mjs (the
+// registered "reviewer-loop-state" machine's completeness/liveness/conformance/safety
+// report), which now covers the two edges added above; no need to duplicate that machinery
+// here.
+
 test("selectReviewerPlan keeps bounded deterministic angles", () => {
   assert.ok(Array.isArray(REVIEWER_SUPPORTED_ANGLES));
   assert.ok(REVIEWER_SUPPORTED_ANGLES.includes("security"));
