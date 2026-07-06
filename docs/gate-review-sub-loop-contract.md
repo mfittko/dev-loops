@@ -332,7 +332,7 @@ not — leaving today's rejection byte-identical:
 
 Escalation is two-trigger: besides the `gate:full` label override, an inline pass that
 surfaces a finding at a severity in the gate's `blockCleanOnFindingSeverities` MUST
-escalate to the full fan-out (`resolveGateDispatchMode` returns `escalated`) — the
+escalate to the full fan-out (`resolveGateDispatchMode` returns `mode: "full_fanout"` with `reason: "escalated"`) — the
 inline verdict never absorbs a blocking finding. When `lightMode` is enabled without
 explicit thresholds, the built-in defaults apply (`maxFiles: 3` / `maxLines: 200`); the
 shipped default is `enabled: false`.
