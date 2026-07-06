@@ -25,6 +25,7 @@ import {
   resolveWorkflowConfig,
   resolveLightMode,
   resolveGateDispatchMode,
+  resolveEffectiveCopilotRoundCap,
   GATE_FULL_LABEL,
   resolveRequireFanoutEvidence,
   resolveRequireFanoutProvenance,
@@ -2444,6 +2445,55 @@ test("resolveLightMode uses built-in defaults when enabled with no overrides", (
 test("resolveLightMode with built-in defaults (disabled)", () => {
   const result = resolveLightMode({ version: 1 });
   assert.equal(result, null);
+});
+
+// ── Effective Copilot round cap composition (#1210) ───────────────────────
+
+test("resolveEffectiveCopilotRoundCap: full PR (lightweight=false) uses maxCopilotRounds unchanged", () => {
+  const config = { version: 1, refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: 5 } };
+  assert.equal(resolveEffectiveCopilotRoundCap(config), 5);
+  assert.equal(resolveEffectiveCopilotRoundCap(config, { lightweight: false }), 5);
+});
+
+test("resolveEffectiveCopilotRoundCap: lightweight with no lightMode.maxCopilotRounds override defaults to 1", () => {
+  const config = { version: 1, refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: 5 } };
+  assert.equal(resolveEffectiveCopilotRoundCap(config, { lightweight: true }), 1);
+});
+
+test("resolveEffectiveCopilotRoundCap: lightweight respects an explicit lightMode.maxCopilotRounds override", () => {
+  const config = {
+    version: 1,
+    refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: 5 },
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20, maxCopilotRounds: 3 } },
+  };
+  assert.equal(resolveEffectiveCopilotRoundCap(config, { lightweight: true }), 3);
+});
+
+test("resolveEffectiveCopilotRoundCap: maxCopilotRounds=0 disables Copilot rounds everywhere, including lightweight", () => {
+  const config = {
+    version: 1,
+    refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: 0 },
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20, maxCopilotRounds: 3 } },
+  };
+  assert.equal(resolveEffectiveCopilotRoundCap(config, { lightweight: true }), 0);
+  assert.equal(resolveEffectiveCopilotRoundCap(config, { lightweight: false }), 0);
+});
+
+test("resolveEffectiveCopilotRoundCap: lightweight cap composes as min(lightCap, maxCopilotRounds), not lightCap alone", () => {
+  const config = {
+    version: 1,
+    refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: 2 },
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20, maxCopilotRounds: 10 } },
+  };
+  assert.equal(resolveEffectiveCopilotRoundCap(config, { lightweight: true }), 2);
+});
+
+test("resolveEffectiveCopilotRoundCap: schema default supplies lightMode.maxCopilotRounds=1 when parsed", () => {
+  const parsed = DevLoopConfigSchema.parse({
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+  });
+  assert.equal(parsed.localImplementation.lightMode.maxCopilotRounds, 1);
 });
 
 // ── Gate dispatch mode ───────────────────────────────────────────────────

@@ -143,6 +143,10 @@ const LocalImplementationConfig = z.strictObject({
     enabled: z.boolean(),
     maxFiles: z.number().int().min(1),
     maxLines: z.number().int().min(1),
+    // Copilot review round cap for light-dispatched PRs (#1210). Composes with
+    // (does not replace) refinement.maxCopilotRounds — see
+    // resolveEffectiveCopilotRoundCap.
+    maxCopilotRounds: z.number().int().nonnegative().default(1),
   }).optional(),
 });
 
@@ -252,7 +256,7 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
     devModeDefault: false,
   }),
   localImplementation: Object.freeze({
-    lightMode: Object.freeze({ enabled: false, maxFiles: 3, maxLines: 200 }),
+    lightMode: Object.freeze({ enabled: false, maxFiles: 3, maxLines: 200, maxCopilotRounds: 1 }),
   }),
   queue: Object.freeze({
     maxParallel: 3,
@@ -1059,6 +1063,30 @@ export function resolveLightMode(config) {
       ? cfg.maxLines
       : 200,
   };
+}
+
+/**
+ * Resolve the effective Copilot review round cap for a PR (#1210).
+ *
+ * Full PRs (lightweight=false) use `refinement.maxCopilotRounds` unchanged
+ * (default 5). Light-dispatched PRs compose with it rather than replacing it:
+ * `effective = min(localImplementation.lightMode.maxCopilotRounds ?? 1,
+ * refinement.maxCopilotRounds)` — so setting `refinement.maxCopilotRounds: 0`
+ * disables Copilot rounds everywhere, including lightweight, with that one
+ * setting.
+ *
+ * @param {DevLoopConfig} config
+ * @param {{ lightweight?: boolean }} [options]
+ * @returns {number}
+ */
+export function resolveEffectiveCopilotRoundCap(config, { lightweight = false } = {}) {
+  const maxCopilotRounds = /** @type {number} */ (resolveRefinementConfig(config, "maxCopilotRounds"));
+  if (!lightweight) return maxCopilotRounds;
+  const lightMaxRounds = config?.localImplementation?.lightMode?.maxCopilotRounds;
+  const effectiveLightCap = typeof lightMaxRounds === "number" && Number.isFinite(lightMaxRounds)
+    ? lightMaxRounds
+    : 1;
+  return Math.min(effectiveLightCap, maxCopilotRounds);
 }
 
 /** Label that forces full fan-out regardless of change size. */

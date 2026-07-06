@@ -411,18 +411,29 @@ function sectionHasBody(section) {
  * Validate that a PR body carries every invariant required to serve as the
  * lightweight spec-of-record: Objective/why, in-scope, explicit non-goals,
  * testable Acceptance criteria (>=1 checklist item), Definition of done
- * (>=1 checklist item), Open questions/risks, and a GitHub closing-keyword
- * issue reference (`Closes #N` and GitHub's other accepted forms — the
- * lightweight path's `Closes #N` linkage, issue #1181). Reuses the generic
- * markdown logic (parseMarkdownSections / AC + DoD patterns /
- * extractChecklistItems) so there is no parallel validator. Fails closed:
- * every missing invariant is reported under its distinct `missing_*` code.
- * Pure; no side effects.
+ * (>=1 checklist item), Open questions/risks, and — unless explicit
+ * issue-less mode is requested — a GitHub closing-keyword issue reference
+ * (`Closes #N` and GitHub's other accepted forms — the lightweight path's
+ * `Closes #N` linkage, issue #1181). Reuses the generic markdown logic
+ * (parseMarkdownSections / AC + DoD patterns / extractChecklistItems) so
+ * there is no parallel validator. Fails closed: every missing invariant is
+ * reported under its distinct `missing_*` code. Pure; no side effects.
  *
- * @param {{ body?: string, expectedIssue?: number }} input
+ * Issue-less mode (`issueLess: true`, issue #1210): the narrative invariants
+ * stay unconditional, but the closing-issue linkage flips from REQUIRED to
+ * FORBIDDEN — the PR is the sole artifact, so it MUST NOT carry a closing
+ * reference to an issue that doesn't back it. A present reference in this
+ * mode fails closed under `unexpected_closing_issue_reference`, distinct
+ * from `missing_closing_issue_reference` (tracker-backed mode, the default)
+ * so callers can tell "no issue expected" apart from "issue expected but
+ * absent". `expectedIssue` and `issueLess` are mutually exclusive; callers
+ * pick exactly one mode (tracker-backed, with or without a specific
+ * expected issue) or issue-less — never both.
+ *
+ * @param {{ body?: string, expectedIssue?: number, issueLess?: boolean }} input
  * @returns {{ checker: "validate-pr-body-spec", ok: boolean, errors: { code: string, message: string }[], sections: string[], acItems: string[], dodItems: string[], closesIssues: number[] }}
  */
-export function validatePrBodySpec({ body = "", expectedIssue = null } = {}) {
+export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess = false } = {}) {
   const bodyText = typeof body === "string" ? body : "";
   const sections = parseMarkdownSections(bodyText);
   const errors = [];
@@ -453,7 +464,14 @@ export function validatePrBodySpec({ body = "", expectedIssue = null } = {}) {
   }
 
   const closesIssues = extractClosingIssueNumbers(bodyText);
-  if (closesIssues.length === 0) {
+  if (issueLess) {
+    if (closesIssues.length > 0) {
+      errors.push({
+        code: "unexpected_closing_issue_reference",
+        message: `Issue-less PR body MUST NOT carry a closing reference to an issue that doesn't back it (found ${closesIssues.map((n) => `#${n}`).join(", ")}).`,
+      });
+    }
+  } else if (closesIssues.length === 0) {
     errors.push({
       code: "missing_closing_issue_reference",
       message: "Missing a GitHub closing-keyword issue reference (e.g. `Closes #123`).",
