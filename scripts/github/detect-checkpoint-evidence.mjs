@@ -393,17 +393,27 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
  * Read the recorded fan-out `provenance` object from a ledger across the
  * enumerated checkouts. Mirrors ledgerExistsInAny's "ANY checkout satisfies"
  * semantics: prefers the FIRST checkout whose ledger provenance actually
- * SATISFIES enforcement (internally consistent AND distinctReviewers >= floor),
- * so a below-floor or provenance-less ledger in an earlier-enumerated checkout
- * cannot SHADOW a valid one in the PR worktree (which would falsely fail closed).
- * Falls back to the first non-null provenance (for a useful diagnostic message)
- * only when NO checkout satisfies, and null only when none is present. Called
- * whenever requireFanoutProvenance is enabled OR the gate's verdict is
- * fanout_fanin (angle-coverage enforcement re-validates recorded provenance
- * independently of the requireFanoutProvenance opt-in) — inline verdicts never
- * trigger this read.
+ * SATISFIES the FULL active enforcement — internally consistent, meeting the
+ * distinctReviewers floor when requireFanoutProvenance is on, AND passing the
+ * gate's angle contract (mandatory-angle coverage; pool membership when
+ * foreign angles are rejected) — so a stale checkout's below-floor,
+ * provenance-less, or angle-contract-failing ledger cannot SHADOW a valid one
+ * in the PR worktree (which would falsely fail closed). Falls back to the
+ * first non-null provenance (for a useful diagnostic message) only when NO
+ * checkout satisfies, and null only when none is present. Called whenever
+ * requireFanoutProvenance is enabled OR the gate's verdict is fanout_fanin —
+ * inline verdicts never trigger this read.
  */
-async function readLedgerProvenanceInAny(checkouts, ledgerPath) {
+async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
+  const { requireProvenance = false, mandatoryAngles = [], anglePool = null, rejectForeignAngles = true } = criteria;
+  const satisfies = (prov) => {
+    if (provenanceConsistencyError(prov) !== null) return false;
+    if (requireProvenance && prov.distinctReviewers < FANOUT_PROVENANCE_MIN_REVIEWERS) return false;
+    const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
+    if (missingMandatory.length > 0) return false;
+    if (foreignAngles.length > 0 && rejectForeignAngles) return false;
+    return true;
+  };
   let firstNonNull = null;
   for (const root of checkouts) {
     const full = path.resolve(root, ledgerPath);
@@ -411,8 +421,8 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath) {
       const parsed = JSON.parse(await readFile(full, "utf8"));
       const prov = parsed && typeof parsed === "object" ? parsed.provenance : null;
       if (prov == null) continue; // ledger present but no provenance — keep scanning.
-      if (provenanceConsistencyError(prov) === null && prov.distinctReviewers >= FANOUT_PROVENANCE_MIN_REVIEWERS) {
-        return prov; // satisfying ledger — prefer it over any earlier below-floor one.
+      if (satisfies(prov)) {
+        return prov; // satisfying ledger — prefer it over any earlier failing one.
       }
       if (firstNonNull === null) firstNonNull = prov; // remember for diagnostics.
     } catch {
@@ -505,7 +515,10 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // Read ledger provenance for ANY fanout_fanin gate (not just when
     // requireProvenance is on): angle-coverage enforcement re-validates
     // whatever provenance is recorded independently of that opt-in flag.
+    // The selection criteria mirror the full active enforcement so a stale
+    // checkout's contract-failing ledger cannot shadow a passing one.
     const readProvenance = requireProvenance || spec.marker.executionMode === "fanout_fanin";
+    const angleFields = GATE_ANGLE_CONFIG[spec.name];
     gates.push({
       name: spec.name,
       executionMode: spec.marker.executionMode ?? null,
@@ -513,8 +526,10 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       scopeUnderThreshold,
       ledgerPath,
       ledgerExists: await ledgerExistsInAny(checkouts, ledgerPath),
-      provenance: readProvenance ? await readLedgerProvenanceInAny(checkouts, ledgerPath) : null,
-      ...GATE_ANGLE_CONFIG[spec.name],
+      provenance: readProvenance
+        ? await readLedgerProvenanceInAny(checkouts, ledgerPath, { requireProvenance, rejectForeignAngles, ...angleFields })
+        : null,
+      ...angleFields,
     });
   }
   return { required: true, requireProvenance, rejectForeignAngles, lightMode, hasFullLabel, gates };

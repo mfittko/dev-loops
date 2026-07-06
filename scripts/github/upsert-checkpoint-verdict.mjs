@@ -1147,6 +1147,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // multi-line per-angle breakdown and the `**Findings summary:**` line carries a
   // single-line digest (so the marker/parse contract still round-trips).
   let structuredFindings = null;
+  let rawFindingsInput = null;
   if (options.findingsJson) {
     let raw;
     try {
@@ -1165,6 +1166,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const candidate = Array.isArray(parsed)
       ? parsed
       : (Array.isArray(parsed?.angles) ? parsed.angles : (Array.isArray(parsed?.findings) ? parsed.findings : null));
+    rawFindingsInput = candidate;
     try {
       structuredFindings = normalizeStructuredFindings(candidate);
     } catch (err) {
@@ -1181,6 +1183,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // a free-text --findings-summary fanout_fanin verdict carries no per-angle
   // data to validate.
   if (structuredFindings && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
+    // Angle-less entries would be bucketed under the synthetic `general` label
+    // by normalization and then surface as a CONFUSING foreign-angle error.
+    // Fail first with a dedicated message naming the real problem instead.
+    const angleless = (rawFindingsInput ?? []).filter(
+      (e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0,
+    ).length;
+    if (angleless > 0) {
+      throw new Error(
+        `--findings-json for ${options.gate}: ${angleless} entr${angleless === 1 ? "y" : "ies"} lack a non-empty .angle — a fanout_fanin verdict must attribute every per-angle entry/finding to its review angle (use the nested [{ angle, verdict, findings }] shape, or add .angle to each flat finding)`,
+      );
+    }
     const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
     const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(structuredFindings, {

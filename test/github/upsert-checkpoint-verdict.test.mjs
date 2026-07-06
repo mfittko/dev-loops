@@ -2870,6 +2870,36 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
   }
 });
 
+test("upsert-checkpoint-verdict rejects an angle-less flat finding in fanout mode with a dedicated error (not a confusing `general` pool error)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angleless-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    // Flat finding without .angle: normalization would bucket it under the
+    // synthetic `general` label, which would surface as a foreign-angle error.
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { severity: "must-fix", summary: "finding with angle" , angle: "pr-description" },
+        { severity: "must-fix", summary: "finding with no angle attribution" },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /lack a non-empty \.angle/);
+    assert.doesNotMatch(result.stderr, /outside the configured pool/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angle when gates.rejectForeignAngles is false", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-warn-"));
   try {

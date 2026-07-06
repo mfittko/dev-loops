@@ -329,3 +329,40 @@ test("detect-checkpoint-evidence: a fanout_fanin ledger that simply OMITS proven
     await rm(base, { recursive: true, force: true });
   }
 });
+
+test("angle-contract shadow: a stale checkout's provenance FAILING the angle contract does NOT shadow a passing one elsewhere", async () => {
+  const { base, repoA, repoB } = await makeRepoWithWorktrees();
+  try {
+    const ledgerPath = buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" });
+    // repoB (== cwd, enumerated FIRST) carries a stale ledger whose provenance
+    // is internally consistent but MISSES the mandatory angle.
+    const stalePath = path.join(repoB, ledgerPath);
+    await mkdir(path.dirname(stalePath), { recursive: true });
+    await writeFile(stalePath, JSON.stringify({
+      repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
+      provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "dry", reviewer: "review-b" }] },
+    }) + "\n", "utf8");
+    // repoA (enumerated later) carries the ledger whose provenance PASSES.
+    const goodPath = path.join(repoA, ledgerPath);
+    await mkdir(path.dirname(goodPath), { recursive: true });
+    await writeFile(goodPath, JSON.stringify({
+      repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
+      provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix", reviewer: "review-b" }] },
+    }) + "\n", "utf8");
+
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: "42", currentHeadSha: HEAD,
+      draftGateMarker: NO_DRAFT_MARKER, preApprovalGateMarker: PA_MARKER,
+      config: ANGLE_CONFIG, cwd: repoB,
+    });
+    const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.ok(
+      pa.provenance.perAngle.some((e) => e.angle === "pr-checklist-matrix"),
+      "must select the angle-contract-passing provenance, not the stale shadow",
+    );
+    const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
+    assert.equal(check.ok, true, JSON.stringify(check.failures));
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
