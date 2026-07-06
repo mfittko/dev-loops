@@ -2,10 +2,10 @@
 // state machine rendered as a mermaid diagram, emitted DETERMINISTICALLY from
 // the code's own exported tables so the page can never drift from the code.
 //
-// Four diagrams come straight from packages/core/src/loop tables (copilot loop,
-// reviewer loop, outer conductor routing, and the public dev-loop gate hub); two
-// more are authored from documented, table-less sources (the PR lifecycle
-// contract and the release pipeline workflow).
+// Five diagrams come straight from packages/core/src/loop tables (copilot loop,
+// reviewer loop, outer conductor routing, the public dev-loop gate hub, and the
+// PR lifecycle contract); one more (the release pipeline workflow) is authored
+// from a documented, table-less source.
 //
 // The page reuses the article design system (docs/articles/introducing-dev-loops.html):
 // the same :root tokens, body gradient, and typography. It intentionally defines
@@ -15,7 +15,7 @@ import { STATE, TRANSITIONS } from '../../packages/core/src/loop/copilot-loop-st
 import { REVIEWER_STATE, REVIEWER_TRANSITIONS } from '../../packages/core/src/loop/reviewer-loop-state.mjs';
 import { OUTER_STATE, OUTER_TRANSITIONS } from '../../packages/core/src/loop/conductor-routing.mjs';
 import { PUBLIC_DEV_LOOP_GATE_CONTRACT } from '../../packages/core/src/loop/public-dev-loop-routing-contract.mjs';
-import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from '../docs/_pr-lifecycle-tables.mjs';
+import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from '../../packages/core/src/loop/pr-lifecycle.mjs';
 
 // Classify a state/gate id by name into one of four visual classes. Colors are
 // drawn from the site's own dark palette (accent violet, kicker blue,
@@ -106,17 +106,16 @@ const outerDiagram = renderStateDiagram(
 );
 const gateDiagram = renderGateFlowchart(PUBLIC_DEV_LOOP_GATE_CONTRACT);
 
-// --- Statically-authored diagrams (documented, table-less sources) ---
-
-// PR lifecycle: the 13-state vocabulary + required transitions from
-// skills/docs/pr-lifecycle-contract.md, imported from the shared pure-data
-// module (see scripts/docs/_pr-lifecycle-tables.mjs) and re-exported here so
+// PR lifecycle: the 13-state vocabulary + required transitions exported by
+// packages/core/src/loop/pr-lifecycle.mjs (issue #1193), re-exported here so
 // this module's public surface is unchanged. The L2/L3 state-machine
 // conformance harness (scripts/docs/validate-state-machine-conformance.mjs)
-// imports the same shared module directly rather than through this one, so it
+// imports the same core module directly rather than through this one, so it
 // never pulls in this page generator's diagram-rendering work at load time.
 export { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS };
 const prLifecycleDiagram = renderStateDiagram(PR_LIFECYCLE_TRANSITIONS, PR_LIFECYCLE_STATES);
+
+// --- Statically-authored diagram (documented, table-less source) ---
 
 // Release pipeline: the fail-closed gate chain from .github/workflows/release.yml.
 const releasePipelineNodes = [
@@ -160,7 +159,7 @@ const releaseDiagram = [
 
 const INTRO_PROSE = [
   'dev-loops drives every pull request through closed, deterministic state machines. Workflow control lives in the graph; agent judgment enters only as bounded, explicit inputs, never as hidden orchestration. Exactly one state applies at a time, and each state exposes the legal transitions out of it.',
-  "Every diagram on this page is generated at site-build time from the code's own exported tables — the copilot loop's <code>STATE</code>/<code>TRANSITIONS</code>, the reviewer loop's <code>REVIEWER_STATE</code>/<code>REVIEWER_TRANSITIONS</code>, the outer loop's <code>OUTER_STATE</code>/<code>OUTER_TRANSITIONS</code>, and the public router's <code>PUBLIC_DEV_LOOP_GATE_CONTRACT</code>. They cannot drift from the code: change a transition table and this page changes with it. Two diagrams (the PR lifecycle and the release pipeline) are authored from documented contracts that have no single code table.",
+  "Every diagram on this page is generated at site-build time from the code's own exported tables — the copilot loop's <code>STATE</code>/<code>TRANSITIONS</code>, the reviewer loop's <code>REVIEWER_STATE</code>/<code>REVIEWER_TRANSITIONS</code>, the outer loop's <code>OUTER_STATE</code>/<code>OUTER_TRANSITIONS</code>, the public router's <code>PUBLIC_DEV_LOOP_GATE_CONTRACT</code>, and the PR lifecycle's <code>PR_LIFECYCLE_STATES</code>/<code>PR_LIFECYCLE_TRANSITIONS</code>. They cannot drift from the code: change a transition table and this page changes with it. One diagram (the release pipeline) is authored from a documented contract that has no single code table.",
   'The state names are not labels for a picture — they are the literal contract identifiers that appear in logs, handoff envelopes, and gate artifacts. Nodes are coloured by role: <strong>active / in-progress</strong> steps the loop advances itself, <strong>waiting-on-external</strong> states that block on something outside the loop (CI, Copilot, a human), <strong>blocked / fail-closed</strong> states that stop or reconcile rather than guess, and <strong>terminal</strong> states where the slice is complete.',
 ];
 
@@ -188,7 +187,7 @@ const SECTIONS = [
   {
     id: 'pr-lifecycle',
     title: 'PR lifecycle contract',
-    source: 'skills/docs/pr-lifecycle-contract.md (documented vocabulary)',
+    source: 'packages/core/src/loop/pr-lifecycle.mjs — PR_LIFECYCLE_STATES + PR_LIFECYCLE_TRANSITIONS',
     prose: [
       'One PR moves through a stable thirteen-state vocabulary from draft to merge. These identifiers are part of the contract surface even as the helper implementations around them change. Two local gates guard the path — <code>draft_gate</code> (draft to ready-for-review) and <code>pre_approval_gate</code> (before final approval) — and both are fail-closed fan-out reviews that run independent angle chains and must produce clean current-head evidence to pass.',
       'All gate evidence is per-head: a new push re-opens the gates, and ready-to-draft resets the lifecycle back into draft-stage gating. A conflicted head detours through <code>merge_conflict_resolution</code> before any further gate progression — a conflicted PR is never treated as approval- or merge-ready, even if older gate comments and CI were green. Human approval and merge are explicit external waits, not hidden remediation states.',
