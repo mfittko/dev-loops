@@ -151,14 +151,34 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
 **invariant block** followed by an **angle-specific prompt**, in that order — never
 angle-first. The invariant block MUST be byte-identical across every reviewer of the same
 gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and worktree path; the
-`write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`), with the
-heavy content — the full diff and PR description — inlined verbatim when shared-prefix
-prompt-cache reuse across the fan-out is desired; and the mandatory
-`verify-fresh-review-context.mjs` instruction above. Angle identity MUST appear ONLY in the
-suffix (the angle-specific prompt, e.g. `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`'s persona
-prompt) and the reviewer's `--scope` flag — never inside the invariant block, or the
-byte-identity requirement is violated by construction and the shared-prefix prompt-cache
-opportunity is destroyed byte one.
+`write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`); and the
+mandatory `verify-fresh-review-context.mjs` instruction above. Angle identity MUST appear
+ONLY in the suffix (the angle-specific prompt, e.g.
+`COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`'s persona prompt) and the reviewer's `--scope` flag
+— never inside the invariant block, or the byte-identity requirement is violated by
+construction and the shared-prefix prompt-cache opportunity is destroyed byte one.
+
+**Content inlining.** `write-gate-context.mjs` renders this invariant block as a
+`<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
+fixed section order: header (repo/PR/head/gate/worktree + the verify-fresh instruction),
+PR body, linked-issue body (when present), the full diff at the reviewed head, and a
+changed-files/adjacent-code summary. The diff SHOULD be inlined up to a size cap
+(`BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES`, a fixed constant), carried inside a fenced
+markdown block — the fence and surrounding framing are part of the rendered prefix bytes,
+so "inline" means the diff content travels in the prefix, not that its raw bytes appear
+unframed. Over the cap the prefix falls back to pointer mode: it references
+`scope.diffPath` when the persisted `.diff` is present, and otherwise discloses that the
+diff pointer is unavailable (reviewers re-derive via `git diff`). Either way the mode is
+disclosed in both the artifact (`prefixMode: "inline"|"pointer"`) and the prefix text
+itself. This is purely a
+size/performance choice — reviewers spend many turns re-reading the same seeded content,
+so inlining it lets the FIRST turn's prompt-cache write serve every later turn cheaply —
+and is a zero-semantic change to the byte-identity requirement above: whichever mode ran,
+every reviewer of the same round still receives byte-identical prefix bytes, and
+`verify-fresh-review-context.mjs --prefix-file`/`verify-briefing-prefixes.mjs` hash and
+compare those bytes exactly as before, oblivious to which mode produced them. Sharing one
+warmed cache entry ACROSS the fan-out's parallel reviewers (rather than each reviewer's own
+multi-turn reuse) is a separate, harness-dependent optimization not covered by this rule.
 
 **Enforcement.** Each reviewer passes `--prefix-hash <sha256>` (or `--prefix-file <path>`,
 hashed by the tool) to `verify-fresh-review-context.mjs`, which persists the hash on the

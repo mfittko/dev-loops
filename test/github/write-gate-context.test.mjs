@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,8 @@ import test from "node:test";
 import { resolveGateAnglesDynamic } from "@dev-loops/core/config";
 
 import {
+  BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
+  buildGateBriefingPrefixPath,
   buildGateContext,
   buildGateContextArtifact,
   buildGateContextPath,
@@ -19,8 +21,12 @@ import {
   parseWriteGateContextCliArgs,
   rationaleFromResolver,
   readGateContext,
+  renderBriefingPrefix,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
+
+const contextGuardPath = path.resolve("scripts/github/verify-fresh-review-context.mjs");
+const briefingCheckerPath = path.resolve("scripts/github/verify-briefing-prefixes.mjs");
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -1194,6 +1200,257 @@ test("buildGateContext with an empty diffOutput leaves diffPath null but still b
     const byPath = Object.fromEntries(result.artifact.adjacentCode.files.map((f) => [f.path, f]));
     assert.equal(byPath["src/dep.mjs"].role, "imports");
     assert.equal(byPath["src/caller.mjs"].role, "importedBy");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+// ---------------------------------------------------------------------------
+// renderBriefingPrefix (Phase 1, #1220) — invariant briefing prefix content
+// ---------------------------------------------------------------------------
+
+function renderInput(overrides = {}) {
+  return {
+    repo: "owner/repo",
+    pr: 9,
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    worktreeRoot: "/repo/worktree",
+    contextPath: "tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.json",
+    briefingPrefixPath: "tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.briefing-prefix.txt",
+    prBody: "Implement the thing.",
+    issueRef: "#42",
+    issueBody: "Acceptance criteria: the thing works.",
+    diffOutput: "diff --git a/x.mjs b/x.mjs\n+added line\n",
+    diffPath: "tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.diff",
+    changedFiles: ["x.mjs"],
+    adjacentCode: { files: [{ path: "x.mjs", role: "changed" }, { path: "y.mjs", role: "imports" }], stripped: [], truncated: [], missing: [] },
+    ...overrides,
+  };
+}
+
+test("renderBriefingPrefix: under-cap — inline mode, fixed section order, all sections present", () => {
+  const { text, prefixMode, diffBytes } = renderBriefingPrefix(renderInput());
+  assert.equal(prefixMode, "inline");
+  assert.equal(diffBytes, Buffer.byteLength(renderInput().diffOutput, "utf8"));
+
+  const headerIdx = text.indexOf("repo: owner/repo");
+  const prBodyIdx = text.indexOf("## PR body");
+  const issueIdx = text.indexOf("## Linked issue #42");
+  const diffIdx = text.indexOf("## Diff at reviewed head");
+  const summaryIdx = text.indexOf("## Changed files + adjacent-code summary");
+
+  // Fixed order: header, PR body, linked issue, diff, changed-files summary.
+  assert.ok(headerIdx >= 0 && headerIdx < prBodyIdx);
+  assert.ok(prBodyIdx < issueIdx);
+  assert.ok(issueIdx < diffIdx);
+  assert.ok(diffIdx < summaryIdx);
+
+  assert.ok(text.includes("Implement the thing."));
+  assert.ok(text.includes("Acceptance criteria: the thing works."));
+  assert.ok(text.includes("+added line"));
+  assert.ok(text.includes("Changed files (1):"));
+  assert.ok(text.includes("- x.mjs"));
+  assert.ok(text.includes("verify-fresh-review-context.mjs"));
+});
+
+test("renderBriefingPrefix: deterministic — two renders of identical input produce byte-identical text", () => {
+  const a = renderBriefingPrefix(renderInput());
+  const b = renderBriefingPrefix(renderInput());
+  assert.equal(a.text, b.text);
+});
+
+test("renderBriefingPrefix: over-cap diff falls back to pointer mode, discloses the pointer, and does NOT inline the diff body", () => {
+  const bigDiff = "+" + "x".repeat(100);
+  const { text, prefixMode, diffBytes } = renderBriefingPrefix(renderInput({ diffOutput: bigDiff, capBytes: 10 }));
+  assert.equal(prefixMode, "pointer");
+  assert.equal(diffBytes, Buffer.byteLength(bigDiff, "utf8"));
+  assert.ok(text.includes("pointer"));
+  assert.ok(text.includes("tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.diff"));
+  assert.ok(!text.includes(bigDiff), "the raw diff body must not be inlined in pointer mode");
+  assert.ok(text.includes(`${diffBytes} bytes`));
+});
+
+test("renderBriefingPrefix: over-cap diff with no persisted diffPath discloses an explicit unavailable-pointer note (no crash)", () => {
+  const bigDiff = "+" + "x".repeat(100);
+  const { text, prefixMode } = renderBriefingPrefix(renderInput({ diffOutput: bigDiff, diffPath: null, capBytes: 10 }));
+  assert.equal(prefixMode, "pointer");
+  assert.ok(text.includes("diff pointer unavailable"));
+});
+
+test("renderBriefingPrefix: issue-less PR omits the Linked issue section entirely (no crash)", () => {
+  const { text } = renderBriefingPrefix(renderInput({ issueBody: null, issueRef: null }));
+  assert.ok(!text.includes("## Linked issue"));
+  assert.ok(text.includes("## PR body"));
+  assert.ok(text.includes("## Diff at reviewed head"));
+});
+
+test("renderBriefingPrefix: fully empty optional input (no PR/issue/diff/changed-files/adjacentCode) renders without crashing", () => {
+  const { text, prefixMode } = renderBriefingPrefix({
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.briefing-prefix.txt",
+  });
+  assert.equal(prefixMode, "inline");
+  assert.ok(text.includes("(no PR body provided)"));
+  assert.ok(text.includes("(no diff text captured for this bundle)"));
+  assert.ok(text.includes("Changed files (0):"));
+  assert.ok(!text.includes("## Linked issue"));
+});
+
+test("buildGateBriefingPrefixPath sits beside the context artifact + diff (same dir, same basename stem)", () => {
+  const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: "abc1234567890" });
+  const jsonPath = buildGateContextPath({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: "abc1234567890" });
+  assert.equal(path.dirname(prefixPath), path.dirname(jsonPath));
+  assert.equal(prefixPath, path.join("tmp", "gate-context", "owner-repo", "pr-9", "draft_gate-abc1234567890.briefing-prefix.txt"));
+});
+
+// ---------------------------------------------------------------------------
+// buildGateContext / writeGateContext — briefing prefix end-to-end (#1220)
+// ---------------------------------------------------------------------------
+
+test("buildGateContext writes an inline-mode briefing prefix under the cap; scope.prefixMode + result.prefixHash/prefixPath agree; deterministic across two builds", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefix-"));
+  try {
+    const config = draftConfig({ dynamicAngles: false });
+    const diff = {
+      nameStatusOutput: "M\tsrc/a.mjs\n",
+      diffOutput: "diff --git a/src/a.mjs b/src/a.mjs\n+line\n",
+    };
+    const buildOnce = async () => buildGateContext(
+      {
+        config, gate: "draft_gate", diff, repo: "owner/repo", pr: 50, headSha: "abc1234567890",
+        prBody: "PR description", acceptanceCriteria: "#42", issueBody: "Issue description",
+      },
+      { repoRoot },
+    );
+
+    const result = await buildOnce();
+    assert.equal(result.artifact.prefixMode, "inline");
+    assert.equal(result.prefixMode, "inline");
+    assert.match(result.prefixHash, /^[0-9a-f]{64}$/);
+    assert.equal(result.prefixPath, buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 50, gate: "draft_gate", headSha: "abc1234567890" }));
+
+    const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.ok(onDisk.includes("PR description"));
+    assert.ok(onDisk.includes("Issue description"));
+    assert.ok(onDisk.includes("+line"));
+    const { createHash } = await import("node:crypto");
+    assert.equal(createHash("sha256").update(onDisk, "utf8").digest("hex"), result.prefixHash);
+
+    // A second build at the SAME head produces a byte-identical prefix.
+    const result2 = await buildOnce();
+    const onDisk2 = await readFile(path.resolve(repoRoot, result2.prefixPath), "utf8");
+    assert.equal(onDisk2, onDisk);
+    assert.equal(result2.prefixHash, result.prefixHash);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext falls back to pointer mode when the diff exceeds the inline cap, and discloses it", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefix-cap-"));
+  try {
+    const config = draftConfig({ dynamicAngles: false });
+    const bigDiffBody = "+" + "x".repeat(BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES + 1024);
+    const diff = {
+      nameStatusOutput: "M\tsrc/big.mjs\n",
+      diffOutput: `diff --git a/src/big.mjs b/src/big.mjs\n${bigDiffBody}\n`,
+    };
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff, repo: "owner/repo", pr: 51, headSha: "deadbeef123456" },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.prefixMode, "pointer");
+    assert.equal(result.prefixMode, "pointer");
+    assert.ok(result.artifact.scope.diffPath, "diffPath persisted for pointer-mode fallback");
+
+    const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.ok(!onDisk.includes(bigDiffBody), "over-cap diff body must not be inlined");
+    assert.ok(onDisk.includes(result.artifact.scope.diffPath), "prefix discloses the diffPath pointer");
+    assert.ok(onDisk.includes("prefixMode: pointer"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext omits the Linked issue section for an issue-less PR (no crash, no issue label)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefix-noissue-"));
+  try {
+    const config = draftConfig({ dynamicAngles: false });
+    const diff = { nameStatusOutput: "M\tsrc/a.mjs\n", diffOutput: "diff --git a/src/a.mjs b/src/a.mjs\n+line\n" };
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff, repo: "owner/repo", pr: 52, headSha: "cafef00d123456", prBody: "Just a PR body" },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.prefixMode, "inline");
+    const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.ok(!onDisk.includes("## Linked issue"));
+    assert.ok(onDisk.includes("Just a PR body"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Dogfood round-trip (#1220 AC4): real gate-pass shape — build via the CLI,
+// two reviewer sentinels via --prefix-file, fan-in verify — verified:true.
+// Reuses verify-fresh-review-context.mjs / verify-briefing-prefixes.mjs UNCHANGED.
+// ---------------------------------------------------------------------------
+
+test("dogfood round-trip: CLI-built briefing prefix verifies clean across two reviewer sentinels via the real verify tools", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await mkdir(path.join(repoRoot, "tmp"), { recursive: true });
+    await main([
+      "--repo", "owner/repo", "--pr", "60", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+      "--base", baseSha,
+      "--pr-body", "Fixes the helper.",
+      "--acceptance-criteria", "#900",
+      "--issue-body", "The helper must return the right value.",
+    ], { repoRoot });
+
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 60, gate: "draft_gate", headSha }, { repoRoot });
+    assert.ok(artifact, "artifact written");
+    assert.equal(artifact.prefixMode, "inline");
+
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 60, gate: "draft_gate", headSha });
+    const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 60, gate: "draft_gate", headSha });
+
+    const r1 = spawnSync("node", [contextGuardPath, "--scope", "scope-a", "--context-path", contextPath, "--prefix-file", prefixPath], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(r1.status, 0, r1.stderr);
+    const r2 = spawnSync("node", [contextGuardPath, "--scope", "scope-b", "--context-path", contextPath, "--prefix-file", prefixPath], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(r2.status, 0, r2.stderr);
+
+    const fanin = spawnSync("node", [briefingCheckerPath, "--head-sha", headSha], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(fanin.status, 0, fanin.stderr);
+    const finalResult = JSON.parse(fanin.stdout.trim());
+    assert.equal(finalResult.verified, true);
+    assert.equal(finalResult.reviewerCount, 2);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext failure-ordering: a prefix-write failure leaves NO JSON artifact behind (artifact is the completion marker)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-order-"));
+  try {
+    // Occupy the deterministic briefing-prefix path with a DIRECTORY so its
+    // writeFile throws EISDIR before the JSON artifact write is attempted.
+    const prefixRel = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: "abc1234567890" });
+    await mkdir(path.resolve(repoRoot, prefixRel), { recursive: true });
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "70", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+    ]);
+    await assert.rejects(() => writeGateContext(options, { repoRoot }), /EISDIR/);
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(artifact, null, "no partial gate-context JSON may exist when the prefix write failed");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
