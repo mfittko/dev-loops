@@ -431,10 +431,10 @@ test("reviewer-loop-state adversarial probe: a local failure fails closed even a
   assert.equal(safety.ok, true);
 });
 
-test("reviewer-loop-state adversarial probe: submission failure fails closed even from a stale-draft race (#1200)", async () => {
+test("reviewer-loop-state adversarial probe: submission failure fails closed even from a stale-draft race", async () => {
   const { interpretReviewerLoopState, REVIEWER_STATE, REVIEWER_TRANSITIONS } = await import("@dev-loops/core/loop/reviewer-loop-state");
 
-  // The realistic race behind #1200: the submission fails precisely BECAUSE the head moved,
+  // The realistic race: the submission fails precisely BECAUSE the head moved,
   // so the snapshot simultaneously looks review_invalidated-shaped (stale draft SHA) and
   // carries reviewSubmissionStatus:"failed". The global failure guard must outrank the
   // invalidation branch, and review_invalidated -> blocked must be a declared edge so the
