@@ -340,12 +340,15 @@ test("public dev-loop agent is a thin executable entrypoint that defers to the p
   assert.match(agentContent, /name:\s*"dev-loop"/);
   assert.match(agentContent, /user-invocable:\s*true/);
   assert.match(agentContent, /skills\/dev-loop\/SKILL\.md/);
+  // Entrypoint-thinness is agent-surface routing guidance (agents own no rules);
+  // the loose /must stay thin/i token is the structural check (#1159).
   assert.match(agentContent, /must stay thin/i);
-  assert.match(agentContent, /do not restate the skill's phase sequencing or workflow policy here/i);
   assert.match(agentContent, /deterministic public routing contract/i);
   assert.doesNotMatch(agentContent, /compatibility\/internal entrypoints during migration/i);
+  // Disagreeing-facts fail-closed semantics are owned by STOP-RECONCILE-001;
+  // the agent surface keeps a loose stop-and-ask token, not the exact sentence (#1159).
+  assertRuleOwned("STOP-RECONCILE-001", "skills/docs/stop-conditions.md");
   assert.match(agentContent, /stop and ask for human direction rather than guessing/i);
-  assert.match(agentContent, /local facts, GitHub facts, and helper\/state-machine output do not agree/i);
   assert.match(skillContent, /public `dev-loop` façade/i);
 });
 test("thin pointer docs reference canonical contract content", async () => {

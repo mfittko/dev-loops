@@ -33,7 +33,9 @@ test("docs agent supports docs-correctness review posture without becoming a pub
   assert.equal(frontmatter.name, "docs");
   assert.equal(frontmatter["user-invocable"], false);
   assert.match(content, /resolved angle prompt as the primary review lens/i);
-  assert.match(content, /do not silently edit files when acting as reviewer/i);
+  // Read-only-when-reviewing is agent-surface routing guidance (agents own no
+  // rules); loose token check instead of the exact sentence (#1159).
+  assert.match(content, /acting as reviewer/i);
 });
 
 test("review workflow resolves pre-approval gate angles from config with explicit fallback requirement", async () => {
@@ -79,8 +81,11 @@ test("review workflow resolves pre-approval gate angles from config with explici
   assertRuleOwned("GATE-EXEC-BUILD-ONCE-SEED", "docs/gate-review-sub-loop-contract.md");
   assertRuleOwned("GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK", "docs/gate-review-sub-loop-contract.md");
   assert.match(copilotFollowupSkill, /if parallel execution is impractical[\s\S]*still run all configured lenses and explicitly record the limitation/i);
-  assert.match(reviewAgent, /if parallel execution is impractical[\s\S]*still cover all configured angles and explicitly record the limitation/i);
-  assert.match(reviewAgent, /run those configured angle-focused passes in fresh context and in parallel when practical/i);
+  // The review agent's fresh-context + sequential-fallback sentences point at
+  // GATE-EXEC-BUILD-ONCE-SEED / GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK (owned
+  // above); loose token checks on the agent surface, not exact sentences (#1159).
+  assert.match(reviewAgent, /fresh context/i);
+  assert.match(reviewAgent, /record the limitation/i);
   assertRuleOwned("REVIEWER-STATE-GATE-ANGLE-MAPPING", "docs/reviewer-loop-state-graph.md");
   assert.match(reviewerGraph, /REVIEWER-STATE-GATE-ANGLE-MAPPING/);
 });
