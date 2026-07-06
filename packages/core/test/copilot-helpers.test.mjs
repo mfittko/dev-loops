@@ -667,7 +667,22 @@ test("sanitizeCopilotSummonTokens falls back to zero-width-joiner neutralization
   const once = sanitizeCopilotSummonTokens(probe);
   assert.equal(containsBareCopilotSummon(once), false, "sanitized output must not arm the guard");
   assert.equal(sanitizeCopilotSummonTokens(once), once, "sanitizer must be idempotent for this input");
-  assert.match(once, /\/\u200Dcopilot/, "fallback inserts a zero-width joiner into the token");
+  // The fallback works on the WRAPPED line: the backtick wrap survives, with the
+  // joiner neutralizing the residual token the re-paired spans left exposed.
+  assert.equal(once, "uses ` oddly, violates the `/\u200Dcopilot` rule");
+});
+
+test("sanitizeCopilotSummonTokens ZWJ fallback preserves successful wraps and keeps the joiner out of legitimate code spans", () => {
+  const probe = "quoting `/copilot` legit and ` stray /copilot bare";
+  const once = sanitizeCopilotSummonTokens(probe);
+  assert.equal(containsBareCopilotSummon(once), false, "sanitized output must not arm the guard");
+  assert.equal(sanitizeCopilotSummonTokens(once), once, "sanitizer must be idempotent for this input");
+  assert.ok(once.includes("`/copilot` legit"), "pre-existing legitimate code span must stay joiner-free");
+  assert.match(once, /\/\u200Dcopilot/, "residual token neutralized with a zero-width joiner");
+});
+
+test("a genuine bare summon still arms the guard after sanitizer fallback changes", () => {
+  assert.equal(containsBareCopilotSummon("@copilot please review"), true);
 });
 
 test("sanitizeCopilotSummonTokens does not mangle email-like text the guard never arms on", () => {

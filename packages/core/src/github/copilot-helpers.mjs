@@ -60,19 +60,24 @@ function transformNonFencedLines(text, transformLine) {
   return transformed.join("\n");
 }
 
-// Wrap bare `@copilot`/`/copilot*` tokens in backticks so a comment can quote the
-// anti-summon rule without arming it. Tokens already inside an inline code span
-// (any N-backtick GFM span) are left untouched.
-function wrapBareSummonTokensInLine(line) {
+// Apply `replaceSegment` to every part of a line that lies OUTSIDE an inline
+// code span (any N-backtick GFM span), leaving span content untouched.
+function transformOutsideSpans(line, replaceSegment) {
   let result = "";
   let last = 0;
   for (const span of line.matchAll(INLINE_CODE_SPAN_RE)) {
-    result += line.slice(last, span.index).replace(COPILOT_SUMMON_TOKEN_RE, "`$1`");
+    result += replaceSegment(line.slice(last, span.index));
     result += span[0];
     last = span.index + span[0].length;
   }
-  result += line.slice(last).replace(COPILOT_SUMMON_TOKEN_RE, "`$1`");
-  return result;
+  return result + replaceSegment(line.slice(last));
+}
+
+// Wrap bare `@copilot`/`/copilot*` tokens in backticks so a comment can quote the
+// anti-summon rule without arming it. Tokens already inside an inline code span
+// are left untouched.
+function wrapBareSummonTokensInLine(line) {
+  return transformOutsideSpans(line, (segment) => segment.replace(COPILOT_SUMMON_TOKEN_RE, "`$1`"));
 }
 
 // Does this single (non-fenced) line still arm the guard scan after inline code
@@ -81,19 +86,24 @@ function lineArmsSummonGuard(line) {
   return COPILOT_SUMMON_WORD_BOUNDARY_RE.test(line.replace(INLINE_CODE_SPAN_RE, ""));
 }
 
+const ZWJ_FALLBACK_RE = /(?<=^|\W)([@/])(copilot)/gi;
+
 // Sanitize one line, verifying against the guard scan. Backtick-wrapping is the
 // primary neutralization (visible, greppable), but a pre-existing UNBALANCED
 // backtick on the line can pair with an inserted one and re-expose the token to
 // the guard's span-stripping (and break idempotence). When the wrapped line
-// still arms the guard, fall back to inserting a zero-width joiner between the
-// sigil and "copilot" — invisible, guard-inert, and idempotent (the joined token
-// no longer matches the summon shape).
+// still arms the guard, additionally neutralize the residual tokens — the ones
+// still outside the re-paired spans of the WRAPPED line — with a zero-width
+// joiner between the sigil and "copilot": invisible, guard-inert, and idempotent
+// (the joined token no longer matches the summon shape). Working on the wrapped
+// line (not the original) preserves every successful backtick wrap and keeps the
+// joiner out of legitimate pre-existing code spans.
 function sanitizeSummonLine(line) {
   const wrapped = wrapBareSummonTokensInLine(line);
   if (!lineArmsSummonGuard(wrapped)) {
     return wrapped;
   }
-  return line.replace(/(?<=^|\W)([@/])(copilot)/gi, `$1${ZERO_WIDTH_JOINER}$2`);
+  return transformOutsideSpans(wrapped, (segment) => segment.replace(ZWJ_FALLBACK_RE, `$1${ZERO_WIDTH_JOINER}$2`));
 }
 
 export function sanitizeCopilotSummonTokens(text) {
