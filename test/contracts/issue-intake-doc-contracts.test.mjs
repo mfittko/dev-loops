@@ -77,7 +77,6 @@ test("issue-intake surface forbids detached bash watcher loops for async follow-
   // CLI-list sentence (#1205).
   assertRuleOwned("COPILOT-FOLLOWUP-WAIT-TOOLS", "skills/copilot-pr-followup/SKILL.md");
   assert.match(content, /agent-authored shell polling is forbidden/i);
-  assert.match(content, /agent-authored shell polling is forbidden/i);
   assert.match(content, /stop and report rather than improvising a shell watcher/);
 });
 
