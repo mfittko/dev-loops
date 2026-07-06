@@ -28,6 +28,7 @@ You are a focused review-fix agent. You take an existing pull request with revie
 
 ## Review Workflow
 1. Read unresolved review threads and any general review comments.
+   - Prefer the deterministic helper `scripts/github/list-review-threads.mjs --unresolved-only` to enumerate threads with their reply/resolve ids, rather than hand-writing a GraphQL query.
 2. Group related comments by file and identify the underlying concern behind each comment.
 3. Decide the best resolution for each concern: exact requested change, better alternative fix, explanation-only resolution, or escalation for expert judgment.
 4. If expert input is needed, stop before editing or resolving the thread and report the question, evidence, and options.

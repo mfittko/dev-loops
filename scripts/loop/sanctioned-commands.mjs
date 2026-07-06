@@ -26,9 +26,11 @@ export const SANCTIONED_COMMANDS = Object.freeze({
   reads: Object.freeze({
     "pr-facts": "scripts/github/view-pr.mjs",
     "ci-status": "scripts/github/probe-ci-status.mjs",
+    "ci-wait": "scripts/github/wait-pr-checks.mjs",
     "ci-logs": "scripts/github/fetch-ci-logs.mjs",
     "issue-list": "scripts/github/list-issues.mjs",
     "copilot-review-state": "scripts/github/probe-copilot-review.mjs",
+    "review-threads": "scripts/github/list-review-threads.mjs",
     "gate-coordination": "scripts/loop/detect-pr-gate-coordination-state.mjs",
   }),
 

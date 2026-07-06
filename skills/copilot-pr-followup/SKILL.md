@@ -71,6 +71,8 @@ Max watch timeout: **30 minutes** (from `policy-constants.mjs` COPILOT_REVIEW_WA
 ```sh
 node <resolved-skill-scripts>/github/request-copilot-review.mjs --help
 node <resolved-skill-scripts>/github/probe-copilot-review.mjs --help
+node <resolved-skill-scripts>/github/list-review-threads.mjs --help
+node <resolved-skill-scripts>/github/wait-pr-checks.mjs --help
 node <resolved-skill-scripts>/loop/detect-copilot-loop-state.mjs --help
 ```
 
@@ -167,7 +169,7 @@ The outer-loop checkpoint is the canonical re-attachment artifact.
 Start every wait seam with a detector refresh: `detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>`.
 
 <!-- rule: COPILOT-FOLLOWUP-WAIT-TOOLS -->
-`COPILOT-FOLLOWUP-WAIT-TOOLS`: The agent MUST wait only through allowed deterministic tools: `detect-copilot-loop-state.mjs` (one-shot), `dev-loops loop watch-cycle` (persistent), `copilot-pr-handoff.mjs --watch-status` (refresh after timeout/idle), `dev-loops loop watch-ci --repo <owner/name> --pr <number>` (provider-agnostic CI: CircleCI / Actions / external commit-status), `gh run watch <run-id> --repo <owner/name>` (Actions-only fallback when the run id is known); otherwise exit and resume later from a fresh detector call.
+`COPILOT-FOLLOWUP-WAIT-TOOLS`: The agent MUST wait only through allowed deterministic tools: `detect-copilot-loop-state.mjs` (one-shot), `dev-loops loop watch-cycle` (persistent), `copilot-pr-handoff.mjs --watch-status` (refresh after timeout/idle), `dev-loops loop watch-ci --repo <owner/name> --pr <number>` (provider-agnostic CI: CircleCI / Actions / external commit-status), `scripts/github/wait-pr-checks.mjs --repo <owner/name> --pr <number>` (same provider-agnostic CI wait, with a direct 0/1/2 process-exit-code contract for shell/scripted callers instead of a JSON `status` field), `gh run watch <run-id> --repo <owner/name>` (Actions-only fallback when the run id is known); otherwise exit and resume later from a fresh detector call.
 
 Practical rules: do not poll manually. `waiting_for_copilot_review` → `run-watch-cycle.mjs` or report-and-resume. `waiting_for_ci` with pending/none CI → `dev-loops loop watch-ci --repo <owner/name> --pr <number>` (provider-agnostic; covers CircleCI / Actions / external commit-status) or report-and-resume; `gh run watch <run-id>` is an Actions-only fallback. `dev-loops loop watch-cycle` also auto-routes a `waiting_for_ci` boundary to this CI watcher. Bounded CI exception: zero current-head suites + previous-head green + local `npm run verify` passed → rerun detector with `--local-validation-head-sha` for `crediblyGreen` promotion. `ciStatus=failure` → stop/fix, never wait.
 
@@ -210,6 +212,7 @@ This step covers four responsibilities: the draft gate right before `gh pr ready
 When unresolved feedback exists, use a narrow follow-up loop:
 
 1. inspect unresolved comments/threads and failing checks
+   - enumerate unresolved threads (with the thread/comment ids the reply-resolve helpers below need) via `scripts/github/list-review-threads.mjs --repo <owner/name> --pr <number> --unresolved-only` rather than a hand-written `gh api graphql` query
 2. before the first local file write in each fixer pass on a Copilot-assigned PR, run `node <resolved-skill-scripts>/loop/pre-write-remote-freshness-guard.mjs --branch <headRefName>` as a required fail-closed guard
    - source `<headRefName>` from authoritative PR state (`headRefName`), not from a local branch guess
    - if the guard exits non-zero (`remote_ahead`), stop writing locally, reconcile to the refreshed remote head, then restart the fixer pass
@@ -452,6 +455,7 @@ Follow [Stop Conditions](../docs/stop-conditions.md). Genuine stops: `blocked` s
 
 See [Anti-patterns](../docs/anti-patterns.md). Key repo-specific additions:
 - Use `reply-resolve-review-thread.mjs` / `reply-resolve-review-threads.mjs` helpers instead of ad hoc `gh api`/`gh api graphql` thread-mutation commands. Do NOT use `gh pr comment`, `gh api`, or `gh pr review` for gate comments (use `upsert-checkpoint-verdict.mjs`).
+- Use `list-review-threads.mjs` and `wait-pr-checks.mjs` instead of ad hoc `gh api graphql` review-thread queries or `gh pr checks` shell-pipe polling loops.
 - Do not declare merge-ready without visible `pre_approval_gate` comment on current head SHA. Do not declare merge-ready based solely on `mergeable_state: clean` + CI green without gate evidence. CI green + resolved threads alone is insufficient.
 - Do not blind-run `gh pr merge`/`gh pr update-branch`/unapproved rebase when conflicted. Do not dispatch async dev-loop tasks that omit the pre-approval gate requirement.
 - Do not assume generated wiki is authoritative over code or CI.
