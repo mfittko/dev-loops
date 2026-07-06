@@ -323,7 +323,7 @@ test("issue-intake safety layer contract is documented", async () => {
   // structural check: the rule covers all three stop states plus the preflight verdict.
   assertRuleOwned("INTAKE-STOP-STATES", "skills/docs/issue-intake-procedure.md");
   const intakeDoc = await readRepo("skills/docs/issue-intake-procedure.md");
-  const stopStatesRuleBlock = intakeDoc.split("<!-- rule: INTAKE-STOP-STATES -->")[1]?.split(/\n\n/)[0] ?? "";
+  const stopStatesRuleBlock = intakeDoc.split("<!-- rule: INTAKE-STOP-STATES -->")[1]?.split(/\r?\n\r?\n/)[0] ?? "";
   for (const token of ["pause_for_clarification", "stopped_overlap_needs_decision", "stopped_low_confidence", "stopped_explicit_reject", "MUST stop", "MUST NOT mutate GitHub"]) {
     assert.ok(stopStatesRuleBlock.includes(token), `INTAKE-STOP-STATES rule block must cover ${token}`);
   }

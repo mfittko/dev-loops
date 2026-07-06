@@ -85,13 +85,12 @@ They are read-only metadata in this slice and do not trigger any automation:
 
 ### 3.3 Deterministic Update Rules
 
-<!-- rule: TRACKER-PROJECTION-IDEMPOTENT -->
 1. **On PR create**: Generate title, body, and labels from tracker item fields.
    Apply draft state.
 2. **On tracker item field change**: Re-apply projection rules to PR title,
    body, and labels. Leave any sections not covered by projection rules
    (e.g. reviewer-added review comments) intact.
-3. **Idempotent regeneration**: Projection MUST be a no-op when the PR already has the correct
+3. <!-- rule: TRACKER-PROJECTION-IDEMPOTENT --> **Idempotent regeneration**: Projection MUST be a no-op when the PR already has the correct
    title, body sections, and labels — re-applying the rules to an already-correct PR MUST NOT
    mutate it.
 

@@ -9,7 +9,7 @@ Other repo docs may summarize or link this contract, but they should not redefin
 ## Two-tier model
 
 <!-- rule: ARTIFACT-TWO-TIER-EXCLUSIVE -->
-dev-loops supports two mutually exclusive artifact authority modes. Every work item MUST originate from exactly one authoritative artifact: a GitHub issue or a persisted markdown plan file. Work MUST originate from a PR or a direct local change only when explicitly requested.
+dev-loops supports two mutually exclusive artifact authority modes. Every work item MUST originate from exactly one authoritative artifact: a GitHub issue or a persisted markdown plan file. Work MUST NOT originate from a PR or a direct local change unless explicitly requested.
 
 The shipped extension default selects local-planning; see [Shipped default posture](#shipped-default-posture) below. The mode names that follow describe the two tiers; "default" in their headings refers to the local-first code-level default in `BUILT_IN_DEFAULTS`.
 
