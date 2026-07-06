@@ -38,6 +38,7 @@ doing manually; it is not a general conflict-resolution engine.
 
 ## Required before merge
 
+<!-- rule: MERGE-PRECOND-REQUIRED -->
 1. ✅ Conflict-free with base (`mergeable: MERGEABLE`; not `CONFLICTING`/`DIRTY`/`BEHIND`/`UNKNOWN`)
 2. ✅ CI green on current head (or crediblyGreen via `--local-validation-head-sha`)
 3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](../../docs/gate-review-comment-contract.md))

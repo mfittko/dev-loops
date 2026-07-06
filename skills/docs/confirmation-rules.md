@@ -4,6 +4,7 @@ Canonical owner for agent confirmation / authorization rules across all workflow
 
 ## Core rule
 
+<!-- rule: CONFIRM-CORE-EXPLICIT -->
 Before any state-changing action, get explicit confirmation unless the latest user message already clearly authorizes that exact action.
 
 ## What counts as confirmation
