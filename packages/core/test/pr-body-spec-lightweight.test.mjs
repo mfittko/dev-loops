@@ -133,6 +133,39 @@ test("validatePrBodySpec: expectedIssue NOT among the closing references fails c
   assert.ok(result.errors.some((e) => e.code === "closes_wrong_issue"));
 });
 
+// ---------------------------------------------------------------------------
+// Issue-less mode (issue #1210): closing linkage flips REQUIRED -> FORBIDDEN
+// ---------------------------------------------------------------------------
+
+test("validatePrBodySpec: issueLess mode with NO Closes reference validates green (AC1)", () => {
+  const body = COMPLETE_BODY.replace("Closes #123\n\n", "");
+  const result = validatePrBodySpec({ body, issueLess: true });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.closesIssues, []);
+});
+
+test("validatePrBodySpec: issueLess mode with a Closes reference present fails closed with unexpected_closing_issue_reference", () => {
+  const result = validatePrBodySpec({ body: COMPLETE_BODY, issueLess: true });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "unexpected_closing_issue_reference"));
+  assert.ok(!result.errors.some((e) => e.code === "missing_closing_issue_reference"));
+});
+
+test("validatePrBodySpec: issueLess + expectedIssue together throw (mutually exclusive modes, fail closed at the library boundary)", () => {
+  assert.throws(
+    () => validatePrBodySpec({ body: COMPLETE_BODY, issueLess: true, expectedIssue: 123 }),
+    /mutually exclusive/,
+  );
+});
+
+test("validatePrBodySpec: the same spec-complete body still fails when an expected issue is supplied and unlinked (AC1 negative)", () => {
+  const body = COMPLETE_BODY.replace("Closes #123\n\n", "");
+  const result = validatePrBodySpec({ body, expectedIssue: 456 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "missing_closing_issue_reference"));
+});
+
 test("validatePrBodySpec: a fenced Closes #N does NOT satisfy the gate (no spoof)", () => {
   const body = COMPLETE_BODY.replace("Closes #123", "```\nCloses #123\n```");
   const result = validatePrBodySpec({ body });

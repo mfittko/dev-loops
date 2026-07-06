@@ -157,6 +157,13 @@ message applies when that file has no pending entries.
 > ordering + projects-script layer, so a renamed Next Up column is not fully supported here.
 > Honoring `statusColumns` across those layers is tracked in #1098.
 
+### Issue-less lightweight PRs on the board
+
+An issue-less lightweight PR (`resolve-dev-loop-startup.mjs --lightweight` alone, per
+[ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE](../skills/docs/artifact-authority-contract.md#lightweight-pr-body-as-spec))
+has no tracker issue, so it appears on the board as a **PR item only** — there is no
+issue-backed board entry to reconcile or close for it.
+
 ### Live pickup path (`/loop-continue`)
 
 The operator-facing pickup path (bare `/loop-continue`) enforces `QUEUE-LIVE-PICKUP-SOURCE` via

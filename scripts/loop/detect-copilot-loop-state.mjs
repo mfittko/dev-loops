@@ -14,7 +14,7 @@ import {
 } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
 import {
   buildSnapshotFromPrFacts,
   interpretLoopState,
@@ -43,8 +43,13 @@ Required (auto-detect mode):
   --pr <number>                              Pull request number
 Required (snapshot mode):
   --input <path>                             Path to snapshot JSON file
-Optional (auto-detect mode only):
-Optional (auto-detect mode only):
+Optional (either mode):
+  --lightweight   This PR is light-dispatched (#1210): compose the Copilot
+                  round cap with localImplementation.lightMode.maxCopilotRounds
+                  (default 1) via min(lightMode.maxCopilotRounds,
+                  refinement.maxCopilotRounds) instead of using
+                  refinement.maxCopilotRounds alone. refinement.maxCopilotRounds:
+                  0 still disables Copilot rounds even with --lightweight.
 Output (stdout, JSON):
   { "ok": true, "snapshot": {..., "copilotReviewRoundCount": N}, "state": "...", "allowedTransitions": [...], "nextAction": "...",
     "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false,
@@ -67,6 +72,7 @@ export function parseDetectCliArgs(argv) {
     inputPath: undefined,
     repo: undefined,
     pr: undefined,
+    lightweight: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -75,6 +81,7 @@ export function parseDetectCliArgs(argv) {
       input: { type: "string" },
       repo: { type: "string" },
       pr: { type: "string" },
+      lightweight: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -102,6 +109,10 @@ export function parseDetectCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "lightweight") {
+      options.lightweight = true;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -455,6 +466,15 @@ export async function runCli(
   const refinementConfig = config.errors.length > 0
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(config.config);
+  if (options.lightweight) {
+    // Compose (not replace) the round cap for light-dispatched PRs (#1210):
+    // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
+    // maxCopilotRounds: 0 still disables Copilot rounds everywhere.
+    refinementConfig.maxCopilotRounds = resolveEffectiveCopilotRoundCap(
+      config.errors.length > 0 ? { version: 1 } : config.config,
+      { lightweight: true },
+    );
+  }
   interpretation = interpretLoopState(interpretationInput, refinementConfig);
   const interpretationSummary = summarizeLoopInterpretation(interpretation);
   process.exitCode = emitResult({

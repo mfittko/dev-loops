@@ -846,6 +846,184 @@ test("request-copilot-review returns round_cap_reached when cap is exhausted wit
   }
 });
 
+test("request-copilot-review --lightweight enforces the composed cap: light PR at 1 completed round returns round_cap_reached (#1210)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-lightweight-cap-"));
+
+  try {
+    // Full cap 5, lightweight cap defaults to 1 -> composed cap = min(1, 5) = 1.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "",
+      "refinement:",
+      "  maxCopilotRounds: 5",
+      "",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 2",
+      "    maxLines: 20",
+      "",
+    ].join("\n"), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}}]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--lightweight"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.status, "round_cap_reached");
+    assert.equal(parsed.completedRounds, 1);
+    assert.equal(parsed.maxRounds, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("request-copilot-review refuses immediately when refinement.maxCopilotRounds: 0 (full PR, cap-0 must not be ignored)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-cap-zero-full-"));
+
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "",
+      "refinement:",
+      "  maxCopilotRounds: 0",
+      "",
+    ].join("\n"), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"sha1","isDraft":false,"state":"OPEN","number":17,"reviews":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    // Before the fix, `effectiveCap > 0` was false for cap 0, so maxRounds stayed
+    // at the built-in default of 5 and this first-ever request would have gone
+    // through as "requested" instead of being refused.
+    assert.equal(parsed.status, "round_cap_reached");
+    assert.equal(parsed.completedRounds, 0);
+    assert.equal(parsed.maxRounds, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("request-copilot-review refuses immediately when the composed lightweight cap is 0 (cap-0 must not be ignored, #1210)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-cap-zero-lightweight-"));
+
+  try {
+    // refinement.maxCopilotRounds: 0 disables Copilot rounds everywhere,
+    // including lightweight, per resolveEffectiveCopilotRoundCap's contract.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "",
+      "refinement:",
+      "  maxCopilotRounds: 0",
+      "",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 2",
+      "    maxLines: 20",
+      "",
+    ].join("\n"), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"sha1","isDraft":false,"state":"OPEN","number":17,"reviews":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--lightweight"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.status, "round_cap_reached");
+    assert.equal(parsed.completedRounds, 0);
+    assert.equal(parsed.maxRounds, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("request-copilot-review --lightweight with an unloadable config falls back to the lightweight default cap of 1 (not the full-PR default of 5) and surfaces the config failure", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-lightweight-broken-config-"));
+
+  try {
+    // Invalid config (fails schema validation) — loadDevLoopConfig() returns
+    // errors, not a thrown exception, for this shape.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nnot_a_real_key: true\n", "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}}]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--lightweight"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    // Before the fix, a config load failure with --lightweight silently kept
+    // the built-in full-PR default of 5 instead of failing toward the safer
+    // lightweight default of 1.
+    assert.equal(parsed.status, "round_cap_reached");
+    assert.equal(parsed.completedRounds, 1);
+    assert.equal(parsed.maxRounds, 1);
+    assert.match(parsed.configWarning, /lightweight default cap of 1/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("request-copilot-review respects low-signal refinement config before auto re-requesting at round cap", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-roundcap-low-signal-"));
 

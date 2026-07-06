@@ -75,7 +75,7 @@ export function parseGitDiffStat(output) {
   }
   return { filesChanged: fileCount, linesChanged: insertions + deletions };
 }
-function detectScope({ base, head } = {}) {
+function detectScope({ base, head, cwd } = {}) {
   let diffArgs = ["diff", "--stat"];
   if (base && head) {
     diffArgs.push(`${base}..${head}`);
@@ -86,7 +86,7 @@ function detectScope({ base, head } = {}) {
   }
   let output;
   try {
-    output = execFileSync("git", diffArgs, { encoding: "utf8", maxBuffer: 1_000_000 });
+    output = execFileSync("git", diffArgs, { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined });
   } catch (err) {
     return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
   }

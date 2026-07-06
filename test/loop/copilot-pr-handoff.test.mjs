@@ -58,6 +58,16 @@ const CAP_REVIEWS = [1, 2, 3, 4, 5].map((n) => ({
 // Help and argument validation
 // ---------------------------------------------------------------------------
 
+test("parseHandoffCliArgs parses --lightweight (#1210)", () => {
+  const opts = parseHandoffCliArgs(["--repo", "owner/repo", "--pr", "17", "--lightweight"]);
+  assert.equal(opts.lightweight, true);
+});
+
+test("parseHandoffCliArgs defaults --lightweight to false", () => {
+  const opts = parseHandoffCliArgs(["--repo", "owner/repo", "--pr", "17"]);
+  assert.equal(opts.lightweight, false);
+});
+
 test("copilot-pr-handoff --help prints usage and exits 0", async () => {
   const helpLong = await runNode(["--help"]);
   assert.equal(helpLong.code, 0);
@@ -2500,6 +2510,30 @@ test("copilot-pr-handoff skips Copilot request when maxCopilotRounds: 0 disables
     assert.equal(output.state, STATE.INTERNAL_TOOLING_DIRECT_GATE);
     assert.equal(output.internalOnlySkipCopilot, true);
     assert.equal(output.reviewRequestStatus, undefined, "must not request Copilot when the gate is disabled");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copilot-pr-handoff --lightweight: maxCopilotRounds=0 disables Copilot rounds for lightweight PRs too (#1210)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-lightweight-copilot-disabled-"));
+  try {
+    // refinement.maxCopilotRounds: 0 must disable Copilot rounds EVERYWHERE,
+    // including lightweight (min(lightCap, 0) === 0).
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 0\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json"], stdout: JSON.stringify({isDraft:false,state:"OPEN",number:17,headRefOid:"abc123",reviews:[],statusCheckRollup:[{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }]}) + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--lightweight"], { cwd: tempDir, env });
+    assert.equal(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.state, STATE.INTERNAL_TOOLING_DIRECT_GATE);
+    assert.equal(output.internalOnlySkipCopilot, true);
+    assert.equal(output.reviewRequestStatus, undefined, "must not request Copilot when maxCopilotRounds:0 disables the gate, even with --lightweight");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

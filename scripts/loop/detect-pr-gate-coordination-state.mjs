@@ -11,7 +11,7 @@ import {
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveGateConfig, resolveRefinement, resolveRefinementConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -30,6 +30,12 @@ Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
 Optional:
+  --lightweight   This PR is light-dispatched (#1210): compose the Copilot
+                  round cap with localImplementation.lightMode.maxCopilotRounds
+                  (default 1) via min(lightMode.maxCopilotRounds,
+                  refinement.maxCopilotRounds) instead of using
+                  refinement.maxCopilotRounds alone. refinement.maxCopilotRounds:
+                  0 still disables Copilot rounds even with --lightweight.
 Output (stdout, JSON):
   {
     "ok": true,
@@ -80,6 +86,7 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     help: false,
     repo: undefined,
     pr: undefined,
+    lightweight: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -87,6 +94,7 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       pr: { type: "string" },
+      lightweight: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -110,6 +118,10 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "lightweight") {
+      options.lightweight = true;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -458,9 +470,20 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // detect-copilot-loop-state path and with request-copilot-review's cap logic.
   const interpreterRepoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   const interpreterConfigResult = await loadDevLoopConfig({ repoRoot: interpreterRepoRoot });
-  const interpreterRefinementConfig = (Array.isArray(interpreterConfigResult.errors) && interpreterConfigResult.errors.length > 0)
+  const interpreterConfigHasErrors = Array.isArray(interpreterConfigResult.errors) && interpreterConfigResult.errors.length > 0;
+  const interpreterRefinementConfig = interpreterConfigHasErrors
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(interpreterConfigResult.config ?? { version: 1 });
+  if (options.lightweight) {
+    // Compose (not replace) the round cap for light-dispatched PRs (#1210):
+    // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
+    // maxCopilotRounds: 0 still disables Copilot rounds everywhere. Shared with
+    // the maxCopilotRounds resolution below (#1126 requires the two to agree).
+    interpreterRefinementConfig.maxCopilotRounds = resolveEffectiveCopilotRoundCap(
+      interpreterConfigHasErrors ? { version: 1 } : (interpreterConfigResult.config ?? { version: 1 }),
+      { lightweight: true },
+    );
+  }
   const interpretation = interpretLoopState(snapshot, interpreterRefinementConfig);
   const disposition = summarizeLoopInterpretation(interpretation, interpreterRefinementConfig);
   const mergeStateStatus = typeof prData?.mergeStateStatus === "string" && prData.mergeStateStatus.trim().length > 0
@@ -515,7 +538,12 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const hasConfigErrors = Array.isArray(configLoadResult.errors) && configLoadResult.errors.length > 0;
   const config = hasConfigErrors ? {} : (configLoadResult.config ?? {});
   const draftGateConfig = resolveGateConfig(config, "draft");
-  const maxCopilotRounds = resolveRefinementConfig(config, "maxCopilotRounds");
+  // Shared with interpreterRefinementConfig.maxCopilotRounds in
+  // loadPrGateCoordinationContext (#1126: the two must never disagree at the
+  // cap boundary) — the same lightweight composition (#1210) is applied here.
+  const maxCopilotRounds = options.lightweight
+    ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
+    : resolveRefinementConfig(config, "maxCopilotRounds");
   // Shared with interpretLoopState (consumed by copilot-pr-handoff.mjs) and
   // evaluatePrGateCoordination — the single source of truth for "is the
   // Copilot round cap reached" so this detector cannot disagree with the
