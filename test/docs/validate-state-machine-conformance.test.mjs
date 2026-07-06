@@ -201,22 +201,21 @@ test("every registered machine passes its full conformance report", () => {
   }
 });
 
-// AC3: the pre_approval_gate entry-ordering divergence is a tracked known-gap, not a silent pass.
-test("pr-gate-coordination known gap: pre_approval_gate entry ordering is tracked, not silently passed", () => {
+// Issue #1190: the pre_approval_gate entry-ordering transition is now a verified (conforming)
+// transition, not a tracked known-gap.
+test("pr-gate-coordination #1190: pre_approval_gate entry ordering is a verified conforming transition", () => {
   const machine = getRegisteredMachines().find((m) => m.name === "pr-gate-coordination");
   const report = runMachineConformance(machine);
-  const knownGap = report.conformance.results.find(
+  const transition = report.conformance.results.find(
     (r) => r.from === "waiting_for_copilot_review" && r.to === "final_local_preapproval_gate",
   );
-  assert.ok(knownGap, "the pre_approval_gate entry-ordering transition must be present in the report");
-  assert.equal(knownGap.status, "known_gap");
-  assert.match(knownGap.note, /verdict-post/);
+  assert.ok(transition, "the pre_approval_gate entry-ordering transition must be present in the report");
+  assert.equal(transition.status, "verified");
 });
 
-test("pr-gate-coordination known gap regression: gate entry is permitted from a merely trusted "
-  + "sameHeadCleanConverged flag with no independent reviewed-head check (documents today's gap; "
-  + "does not fix it)", async () => {
-  const { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } = await import("@dev-loops/core/loop/pr-gate-coordination");
+test("pr-gate-coordination #1190 fix: gate entry is refused when a Copilot review request is "
+  + "outstanding on the current head, even though the caller reports sameHeadCleanConverged", async () => {
+  const { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } = await import("@dev-loops/core/loop/pr-gate-coordination");
   const { STATE } = await import("@dev-loops/core/loop/copilot-loop-state");
 
   const result = evaluatePrGateCoordination({
@@ -224,14 +223,18 @@ test("pr-gate-coordination known gap regression: gate entry is permitted from a 
     prDraft: false,
     lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
     ciStatus: "success",
-    // The caller claims the current head converged cleanly; evaluatePrGateCoordination has no
-    // parameter to independently confirm "deadbeef0000" is the head Copilot actually reviewed.
+    // The caller claims the current head converged cleanly, but an independent signal — an
+    // outstanding Copilot review request on the current head — says otherwise. #1190 added this
+    // independent cross-check so the caller-supplied flag alone can no longer open the gate.
     sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "requested",
     preApprovalGate: { visible: false, headSha: null, verdict: null, contractComplete: false },
   });
 
-  // Gate entry is permitted despite no independent reviewed-head verification (the known gap).
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  // Gate entry is refused: the fix closes the gap the flag alone could not catch.
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
 // ---------------------------------------------------------------------------

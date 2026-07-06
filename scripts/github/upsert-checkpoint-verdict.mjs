@@ -998,6 +998,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     copilotReviewRoundCount: coordinationContext.snapshot?.copilotReviewRoundCount ?? 0,
     maxCopilotRounds,
     sameHeadCleanConverged: coordinationContext.interpretation.sameHeadCleanConverged,
+    // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
+    // sameHeadCleanConverged, so an outstanding request on the current head refuses
+    // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
+    copilotReviewRequestStatus: coordinationContext.snapshot?.copilotReviewRequestStatus ?? "none",
     draftGateRequireCi: draftGateConfig.requireCi,
     draftGate: coordinationContext.gateEvidence.draftGate,
     draftGateMarker: coordinationContext.gateEvidence.draftGateMarker,

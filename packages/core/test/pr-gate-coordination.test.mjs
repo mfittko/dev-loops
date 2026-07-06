@@ -213,6 +213,86 @@ test("clean settled current-head review opens the pre-approval gate window", () 
   assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
+// Issue #1190: gate-ENTRY re-check. Even when the caller asserts convergence
+// (sameHeadCleanConverged: true, the same fixture as the test above), an
+// independent, outstanding Copilot review request on the current head must
+// refuse pre_approval_gate entry outright — the same predicate that
+// previously only fired at verdict-post time (upsert-checkpoint-verdict.mjs)
+// now also fires here, before any reviewer fan-out spends tokens.
+test("#1190: outstanding Copilot review request refuses pre_approval_gate entry even when the caller "
+  + "claims sameHeadCleanConverged", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "requested",
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /outstanding/i);
+});
+
+test("#1190: already-requested Copilot review also refuses pre_approval_gate entry", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "already-requested",
+    ciStatus: "success",
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("#1190: internal_only reviewMode is exempt from the outstanding-review entry guard (#1210 lightweight cap)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "requested",
+    reviewMode: "internal_only",
+    ciStatus: "success",
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("#1190: maxCopilotRounds: 0 (Copilot review disabled) is exempt from the outstanding-review entry guard", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "requested",
+    maxCopilotRounds: 0,
+    ciStatus: "success",
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
 test("draft gate with crediblyGreen CI routes to WAIT_FOR_CI — unconfirmed CI is not a hard block", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,
