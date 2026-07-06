@@ -95,14 +95,40 @@ test("verify-briefing-prefixes rejects a malformed --head-sha", () => {
   assert.equal(result.status, 2, result.stderr);
 });
 
+test("verify-briefing-prefixes rejects a SHORT head SHA (would glob zero sentinels and pass vacuously)", () => {
+  const result = runChecker(["--head-sha", "abc1234"]);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /FULL 40-character/);
+});
+
+const FULL_TEST_SHA = "abc1234abc1234abc1234abc1234abc1234abc12";
+
 test("verify-briefing-prefixes exits 0 with reviewerCount 0 when no sentinels exist for the head SHA", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
   try {
-    const result = runChecker(["--head-sha", "abc1234"], { cwd: tmpDir });
+    const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.verified, true);
     assert.equal(output.reviewerCount, 0);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-briefing-prefixes treats a malformed (non-sha256) recorded hash as missing and fails closed", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    await writeFile(
+      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-correctness-${FULL_TEST_SHA}.json`),
+      JSON.stringify({ scope: "correctness", prefixHash: "not-a-real-hash" }),
+    );
+    const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.verified, false);
+    assert.deepEqual(output.missing, ["correctness"]);
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }

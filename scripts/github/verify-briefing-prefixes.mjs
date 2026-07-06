@@ -12,7 +12,7 @@ invariant-briefing prefix hash. Deterministic and offline: reads only the sentin
 already on disk under tmp/, keyed by the given head SHA.
 
 Required:
-  --head-sha <sha>  The reviewed head SHA (git rev-parse HEAD); sentinels are read from
+  --head-sha <sha>  The FULL 40-char reviewed head SHA (git rev-parse HEAD); sentinels are read from
                      tmp/checkpoint-context-sentinel-<scope>-<headSha>.json.
 
 Output (stdout, JSON):
@@ -37,7 +37,11 @@ head) per gate pass; legitimately different per-gate prefixes at an identical
 head would otherwise flag as a mismatch (conservative fail-closed, never
 fail-open).`.trim();
 
-const HEAD_SHA_RE = /^[0-9a-f]{7,64}$/i;
+// Full 40-char SHA required: sentinel filenames embed the full `git rev-parse
+// HEAD` value, so a short prefix would glob zero sentinels and read as a
+// vacuous pass — fail closed on anything shorter instead.
+const HEAD_SHA_RE = /^[0-9a-f]{40}$/i;
+const SHA256_RE = /^[0-9a-f]{64}$/;
 const SENTINEL_PREFIX = "checkpoint-context-sentinel-";
 const parseError = buildParseError(USAGE);
 
@@ -84,8 +88,11 @@ async function readRoundSentinels(tmpRoot, headSha) {
     try {
       const raw = await readFile(path.join(tmpRoot, file), "utf8");
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.prefixHash === "string" && parsed.prefixHash.length > 0) {
-        prefixHash = parsed.prefixHash;
+      // Only a well-formed sha256 counts as a recorded hash; anything else
+      // (corrupted/hand-edited value) is treated as missing so the round
+      // fails closed rather than comparing garbage.
+      if (parsed && typeof parsed.prefixHash === "string" && SHA256_RE.test(parsed.prefixHash.toLowerCase().trim())) {
+        prefixHash = parsed.prefixHash.toLowerCase().trim();
       }
     } catch {
       // Malformed/unreadable sentinel: counted with prefixHash null so the
@@ -143,7 +150,7 @@ export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(p
   const headShaArg = resolveFlagValue(argv, "--head-sha");
   if (headShaArg === null || headShaArg === "" || !HEAD_SHA_RE.test(headShaArg)) {
     process.stderr.write(`${formatCliError(
-      parseError(`--head-sha is required and must be a 7-64 character hex SHA${headShaArg ? ` (got ${JSON.stringify(headShaArg)})` : ""}.`)
+      parseError(`--head-sha is required and must be the FULL 40-character hex head SHA (short prefixes would match zero sentinels and pass vacuously)${headShaArg ? ` (got ${JSON.stringify(headShaArg)})` : ""}.`)
     )}\n`);
     return 2;
   }
