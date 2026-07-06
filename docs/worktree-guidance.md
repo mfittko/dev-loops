@@ -4,9 +4,6 @@ Canonical owner for local worktree usage guidance in `dev-loops`.
 
 ## Purpose and scope
 
-This document is the canonical repo-level owner for local worktree usage guidance in
-`dev-loops`.
-
 Use it to keep local mutation work isolated, predictable, and easy to clean up.
 This guidance covers where worktrees live, how to create-or-reuse and provision
 them in one step (`ensure-worktree.mjs`), how to handle dependencies inside them,

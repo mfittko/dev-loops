@@ -148,7 +148,6 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     "Step 7 should not leave the reply-resolve helper optional",
   );
   assertRuleOwned("COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(step7, /COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE/, "Step 7 should require a post-fix verification checkpoint before thread resolution");
   // The four checks below are intentional behavioral coverage of the verification
   // checkpoint's specific sub-requirements (owned by COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE
   // above), not standalone exact-sentence contract pins.
@@ -172,12 +171,12 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     /if any verification check fails, do \*\*not\*\* resolve the thread; leave it open/i,
     "verification checkpoint should keep threads open when verification fails",
   );
-  // Structural ordering check: the numbered follow-up-loop list must keep the
-  // verification-checkpoint item (9) before the resolve item (10), by ordinal
-  // position rather than by pinning either item's full sentence text.
-  const item9Index = step7.search(/^9\.\s/m);
-  const item10Index = step7.search(/^10\.\s/m);
-  assert.ok(item9Index >= 0 && item10Index > item9Index, "verification checkpoint (item 9) must appear before the resolve step (item 10)");
+  // Structural ordering check: the verification-checkpoint marker must appear
+  // before the resolve-step phrase, content-anchored rather than by ordinal
+  // list position (which is tautological for any numbered list).
+  const verifyIndex = step7.indexOf("COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE");
+  const resolveIndex = step7.search(/resolve the addressed review thread only after/i);
+  assert.ok(verifyIndex >= 0 && resolveIndex >= 0 && verifyIndex < resolveIndex, "verification checkpoint must appear before the resolve step");
   assert.match(
     step7,
     /verify zero unresolved threads remain via `dev-loops gate capture-threads` before proceeding/i,

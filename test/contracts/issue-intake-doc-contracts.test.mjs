@@ -46,9 +46,10 @@ test("issue-intake surface requires github reply/resolve follow-up and gates wai
   assert.match(content, /reply\/resolve work is done for the addressed threads/);
   assert.match(content, /if that local validation is still known red, continue remediation instead of re-requesting Copilot/);
   assert.match(content, /if GitHub CI\/checks for the updated head are known red for a fixable issue, continue remediation instead of re-requesting Copilot/);
-  // The green/credibly-green re-request gating is elaboration of COPILOT-FOLLOWUP-ROUND-CAP
+  // The green/credibly-green re-request gating is its own normative rule
   // (owned in the same skill file); loose token instead of the full sentence.
-  assertRuleOwned("COPILOT-FOLLOWUP-ROUND-CAP", "skills/copilot-pr-followup/SKILL.md");
+  assertRuleOwned("COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE", "skills/copilot-pr-followup/SKILL.md");
+  assert.match(content, /COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE/);
   assert.match(content, /explicitly re-request Copilot review for the new head/i);
   assert.match(content, /wait\/watch loop if the request result is confirmed as `requested` or `already-requested`/);
   assert.match(content, /`requested`: if another Copilot pass is actually desired, immediately re-baseline/i);

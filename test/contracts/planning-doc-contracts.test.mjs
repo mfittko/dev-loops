@@ -66,9 +66,9 @@ test("defaults config exposes a customizable refiner coverage-matrix prompt", as
     /\| Item \| Type \(AC\/DoD\/Non-goal\) \| Status \(Met\/Partial\/Unmet\/Unverified\) \| Evidence \| Notes \|/i,
     /Use exact wording from the source issue\(s\); when the governing input is a phase doc or other spec instead of an issue, use that source wording exactly for every explicit item/i,
     /Include every explicit acceptance criterion, definition-of-done item, and non-goal; do not skip items/i,
-    // `Proposed DoD` requirement is rule-owned in agents/refiner.agent.md; loose
-    // token here confirms the shipped default prompt mirrors it, not an exact-sentence pin.
-    /`Proposed DoD` subsection before the matrix/i,
+    // The yaml is a shipped config mirror of the owner rule REFINER-DOD-PROPOSED-SUBSECTION;
+    // pin fidelity of the mirror here, the owner doc itself is covered by assertRuleOwned below.
+    /If no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix/i,
     /A refinement is complete only when no item has `Partial`, `Unmet`, or `Unverified` status/i,
   ], "packages/core/src/config/extension-defaults.yaml");
   assertRuleOwned("REFINER-DOD-PROPOSED-SUBSECTION", "agents/refiner.agent.md");
@@ -252,7 +252,6 @@ test("refinement docs and prompts wire the optional audit handoff into the refin
     /explicit non-goal \/ defer|non-goal\/defer/i,
     /risk\/watchpoint/i,
     /not.+rewrite or broaden/i,
-    /REFINER-NO-INVENT-AUDIT-FINDINGS/,
   ], "agents/refiner.agent.md");
   assertRuleOwned("REFINER-NO-INVENT-AUDIT-FINDINGS", "agents/refiner.agent.md");
 
