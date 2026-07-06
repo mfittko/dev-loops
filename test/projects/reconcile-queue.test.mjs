@@ -217,4 +217,80 @@ describe("reconcile-queue main (#1069)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Regression (#1227): reconcile passes the item's stable node id straight
+  // through to the REAL move-queue-item main() (moveItem left undefined here,
+  // unlike the mocked-moveItem tests above), so this exercises the actual
+  // --item validator end to end against a live-shaped node ID with a hyphen
+  // in its base64url payload. Only `gh` (runChild) is mocked, per house seams.
+  it("reconcile end-to-end moves an item whose node ID contains a hyphen (real move-queue-item validator)", async () => {
+    const hyphenId = "PVTI_lAHOAAT8js4BaBePzgxz5-I";
+    const items = [{ itemId: hyphenId, issueNumber: 1196, prNumber: null, status: "Backlog" }];
+
+    const ghResponses = [
+      { data: { user: { id: "U_kgDOABC123" } } },
+      {
+        data: {
+          user: {
+            projectsV2: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ id: "PVT_proj1", number: 7, title: "Dev Loop Queue", url: "https://github.com/users/o/projects/7" }],
+            },
+          },
+        },
+      },
+      {
+        data: {
+          node: {
+            fields: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{
+                id: "PVTSSF_status",
+                name: "Status",
+                options: [{ id: "opt-backlog", name: "Backlog" }, { id: "opt-progress", name: "In Progress" }],
+              }],
+            },
+          },
+        },
+      },
+      {
+        data: {
+          node: {
+            items: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{
+                id: hyphenId,
+                fieldValues: { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: "Backlog" }] },
+                content: { __typename: "Issue", number: 1196, repository: { nameWithOwner: "o/r" } },
+              }],
+            },
+          },
+        },
+      },
+      { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: hyphenId } } } },
+    ];
+    let ghCall = 0;
+    const runChild = async (cmd, argv, _env) => {
+      if (ghCall >= ghResponses.length) {
+        throw new Error(`Unexpected gh call #${ghCall + 1} (only ${ghResponses.length} mocked): ${cmd} ${argv.join(" ")}`);
+      }
+      const payload = ghResponses[ghCall++];
+      return { code: 0, stdout: JSON.stringify(payload), stderr: "" };
+    };
+
+    const result = await main(
+      { repo: "o/r", project: "7" },
+      {
+        env: {},
+        runChild,
+        listItems: async () => ({ items }),
+        gatherFacts: async () => new Map([[hyphenId, READY_LINKED_PR]]),
+        // moveItem intentionally omitted → real move-queue-item main() runs.
+      },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.moved, 1);
+    assert.deepEqual(result.reconciled, [{ number: 1196, from: "Backlog", to: "In Progress", ok: true }]);
+  });
 });

@@ -215,6 +215,33 @@ describe("reorder-queue-item — move to top (no --after)", () => {
     assert.ok(capturedInput !== null);
     assert.strictEqual(capturedInput.afterId, undefined);
   });
+
+  // Regression (#1227): a real project item node ID whose base64url payload
+  // contains a hyphen was rejected by an [A-Za-z0-9_] validator.
+  it("moves an item to top by an item node ID containing a hyphen", async () => {
+    const hyphenId = "PVTI_lAHOAAT8js4BaBePzgxz5-I";
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+      {
+        payload: getProjectItemResponse(hyphenId, {
+          __typename: "PullRequest",
+          number: 88,
+          title: "PR",
+          url: "...",
+        }),
+      },
+      { payload: updatePositionResponse() },
+    ];
+
+    const result = await main(
+      { repo: "mfittko/dev-loops", project: "1", item: hyphenId },
+      { runChild: mockRunChild(responses) },
+    );
+
+    assert.ok(result.ok);
+    assert.strictEqual(result.item.itemId, hyphenId);
+  });
 });
 
 describe("reorder-queue-item — move after another item", () => {

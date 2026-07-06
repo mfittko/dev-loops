@@ -206,6 +206,31 @@ describe("move-queue-item", () => {
       assert.equal(result.item.newColumn, "In Progress");
       assert.equal(result.item.issueNumber, 10);
     });
+
+    // Regression (#1227): a real project item node ID whose base64url payload
+    // contains a hyphen was rejected by an [A-Za-z0-9_] validator that never
+    // accounted for the full node-ID alphabet.
+    it("accepts an item node ID containing a hyphen", async () => {
+      const hyphenId = "PVTI_lAHOAAT8js4BaBePzgxz5-I";
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode(hyphenId, makeContent("Issue", 10), "In Progress"),
+          ]),
+        },
+        { payload: updateItemFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: hyphenId, toColumn: "Done" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.itemId, hyphenId);
+      assert.equal(result.item.newColumn, "Done");
+    });
   });
 
   describe("success path — move by number", () => {

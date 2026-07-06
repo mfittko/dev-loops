@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
-import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
+import { resolveProjectSelector, findProject, applyDevloopsBoard, parseItemRef } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -96,7 +96,6 @@ function parseCliArgs(argv) {
 
 const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const REPO_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
-const GLOBAL_NODE_ID_RE = /^[A-Za-z0-9_]+$/;
 
 function validateRepo(repo) {
   if (!repo || typeof repo !== "string") {
@@ -116,24 +115,6 @@ function validateRepo(repo) {
     throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
   }
   return repo;
-}
-
-function parseItemRef(raw) {
-  if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
-    throw Object.assign(new Error("--item is required"), { code: "INVALID_ITEM" });
-  }
-  const trimmed = raw.trim();
-  const asNum = Number(trimmed);
-  if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
-    return { kind: "number", value: asNum };
-  }
-  if (trimmed === "0") {
-    throw Object.assign(new Error(`--item must be a positive integer or an item node ID, got "${raw}"`), { code: "INVALID_ITEM" });
-  }
-  if (GLOBAL_NODE_ID_RE.test(trimmed)) {
-    return { kind: "id", value: trimmed };
-  }
-  throw Object.assign(new Error(`--item must be a positive integer or an item node ID, got "${raw}"`), { code: "INVALID_ITEM" });
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────

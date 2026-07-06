@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   resolveSettings,
   parseProjectRef,
+  parseItemRef,
   resolveProjectSelector,
   findProject,
 } from "../../scripts/projects/_resolve-project.mjs";
@@ -144,6 +145,36 @@ describe("_resolve-project — parseProjectRef", () => {
       () => parseProjectRef("https://github.com/users/mfittko/repos/dev-loops"),
       (err) => err.code === "INVALID_PROJECT",
     );
+  });
+
+  it("parses a node ID whose payload contains a hyphen (#1227)", () => {
+    assert.deepStrictEqual(
+      parseProjectRef("PVT_lAHOAAT8js4BaBePzgxz5-I"),
+      { kind: "id", value: "PVT_lAHOAAT8js4BaBePzgxz5-I" },
+    );
+  });
+});
+
+describe("_resolve-project — parseItemRef", () => {
+  it("parses a positive integer as a number ref", () => {
+    assert.deepStrictEqual(parseItemRef("10"), { kind: "number", value: 10 });
+  });
+
+  it("parses a node ID as an id ref", () => {
+    assert.deepStrictEqual(parseItemRef("PVTI_42"), { kind: "id", value: "PVTI_42" });
+  });
+
+  // Regression (#1227): the exact live ID that reconcile-queue passed and
+  // move-queue-item's validator rejected — its base64url payload has a hyphen.
+  it("parses a node ID whose payload contains a hyphen", () => {
+    const hyphenId = "PVTI_lAHOAAT8js4BaBePzgxz5-I";
+    assert.deepStrictEqual(parseItemRef(hyphenId), { kind: "id", value: hyphenId });
+  });
+
+  it("throws INVALID_ITEM for empty/malformed input", () => {
+    for (const bad of ["", "   ", "0", "not-a-number", "not/a/ref"]) {
+      assert.throws(() => parseItemRef(bad), (err) => err.code === "INVALID_ITEM");
+    }
   });
 });
 
