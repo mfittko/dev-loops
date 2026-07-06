@@ -167,8 +167,13 @@ reviewer's per-scope sentinel. Before Phase 3 consolidation, the fan-in MUST run
 when sentinels for the same round record two or more DISTINCT prefix hashes, or when any
 sentinel for the round records no prefix hash at all — a missing hash means the
 invariant-prefix proof was never established for that reviewer and is treated the same as
-a mismatch, never grandfathered in. The check is deterministic and offline: it only reads
-sentinel files already on disk.
+a mismatch, never grandfathered in — a single hashless sentinel (e.g. a one-angle Phase 5
+retry round) fails closed the same way. The check is deterministic and offline: it only
+reads sentinel files already on disk. Caveat: the check is keyed by head SHA only, not by
+gate — two gates reviewed at the SAME head share one sentinel namespace, so a `draft_gate`
+and `pre_approval_gate` pass at an identical head with legitimately different invariant
+blocks would flag as a mismatch. That direction is conservative (fail-closed, never
+fail-open); in practice `GATE-EXEC-REGATE-MANDATORY` advances the head between passes.
 
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Reviewers SHOULD run in parallel when practical; when parallel execution is impractical

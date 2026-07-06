@@ -33,11 +33,20 @@ function makeGit(tmpDir) {
 // Pure function unit tests (no filesystem/subprocess).
 // ---------------------------------------------------------------------------
 
-test("evaluateBriefingPrefixes: 0 or 1 sentinel is trivially verified (nothing to compare)", () => {
+test("evaluateBriefingPrefixes: zero sentinels is trivially verified (nothing to check)", () => {
   assert.deepEqual(evaluateBriefingPrefixes([]), { verified: true, reason: "no sentinels found for this round" });
+});
+
+test("evaluateBriefingPrefixes: a single HASHED sentinel verifies (nothing to mismatch)", () => {
   const one = evaluateBriefingPrefixes([{ scope: "a", prefixHash: "h1" }]);
   assert.equal(one.verified, true);
-  assert.equal(one.reason, undefined);
+  assert.equal(one.prefixHash, "h1");
+});
+
+test("evaluateBriefingPrefixes: a single HASHLESS sentinel fails closed (one-angle retry round, never grandfathered)", () => {
+  const result = evaluateBriefingPrefixes([{ scope: "a", prefixHash: null }]);
+  assert.equal(result.verified, false);
+  assert.deepEqual(result.missing, ["a"]);
 });
 
 test("evaluateBriefingPrefixes: identical hashes across distinct scopes verify (positive case)", () => {

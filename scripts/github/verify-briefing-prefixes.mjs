@@ -23,11 +23,19 @@ Output (stdout, JSON):
   { "ok": false, "error": "...", "usage": "..." }
 ${JQ_OUTPUT_USAGE}
 Exit codes:
-  0  Verified: 0/1 sentinels found (nothing to compare), or all reviewers share one hash
-  1  Fail closed: two or more sentinels record DIFFERENT prefix hashes, or at least one
-     sentinel for the round is missing a prefix hash (treated as a mismatch, never
-     grandfathered)
-  2  Usage or internal error, or invalid --jq filter`.trim();
+  0  Verified: no sentinels found for this round (nothing to check), or every
+     sentinel records a hash and all hashes are identical (a single hashed
+     sentinel verifies — nothing to mismatch)
+  1  Fail closed: two or more sentinels record DIFFERENT prefix hashes, or ANY
+     sentinel for the round (even a lone one) records no prefix hash — a missing
+     hash is treated as a mismatch, never grandfathered
+  2  Usage or internal error, or invalid --jq filter
+
+Caveat: rounds are keyed by head SHA only. Two different gates reviewed at the
+SAME head share one sentinel namespace, so run this check (and clear/advance the
+head) per gate pass; legitimately different per-gate prefixes at an identical
+head would otherwise flag as a mismatch (conservative fail-closed, never
+fail-open).`.trim();
 
 const HEAD_SHA_RE = /^[0-9a-f]{7,64}$/i;
 const SENTINEL_PREFIX = "checkpoint-context-sentinel-";
@@ -46,9 +54,10 @@ function resolveFlagValue(argv, flag) {
 /**
  * Read every sentinel for the given round (head SHA) from `<tmpRoot>/`, extracting
  * the reviewer scope (from the filename) and recorded `prefixHash` (from the JSON
- * body, when present). Malformed sentinel JSON is skipped (not fatal) rather than
- * treated as a false mismatch — a corrupt sentinel is a different failure mode than
- * a genuine prefix disagreement and is out of this check's scope.
+ * body, when present). A malformed/unreadable sentinel is still COUNTED, with
+ * `prefixHash: null` — downstream that reads as a missing hash and FAILS CLOSED,
+ * deliberately: a corrupt sentinel means the invariant-prefix proof cannot be
+ * verified for that reviewer, and silently dropping it would fail open.
  * @param {string} tmpRoot
  * @param {string} headSha — lowercase hex, already validated
  * @returns {Promise<Array<{ scope: string, prefixHash: string|null }>>}
@@ -79,7 +88,8 @@ async function readRoundSentinels(tmpRoot, headSha) {
         prefixHash = parsed.prefixHash;
       }
     } catch {
-      // Malformed/unreadable sentinel: treat as no recorded hash rather than crashing.
+      // Malformed/unreadable sentinel: counted with prefixHash null so the
+      // evaluation fails closed on it (see the function doc comment).
     }
     results.push({ scope, prefixHash });
   }
@@ -93,9 +103,14 @@ async function readRoundSentinels(tmpRoot, headSha) {
  * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}> }}
  */
 export function evaluateBriefingPrefixes(sentinels) {
-  if (sentinels.length <= 1) {
-    return { verified: true, reason: sentinels.length === 0 ? "no sentinels found for this round" : undefined };
+  if (sentinels.length === 0) {
+    return { verified: true, reason: "no sentinels found for this round" };
   }
+  // A hashless sentinel fails closed even when it is the ONLY sentinel (a
+  // one-angle Phase-5 retry round is a real case): "never grandfathered" means
+  // the invariant-prefix proof must exist for every reviewer, not just when a
+  // sibling exists to compare against. A single HASHED sentinel stays verified —
+  // with one recorded hash there is nothing to mismatch.
   const missing = sentinels.filter((s) => s.prefixHash === null).map((s) => s.scope);
   if (missing.length > 0) {
     return {

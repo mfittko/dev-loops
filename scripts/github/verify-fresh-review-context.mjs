@@ -47,7 +47,8 @@ Options:
                   means either a stale/isolated checkout or a skipped
                   preamble, and the reviewer must refuse to proceed
                   rather than silently reviewing without seeded context.
-  --prefix-hash <sha256>  A 64-character lowercase hex SHA-256 digest of the
+  --prefix-hash <sha256>  A 64-character hex SHA-256 digest (case-insensitive,
+                  normalized to lowercase) of the
                   invariant briefing block this reviewer was seeded with
                   (GATE-EXEC-BRIEFING-PREFIX in
                   docs/gate-review-sub-loop-contract.md). Recorded on the
@@ -190,7 +191,7 @@ async function main(argv = process.argv.slice(2)) {
   }
   if (prefixHashArg !== null && !SHA256_HEX_RE.test(prefixHashArg.trim().toLowerCase())) {
     process.stderr.write(`${formatCliError(
-      parseError(`Invalid --prefix-hash value "${prefixHashArg}": must be a 64-character lowercase hex SHA-256 digest.`)
+      parseError(`Invalid --prefix-hash value "${prefixHashArg}": must be a 64-character hex SHA-256 digest (case-insensitive).`)
     )}\n`);
     return 2;
   }
