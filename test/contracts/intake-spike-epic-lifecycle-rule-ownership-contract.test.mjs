@@ -67,7 +67,7 @@ test("issue-intake-procedure references facade/stop-condition rules by ID instea
   }
 });
 
-test("artifact-authority-contract's tracker-first no-duplicate rule is not restated in the local-planning section", () => {
+test("artifact-authority-contract's tracker-first no-duplicate rule is not restated in public-dev-loop-contract.md", () => {
   assertNotRestated("ARTIFACT-TRACKER-FIRST-NO-DUP", [
     "skills/docs/public-dev-loop-contract.md",
   ]);
