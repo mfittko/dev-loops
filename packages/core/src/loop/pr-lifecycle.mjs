@@ -13,7 +13,7 @@
  *
  * Pure data + one derivation, no imports, no side effects.
  */
-export const PR_LIFECYCLE_STATES = [
+export const PR_LIFECYCLE_STATES = Object.freeze([
   'draft_local_review_gate',
   'draft_local_remediation',
   'ready_state_needs_copilot_request',
@@ -27,35 +27,35 @@ export const PR_LIFECYCLE_STATES = [
   'waiting_for_merge',
   'terminal_slice_complete',
   'stopped_needs_user_decision',
-];
+]);
 
 // '[*]' is the synthetic terminal-marker target (see build-state-atlas.mjs's
 // renderStateDiagram and validate-state-machine-conformance.mjs's realEdges):
 // a row `[state, '[*]']` marks `state` as absorbing without being a real edge.
 const TERMINAL_MARKER = '[*]';
 
-export const PR_LIFECYCLE_TRANSITIONS = [
-  ['draft_local_review_gate', 'draft_local_remediation'],
-  ['draft_local_review_gate', 'ready_state_needs_copilot_request'],
-  ['draft_local_review_gate', 'stopped_needs_user_decision'],
-  ['draft_local_remediation', 'draft_local_review_gate'],
-  ['ready_state_needs_copilot_request', 'waiting_for_copilot_review'],
-  ['ready_state_needs_copilot_request', 'stopped_needs_user_decision'],
-  ['waiting_for_copilot_review', 'copilot_feedback_remediation'],
-  ['copilot_feedback_remediation', 'copilot_reply_resolve_pending'],
-  ['copilot_reply_resolve_pending', 'ready_state_needs_copilot_request'],
-  ['waiting_for_copilot_review', 'merge_conflict_resolution'],
-  ['merge_conflict_resolution', 'waiting_for_copilot_review'],
-  ['waiting_for_copilot_review', 'final_local_preapproval_gate'],
-  ['final_local_preapproval_gate', 'final_gate_remediation'],
-  ['final_local_preapproval_gate', 'waiting_for_human_pr_approval'],
-  ['final_gate_remediation', 'final_local_preapproval_gate'],
-  ['waiting_for_human_pr_approval', 'waiting_for_merge'],
-  ['waiting_for_human_pr_approval', 'draft_local_review_gate'],
-  ['waiting_for_merge', 'terminal_slice_complete'],
-  ['terminal_slice_complete', TERMINAL_MARKER],
-  ['stopped_needs_user_decision', TERMINAL_MARKER],
-];
+export const PR_LIFECYCLE_TRANSITIONS = Object.freeze([
+  Object.freeze(['draft_local_review_gate', 'draft_local_remediation']),
+  Object.freeze(['draft_local_review_gate', 'ready_state_needs_copilot_request']),
+  Object.freeze(['draft_local_review_gate', 'stopped_needs_user_decision']),
+  Object.freeze(['draft_local_remediation', 'draft_local_review_gate']),
+  Object.freeze(['ready_state_needs_copilot_request', 'waiting_for_copilot_review']),
+  Object.freeze(['ready_state_needs_copilot_request', 'stopped_needs_user_decision']),
+  Object.freeze(['waiting_for_copilot_review', 'copilot_feedback_remediation']),
+  Object.freeze(['copilot_feedback_remediation', 'copilot_reply_resolve_pending']),
+  Object.freeze(['copilot_reply_resolve_pending', 'ready_state_needs_copilot_request']),
+  Object.freeze(['waiting_for_copilot_review', 'merge_conflict_resolution']),
+  Object.freeze(['merge_conflict_resolution', 'waiting_for_copilot_review']),
+  Object.freeze(['waiting_for_copilot_review', 'final_local_preapproval_gate']),
+  Object.freeze(['final_local_preapproval_gate', 'final_gate_remediation']),
+  Object.freeze(['final_local_preapproval_gate', 'waiting_for_human_pr_approval']),
+  Object.freeze(['final_gate_remediation', 'final_local_preapproval_gate']),
+  Object.freeze(['waiting_for_human_pr_approval', 'waiting_for_merge']),
+  Object.freeze(['waiting_for_human_pr_approval', 'draft_local_review_gate']),
+  Object.freeze(['waiting_for_merge', 'terminal_slice_complete']),
+  Object.freeze(['terminal_slice_complete', TERMINAL_MARKER]),
+  Object.freeze(['stopped_needs_user_decision', TERMINAL_MARKER]),
+]);
 
 // Derived, not hand-listed (lesson from #1157: a hand-copied terminal list can
 // silently drift from the transition table it is supposed to describe). A
@@ -67,7 +67,7 @@ function deriveTerminalStates(states, transitions) {
   return states.filter((state) => !hasRealOutgoing.has(state));
 }
 
-export const PR_LIFECYCLE_TERMINAL_STATES = deriveTerminalStates(PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS);
+export const PR_LIFECYCLE_TERMINAL_STATES = Object.freeze(deriveTerminalStates(PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS));
 
 // Enum-style access (SCREAMING_SNAKE_CASE key -> the same state string), so
 // handoff scripts can reference `PR_LIFECYCLE_STATE.READY_STATE_NEEDS_COPILOT_REQUEST`
