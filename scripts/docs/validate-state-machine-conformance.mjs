@@ -788,9 +788,14 @@ registerMachine(COPILOT_LOOP_STATE_MACHINE);
 // ---------------------------------------------------------------------------
 // Fourth machine (issue #1157): reviewer-loop-state.
 //
-// Doc side: docs/reviewer-loop-state-graph.md's "## Required transitions" bullets. The doc
-// bullets one abstract row for the five reviewer-pass states that all fail closed into
-// `blocked_needs_user_decision` on an unexpected failure, expanded below.
+// Doc side: docs/reviewer-loop-state-graph.md's "## Required transitions" bullets, with
+// three abstract rows expanded via REVIEWER_LOOP_STATE_ABSTRACT_ROWS below. The interpreter
+// checks its {!prExists, prMerged, prClosed, prDraft} pre-gates first (those snapshots stay
+// `waiting_for_review_request`); only past those pre-gates does the reviewSubmissionStatus
+// guard fire, ahead of the state-specific branches — `"failed"` fail-closes into
+// `blocked_needs_user_decision`, `"submitted"` outranks the pre-posted local-metadata
+// branches into `submitted_review`. The two submission-guard abstract rows cover exactly the
+// pre-gate-passing states not already carried by the active-pass row / concrete bullets.
 //
 // Code side: packages/core/src/loop/reviewer-loop-state.mjs exports REVIEWER_STATE,
 // REVIEWER_TRANSITIONS, and interpretReviewerLoopState. Checked the same two ways as
@@ -807,6 +812,26 @@ const REVIEWER_LOOP_STATE_ABSTRACT_ROWS = new Map([
     [REVIEWER_STATE.REVIEWS_RUNNING, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
     [REVIEWER_STATE.MERGE_RESULTS, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
     [REVIEWER_STATE.DRAFT_REVIEW_READY, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+  ]],
+  // The reviewSubmissionStatus:"failed" guard fails closed from every pre-gate-passing
+  // state; the active-pass row above lists five, these are the remaining five.
+  ["any submission-failure-eligible state->`blocked_needs_user_decision`", [
+    [REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [REVIEWER_STATE.DRAFT_REVIEW_POSTED, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [REVIEWER_STATE.WAITING_FOR_USER_SUBMIT, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [REVIEWER_STATE.REVIEW_INVALIDATED, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [REVIEWER_STATE.SUBMITTED_REVIEW, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+  ]],
+  // The reviewSubmissionStatus:"submitted" guard routes the pre-posted local-metadata
+  // branches into submitted_review (draft_review_posted/waiting_for_user_submit reach it
+  // via their own concrete bullets, so they are not repeated here).
+  ["any pre-posted submission-settled state->`submitted_review`", [
+    [REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST, REVIEWER_STATE.SUBMITTED_REVIEW],
+    [REVIEWER_STATE.REVIEW_REQUESTED, REVIEWER_STATE.SUBMITTED_REVIEW],
+    [REVIEWER_STATE.DETERMINE_REVIEW_PLAN, REVIEWER_STATE.SUBMITTED_REVIEW],
+    [REVIEWER_STATE.REVIEWS_RUNNING, REVIEWER_STATE.SUBMITTED_REVIEW],
+    [REVIEWER_STATE.MERGE_RESULTS, REVIEWER_STATE.SUBMITTED_REVIEW],
+    [REVIEWER_STATE.DRAFT_REVIEW_READY, REVIEWER_STATE.SUBMITTED_REVIEW],
   ]],
 ]);
 

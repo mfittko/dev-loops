@@ -39,7 +39,11 @@ Terminal state with no outgoing transitions: `blocked_needs_user_decision`.
 - `waiting_for_review_request` -> `review_requested`
   - explicit review request received
 - any active reviewer-pass state -> `blocked_needs_user_decision`
-  - unexpected failure in planning, local review runs, or merge synthesis; "any active reviewer-pass state" means the five states `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, and `draft_review_ready` (submission-failure fail-closed edges from later states are a tracked table gap: #1200)
+  - unexpected failure in planning, local review runs, or merge synthesis; "any active reviewer-pass state" means the five states `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, and `draft_review_ready`
+- any submission-failure-eligible state -> `blocked_needs_user_decision`
+  - the `reviewSubmissionStatus: "failed"` guard fails closed from every pre-gate-passing state; beyond the active reviewer-pass states above that means `waiting_for_review_request`, `draft_review_posted`, `waiting_for_user_submit`, `review_invalidated`, and `submitted_review`
+- any pre-posted submission-settled state -> `submitted_review`
+  - a recorded `reviewSubmissionStatus: "submitted"` outcome outranks the pre-posted local-metadata branches into `submitted_review`: `waiting_for_review_request`, `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, and `draft_review_ready`
 - `review_requested` -> `determine_review_plan`
   - review angles are being selected
 - `determine_review_plan` -> `reviews_running`

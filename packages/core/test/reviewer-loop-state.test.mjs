@@ -229,6 +229,58 @@ test("interpretReviewerLoopState routes failures to blocked_needs_user_decision"
   }
 });
 
+// Property test: interpreter outputs are always reachable via declared REVIEWER_TRANSITIONS
+// edges. Sweep: one representative snapshot per interpreter-producible state x every
+// reviewSubmissionStatus value; every non-identity (before, after) pair the interpreter
+// produces must be a declared edge. The interpreter checks its {!prExists, prMerged,
+// prClosed, prDraft} pre-gates first; only past those pre-gates do the reviewSubmissionStatus
+// guards fire ahead of every state-specific branch below them, so this sweep is exactly what
+// forces the blocked/submitted edges into the table.
+test("interpretReviewerLoopState outputs stay reachable via REVIEWER_TRANSITIONS across a reviewSubmissionStatus sweep", () => {
+  // Base fixtures leave reviewSubmissionStatus at its "none" default so the sweep mutation
+  // never clobbers a state-defining field; the blocked representative uses the
+  // localPlanningStatus variant for the same reason. Legacy compatibility states
+  // (waiting_for_author_followup / waiting_for_re_request) are never interpreter outputs
+  // and have no snapshot shape, so they are intentionally absent.
+  const representatives = [
+    { prExists: false },
+    { prExists: true, prNumber: 1, prDraft: true },
+    { prExists: true, prNumber: 1, prMerged: true },
+    { prExists: true, prNumber: 1 }, // idle open non-draft PR
+    { prExists: true, prNumber: 1, reviewRequested: true },
+    { prExists: true, prNumber: 1, localPlanningStatus: "determining" },
+    { prExists: true, prNumber: 1, localReviewRunsStatus: "running" },
+    { prExists: true, prNumber: 1, localReviewRunsStatus: "completed" },
+    { prExists: true, prNumber: 1, draftReviewPrepared: true },
+    { prExists: true, prNumber: 1, prHeadSha: "abc", draftReviewPosted: true, draftReviewCommitSha: "abc" },
+    { prExists: true, prNumber: 1, prHeadSha: "abc", draftReviewPosted: true, draftReviewCommitSha: "abc", draftReviewNotificationStatus: "notified" },
+    { prExists: true, prNumber: 1, prHeadSha: "def", draftReviewPosted: true, draftReviewCommitSha: "abc" },
+    { prExists: true, prNumber: 1, prHeadSha: "abc", submittedReviewPresent: true, submittedReviewCommitSha: "abc" },
+    { prExists: true, prNumber: 1, localPlanningStatus: "failed" },
+  ];
+
+  const seenStates = new Set();
+  for (const base of representatives) {
+    const before = interpretReviewerLoopState(base).state;
+    seenStates.add(before);
+    for (const status of ["none", "submitted", "failed"]) {
+      const after = interpretReviewerLoopState({ ...base, reviewSubmissionStatus: status }).state;
+      if (after === before) continue;
+      assert.ok(
+        REVIEWER_TRANSITIONS[before].includes(after),
+        `${before} -> ${after} (reviewSubmissionStatus=${status}) must be a declared REVIEWER_TRANSITIONS edge`,
+      );
+    }
+  }
+
+  // Sweep completeness: every interpreter-producible state is represented.
+  const producible = Object.values(REVIEWER_STATE).filter(
+    (state) => state !== REVIEWER_STATE.WAITING_FOR_AUTHOR_FOLLOWUP
+      && state !== REVIEWER_STATE.WAITING_FOR_RE_REQUEST,
+  );
+  assert.deepEqual([...seenStates].sort(), [...producible].sort());
+});
+
 test("selectReviewerPlan keeps bounded deterministic angles", () => {
   assert.ok(Array.isArray(REVIEWER_SUPPORTED_ANGLES));
   assert.ok(REVIEWER_SUPPORTED_ANGLES.includes("security"));
