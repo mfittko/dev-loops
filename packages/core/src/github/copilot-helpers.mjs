@@ -18,9 +18,16 @@ export function isCopilotLogin(login) {
 // Anti-summon literal: bare-text `@copilot` or a `/copilot*` slash command. Both
 // the write-side sanitizer and the read-side guard scan key off this shape so a
 // gate-evidence comment can quote the rule (inside a code span/fenced block)
-// without arming the request-copilot-review.mjs anti-summon guard.
-const COPILOT_SUMMON_TOKEN_RE = /(@copilot|\/copilot[a-z0-9_-]*)/gi;
+// without arming the request-copilot-review.mjs anti-summon guard. The token
+// regex carries the same left word-boundary as the guard regex so the sanitizer
+// never mangles text the guard would not arm on (e.g. user@copilot.example).
+const COPILOT_SUMMON_TOKEN_RE = /(?<=^|\W)(@copilot|\/copilot[a-z0-9_-]*)/gi;
 const COPILOT_SUMMON_WORD_BOUNDARY_RE = /(?:^|\W)(@copilot|\/copilot)(?:$|\W)/i;
+// GFM inline code span: an N-backtick run, lazy content, closed by a same-length
+// run. Covers single-backtick spans as well as double-backtick spans wrapping a
+// literal backtick.
+const INLINE_CODE_SPAN_RE = /(`+)[\s\S]*?\1(?!`)/g;
+const ZERO_WIDTH_JOINER = "\u200D";
 
 // Apply `transformLine` to every markdown line OUTSIDE a fenced code block
 // (```/~~~), leaving fence-delimiter lines and fenced content untouched.
@@ -54,20 +61,43 @@ function transformNonFencedLines(text, transformLine) {
 }
 
 // Wrap bare `@copilot`/`/copilot*` tokens in backticks so a comment can quote the
-// anti-summon rule without arming it. Idempotent: a token already inside an
-// inline code span (or a fenced block, via transformNonFencedLines) is left
-// untouched, so re-sanitizing an already-sanitized body is a no-op.
+// anti-summon rule without arming it. Tokens already inside an inline code span
+// (any N-backtick GFM span) are left untouched.
 function wrapBareSummonTokensInLine(line) {
-  return line
-    .split(/(`[^`]*`)/)
-    .map((part) => (part.startsWith("`") && part.endsWith("`") && part.length >= 2
-      ? part
-      : part.replace(COPILOT_SUMMON_TOKEN_RE, (match) => `\`${match}\``)))
-    .join("");
+  let result = "";
+  let last = 0;
+  for (const span of line.matchAll(INLINE_CODE_SPAN_RE)) {
+    result += line.slice(last, span.index).replace(COPILOT_SUMMON_TOKEN_RE, "`$1`");
+    result += span[0];
+    last = span.index + span[0].length;
+  }
+  result += line.slice(last).replace(COPILOT_SUMMON_TOKEN_RE, "`$1`");
+  return result;
+}
+
+// Does this single (non-fenced) line still arm the guard scan after inline code
+// spans are dropped? Mirrors stripMarkdownCodeForScan's per-line step.
+function lineArmsSummonGuard(line) {
+  return COPILOT_SUMMON_WORD_BOUNDARY_RE.test(line.replace(INLINE_CODE_SPAN_RE, ""));
+}
+
+// Sanitize one line, verifying against the guard scan. Backtick-wrapping is the
+// primary neutralization (visible, greppable), but a pre-existing UNBALANCED
+// backtick on the line can pair with an inserted one and re-expose the token to
+// the guard's span-stripping (and break idempotence). When the wrapped line
+// still arms the guard, fall back to inserting a zero-width joiner between the
+// sigil and "copilot" — invisible, guard-inert, and idempotent (the joined token
+// no longer matches the summon shape).
+function sanitizeSummonLine(line) {
+  const wrapped = wrapBareSummonTokensInLine(line);
+  if (!lineArmsSummonGuard(wrapped)) {
+    return wrapped;
+  }
+  return line.replace(/(?<=^|\W)([@/])(copilot)/gi, `$1${ZERO_WIDTH_JOINER}$2`);
 }
 
 export function sanitizeCopilotSummonTokens(text) {
-  return transformNonFencedLines(String(text), wrapBareSummonTokensInLine);
+  return transformNonFencedLines(String(text), sanitizeSummonLine);
 }
 
 // Drop all markdown code content (fenced blocks entirely, inline code spans
@@ -97,7 +127,7 @@ function stripMarkdownCodeForScan(text) {
     if (inFencedBlock) {
       continue;
     }
-    kept.push(line.replace(/`[^`]*`/g, ""));
+    kept.push(line.replace(INLINE_CODE_SPAN_RE, ""));
   }
   return kept.join("\n");
 }

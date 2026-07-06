@@ -67,7 +67,9 @@ is a caller-must-branch outcome, not a silent success.
 placed this run); non-zero for every other status, including
 already-requested/suppressed_same_head_clean/unavailable/blocked_by_copilot_comment/
 round_cap_reached/no_changes_since_last_review/suppressed_draft. Without
---silent the JSON body always prints regardless of status.
+--silent the JSON body always prints regardless of status. --jq combined with
+--silent keeps the shared jq-stream truthiness semantics (exit reflects the
+filtered value) and is exempt from the status-based rule above.
 Exit codes:
   0  Success (including unavailable); with --silent, only when status is "requested"
   1  Argument error, gh failure, or (--silent) any non-"requested" status

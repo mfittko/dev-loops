@@ -843,6 +843,124 @@ test("request-copilot-review --silent exits non-zero for a non-requested status 
   }
 });
 
+// Per-status --silent exit contract: every non-"requested" outcome exits
+// non-zero. Stub sequences mirror the corresponding non-silent status tests.
+const SILENT_NON_REQUESTED_CASES = {
+  "already-requested": {
+    args: [],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+    ],
+  },
+  unavailable: {
+    args: [],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        stderr: "gh: Reviews may only be requested from collaborators.\n",
+        exitCode: 1,
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+    ],
+  },
+  round_cap_reached: {
+    args: [],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"newsha","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}},{"id":"r-2","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}},{"id":"r-3","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha3"}},{"id":"r-4","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha4"}},{"id":"r-5","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha5"}}]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+    ],
+  },
+  no_changes_since_last_review: {
+    args: ["--force-rerequest-review"],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"currentsha","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}},{"id":"r-2","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}},{"id":"r-3","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha3"}},{"id":"r-4","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha4"}},{"id":"r-5","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"currentsha"}}]}\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: "[[]]\n",
+      },
+    ],
+  },
+  suppressed_draft: {
+    args: [],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"isDraft":true,"state":"OPEN","number":17,"reviews":[]}\n',
+      },
+    ],
+  },
+};
+
+for (const [status, { args, entries }] of Object.entries(SILENT_NON_REQUESTED_CASES)) {
+  test(`request-copilot-review --silent exits non-zero for status ${status}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), `dev-loops-request-copilot-silent-${status.replace(/_/g, "-")}-`));
+
+    try {
+      const env = await writeGhStub(tempDir, entries);
+
+      // Confirm the stub sequence actually produces the status under test.
+      const plain = await runNode(["--repo", "owner/repo", "--pr", "17", ...args], { env });
+      assert.equal(plain.code, 0);
+      assert.equal(JSON.parse(plain.stdout).status, status);
+
+      // Rewind the sequential stub for the second (silent) invocation.
+      await writeFile(env.GH_COUNTER_PATH, "0\n", "utf8");
+      const silent = await runNode(["--repo", "owner/repo", "--pr", "17", ...args, "--silent"], { env });
+      assert.equal(silent.code, 1);
+      assert.equal(silent.stdout, "");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
 const BLOCKED_REGRESSION_GH_ENTRIES = [
   {
     assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],

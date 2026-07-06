@@ -660,6 +660,32 @@ test("sanitizeCopilotSummonTokens leaves fenced code blocks untouched", () => {
   assert.equal(sanitizeCopilotSummonTokens(body), body);
 });
 
+test("sanitizeCopilotSummonTokens falls back to zero-width-joiner neutralization when a stray backtick defeats span-wrapping", () => {
+  // A pre-existing unbalanced backtick would pair with an inserted opening
+  // backtick under the guard's span-stripping, re-exposing the token.
+  const probe = "uses ` oddly, violates the /copilot rule";
+  const once = sanitizeCopilotSummonTokens(probe);
+  assert.equal(containsBareCopilotSummon(once), false, "sanitized output must not arm the guard");
+  assert.equal(sanitizeCopilotSummonTokens(once), once, "sanitizer must be idempotent for this input");
+  assert.match(once, /\/\u200Dcopilot/, "fallback inserts a zero-width joiner into the token");
+});
+
+test("sanitizeCopilotSummonTokens does not mangle email-like text the guard never arms on", () => {
+  const body = "contact user@copilot.example about path/copilot-adjacent naming";
+  assert.equal(containsBareCopilotSummon(body), false);
+  assert.equal(sanitizeCopilotSummonTokens(body), body);
+});
+
+test("sanitizeCopilotSummonTokens leaves a double-backtick GFM span untouched", () => {
+  const body = "quoting `` @copilot `` inside a double-backtick span";
+  assert.equal(sanitizeCopilotSummonTokens(body), body);
+});
+
+test("containsBareCopilotSummon exempts occurrences inside a double-backtick GFM span", () => {
+  assert.equal(containsBareCopilotSummon("quoting `` @copilot `` inside a double-backtick span"), false);
+  assert.equal(containsBareCopilotSummon("nested literal `` `/copilot` `` quoted"), false);
+});
+
 test("containsBareCopilotSummon detects a bare-text summon literal", () => {
   assert.equal(containsBareCopilotSummon("please @copilot re-review this"), true);
   assert.equal(containsBareCopilotSummon("violates the /copilot prohibition rule"), true);
