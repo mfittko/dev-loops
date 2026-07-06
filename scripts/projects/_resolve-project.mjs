@@ -45,7 +45,7 @@ const NODE_ID_RE = /^[A-Za-z]+_[A-Za-z0-9_-]+$/;
 //
 // Supported forms:
 //   <n>           positive integer  → { kind:"number", value:<n> }
-//   <NODE_ID>     GraphQL node ID    → { kind:"id", value:<NODE_ID> }
+//   <NODE_ID>     project node ID (prefix_payload shape) → { kind:"id", value:<NODE_ID> }
 //   https://github.com/users/<login>/projects/<n>
 //   https://github.com/orgs/<login>/projects/<n>
 //                 board URI        → { kind:"uri", number:<n>, owner:<login>, ownerKind:"user"|"org" }
