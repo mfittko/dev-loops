@@ -64,6 +64,7 @@ import { DISPOSITION, interpretLoopState, STATE, TRANSITIONS } from "@dev-loops/
 import { evaluateConductorRouting, getAllowedOuterTransitions, OUTER_STATE, OUTER_TERMINAL_STATES } from "@dev-loops/core/loop/conductor-routing";
 import { interpretReviewerLoopState, REVIEWER_STATE, REVIEWER_TRANSITIONS } from "@dev-loops/core/loop/reviewer-loop-state";
 import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TERMINAL_STATES, PR_LIFECYCLE_TRANSITIONS } from "@dev-loops/core/loop/pr-lifecycle";
+import { DEV_LOOP_GATE, DEV_LOOP_ROUTE_KIND, PUBLIC_DEV_LOOP_GATE_CONTRACT, DEV_LOOP_PUBLIC_INTENT, DEV_LOOP_TARGET_KIND, DEV_LOOP_ACTOR, DEV_LOOP_STATUS, DEV_LOOP_AUTHORIZATION, DEV_LOOP_TARGET_PREFERENCE, INTERNAL_DEV_LOOP_STRATEGY, evaluatePublicDevLoopRouting } from "@dev-loops/core/loop/public-dev-loop-routing";
 
 const USAGE = `Usage: validate-state-machine-conformance.mjs [--help]
 
@@ -936,6 +937,125 @@ const REVIEWER_LOOP_STATE_MACHINE = {
 };
 
 registerMachine(REVIEWER_LOOP_STATE_MACHINE);
+
+// ---------------------------------------------------------------------------
+// Fifth machine (issue #1233): public-dev-loop-routing.
+//
+// Doc side: skills/docs/public-dev-loop-contract.md's "## Required transitions" bullets,
+// parsed at load time. Like conductor-routing, the gate graph is stateless per cycle, so each
+// non-terminal (route/wait) gate bullets one abstract row "`gate` -> any dev-loop gate",
+// expanded below to concrete edges into all gates.
+//
+// Code side: packages/core/src/loop/public-dev-loop-routing.mjs exports DEV_LOOP_GATE,
+// PUBLIC_DEV_LOOP_GATE_CONTRACT, and evaluatePublicDevLoopRouting. Non-terminal vs terminal is
+// DERIVED from the gate contract's routeKind (route/wait = non-terminal; stop/needs_reconcile =
+// terminal), so a gate reclassification surfaces here instead of drifting silently. Each edge is
+// checked by calling the real evaluator with a fixture (drawn from the routing unit tests) that
+// produces the `to` gate and asserting selectedGate === to.
+// ---------------------------------------------------------------------------
+
+const DEV_LOOP_GATE_VALUES = Object.values(DEV_LOOP_GATE);
+const DEV_LOOP_GATE_ROUTE_KIND = new Map(PUBLIC_DEV_LOOP_GATE_CONTRACT.map((entry) => [entry.gate, entry.routeKind]));
+const DEV_LOOP_TERMINAL_ROUTE_KINDS = new Set([DEV_LOOP_ROUTE_KIND.STOP, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE]);
+const PUBLIC_DEV_LOOP_TERMINAL_GATES = DEV_LOOP_GATE_VALUES.filter((g) => DEV_LOOP_TERMINAL_ROUTE_KINDS.has(DEV_LOOP_GATE_ROUTE_KIND.get(g)));
+const PUBLIC_DEV_LOOP_NON_TERMINAL_GATES = DEV_LOOP_GATE_VALUES.filter((g) => !DEV_LOOP_TERMINAL_ROUTE_KINDS.has(DEV_LOOP_GATE_ROUTE_KIND.get(g)));
+
+const PUBLIC_DEV_LOOP_ROUTING_ABSTRACT_ROWS = new Map(
+  PUBLIC_DEV_LOOP_NON_TERMINAL_GATES.map((from) => [
+    `\`${from}\`->any dev-loop gate`,
+    DEV_LOOP_GATE_VALUES.map((to) => [from, to]),
+  ]),
+);
+
+const PUBLIC_DEV_LOOP_ROUTING_DOC_TRANSITIONS = parseRequiredTransitions(
+  readFileSync(path.join(REPO_ROOT, "skills", "docs", "public-dev-loop-contract.md"), "utf8"),
+  { abstractRows: PUBLIC_DEV_LOOP_ROUTING_ABSTRACT_ROWS },
+);
+
+const PUBLIC_DEV_LOOP_ROUTING_TRANSITIONS = PUBLIC_DEV_LOOP_NON_TERMINAL_GATES.flatMap((from) => DEV_LOOP_GATE_VALUES.map((to) => [from, to]));
+
+// Independent doc<->code binding (parseRequiredTransitions header caveat): a dropped or
+// renamed doc bullet throws loudly here instead of silently shrinking both tables in lockstep.
+bindDocToCodeTable("public-dev-loop-routing", PUBLIC_DEV_LOOP_ROUTING_DOC_TRANSITIONS, PUBLIC_DEV_LOOP_ROUTING_TRANSITIONS);
+
+// Clean current-head pre_approval_gate evidence (inlined from the routing unit tests' helper).
+const PUBLIC_DEV_LOOP_CLEAN_PREAPPROVAL_EVIDENCE = {
+  currentHeadSha: "abc1234",
+  preApprovalGate: { visible: true, headSha: "abc1234", verdict: "clean" },
+};
+
+const PUBLIC_DEV_LOOP_PR_TARGET = { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 };
+function publicDevLoopPrState(overrides = {}) {
+  return {
+    target: PUBLIC_DEV_LOOP_PR_TARGET,
+    ownership: DEV_LOOP_ACTOR.COPILOT,
+    nextActor: DEV_LOOP_ACTOR.COPILOT,
+    status: DEV_LOOP_STATUS.ACTIVE,
+    authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
+    ...overrides,
+  };
+}
+const PUBLIC_DEV_LOOP_GITHUB_FIRST = DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST;
+
+// One fixture per reachable gate. Inputs are drawn from the routing unit tests
+// (packages/core/test/public-dev-loop-routing-routing.test.mjs) — no invented behavior.
+const PUBLIC_DEV_LOOP_GATE_TO_FIXTURE = new Map([
+  [DEV_LOOP_GATE.STOP_BLOCKED_OR_NOT_AUTHORIZED, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ status: DEV_LOOP_STATUS.BLOCKED }), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.STOP_DONE_TERMINAL, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ status: DEV_LOOP_STATUS.DONE, authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED }), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.FINAL_APPROVAL, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ ownership: DEV_LOOP_ACTOR.MAINTAINER, nextActor: DEV_LOOP_ACTOR.MAINTAINER, status: DEV_LOOP_STATUS.APPROVAL_READY, authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED }), gateReviewEvidence: PUBLIC_DEV_LOOP_CLEAN_PREAPPROVAL_EVIDENCE, targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.WAITING_FOR_MERGE_AUTHORIZATION, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ ownership: DEV_LOOP_ACTOR.MAINTAINER, nextActor: DEV_LOOP_ACTOR.MAINTAINER, status: DEV_LOOP_STATUS.MERGE_READY, authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION }), gateReviewEvidence: PUBLIC_DEV_LOOP_CLEAN_PREAPPROVAL_EVIDENCE, targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.WAIT_WATCH, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ status: DEV_LOOP_STATUS.WAITING }), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.LOCAL_IMPLEMENTATION, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: { target: { kind: DEV_LOOP_TARGET_KIND.LOCAL_BRANCH, branch: "feature/issue-86" }, ownership: DEV_LOOP_ACTOR.LOCAL, nextActor: DEV_LOOP_ACTOR.LOCAL, status: DEV_LOOP_STATUS.ACTIVE, authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED } })],
+  [DEV_LOOP_GATE.ISSUE_INTAKE, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE, target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 }, targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.EXTERNAL_PR_FOLLOWUP, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 91 }, ownership: DEV_LOOP_ACTOR.EXTERNAL_HUMAN, nextActor: DEV_LOOP_ACTOR.REVIEWER }), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.REVIEWER_FIXER, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ ownership: DEV_LOOP_ACTOR.REVIEWER, nextActor: DEV_LOOP_ACTOR.REVIEWER }), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({}), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_ON_PR, target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 } })],
+]);
+
+const PUBLIC_DEV_LOOP_ROUTING_TRANSITION_CHECKS = new Map();
+for (const from of PUBLIC_DEV_LOOP_NON_TERMINAL_GATES) {
+  for (const to of DEV_LOOP_GATE_VALUES) {
+    const buildFixture = PUBLIC_DEV_LOOP_GATE_TO_FIXTURE.get(to);
+    if (!buildFixture) throw new Error(`public-dev-loop-routing: no fixture registered for reachable gate "${to}"`);
+    PUBLIC_DEV_LOOP_ROUTING_TRANSITION_CHECKS.set(`${from}->${to}`, {
+      status: "verified",
+      verify: () => {
+        const result = buildFixture();
+        const ok = result.selectedGate === to;
+        return {
+          ok,
+          detail: result,
+          result: { selectedGate: result.selectedGate, routeKind: result.routeKind, selectedStrategy: result.selectedStrategy },
+        };
+      },
+    });
+  }
+}
+
+const PUBLIC_DEV_LOOP_ROUTING_MACHINE = {
+  name: "public-dev-loop-routing",
+  states: DEV_LOOP_GATE_VALUES,
+  terminalStates: PUBLIC_DEV_LOOP_TERMINAL_GATES,
+  transitions: PUBLIC_DEV_LOOP_ROUTING_TRANSITIONS,
+  docTransitions: PUBLIC_DEV_LOOP_ROUTING_DOC_TRANSITIONS,
+  transitionChecks: PUBLIC_DEV_LOOP_ROUTING_TRANSITION_CHECKS,
+  safetyRules: [
+    {
+      // Analog of "fail-closed states never dispatch a Backlog pull": a terminal
+      // (stop / needs_reconcile) gate must never carry a routed internal strategy.
+      // Terminality is keyed off the gate contract's routeKind for the observed
+      // selectedGate, not the observation's own routeKind — non-terminal gates
+      // (e.g. issue_intake) can legitimately emit routeKind "stop" for
+      // clarification/assignment-confirmation seams while still routing a strategy.
+      name: "terminal-gate-never-carries-strategy",
+      check: (observation) => !DEV_LOOP_TERMINAL_ROUTE_KINDS.has(DEV_LOOP_GATE_ROUTE_KIND.get(observation.selectedGate))
+        || observation.selectedStrategy === INTERNAL_DEV_LOOP_STRATEGY.NONE,
+    },
+  ],
+};
+
+registerMachine(PUBLIC_DEV_LOOP_ROUTING_MACHINE);
 
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
