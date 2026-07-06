@@ -126,6 +126,16 @@ test("modality conflict scan is order-insensitive (gating must not depend on fil
   assert.ok(detectModalityConflicts(threeWay).length >= 2, "all conflicting pairs in a subject group are reported");
 });
 
+test("modality conflict scan catches MUST NOT vs SHOULD NOT negative-pair downgrade (both orders)", () => {
+  const mustNotFirst = [
+    { id: "C-001", body: "The agent MUST NOT merge without a clean gate." },
+    { id: "C-002", body: "The agent SHOULD NOT merge without a clean gate." },
+  ];
+  const shouldNotFirst = [...mustNotFirst].reverse();
+  assert.equal(detectModalityConflicts(mustNotFirst).length, 1, "MUST NOT-then-SHOULD NOT downgrade must be flagged");
+  assert.equal(detectModalityConflicts(shouldNotFirst).length, 1, "SHOULD NOT-then-MUST NOT (reverse order) must be flagged identically");
+});
+
 test("validateRuleOwnership gates on a modality conflict (no longer advisory)", async () => {
   const dir = await fixture({
     "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The agent MUST stop before merge and report the gate. |",

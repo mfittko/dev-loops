@@ -130,7 +130,8 @@ test("local workflow docs define tracker-backed local canonicality and no-dup ru
     /tracker-backed local sessions/i,
     /Non-durable spec-of-record \(no committed plan artifact\)/i,
     /lightweight PR-body-as-spec sessions.*NOT a durable committed artifact/is,
-    /do not create or read \[Phase Plan\]\(\.\.\/\.\.\/docs\/phases\/phase-x\.md\) for that same tracker-backed session/i,
+    /ARTIFACT-TRACKER-FIRST-NO-DUP/,
+    /do not read \[Phase Plan\]\(\.\.\/\.\.\/docs\/phases\/phase-x\.md\) for that same tracker-backed session/i,
     /keep `tmp\/` as temporary local execution state only/i,
   ], "skills/local-implementation/SKILL.md");
 

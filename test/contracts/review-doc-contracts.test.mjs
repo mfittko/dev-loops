@@ -76,11 +76,11 @@ test("review workflow resolves pre-approval gate angles from config with explici
   assert.match(reviewTemplate, /resolveGateAngles/i);
   assert.match(copilotFollowupSkill, /resolveGateAngles/i);
   assert.match(reviewTemplate, /configured angle checks/i);
-  assert.match(localImplementationSkill, /if parallel execution is impractical[\s\S]*run all angles sequentially and explicitly record why parallel execution was impractical/i);
+  assert.match(localImplementationSkill, /GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK/);
   assert.match(copilotFollowupSkill, /gate-review-sub-loop-contract\.md.*pre-approval/i);
   assertRuleOwned("GATE-EXEC-BUILD-ONCE-SEED", "docs/gate-review-sub-loop-contract.md");
   assertRuleOwned("GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK", "docs/gate-review-sub-loop-contract.md");
-  assert.match(copilotFollowupSkill, /if parallel execution is impractical[\s\S]*still run all configured lenses and explicitly record the limitation/i);
+  assert.match(copilotFollowupSkill, /GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK/);
   // The review agent's fresh-context + sequential-fallback sentences point at
   // GATE-EXEC-BUILD-ONCE-SEED / GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK (owned
   // above); loose token checks on the agent surface, not exact sentences (#1159).

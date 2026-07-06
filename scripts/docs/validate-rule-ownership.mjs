@@ -28,7 +28,7 @@ const MARKER_RE = /<!--\s*rule:\s*([A-Z][A-Z0-9-]*)\s*-->/g;
 const REF_RE = /<!--\s*rule-ref:\s*([A-Z][A-Z0-9-]*)\s*-->|\[([A-Z0-9]+(?:-[A-Z0-9]+){2,})\]\([^)]*\)/g;
 const TERM_RE = /<!--\s*term:\s*(state|reason|gate):([a-zA-Z0-9_.:-]+)\s*-->/g;
 const CODE_TOKEN_RE = /`([a-z][a-z0-9_:-]+)`/g;
-const MODAL_RE = /\b(MUST NOT|SHALL NOT|MUST|SHALL|SHOULD|MAY)\b/g;
+const MODAL_RE = /\b(MUST NOT|SHALL NOT|SHOULD NOT|MAY NOT|MUST|SHALL|SHOULD|MAY)\b/g;
 
 // Duplicate-imperative-sentence scan (ported from validate-no-duplicate-rules.mjs).
 const IMPERATIVE_PATTERNS = [/\bmust\b/i, /\bnever\b/i, /\bdo not\b/i, /\brequire[sd]?\b/i];
@@ -287,7 +287,9 @@ export function detectModalityConflicts(definitions) {
         const aNegative = a.modalities.some((m) => m.endsWith("NOT"));
         const bNegative = b.modalities.some((m) => m.endsWith("NOT"));
         const weaker = (a.modalities.includes("MUST") && b.modalities.some((m) => m === "SHOULD" || m === "MAY"))
-          || (b.modalities.includes("MUST") && a.modalities.some((m) => m === "SHOULD" || m === "MAY"));
+          || (b.modalities.includes("MUST") && a.modalities.some((m) => m === "SHOULD" || m === "MAY"))
+          || (a.modalities.includes("MUST NOT") && b.modalities.some((m) => m === "SHOULD NOT" || m === "MAY NOT"))
+          || (b.modalities.includes("MUST NOT") && a.modalities.some((m) => m === "SHOULD NOT" || m === "MAY NOT"));
         if (aNegative !== bNegative || weaker) findings.push({ kind: "modality_conflict", a: a.def, b: b.def });
       }
     }

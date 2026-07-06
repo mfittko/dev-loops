@@ -28,7 +28,8 @@ test("issue-intake surface still contains its core workflow guidance", async () 
   assert.match(content, /entrypoint briefing/i);
   assert.match(content, /Read.*contract docs needed for the current step/i);
   assert.match(content, /Skill asset path resolution/);
-  assert.match(content, /Do not assume `scripts\/\.\.\.` is repo-local to the target codebase/i);
+  assertRuleOwned("ASSET-PATH-SOURCE-NO-REPO-LOCAL", "skills/copilot-pr-followup/SKILL.md");
+  assert.match(content, /ASSET-PATH-SOURCE-NO-REPO-LOCAL/);
   assert.match(content, /source-repo helper scripts live two levels up at `\.\.\/\.\.\/scripts\/`/i);
   assert.match(content, /Before any GitHub mutation/);
   assert.match(content, /Preferred defaults for this repo:/);
@@ -51,9 +52,12 @@ test("issue-intake surface requires github reply/resolve follow-up and gates wai
   assert.match(content, /`already-requested`: apply the same detector-first rebasing and wait branching as `requested`/i);
   assert.match(content, /`unavailable`: report the limitation and stop/);
   assert.match(content, /stop and report the error rather than (?:entering a sleep\/watch loop|sleeping and hoping for a new review)/);
+  // GitHub-autolink backtick formatting is elaboration of the reply-resolve
+  // mechanism owned by COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER in this same
+  // skill file; loose tokens instead of the full formatting sentences (#1205).
+  assertRuleOwned("COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER", "skills/copilot-pr-followup/SKILL.md");
   assert.match(content, /keep commit SHAs and issue\/PR refs as plain text/i);
   assert.match(content, /do not wrap them in backticks/i);
-  assert.match(content, /backticks for actual code\/path\/CLI literals only/i);
 });
 
 test("fixer agent documentation includes GitHub autolink guidance", async () => {
@@ -68,7 +72,11 @@ test("issue-intake surface forbids detached bash watcher loops for async follow-
   const content = await readIssueIntakeSurface();
 
   assert.match(content, /Pi async subagent|designated async follow-up skill/);
-  assert.match(content, /do not use `nohup`, detached shell jobs, `tmux`, `screen`, or ad hoc `for i in \$\(seq \.\.\.\)`, `while true`, `until \.\.\.; do sleep \.\.\.; done`, or `sleep`-retry bash loops/);
+  // The detached-watcher prohibition is elaboration of COPILOT-FOLLOWUP-WAIT-TOOLS
+  // (owned in the same skill file); loose token instead of the full enumerated
+  // CLI-list sentence (#1205).
+  assertRuleOwned("COPILOT-FOLLOWUP-WAIT-TOOLS", "skills/copilot-pr-followup/SKILL.md");
+  assert.match(content, /agent-authored shell polling is forbidden/i);
   assert.match(content, /agent-authored shell polling is forbidden/i);
   assert.match(content, /stop and report rather than improvising a shell watcher/);
 });
@@ -82,13 +90,14 @@ test("issue-intake surface requires unattended resume-from-state behavior when a
   assert.match(content, /If a PR already exists, classify the post-assignment seam before follow-up/i);
   assert.match(content, /waiting_for_initial_copilot_implementation.*keep waiting/i);
   assert.match(content, /linked_pr_ready_for_followup.*route to the existing PR follow-up path immediately/i);
-  assert.match(content, /linked_pr_ready_for_followup[\s\S]*do not stop only because local isolation is required/i);
+  assertRuleOwned("FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION", PUBLIC_CONTRACT_PATH);
+  assert.match(content, /linked_pr_ready_for_followup[\s\S]*FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION/i);
   assert.match(content, /safe isolated checkout\/worktree/i);
   assert.match(content, /When the draft PR appears, classify whether it is still the bootstrap-only Copilot draft/i);
   assert.match(content, /child async run exits[\s\S]*non-terminal[\s\S]*waiting_for_copilot_review/i);
   assert.match(content, /automatically resume\/restart follow-up when continuation is feasible/i);
-  assert.match(content, /New PRs in this workflow must be opened as \*\*draft\*\* PRs first/i);
-  assert.match(content, /Do not create a fresh PR directly in ready-for-review state/i);
+  assertRuleOwned("OPS-DRAFT-FIRST-PR", "skills/docs/copilot-loop-operations.md");
+  assert.match(content, /OPS-DRAFT-FIRST-PR/);
   assert.match(content, /node <resolved-skill-scripts>\/github\/create-pr\.mjs --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.doesNotMatch(content, /gh pr create --draft --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.match(content, /pre-existing PR.*not.*stop-by-default condition/is);
@@ -255,7 +264,8 @@ test("issue-intake overlay wires waiting_for_initial_copilot_implementation to d
   const skillContent = await readIssueIntakeSurface();
 
   assert.match(skillContent, /watch-initial-copilot-pr\.mjs --repo <resolved-repo> --issue <number>/i);
-  assert.match(skillContent, /must use the dedicated `watch-initial-copilot-pr\.mjs` watcher and its default 1-hour watch budget/i);
+  assertRuleOwned("FACADE-BOOTSTRAP-WATCH-ROUTE", PUBLIC_CONTRACT_PATH);
+  assert.match(skillContent, /FACADE-BOOTSTRAP-WATCH-ROUTE/);
   assert.match(skillContent, /ready_for_followup.*linked PR has.*substantive/i);
   assert.match(skillContent, /timed_out.*observational first; refresh authoritative state/i);
   assert.match(skillContent, /if refreshed state is still `waiting_for_initial_copilot_implementation`, remain attached/i);
@@ -275,9 +285,9 @@ test("issue-intake overlay delegates linked-PR detection mechanics to determinis
   const skillContent = await readIssueIntakeSurface();
 
   assert.match(skillContent, /deterministic linked-PR helper/i);
-  assert.match(skillContent, /do not re-implement linked-event query behavior, pagination, repo filtering, or tie-break logic/i);
+  assertRuleOwned("INTAKE-LINKED-PR-HELPER-DELEGATION", "skills/docs/issue-intake-procedure.md");
+  assert.match(skillContent, /INTAKE-LINKED-PR-HELPER-DELEGATION/);
   assert.match(skillContent, /<resolved-skill-scripts>\/github\/detect-linked-issue-pr\.mjs/i);
-  assert.match(skillContent, /do not rely only on PR title\/body containing a literal issue number/i);
   assert.match(skillContent, /treat an open linked PR(?: reported by the helper)? as the active implementation for this issue/i);
 });
 

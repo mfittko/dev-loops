@@ -85,7 +85,11 @@ test("copilot-pr-followup skill routes review requests and wait seams through de
   assert.match(step6, /for i in \$\(seq \.\.\.\)/i);
   assert.match(step6, /while true/i);
   assert.match(step6, /until \.\.\.; do sleep \.\.\.; done/i);
-  assert.match(step6, /do not wrap repeated `gh pr view`, `gh pr checks`, `gh api`, or `detect-copilot-loop-state\.mjs` calls inside shell polling loops/i);
+  // The manual-polling prohibition is elaboration of COPILOT-FOLLOWUP-WAIT-TOOLS
+  // (the deterministic-wait-tools rule owned in this same skill file); loose
+  // token instead of the full enumerated CLI-list sentence (#1205).
+  assertRuleOwned("COPILOT-FOLLOWUP-WAIT-TOOLS", "skills/copilot-pr-followup/SKILL.md");
+  assert.match(step6, /do not wrap repeated/i);
 });
 test("copilot-pr-followup skill keeps async watch persistence explicit", async () => {
   const [skillContent, scriptsReadme, stateGraph] = await Promise.all([
@@ -435,7 +439,8 @@ test("checkpoint verdict comment ownership stays explicit in the canonical inter
   assert.match(devLoopDraftGate, /Required PR comment/i);
   assert.match(devLoopDraftGate, /`draft_gate`/);
   assert.match(devLoopDraftGate, /head SHA/i);
-  assert.match(devLoopDraftGate, /does \*\*not\*\* satisfy `pre_approval_gate`|does not satisfy `pre_approval_gate`/i);
+  assertRuleOwned("GATE-COMMENT-NON-SUBSTITUTION", "docs/gate-review-comment-contract.md");
+  assert.match(devLoopDraftGate, /GATE-COMMENT-NON-SUBSTITUTION/);
   // Comment field content, the draft-boundary requirement, and fail-closed behavior are
   // single-owner rules in the checkpoint verdict comment contract; this skill references
   // them by ID rather than restating the phrase-pinned prose (#1154).
@@ -452,7 +457,7 @@ test("checkpoint verdict comment ownership stays explicit in the canonical inter
   assert.match(devLoopPreApprovalGate, /Required PR comment/i);
   assert.match(devLoopPreApprovalGate, /`pre_approval_gate`/);
   assert.match(devLoopPreApprovalGate, /head SHA/i);
-  assert.match(devLoopPreApprovalGate, /does \*\*not\*\* replace the required `draft_gate` evidence|does not replace the required `draft_gate` evidence/i);
+  assert.match(devLoopPreApprovalGate, /GATE-COMMENT-NON-SUBSTITUTION/);
   // The "must be entered and completed before merge-ready" gate-boundary requirement is
   // owned by GATE-COMMENT-FAIL-CLOSED (asserted below); the "not recoverable by asserting
   // convergence" caution is now GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE (#1159).
@@ -471,8 +476,10 @@ test("issue-intake skill documents epic decomposition with GitHub sub-issue tree
   assert.match(skillContent, /manage-sub-issues\.mjs reorder/i);
   assert.match(skillContent, /manage-sub-issues\.mjs verify/i);
   assert.match(skillContent, /manage-sub-issues\.mjs list/i);
-  assert.match(skillContent, /Do \*\*not\*\* re-implement sub-issue management ad hoc or bypass `manage-sub-issues\.mjs`/i);
-  assert.match(skillContent, /Do \*\*not\*\* maintain a body checklist that duplicates the sub-issue tree/i);
+  assertRuleOwned("SUBISSUE-NO-ADHOC-BYPASS", "docs/sub-issue-tree-contract.md");
+  assertRuleOwned("SUBISSUE-LEAN-BODY-NO-DUPLICATE", "docs/sub-issue-tree-contract.md");
+  assert.match(skillContent, /SUBISSUE-NO-ADHOC-BYPASS/);
+  assert.match(skillContent, /SUBISSUE-LEAN-BODY-NO-DUPLICATE/);
   assert.match(skillContent, /sub-issue-tree-contract\.md/i);
   assert.match(skillContent, /\.\.\/\.\.\/docs\/sub-issue-tree-contract\.md/i);
 });

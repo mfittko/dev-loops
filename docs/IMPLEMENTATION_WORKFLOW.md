@@ -80,7 +80,7 @@ For already-shipped helpers, CLIs, and extension commands:
 - shipped helper/runtime semantics stay owned by code, tests, and the relevant contract docs
 - [Scripts Documentation](../scripts/README.md) summarizes those semantics for operators and maintainers; it must be kept aligned with the implementation
 - the narrower state-graph/contract docs under `docs/` remain part of the authoritative shipped contract surface for their helper families
-- skills and phase docs explain workflow procedure and durable planning intent; they must not silently redefine shipped helper behavior
+- <!-- rule: WORKFLOW-DOCS-NO-REDEFINE-HELPER --> `WORKFLOW-DOCS-NO-REDEFINE-HELPER`: Skills and phase docs explain workflow procedure and durable planning intent; they MUST NOT silently redefine shipped helper behavior
 
 Use workflow/phase docs to explain how to operate within the repository contract. Use code, tests, and helper contract docs to define what shipped runtime surfaces actually do.
 
