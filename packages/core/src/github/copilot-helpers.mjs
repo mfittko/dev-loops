@@ -15,6 +15,100 @@ export function isCopilotLogin(login) {
   return typeof login === "string" && /^copilot(?:[^a-z]|$)/i.test(login);
 }
 
+// Anti-summon literal: bare-text `@copilot` or a `/copilot*` slash command. Both
+// the write-side sanitizer and the read-side guard scan key off this shape so a
+// gate-evidence comment can quote the rule (inside a code span/fenced block)
+// without arming the request-copilot-review.mjs anti-summon guard.
+const COPILOT_SUMMON_TOKEN_RE = /(@copilot|\/copilot[a-z0-9_-]*)/gi;
+const COPILOT_SUMMON_WORD_BOUNDARY_RE = /(?:^|\W)(@copilot|\/copilot)(?:$|\W)/i;
+
+// Apply `transformLine` to every markdown line OUTSIDE a fenced code block
+// (```/~~~), leaving fence-delimiter lines and fenced content untouched.
+// Mirrors the fenced-block tracking scripts/docs/validate-rule-ownership.mjs
+// uses for its own lexical scan.
+function transformNonFencedLines(text, transformLine) {
+  const lines = String(text).split(/\r?\n/);
+  let inFencedBlock = false;
+  let fencedDelimiter = "";
+  const transformed = lines.map((line) => {
+    const rawTrimmed = line.trim();
+    const fenceMatch = rawTrimmed.match(/^(```|~~~)/);
+    if (fenceMatch) {
+      if (!inFencedBlock) {
+        inFencedBlock = true;
+        fencedDelimiter = fenceMatch[1];
+        return line;
+      }
+      if (rawTrimmed.startsWith(fencedDelimiter)) {
+        inFencedBlock = false;
+        fencedDelimiter = "";
+        return line;
+      }
+    }
+    if (inFencedBlock) {
+      return line;
+    }
+    return transformLine(line);
+  });
+  return transformed.join("\n");
+}
+
+// Wrap bare `@copilot`/`/copilot*` tokens in backticks so a comment can quote the
+// anti-summon rule without arming it. Idempotent: a token already inside an
+// inline code span (or a fenced block, via transformNonFencedLines) is left
+// untouched, so re-sanitizing an already-sanitized body is a no-op.
+function wrapBareSummonTokensInLine(line) {
+  return line
+    .split(/(`[^`]*`)/)
+    .map((part) => (part.startsWith("`") && part.endsWith("`") && part.length >= 2
+      ? part
+      : part.replace(COPILOT_SUMMON_TOKEN_RE, (match) => `\`${match}\``)))
+    .join("");
+}
+
+export function sanitizeCopilotSummonTokens(text) {
+  return transformNonFencedLines(String(text), wrapBareSummonTokensInLine);
+}
+
+// Drop all markdown code content (fenced blocks entirely, inline code spans
+// per line) from `text`, leaving only the bare-text markdown to scan. Unlike
+// transformNonFencedLines (which leaves fenced lines verbatim — correct for
+// sanitizing, where code content must not be rewritten), fenced content here
+// must be REMOVED rather than kept: leaving it in place would let bare text
+// inside a fence still match the anti-summon scan.
+function stripMarkdownCodeForScan(text) {
+  const lines = String(text).split(/\r?\n/);
+  let inFencedBlock = false;
+  let fencedDelimiter = "";
+  const kept = [];
+  for (const line of lines) {
+    const rawTrimmed = line.trim();
+    const fenceMatch = rawTrimmed.match(/^(```|~~~)/);
+    if (fenceMatch) {
+      if (!inFencedBlock) {
+        inFencedBlock = true;
+        fencedDelimiter = fenceMatch[1];
+      } else if (rawTrimmed.startsWith(fencedDelimiter)) {
+        inFencedBlock = false;
+        fencedDelimiter = "";
+      }
+      continue;
+    }
+    if (inFencedBlock) {
+      continue;
+    }
+    kept.push(line.replace(/`[^`]*`/g, ""));
+  }
+  return kept.join("\n");
+}
+
+// The request-copilot-review.mjs anti-summon guard scan: true when `text`
+// contains a bare-text (not code-spanned/fenced) `@copilot` or `/copilot`
+// occurrence. Quoting the rule inside backticks or a fenced block is exempt.
+export function containsBareCopilotSummon(text) {
+  return COPILOT_SUMMON_WORD_BOUNDARY_RE.test(stripMarkdownCodeForScan(text));
+}
+
 export function normalizeTimestamp(value) {
   if (typeof value !== "string" || value.trim().length === 0) {
     return null;

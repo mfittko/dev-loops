@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { isCopilotLogin, parseReviewThreads } from "../_core-helpers.mjs";
+import { isCopilotLogin, parseReviewThreads, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 export const MIN_DISMISSAL_REASON_LENGTH = 30;
 export function hasCommitShaReference(text) {
@@ -175,12 +175,15 @@ export async function replyAndMaybeResolve(
   } else {
     await validateReplyTarget({ repo, pr, commentId, threadId }, { env, ghCommand });
   }
+  // Neutralize any bare @copilot/`/copilot`* tokens the reply text quotes (e.g.
+  // a dismissal reason citing the anti-summon rule) so posting this reply can
+  // never arm request-copilot-review.mjs's anti-summon guard.
   const reply = parseReplyPayload(await postReply(
     {
       repo,
       pr,
       commentId,
-      body,
+      body: sanitizeCopilotSummonTokens(body),
     },
     { env, ghCommand },
   ));

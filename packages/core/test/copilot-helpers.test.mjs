@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  containsBareCopilotSummon,
   extractReviewCommitSha,
   isCopilotLogin,
   normalizeTimestamp,
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,
   resolveDraftGateRoundResetMs,
+  sanitizeCopilotSummonTokens,
   summarizeCopilotReviews,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
@@ -623,4 +625,66 @@ test("resolveDraftGateRoundResetMs + summarizeCopilotReviews agree on the reset-
 
   assert.equal(raw.completedCopilotReviewRounds, 5);
   assert.equal(reset.completedCopilotReviewRounds, 2);
+});
+
+test("sanitizeCopilotSummonTokens wraps bare @copilot and /copilot* tokens in backticks", () => {
+  assert.equal(
+    sanitizeCopilotSummonTokens("please @copilot re-review this"),
+    "please `@copilot` re-review this",
+  );
+  assert.equal(
+    sanitizeCopilotSummonTokens("violates the /copilot prohibition rule"),
+    "violates the `/copilot` prohibition rule",
+  );
+  assert.equal(
+    sanitizeCopilotSummonTokens("see the /copilot-review command"),
+    "see the `/copilot-review` command",
+  );
+});
+
+test("sanitizeCopilotSummonTokens leaves already-code-spanned tokens untouched (idempotent)", () => {
+  const once = sanitizeCopilotSummonTokens("quoting the `/copilot` rule and `@copilot` login");
+  assert.equal(once, "quoting the `/copilot` rule and `@copilot` login");
+  const twice = sanitizeCopilotSummonTokens(once);
+  assert.equal(twice, once);
+});
+
+test("sanitizeCopilotSummonTokens is idempotent for a freshly-wrapped bare token", () => {
+  const once = sanitizeCopilotSummonTokens("the /copilot prohibition rule");
+  const twice = sanitizeCopilotSummonTokens(once);
+  assert.equal(twice, once);
+});
+
+test("sanitizeCopilotSummonTokens leaves fenced code blocks untouched", () => {
+  const body = "Excerpt:\n```\n@copilot re-review\n```\nDone.";
+  assert.equal(sanitizeCopilotSummonTokens(body), body);
+});
+
+test("containsBareCopilotSummon detects a bare-text summon literal", () => {
+  assert.equal(containsBareCopilotSummon("please @copilot re-review this"), true);
+  assert.equal(containsBareCopilotSummon("violates the /copilot prohibition rule"), true);
+});
+
+test("containsBareCopilotSummon exempts occurrences inside an inline code span", () => {
+  assert.equal(containsBareCopilotSummon("quoting the `/copilot` rule from the guard"), false);
+  assert.equal(containsBareCopilotSummon("the `@copilot` login is a bot account"), false);
+});
+
+test("containsBareCopilotSummon exempts occurrences inside a fenced code block", () => {
+  const body = "Anti-summon rule excerpt:\n```\n@copilot re-review\n```\nDo not post this literally.";
+  assert.equal(containsBareCopilotSummon(body), false);
+});
+
+test("containsBareCopilotSummon still detects bare text outside a fenced block sharing the same comment", () => {
+  const body = "```\nsome code\n```\n@copilot please review";
+  assert.equal(containsBareCopilotSummon(body), true);
+});
+
+test("round-trip: sanitizing a verdict body before posting keeps the anti-summon guard from arming on its own gate evidence", () => {
+  const rawFindingsSummary = "Finding: this comment violates the /copilot prohibition rule.";
+  assert.equal(containsBareCopilotSummon(rawFindingsSummary), true, "unsanitized text should still arm the guard (sanity check)");
+
+  const sanitized = sanitizeCopilotSummonTokens(rawFindingsSummary);
+  assert.equal(sanitized, "Finding: this comment violates the `/copilot` prohibition rule.");
+  assert.equal(containsBareCopilotSummon(sanitized), false, "sanitized text must not arm the anti-summon guard");
 });

@@ -85,6 +85,49 @@ test("reply-resolve-review-thread posts a reply then resolves the thread", async
   }
 });
 
+test("reply-resolve-review-thread neutralizes a bare /copilot token in the reply body before posting", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-sanitize-"));
+  const bodyFile = path.join(tempDir, "reply.md");
+  await writeFile(bodyFile, "Fixed in 93cd7f8. Also note the /copilot prohibition rule applies here.\n", "utf8");
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_123",
+            comments: {
+              nodes: [
+                { id: "PRRC_node_123", databaseId: 123 },
+              ],
+            },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/123/replies", "--input", "-"],
+        assertStdinIncludes: ['"body":"Fixed in 93cd7f8. Also note the `/copilot` prohibition rule applies here.\\n"'],
+        stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "threadId=THREAD_123"],
+        stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_123","isResolved":true}}}}\n',
+      },
+    ]);
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("reply-resolve-review-thread rejects thin replies without commit SHA or dismissal reason", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-thin-"));
   const bodyFile = path.join(tempDir, "reply.md");

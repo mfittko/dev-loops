@@ -132,7 +132,10 @@ At the issue-assignment seam, use `detect-initial-copilot-pr-state.mjs` and keep
 - `already-requested`: apply the same detector-first rebasing and wait branching as `requested`
 - `suppressed_same_head_clean`: report clean-converged state and stop unless `--force-rerequest-review` bypass is intentionally authorized
 - `unavailable`: report the limitation and stop
+- `blocked_by_copilot_comment`: no request was placed. Delete the violating `violationCommentIds` (or confirm they only quote the rule inside a code span/fenced block, which does not arm the guard) and re-run; do NOT treat this as a placed request and do NOT enter a wait seam
 - non-zero / unexpected failure: stop and report error
+
+Branch on `status`, never on `ok`/exit-code truthiness alone: `ok: true` means the helper ran without error, not that a review was placed. Under `--silent`, the exit code is 0 only for `requested`; every other status (including `blocked_by_copilot_comment`) exits non-zero.
 
 ### Re-attachment guard (check for existing loop state first)
 

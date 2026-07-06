@@ -4,6 +4,7 @@ import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --findings <json>
 Post (or idempotently update) a visible, marker-tagged PR issue comment that lists the
@@ -215,7 +216,7 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
   ];
   if (findings.length === 0) {
     lines.push("No findings. All review angles passed for this head.");
-    return lines.join("\n");
+    return sanitizeCopilotSummonTokens(lines.join("\n"));
   }
   const grouped = new Map();
   for (const sev of SEVERITY_ORDER) {
@@ -261,7 +262,10 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
   while (lines.length > 0 && lines[lines.length - 1] === "") {
     lines.pop();
   }
-  return lines.join("\n");
+  // Neutralize any bare @copilot/`/copilot`* tokens a finding summary quotes
+  // (e.g. an excerpt of the anti-summon rule itself) so this comment can never
+  // arm request-copilot-review.mjs's anti-summon guard.
+  return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
 async function runGhJson(args, { env, ghCommand }) {
