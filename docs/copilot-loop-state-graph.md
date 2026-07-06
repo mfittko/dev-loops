@@ -28,7 +28,7 @@ The implementation lives in:
 | <!-- term: state:waiting_for_ci --> `waiting_for_ci` | CI checks are in progress or no usable CI readiness signal exists yet; wait before proceeding |
 | `blocked_needs_user_decision` | Unexpected failure (CI failure, bad request result); requires user decision |
 | `done` | PR has been merged or closed |
-| <!-- term: state:internal_tooling_direct_gate --> `internal_tooling_direct_gate` | Internal-tooling-only PR; Copilot external review is skipped and the loop proceeds directly to `pre_approval_gate` |
+| <!-- term: state:internal_tooling_direct_gate --> `internal_tooling_direct_gate` | Internal-tooling-only PR; Copilot external review is skipped and the loop proceeds directly to `pre_approval_gate`. Externally assigned by the routing layer, never derived from a snapshot by `interpretLoopState` — no snapshot field drives it |
 
 Three additional terminal states (`low_signal_converged`, `round_cap_reached`,
 `round_cap_clean_fallback`) are owned by the round-cap/low-signal refinement heuristics in
@@ -192,7 +192,7 @@ Re-requesting Copilot after a follow-up fix is gated on the updated head being g
 ### `waiting_for_copilot_review` is a persistence boundary for explicit async loop entry
 
 <!-- rule: COPILOT-STATE-WATCH-PERSISTENCE -->
-`COPILOT-STATE-WATCH-PERSISTENCE`: When a user explicitly asks to enter or continue the async Copilot dev loop, `waiting_for_copilot_review` is a persistence boundary for explicit async loop entry: landing on it MUST keep the loop in watch mode rather than reporting completion. Quiet watcher results such as `timeout` or `idle` are observational only: refresh deterministic state, and if the state remains `waiting_for_copilot_review` (or another non-terminal wait state) keep the async watcher attached. The same rule applies after a successful narrow follow-up fix / reply-resolve / re-request cycle: if the next deterministic state returns to `waiting_for_copilot_review`, resume watch mode again instead of treating the re-request handoff as the end of the async run. Handoff-only behavior is a separate, narrower contract and must be explicitly requested.
+`COPILOT-STATE-WATCH-PERSISTENCE`: When a user explicitly asks to enter or continue the async Copilot dev loop, landing on `waiting_for_copilot_review` MUST keep the loop in watch mode (the continuation-not-completion core is owned by [`STOP-COPILOT-REVIEW-001`](../skills/docs/stop-conditions.md), quiet observations by [`STOP-QUIET-WATCHER-001`](../skills/docs/stop-conditions.md)). This rule owns watch REATTACHMENT: after a quiet `timeout`/`idle`, refresh deterministic state and, if it remains `waiting_for_copilot_review` (or another non-terminal wait state), keep the async watcher attached; after a successful narrow follow-up fix / reply-resolve / re-request cycle that returns to `waiting_for_copilot_review`, resume watch mode instead of treating the re-request handoff as the end of the async run. Handoff-only behavior is a separate, narrower contract and MUST be explicitly requested.
 
 ## Normal request/watch routing contract
 

@@ -868,10 +868,10 @@ for (const [from, to] of realEdges(REVIEWER_LOOP_STATE_DOC_TRANSITIONS)) {
         detail: interpretation,
         result: {
           state: interpretation.state,
-          failed: fixture.localPlanningStatus === "failed"
-            || fixture.localReviewRunsStatus === "failed"
-            || fixture.localMergeStatus === "failed"
-            || fixture.reviewSubmissionStatus === "failed",
+          // Only localPlanningStatus is ever set to "failed" by a registered
+          // fixture (the BLOCKED one); other failure fields join here if a
+          // future fixture exercises them.
+          failed: fixture.localPlanningStatus === "failed",
         },
       };
     },
