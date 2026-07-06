@@ -9,7 +9,7 @@ user-invocable: false
 
 # Copilot PR Follow-up
 
-This skill is the canonical internal `copilot_pr_followup` route behind the public `dev-loop` façade.
+Canonical owner for the internal `copilot_pr_followup` route behind the public `dev-loop` façade.
 
 It is also the canonical internal owner of the shared post-PR mechanics used by this repo:
 PR discovery and interpretation, async watch behavior, fix / reply-resolve / re-request flow,
@@ -225,7 +225,7 @@ When unresolved feedback exists, use a narrow follow-up loop:
    - when the intent is GitHub linkability, keep commit SHAs and issue/PR refs as plain text (for example 3ee82fc and owner/repo#70) and do not wrap them in backticks
    - keep backticks for actual code/path/CLI literals only
    - if either helper was newly added or recently changed, smoke-check it against one real thread before assuming the rest of the loop can rely on it
-9. before resolving an addressed review thread, run a post-fix verification checkpoint
+9. <!-- rule: COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE --> `COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE`: before resolving an addressed review thread, run a post-fix verification checkpoint
    - confirm the GitHub reply actually exists on the intended thread/comment, not only in local notes or helper stdout
    - confirm the pushed current-head diff genuinely addresses the reviewer concern on the flagged lines or pattern; if the concern is only partially addressed, leave the thread open and explain what remains
    - refresh the API-backed thread snapshot via `dev-loops gate capture-threads` and use that refreshed data — including the unresolved thread count — for follow-up decisions rather than prose assumptions

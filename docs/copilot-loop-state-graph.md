@@ -1,5 +1,7 @@
 # Copilot Loop State Graph
 
+Canonical owner for the async Copilot review/fix loop state machine.
+
 This document defines the deterministic state machine for the async Copilot review/fix loop.
 
 ## Overview

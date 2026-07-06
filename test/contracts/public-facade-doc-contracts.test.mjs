@@ -159,7 +159,8 @@ test("workflow-surface taxonomy stays explicit and guards the entrypoint asset s
   assert.match(publicContract, /Public workflow entrypoint/i);
   assert.match(publicContract, /Internal routed strategy modules/i);
   assert.match(publicContract, /Reusable role agents/i);
-  assert.match(publicContract, /specialized Copilot behavior stays internal-only behind `dev-loop`/i);
+  assertRuleOwned("FACADE-COPILOT-INTERNAL-ONLY", PUBLIC_CONTRACT_PATH);
+  assert.match(publicContract, /FACADE-COPILOT-INTERNAL-ONLY/);
   assertRuleOwned("FACADE-TAXONOMY-DRIFT-TEST", PUBLIC_CONTRACT_PATH);
 
   assert.match(devLoopAgent, /single public workflow entrypoint/i);

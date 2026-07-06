@@ -72,7 +72,8 @@ Use this taxonomy consistently across docs, discovery surfaces, and tests:
 | Internal routed strategy modules | `issue-intake`, `copilot-pr-followup`, `local-implementation`, `final-approval` | keep internal-only behind `dev-loop`; do not expose as executable peer workflow entrypoints |
 | Reusable role agents | `developer`, `docs`, `review`, `fixer`, `quality`, `refiner` | keep framed as reusable building blocks, not peer public workflow entrypoints |
 
-Any remaining specialized Copilot behavior stays internal-only behind `dev-loop`.
+<!-- rule: FACADE-COPILOT-INTERNAL-ONLY -->
+`FACADE-COPILOT-INTERNAL-ONLY`: Any remaining specialized Copilot behavior stays internal-only behind `dev-loop`.
 
 <!-- rule: FACADE-TAXONOMY-DRIFT-TEST -->
 `FACADE-TAXONOMY-DRIFT-TEST`: Regression tests MUST fail if this taxonomy drifts in wording or surfaced entrypoint assets.

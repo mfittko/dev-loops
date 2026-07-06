@@ -37,13 +37,13 @@ For the active phase, require and produce:
 
 - use exact wording from the source issue(s); when the governing input is a phase doc or other spec instead of an issue, use that source wording exactly for every explicit item in the matrix
 - include every explicit acceptance criterion, definition-of-done item, and non-goal; do not skip items
-- if no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix
+- <!-- rule: REFINER-DOD-PROPOSED-SUBSECTION --> `REFINER-DOD-PROPOSED-SUBSECTION`: if no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix
 - explicit risks, watchpoints, and unresolved questions
 - validation steps and tests to write first
 - durable decisions that SHOULD be preserved in the phase doc
 - when the phase includes a bounded audit or scan: prioritized findings, the highest-value follow-up candidates, and an explicit statement of what the current phase will not rewrite or broaden
 - When an audit artifact is provided, treat it as a first-class planning input: summarize the audited scope, list prioritized findings, include the highest-value follow-up candidates, and classify each meaningful finding as exactly one of current-phase scope/AC, DoD expectation, explicit non-goal / defer, or risk/watchpoint
-- Do not invent audit findings when no audit artifact was provided
+- <!-- rule: REFINER-NO-INVENT-AUDIT-FINDINGS --> `REFINER-NO-INVENT-AUDIT-FINDINGS`: Do not invent audit findings when no audit artifact was provided
 - when the phase includes watcher or predicate-driven behavior: explicit timeout semantics and negative-case expectations for non-target identities/events
 - when the phase relies on package-first shared helpers inside a source-loaded workspace: explicit integration expectations about whether local callers use published package imports or a thin source/workspace adapter during development
 - cross-check the phase's claims against the contracts and docs they reference (the autonomous docs-grill step, see ../docs/docs-grill-step.md): surface code-vs-doc drift, stale references, and contract-surface inaccuracies as refinement findings while the claims are still being verified

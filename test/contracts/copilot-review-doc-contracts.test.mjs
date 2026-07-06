@@ -29,7 +29,7 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
   const devLoopPreApprovalMatch = devLoopStep7.match(/### Pre-approval gate contract[\s\S]*?(?=\n## |\n### |$)/);
   const devLoopPreApproval = devLoopPreApprovalMatch ? devLoopPreApprovalMatch[0] : "";
   assert.ok(devLoopPreApproval.length > 0, "copilot-pr-followup pre-approval gate section not found inside Step 7");
-  assert.match(copilotPrFollowupSkill, /canonical internal `copilot_pr_followup` route behind the public `dev-loop` façade/i);
+  assert.match(copilotPrFollowupSkill, /Canonical owner for the internal `copilot_pr_followup` route behind the public `dev-loop` façade/i);
   assert.match(copilotPrFollowupSkill, /canonical internal owner of the shared post-PR mechanics/i);
   assertRuleOwned("GATE-COMMENT-SCOPE-ONLY", "docs/gate-review-comment-contract.md");
   const expectedDevLoopShape = [/Gate name:/i, /Trigger \/ boundary:/i, /Review angles:/i, /Pass criteria:/i, /Next step after passing:/i];
@@ -120,6 +120,10 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     /Every async dev-loop dispatch task body must include this clause verbatim/i,
     "Step 6 should define canonical async dispatch wording",
   );
+  // Intentional verbatim-contract pin, not a stray phrase pin: SKILL.md itself
+  // mandates ("must include this clause verbatim") that this exact quoted
+  // clause be reproduced unchanged in every async dispatch task body, so the
+  // test asserts it byte-for-byte.
   assert.match(
     step6,
     /Before reporting merge-ready or stopping at the human approval checkpoint, you must complete the pre_approval_gate procedure and verify that a visible clean checkpoint verdict comment exists on the PR for the current head SHA\. Do not stop or report completion without this evidence\./i,
@@ -143,11 +147,11 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     /prefer the deterministic helper `reply-resolve-review-thread\.mjs`/i,
     "Step 7 should not leave the reply-resolve helper optional",
   );
-  assert.match(
-    step7,
-    /before resolving an addressed review thread, run a post-fix verification checkpoint/i,
-    "Step 7 should require a post-fix verification checkpoint before thread resolution",
-  );
+  assertRuleOwned("COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE", "skills/copilot-pr-followup/SKILL.md");
+  assert.match(step7, /COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE/, "Step 7 should require a post-fix verification checkpoint before thread resolution");
+  // The four checks below are intentional behavioral coverage of the verification
+  // checkpoint's specific sub-requirements (owned by COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE
+  // above), not standalone exact-sentence contract pins.
   assert.match(
     step7,
     /confirm the GitHub reply actually exists on the intended thread\/comment/i,
@@ -168,9 +172,12 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     /if any verification check fails, do \*\*not\*\* resolve the thread; leave it open/i,
     "verification checkpoint should keep threads open when verification fails",
   );
-  const verificationIndex = step7.indexOf("before resolving an addressed review thread, run a post-fix verification checkpoint");
-  const resolveIndex = step7.indexOf("resolve the addressed review thread only after the reply is attached successfully");
-  assert.ok(verificationIndex >= 0 && resolveIndex > verificationIndex, "verification checkpoint must appear before the resolve step");
+  // Structural ordering check: the numbered follow-up-loop list must keep the
+  // verification-checkpoint item (9) before the resolve item (10), by ordinal
+  // position rather than by pinning either item's full sentence text.
+  const item9Index = step7.search(/^9\.\s/m);
+  const item10Index = step7.search(/^10\.\s/m);
+  assert.ok(item9Index >= 0 && item10Index > item9Index, "verification checkpoint (item 9) must appear before the resolve step (item 10)");
   assert.match(
     step7,
     /verify zero unresolved threads remain via `dev-loops gate capture-threads` before proceeding/i,

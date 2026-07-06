@@ -1,5 +1,7 @@
 # Worktree usage guidance
 
+Canonical owner for local worktree usage guidance in `dev-loops`.
+
 ## Purpose and scope
 
 This document is the canonical repo-level owner for local worktree usage guidance in

@@ -1,5 +1,7 @@
 # Conductor Routing Contract
 
+Canonical owner for the conductor routing contract governing an already-targeted active run.
+
 This document defines the **conductor routing contract** for an already-targeted active run: which loop family
 owns the next active step, and what machine-readable handoff payload should be emitted.
 
