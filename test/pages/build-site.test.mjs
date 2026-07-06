@@ -107,6 +107,18 @@ test('build-state-atlas: generator is pure and deterministic (identical bytes ac
   assert.equal(buildStateAtlasHtml(), buildStateAtlasHtml(), 'atlas HTML is byte-identical across calls');
 });
 
+test('build-state-atlas: fullscreen lightbox structure (one expand button per diagram, wired handler + CSS)', async () => {
+  const { buildStateAtlasHtml } = await import('../../scripts/pages/build-state-atlas.mjs');
+  const html = buildStateAtlasHtml();
+  const diagrams = (html.match(/class="diagram"/g) ?? []).length;
+  const buttons = (html.match(/class="expand" type="button" aria-label="View diagram fullscreen"/g) ?? []).length;
+  assert.ok(diagrams > 0, 'atlas renders diagrams');
+  assert.equal(buttons, diagrams, 'exactly one expand button per diagram');
+  for (const token of ['requestFullscreen', 'fs-fallback', ':-webkit-full-screen', '.diagram .expand', 'fsInFlight']) {
+    assert.ok(html.includes(token), `lightbox structure token missing: ${token}`);
+  }
+});
+
 test('injectNav fails closed when a page lacks the expected structure', () => {
   assert.throws(() => injectNav('<html><body>no style block</body></html>', REPO_URL), /missing a <style> block or <body>/);
   assert.throws(() => injectNav('<style>x</style> no body', REPO_URL), /missing a <style> block or <body>/);

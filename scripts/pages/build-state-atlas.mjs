@@ -240,7 +240,7 @@ function sectionMarkup(s) {
         <h2>${s.title}</h2>
         <p class="source">Diagram generated from <code>${s.source}</code></p>
 ${proseParagraphs(s.prose)}
-        <div class="diagram"><div class="mermaid">
+        <div class="diagram"><button class="expand" type="button" aria-label="View diagram fullscreen">⤢ Fullscreen</button><div class="mermaid">
 ${escapeMermaid(s.diagram)}
 </div></div>
       </section>`;
@@ -374,6 +374,16 @@ export function buildStateAtlasHtml() {
   }
   .diagram .mermaid { text-align: center; }
   .diagram .mermaid svg { max-width: 100%; height: auto; }
+  .diagram { position: relative; }
+  .diagram .expand { position: sticky; float: right; top: 0.6rem; right: 0.6rem; margin: 0 0 -2rem; z-index: 2; font: 600 0.72rem var(--font); color: var(--copy); background: rgba(15, 23, 42, 0.85); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.35rem 0.6rem; cursor: pointer; }
+  .diagram .expand:hover { color: var(--heading); border-color: var(--accent); }
+  .diagram .mermaid { cursor: zoom-in; }
+  .diagram .mermaid:fullscreen { cursor: zoom-out; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 2rem; }
+  .diagram .mermaid:-webkit-full-screen { cursor: zoom-out; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 2rem; }
+  .diagram .mermaid:-webkit-full-screen svg { max-width: calc(100vw - 4rem); max-height: calc(100vh - 4rem); width: auto; height: auto; }
+  .diagram .mermaid:fullscreen svg { max-width: calc(100vw - 4rem); max-height: calc(100vh - 4rem); width: auto; height: auto; }
+  .diagram .mermaid.fs-fallback { position: fixed; inset: 0; z-index: 50; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 1rem; cursor: zoom-out; overflow: auto; }
+  .diagram .mermaid.fs-fallback svg { max-width: calc(100vw - 2rem); max-height: calc(100vh - 2rem); width: auto; height: auto; }
 </style>
 </head>
 <body>
@@ -386,6 +396,28 @@ ${sections}
     </main>
     <script src="assets/mermaid.min.js"></script>
     <script>
+      let fsInFlight = false;
+      document.addEventListener('click', async (e) => {
+        if (fsInFlight) return;
+        const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+        if (!target) return;
+        const btn = target.closest('.diagram .expand');
+        const box = btn ? btn.parentElement.querySelector('.mermaid') : target.closest('.diagram .mermaid');
+        if (!box) return;
+        fsInFlight = true;
+        try {
+          const fsElement = document.fullscreenElement || document.webkitFullscreenElement;
+          if (fsElement === box) {
+            await (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+            return;
+          }
+          if (box.classList.contains('fs-fallback')) { box.classList.remove('fs-fallback'); return; }
+          const request = box.requestFullscreen || box.webkitRequestFullscreen;
+          if (request) await request.call(box);
+          else box.classList.add('fs-fallback'); // iOS Safari: CSS overlay fallback
+        } catch { /* fullscreen denied: fall back to the CSS overlay */ box.classList.add('fs-fallback'); }
+        finally { fsInFlight = false; }
+      });
       mermaid.initialize({
         startOnLoad: true,
         securityLevel: 'strict',
