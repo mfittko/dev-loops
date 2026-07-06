@@ -1010,6 +1010,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     draftGateRequireCi: draftGateConfig.requireCi,
     draftGate: coordinationContext.gateEvidence.draftGate,
     draftGateMarker: coordinationContext.gateEvidence.draftGateMarker,
+    refinementArtifact: coordinationContext.refinementArtifact,
     preApprovalGate: coordinationContext.gateEvidence.preApprovalGate,
     preApprovalGateMarker: coordinationContext.gateEvidence.preApprovalGateMarker,
     ...(reviewMode ? { reviewMode } : {}),

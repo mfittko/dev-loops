@@ -227,7 +227,15 @@ function normalizeRefinementArtifactStatus(value) {
   return REFINEMENT_ARTIFACT_STATUS.UNKNOWN;
 }
 
-function formatRefinementBlockedReason(linkedIssue, status) {
+// Issue-less refinement artifacts (specSource "pr_body"/"plan_file") carry
+// their own validation-failure reason from the detector; that reason must
+// replace the "linked issue" wording, which does not apply when the PR is the
+// spec-of-record and no linked issue was ever expected.
+function formatRefinementBlockedReason(linkedIssue, status, refinementArtifact) {
+  const specSource = refinementArtifact?.specSource;
+  if ((specSource === "pr_body" || specSource === "plan_file") && typeof refinementArtifact?.reason === "string" && refinementArtifact.reason.length > 0) {
+    return `The draft gate cannot complete: ${refinementArtifact.reason} finding=${REFINEMENT_ARTIFACT_FINDING}`;
+  }
   if (linkedIssue !== null && Number.isInteger(linkedIssue)) {
     return `Linked issue #${linkedIssue} has no refinement artifact (Acceptance criteria / DoD / linked refinement doc). Run refinement first, add ACs/DoD to the issue, then re-open the draft PR. finding=${REFINEMENT_ARTIFACT_FINDING}`;
   }
@@ -864,7 +872,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        reason: formatRefinementBlockedReason(refinementLinkedIssue, refinementArtifactStatus),
+        reason: formatRefinementBlockedReason(refinementLinkedIssue, refinementArtifactStatus, refinementArtifact),
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,

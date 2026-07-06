@@ -6,8 +6,9 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
-import { detectPrGateCoordinationState, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
 
@@ -1290,6 +1291,197 @@ test("detect-pr-gate-coordination-state leaves refinement=present when linked is
     assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
     assert.equal(result.refinementArtifact?.status, "present");
     assert.deepEqual(result.refinementArtifact?.acItems, ["First AC", "Second AC"]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ── issue-less / plan-file draft PRs reach RUN_DRAFT_GATE (three-origin model) ──
+
+test("detect-pr-gate-coordination-state: issue-less lightweight draft PR (PR-body-as-spec) reaches RUN_DRAFT_GATE", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const body = [
+      "## Objective",
+      "",
+      "Ship the thing.",
+      "",
+      "## In scope",
+      "",
+      "- the thing",
+      "",
+      "## Explicit non-goals",
+      "",
+      "- not the other thing",
+      "",
+      "## Acceptance criteria",
+      "",
+      "- [ ] does the thing",
+      "",
+      "## Definition of done",
+      "",
+      "- [ ] tests pass",
+      "",
+      "## Open questions/risks",
+      "",
+      "- none",
+      "",
+    ].join("\n");
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
+    assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+    assert.equal(result.refinementArtifact?.status, "present");
+    assert.equal(result.refinementArtifact?.specSource, "pr_body");
+    assert.equal(result.refinementArtifact?.linkedIssue, null);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state: promoted plan-file draft PR reaches RUN_DRAFT_GATE", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const body = buildPromotionPrBody({
+      planDocPath: "docs/phases/phase-9.md",
+      acceptanceCriteria: "- [ ] a",
+      definitionOfDone: "- [ ] b",
+    });
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
+    assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+    assert.equal(result.refinementArtifact?.status, "present");
+    assert.equal(result.refinementArtifact?.specSource, "plan_file");
+    assert.equal(result.refinementArtifact?.planDocPath, "docs/phases/phase-9.md");
+    assert.equal(result.refinementArtifact?.linkedIssue, null);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state: issue-less draft PR whose body fails spec validation stays BLOCKED (fail closed)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body: "Some notes about the change, no structured sections at all.",
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+    assert.equal(result.refinementArtifact?.status, "missing");
+    assert.equal(result.refinementArtifact?.finding, "missing_refinement_artifact");
+    assert.match(result.refinementArtifact?.reason, /validate-pr-body-spec/);
+    assert.match(result.refinementArtifact?.reason, /missing_acceptance_criteria/);
+    assert.doesNotMatch(result.refinementArtifact?.reason, /linked issue/i);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("loadRefinementArtifact: non-draft issue-less PR stays unknown (refinement is a draft-gate boundary)", async () => {
+  const result = await loadRefinementArtifact({
+    repo: "owner/repo",
+    prData: { number: 11, closingIssuesReferences: [], body: "Just a description, no ACs, no issue link." },
+    prDraft: false,
+    prClosed: false,
+    prMerged: false,
+  });
+  assert.equal(result.status, "unknown");
+  assert.equal(result.linkedIssue, null);
+});
+
+test("loadRefinementArtifact: tracker-backed draft PR with closingIssuesReferences keeps linked-issue behavior (regression)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const { env } = await writeGhStubHelper(tmp, [
+      { stdout: JSON.stringify({ body: "## Problem\n\nProse only, no ACs/DoD.\n" }) + "\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: { number: 12, closingIssuesReferences: [{ number: 900 }], body: "Closes #900\n" },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    assert.equal(result.status, "missing");
+    assert.equal(result.linkedIssue, 900);
+    assert.equal(result.specSource, "linked_issue");
+    assert.equal(result.finding, "missing_refinement_artifact");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

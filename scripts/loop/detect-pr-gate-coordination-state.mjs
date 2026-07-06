@@ -287,17 +287,61 @@ async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = 
     return null;
   }
 }
+// Plan-file promotion PRs (P4, `buildPromotionPrBody`) carry no linked issue by
+// design; the PR body instead names the committed plan doc as the spec-of-record
+// verbatim. Matching that literal marker is how the refinement check tells a
+// promoted plan-file PR apart from an ordinary issue-less body.
+const PLAN_FILE_PROMOTION_DOC_PATH_PATTERN = /Spec-of-record: the committed plan doc `([^`]+)`/u;
+
+// Resolve the refinement artifact for a draft PR with zero linked issues,
+// directly from its own body. The sanctioned three-origin model
+// (artifact-authority-contract.md) backs a draft PR with a linked issue, a
+// promoted plan file, or the PR body itself as the spec-of-record; only the
+// first fetches an issue body, so this never needs a network call.
+async function resolveNoIssueRefinementArtifact(body) {
+  const planDocMatch = PLAN_FILE_PROMOTION_DOC_PATH_PATTERN.exec(body);
+  if (planDocMatch) {
+    return {
+      status: "present",
+      linkedIssue: null,
+      linkedIssues: [],
+      specSource: "plan_file",
+      planDocPath: planDocMatch[1],
+      reason: `Refinement artifact present via the promoted plan doc \`${planDocMatch[1]}\` the PR body carries as the spec-of-record (plan-file promotion; no linked issue required).`,
+      finding: null,
+    };
+  }
+  const { validatePrBodySpec } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+  const specResult = validatePrBodySpec({ body, issueLess: true });
+  if (specResult.ok) {
+    return {
+      status: "present",
+      linkedIssue: null,
+      linkedIssues: [],
+      specSource: "pr_body",
+      acItems: specResult.acItems,
+      dodItems: specResult.dodItems,
+      sections: specResult.sections,
+      reason: "Refinement artifact present via the PR body itself (issue-less lightweight PR-body-as-spec; validate-pr-body-spec --no-issue clean).",
+      finding: null,
+    };
+  }
+  return {
+    status: "missing",
+    linkedIssue: null,
+    linkedIssues: [],
+    specSource: "pr_body",
+    reason: `PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`,
+    finding: "missing_refinement_artifact",
+  };
+}
+
 export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged }, { env = process.env, ghCommand = "gh" } = {}) {
   const linkedIssues = resolveLinkedIssuesFromPr(prData);
   if (linkedIssues.length === 0) {
     if (prDraft) {
-      return {
-        status: "missing",
-        linkedIssue: null,
-        linkedIssues: [],
-        reason: "Draft PR has no deterministically resolvable linked issue (no closingIssuesReferences and no Closes/Fixes/Resolves #n reference in body); draft gate cannot verify a refinement artifact.",
-        finding: "missing_refinement_artifact",
-      };
+      const body = typeof prData?.body === "string" ? prData.body : "";
+      return resolveNoIssueRefinementArtifact(body);
     }
     return {
       status: "unknown",
@@ -339,6 +383,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       status: "present",
       linkedIssue: firstPresent.issue,
       linkedIssues,
+      specSource: "linked_issue",
       refinedIssues,
       source: a.source,
       acItems: a.acItems,
@@ -366,6 +411,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
         status: "missing",
         linkedIssue: firstEvaluated.issue,
         linkedIssues,
+        specSource: "linked_issue",
         refinedIssues,
         reason: `Failed to fetch body for linked issue(s) ${scopeLabel}; draft gate cannot verify a refinement artifact, treating as missing.`,
         finding: "missing_refinement_artifact",
@@ -389,6 +435,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     status: "missing",
     linkedIssue: firstFetched.issue,
     linkedIssues,
+    specSource: "linked_issue",
     refinedIssues,
     source: first.source,
     acItems: first.acItems,
