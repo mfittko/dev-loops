@@ -1431,3 +1431,27 @@ test("dogfood round-trip: CLI-built briefing prefix verifies clean across two re
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("writeGateContext failure-ordering: a prefix-write failure leaves NO JSON artifact behind (artifact is the completion marker)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-order-"));
+  try {
+    // Occupy the deterministic briefing-prefix path with a DIRECTORY so its
+    // writeFile throws EISDIR before the JSON artifact write is attempted.
+    const prefixRel = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: "abc1234567890" });
+    await mkdir(path.resolve(repoRoot, prefixRel), { recursive: true });
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "70", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+    ]);
+    await assert.rejects(() => writeGateContext(options, { repoRoot }), /EISDIR/);
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(artifact, null, "no partial gate-context JSON may exist when the prefix write failed");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

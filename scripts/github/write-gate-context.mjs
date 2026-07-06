@@ -849,13 +849,18 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     ...buildGateContextArtifact({ ...options, prefixMode: rendered.prefixMode }),
     loggedAt: new Date().toISOString(),
   };
-  await mkdir(path.dirname(fullPath), { recursive: true });
-  await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
-
+  // Write ORDER matters: the sibling briefing prefix goes first and the JSON
+  // artifact last, so the artifact's existence is the completion marker for
+  // the whole set. Downstream consumers (readGateContext, the reviewers'
+  // --context-path guard) key on the JSON — a prefix-write failure must not
+  // leave a complete-looking artifact pointing at a missing prefix file.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
   await writeFile(fullPrefixPath, rendered.text, "utf8");
   const prefixHash = createHash("sha256").update(rendered.text, "utf8").digest("hex");
+
+  await mkdir(path.dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
 
   return { ok: true, path: contextPath, artifact, prefixPath: briefingPrefixPath, prefixHash, prefixMode: rendered.prefixMode };
 }
