@@ -15,6 +15,20 @@ async function writeGhStub(tempDir, entries) {
   return env;
 }
 
+// request-copilot-review.mjs treats env.GH_SEQUENCE_PATH as a "running under the
+// stub harness — skip the copilot-comment check" test-mode signal, which shares
+// its name with the gh-stub harness's own sequence-file pointer, so the two
+// roles collide. Rename the stub's internal pointer so a test can exercise the
+// actual copilot-comment-check path end to end while still reusing the shared
+// stub-script generator.
+async function writeGhStubWithCommentCheck(tempDir, entries) {
+  const { env, ghPath } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
+  const script = await readFile(ghPath, "utf8");
+  await writeFile(ghPath, script.replaceAll("process.env.GH_SEQUENCE_PATH", "process.env.TEST_GH_SEQUENCE_PATH"), "utf8");
+  const { GH_SEQUENCE_PATH: sequencePath, ...rest } = env;
+  return { ...rest, TEST_GH_SEQUENCE_PATH: sequencePath };
+}
+
 test("request-copilot-review requests Copilot deterministically and verifies via requested_reviewers", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-review-"));
 
@@ -708,6 +722,296 @@ test("checkForCopilotComments reports all violation comments when multiple found
 
     assert.equal(result.blocked, true);
     assert.deepEqual(result.violationCommentIds, [3001, 3002]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("checkForCopilotComments exempts a summon literal quoted inside an inline code span", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-codespan-exempt-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
+        stdout: JSON.stringify({
+          id: 4001,
+          body: "Gate finding: quoting the `/copilot` prohibition rule from the anti-summon guard.",
+          user: { login: "human-dev" },
+        }) + "\n",
+      },
+    ]);
+
+    const { checkForCopilotComments } = await import("../../scripts/github/request-copilot-review.mjs");
+    const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { env });
+
+    assert.equal(result.blocked, false);
+    assert.deepEqual(result.violationCommentIds, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("checkForCopilotComments exempts a summon literal quoted inside a fenced code block", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-fence-exempt-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
+        stdout: JSON.stringify({
+          id: 4002,
+          body: "Anti-summon rule excerpt:\n```\n@copilot re-review\n```\nDo not post this literally.",
+          user: { login: "human-dev" },
+        }) + "\n",
+      },
+    ]);
+
+    const { checkForCopilotComments } = await import("../../scripts/github/request-copilot-review.mjs");
+    const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { env });
+
+    assert.equal(result.blocked, false);
+    assert.deepEqual(result.violationCommentIds, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("request-copilot-review --silent exits 0 only when status is requested", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-silent-requested-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        stdout: "https://github.com/owner/repo/pull/17\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--silent"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, "");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("request-copilot-review --silent exits non-zero for a non-requested status (honest status semantics)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-silent-non-requested-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"isDraft":false,"state":"OPEN","number":17,"headRefOid":"newsha","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"newsha"}}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+    ]);
+
+    // suppressed_same_head_clean is not "requested": ok:true in the JSON body
+    // must NOT read as a placed request under --silent.
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--silent"], { env });
+
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Per-status --silent exit contract: every non-"requested" outcome exits
+// non-zero. Stub sequences mirror the corresponding non-silent status tests.
+const SILENT_NON_REQUESTED_CASES = {
+  "already-requested": {
+    args: [],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+    ],
+  },
+  unavailable: {
+    args: [],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        stderr: "gh: Reviews may only be requested from collaborators.\n",
+        exitCode: 1,
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"reviews":[]}\n',
+      },
+    ],
+  },
+  round_cap_reached: {
+    args: [],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"newsha","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}},{"id":"r-2","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}},{"id":"r-3","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha3"}},{"id":"r-4","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha4"}},{"id":"r-5","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha5"}}]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+    ],
+  },
+  no_changes_since_last_review: {
+    args: ["--force-rerequest-review"],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"currentsha","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}},{"id":"r-2","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}},{"id":"r-3","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha3"}},{"id":"r-4","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha4"}},{"id":"r-5","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"currentsha"}}]}\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: "[[]]\n",
+      },
+    ],
+  },
+  suppressed_draft: {
+    args: [],
+    entries: [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"isDraft":true,"state":"OPEN","number":17,"reviews":[]}\n',
+      },
+    ],
+  },
+};
+
+for (const [status, { args, entries }] of Object.entries(SILENT_NON_REQUESTED_CASES)) {
+  test(`request-copilot-review --silent exits non-zero for status ${status}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), `dev-loops-request-copilot-silent-${status.replace(/_/g, "-")}-`));
+
+    try {
+      const env = await writeGhStub(tempDir, entries);
+
+      // Confirm the stub sequence actually produces the status under test.
+      const plain = await runNode(["--repo", "owner/repo", "--pr", "17", ...args], { env });
+      assert.equal(plain.code, 0);
+      assert.equal(JSON.parse(plain.stdout).status, status);
+
+      // Rewind the sequential stub for the second (silent) invocation.
+      await writeFile(env.GH_COUNTER_PATH, "0\n", "utf8");
+      const silent = await runNode(["--repo", "owner/repo", "--pr", "17", ...args, "--silent"], { env });
+      assert.equal(silent.code, 1);
+      assert.equal(silent.stdout, "");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+const BLOCKED_REGRESSION_GH_ENTRIES = [
+  {
+    assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+    stdout: '{"users":[],"teams":[]}\n',
+  },
+  {
+    assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+    stdout: '{"isDraft":false,"state":"OPEN","number":17,"reviews":[]}\n',
+  },
+  {
+    assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
+    // A draft-gate verdict comment quoting the anti-summon rule as bare text
+    // (not code-spanned) — the literal live-PR shape that self-deadlocked.
+    stdout: JSON.stringify({
+      id: 5001,
+      body: "Findings summary: violates the /copilot prohibition rule.",
+      user: { login: "human-dev" },
+    }) + "\n",
+  },
+];
+
+test("request-copilot-review self-deadlock regression: blocked_by_copilot_comment reports ok:true but is not a placed request", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-blocked-regression-"));
+
+  try {
+    const env = await writeGhStubWithCommentCheck(tempDir, BLOCKED_REGRESSION_GH_ENTRIES);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.status, "blocked_by_copilot_comment");
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(parsed.violationCommentIds, [5001]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("request-copilot-review self-deadlock regression: --silent exits non-zero for blocked_by_copilot_comment", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-blocked-regression-silent-"));
+
+  try {
+    const env = await writeGhStubWithCommentCheck(tempDir, BLOCKED_REGRESSION_GH_ENTRIES);
+
+    // Honest status: ok:true in the JSON body must NOT be read as a placed
+    // request. --silent exits non-zero because status !== "requested" — this is
+    // the exact contract violated in the live deadlock (two 30-minute watch
+    // cycles ran against a request that was never placed).
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--silent"], { env });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

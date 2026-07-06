@@ -204,6 +204,20 @@ test("renderFindingsCommentBody sanitizes file refs (collapses whitespace/newlin
   assert.ok(!body.includes("``"));
 });
 
+test("renderFindingsCommentBody neutralizes bare @copilot/`/copilot`* tokens so the rendered body cannot arm the anti-summon guard", async () => {
+  const { containsBareCopilotSummon } = await import("../../scripts/_core-helpers.mjs");
+  const findings = parseFindings(JSON.stringify([
+    {
+      severity: "must-fix",
+      angle: "scope",
+      summary: "Finding: this comment violates the /copilot prohibition rule.",
+    },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.match(body, /`\/copilot`/);
+  assert.equal(containsBareCopilotSummon(body), false, "rendered findings body must not arm the anti-summon guard");
+});
+
 test("renderFindingsCommentBody sanitizes an angle containing a backtick + newline into a single clean code span", () => {
   const findings = parseFindings(JSON.stringify([
     {

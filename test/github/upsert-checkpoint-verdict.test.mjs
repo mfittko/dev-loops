@@ -2548,6 +2548,21 @@ test("renderGateReviewCommentBody falls back to free-text findings summary when 
   assert.doesNotMatch(body, /per-angle breakdown below/);
 });
 
+test("renderGateReviewCommentBody neutralizes bare @copilot/`/copilot`* tokens so the rendered body cannot arm the anti-summon guard", async () => {
+  const { containsBareCopilotSummon } = await import("../../scripts/_core-helpers.mjs");
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    verdict: "findings_present",
+    // A findings summary quoting the anti-summon rule as bare text — the same
+    // shape that self-deadlocked a live gate-verdict/request-review round-trip.
+    findingsSummary: "Finding: this comment violates the /copilot prohibition rule.",
+    nextAction: "delete the offending comment before re-requesting review",
+  });
+  assert.match(body, /`\/copilot`/);
+  assert.equal(containsBareCopilotSummon(body), false, "rendered gate verdict body must not arm the anti-summon guard");
+});
+
 test("renderGateReviewCommentBody sanitizes structured angle/finding text and survives parsing (#898)", async () => {
   const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
   const body = renderGateReviewCommentBody({

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -753,7 +753,11 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
     "",
     `**Next action:** ${nextAction}`,
   );
-  return lines.join("\n");
+  // Neutralize any bare @copilot/`/copilot`* tokens in the rendered body (gate
+  // evidence legitimately quotes the anti-summon rule, e.g. from a findings
+  // excerpt) so posting this comment can never arm request-copilot-review.mjs's
+  // anti-summon guard on a later request.
+  return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 function resolveRequestedHeadSha(requestedHeadSha, currentHeadSha) {
   if (requestedHeadSha === currentHeadSha) {

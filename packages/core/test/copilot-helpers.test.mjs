@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  containsBareCopilotSummon,
   extractReviewCommitSha,
   isCopilotLogin,
   normalizeTimestamp,
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,
   resolveDraftGateRoundResetMs,
+  sanitizeCopilotSummonTokens,
   summarizeCopilotReviews,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
@@ -623,4 +625,126 @@ test("resolveDraftGateRoundResetMs + summarizeCopilotReviews agree on the reset-
 
   assert.equal(raw.completedCopilotReviewRounds, 5);
   assert.equal(reset.completedCopilotReviewRounds, 2);
+});
+
+test("sanitizeCopilotSummonTokens wraps bare @copilot and /copilot* tokens in backticks", () => {
+  assert.equal(
+    sanitizeCopilotSummonTokens("please @copilot re-review this"),
+    "please `@copilot` re-review this",
+  );
+  assert.equal(
+    sanitizeCopilotSummonTokens("violates the /copilot prohibition rule"),
+    "violates the `/copilot` prohibition rule",
+  );
+  assert.equal(
+    sanitizeCopilotSummonTokens("see the /copilot-review command"),
+    "see the `/copilot-review` command",
+  );
+});
+
+test("sanitizeCopilotSummonTokens leaves already-code-spanned tokens untouched (idempotent)", () => {
+  const once = sanitizeCopilotSummonTokens("quoting the `/copilot` rule and `@copilot` login");
+  assert.equal(once, "quoting the `/copilot` rule and `@copilot` login");
+  const twice = sanitizeCopilotSummonTokens(once);
+  assert.equal(twice, once);
+});
+
+test("sanitizeCopilotSummonTokens is idempotent for a freshly-wrapped bare token", () => {
+  const once = sanitizeCopilotSummonTokens("the /copilot prohibition rule");
+  const twice = sanitizeCopilotSummonTokens(once);
+  assert.equal(twice, once);
+});
+
+test("sanitizeCopilotSummonTokens leaves fenced code blocks untouched", () => {
+  const body = "Excerpt:\n```\n@copilot re-review\n```\nDone.";
+  assert.equal(sanitizeCopilotSummonTokens(body), body);
+});
+
+test("sanitizeCopilotSummonTokens falls back to zero-width-joiner neutralization when a stray backtick defeats span-wrapping", () => {
+  // A pre-existing unbalanced backtick would pair with an inserted opening
+  // backtick under the guard's span-stripping, re-exposing the token.
+  const probe = "uses ` oddly, violates the /copilot rule";
+  const once = sanitizeCopilotSummonTokens(probe);
+  assert.equal(containsBareCopilotSummon(once), false, "sanitized output must not arm the guard");
+  assert.equal(sanitizeCopilotSummonTokens(once), once, "sanitizer must be idempotent for this input");
+  // The fallback works on the WRAPPED line: the backtick wrap survives, with the
+  // joiner neutralizing the residual token the re-paired spans left exposed.
+  assert.equal(once, "uses ` oddly, violates the `/\u200Dcopilot` rule");
+});
+
+test("sanitizeCopilotSummonTokens ZWJ fallback preserves successful wraps and keeps the joiner out of legitimate code spans", () => {
+  const probe = "quoting `/copilot` legit and ` stray /copilot bare";
+  const once = sanitizeCopilotSummonTokens(probe);
+  assert.equal(containsBareCopilotSummon(once), false, "sanitized output must not arm the guard");
+  assert.equal(sanitizeCopilotSummonTokens(once), once, "sanitizer must be idempotent for this input");
+  assert.ok(once.includes("`/copilot` legit"), "pre-existing legitimate code span must stay joiner-free");
+  assert.match(once, /\/\u200Dcopilot/, "residual token neutralized with a zero-width joiner");
+});
+
+test("a genuine bare summon still arms the guard after sanitizer fallback changes", () => {
+  assert.equal(containsBareCopilotSummon("@copilot please review"), true);
+});
+
+test("sanitizeCopilotSummonTokens stays byte-stable when adjacent code spans destabilize a backtick wrap", () => {
+  // Adjacent spans re-tokenize a wrapped line differently on the next pass; an
+  // unstable wrap must route to the ZWJ path instead of growing one backtick
+  // per rewrite (gate comments are rewritten on every gate pass).
+  const probe = "`a``b` /copilot";
+  const once = sanitizeCopilotSummonTokens(probe);
+  assert.equal(containsBareCopilotSummon(once), false, "sanitized output must not arm the guard");
+  assert.equal(sanitizeCopilotSummonTokens(once), once, "sanitizer must be byte-identical from pass 1 on");
+  assert.match(once, /\/\u200Dcopilot/, "unstable wrap neutralized with a zero-width joiner");
+});
+
+test("containsBareCopilotSummon does not rejoin fragments across a stripped code span into a phantom token", () => {
+  assert.equal(containsBareCopilotSummon("@copi`x`lot"), false);
+});
+
+test("containsBareCopilotSummon arms on a summon directly abutting a code span", () => {
+  assert.equal(containsBareCopilotSummon("text`x`@copilot"), true);
+});
+
+test("sanitizeCopilotSummonTokens does not mangle email-like text the guard never arms on", () => {
+  const body = "contact user@copilot.example about path/copilot-adjacent naming";
+  assert.equal(containsBareCopilotSummon(body), false);
+  assert.equal(sanitizeCopilotSummonTokens(body), body);
+});
+
+test("sanitizeCopilotSummonTokens leaves a double-backtick GFM span untouched", () => {
+  const body = "quoting `` @copilot `` inside a double-backtick span";
+  assert.equal(sanitizeCopilotSummonTokens(body), body);
+});
+
+test("containsBareCopilotSummon exempts occurrences inside a double-backtick GFM span", () => {
+  assert.equal(containsBareCopilotSummon("quoting `` @copilot `` inside a double-backtick span"), false);
+  assert.equal(containsBareCopilotSummon("nested literal `` `/copilot` `` quoted"), false);
+});
+
+test("containsBareCopilotSummon detects a bare-text summon literal", () => {
+  assert.equal(containsBareCopilotSummon("please @copilot re-review this"), true);
+  assert.equal(containsBareCopilotSummon("violates the /copilot prohibition rule"), true);
+});
+
+test("containsBareCopilotSummon exempts occurrences inside an inline code span", () => {
+  assert.equal(containsBareCopilotSummon("quoting the `/copilot` rule from the guard"), false);
+  assert.equal(containsBareCopilotSummon("the `@copilot` login is a bot account"), false);
+});
+
+test("containsBareCopilotSummon exempts occurrences inside a fenced code block", () => {
+  const body = "Anti-summon rule excerpt:\n```\n@copilot re-review\n```\nDo not post this literally.";
+  assert.equal(containsBareCopilotSummon(body), false);
+});
+
+test("containsBareCopilotSummon still detects bare text outside a fenced block sharing the same comment", () => {
+  const body = "```\nsome code\n```\n@copilot please review";
+  assert.equal(containsBareCopilotSummon(body), true);
+});
+
+test("round-trip: sanitizing a verdict body before posting keeps the anti-summon guard from arming on its own gate evidence", () => {
+  const rawFindingsSummary = "Finding: this comment violates the /copilot prohibition rule.";
+  assert.equal(containsBareCopilotSummon(rawFindingsSummary), true, "unsanitized text should still arm the guard (sanity check)");
+
+  const sanitized = sanitizeCopilotSummonTokens(rawFindingsSummary);
+  assert.equal(sanitized, "Finding: this comment violates the `/copilot` prohibition rule.");
+  assert.equal(containsBareCopilotSummon(sanitized), false, "sanitized text must not arm the anti-summon guard");
 });

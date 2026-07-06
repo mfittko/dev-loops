@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import {
   buildParseError,
+  containsBareCopilotSummon,
   formatCliError,
   isCopilotLogin,
   isDirectCliRun,
@@ -58,9 +59,20 @@ Error output (stderr, JSON):
   gh/runtime failures:
     { "ok": false, "error": "..." }
 ${JQ_OUTPUT_USAGE}
+Status contract: "ok": true means the helper ran without error, NOT that a
+review was placed. Callers MUST branch on "status", never on "ok" truthiness
+alone — every non-"requested" status (including blocked_by_copilot_comment)
+is a caller-must-branch outcome, not a silent success.
+--silent exit code: 0 only when status is "requested" (a new request was just
+placed this run); non-zero for every other status, including
+already-requested/suppressed_same_head_clean/unavailable/blocked_by_copilot_comment/
+round_cap_reached/no_changes_since_last_review/suppressed_draft. Without
+--silent the JSON body always prints regardless of status. --jq combined with
+--silent keeps the shared jq-stream truthiness semantics (exit reflects the
+filtered value) and is exempt from the status-based rule above.
 Exit codes:
-  0  Success (including unavailable)
-  1  Argument error or gh failure
+  0  Success (including unavailable); with --silent, only when status is "requested"
+  1  Argument error, gh failure, or (--silent) any non-"requested" status
   2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 export function parseRequestCliArgs(argv) {
@@ -454,7 +466,9 @@ export async function checkForCopilotComments({ repo, pr }, { env = process.env,
     if (isCopilotLogin(author)) {
       continue;
     }
-    if (/(?:^|\W)(@copilot|\/copilot)(?:$|\W)/i.test(body)) {
+    // Exempt bare-text occurrences inside inline code spans/fenced blocks: a
+    // gate-evidence comment legitimately quotes the anti-summon rule itself.
+    if (containsBareCopilotSummon(body)) {
       violationCommentIds.push(comment.id);
     }
   }
@@ -668,7 +682,16 @@ export async function runCli(
     return;
   }
   const result = await performCopilotReviewRequest(options, { env, ghCommand });
-  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+  // Honest status under --silent: `ok: true` reports "the helper ran without
+  // error", not "a review was placed" — a caller checking only exit-code
+  // truthiness must NOT read a non-`requested` status (blocked_by_copilot_comment,
+  // round_cap_reached, etc.) as a placed request. --silent therefore answers
+  // "was a request just placed" specifically: exit 0 only for `requested`,
+  // non-zero for every other status. Non-silent output is unaffected — the full
+  // JSON body (with `ok: true`) still prints for every documented status; the
+  // caller MUST branch on `.status`, not `.ok`.
+  const silentOk = options.silent ? result.status === "requested" : undefined;
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: silentOk });
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

@@ -14,12 +14,14 @@ export {
 } from "@dev-loops/core/loop/phase-files";
 
 export {
+  containsBareCopilotSummon,
   extractReviewCommitSha,
   isCopilotLogin,
   normalizeTimestamp,
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,
   resolveDraftGateRoundResetMs,
+  sanitizeCopilotSummonTokens,
   summarizeCopilotReviews,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
