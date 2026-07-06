@@ -14,7 +14,7 @@ import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAngles, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
@@ -310,26 +310,36 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
           );
         }
       }
-      // Angle-coverage enforcement: independent of requireFanoutProvenance —
-      // whenever a fanout_fanin ledger recorded ANY internally-consistent
-      // provenance, its perAngle must cover every configured mandatory angle
-      // and (default) stay within the gate's configured pool. An absent or
-      // malformed provenance is not a NEW failure here (that gap is
-      // requireFanoutProvenance's separate, opt-in concern).
-      if (gate.executionMode === "fanout_fanin" && gate.provenance && provenanceConsistencyError(gate.provenance) === null) {
-        const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(gate.provenance.perAngle, {
-          mandatoryAngles: gate.mandatoryAngles ?? [],
-          pool: gate.anglePool ?? null,
-        });
-        if (missingMandatory.length > 0) {
+      // Angle-coverage enforcement: independent of requireFanoutProvenance.
+      // When the gate configures mandatory angles, a fanout_fanin ledger MUST
+      // record internally-consistent provenance — otherwise a shadow ledger
+      // that simply omits provenance would bypass mandatory-angle coverage.
+      // Recorded provenance is then re-validated: perAngle must cover every
+      // mandatory angle and (default) stay within the configured pool. Gates
+      // without mandatory angles keep today's behavior (absent provenance adds
+      // no failure; that stricter gap is requireFanoutProvenance's opt-in).
+      if (gate.executionMode === "fanout_fanin") {
+        const mandatoryAngles = gate.mandatoryAngles ?? [];
+        const provValid = gate.provenance != null && provenanceConsistencyError(gate.provenance) === null;
+        if (mandatoryAngles.length > 0 && !provValid) {
           failures.push(
-            `${gate.name}: fan-out provenance is missing mandatory angle(s): ${missingMandatory.join(", ")}; ${FANOUT_UNAVAILABLE_MESSAGE}`,
+            `${gate.name}: mandatory angle coverage is configured (${mandatoryAngles.join(", ")}) but the findings-log ledger records no valid fan-out provenance to verify it against; write the ledger with --provenance covering the mandatory angles; ${FANOUT_UNAVAILABLE_MESSAGE}`,
           );
-        }
-        if (foreignAngles.length > 0 && (fanoutEnforcement.rejectForeignAngles ?? true)) {
-          failures.push(
-            `${gate.name}: fan-out provenance names angle(s) outside the configured pool: ${foreignAngles.join(", ")}; ${FANOUT_UNAVAILABLE_MESSAGE}`,
-          );
+        } else if (provValid) {
+          const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(gate.provenance.perAngle, {
+            mandatoryAngles,
+            pool: gate.anglePool ?? null,
+          });
+          if (missingMandatory.length > 0) {
+            failures.push(
+              `${gate.name}: fan-out provenance is missing mandatory angle(s): ${missingMandatory.join(", ")}; ${FANOUT_UNAVAILABLE_MESSAGE}`,
+            );
+          }
+          if (foreignAngles.length > 0 && (fanoutEnforcement.rejectForeignAngles ?? true)) {
+            failures.push(
+              `${gate.name}: fan-out provenance names angle(s) outside the configured pool: ${foreignAngles.join(", ")}; ${FANOUT_UNAVAILABLE_MESSAGE}`,
+            );
+          }
         }
       }
     }
@@ -450,9 +460,17 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   const lightMode = lightThreshold != null;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
+  // Shared angle-contract resolver (exclude-filtered mandatory angles +
+  // additive-aware pool) — the same contract the write paths enforce. The
+  // field names here (`mandatoryAngles`/`anglePool`) are exactly what
+  // buildPreMergeGateCheck reads off each gate entry.
+  const buildAngleFields = (gateKey) => {
+    const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
+    return { mandatoryAngles, anglePool: pool };
+  };
   const GATE_ANGLE_CONFIG = {
-    draft_gate: { mandatoryAngles: draftGateConfig.mandatoryAngles, pool: resolveGateAngles(config, "draft") },
-    pre_approval_gate: { mandatoryAngles: preApprovalGateConfig.mandatoryAngles, pool: resolveGateAngles(config, "preApproval") },
+    draft_gate: buildAngleFields("draft"),
+    pre_approval_gate: buildAngleFields("preApproval"),
   };
   const gateSpecs = [
     { name: "draft_gate", marker: draftGateMarker, required: draftGateConfig.required },

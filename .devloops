@@ -33,6 +33,9 @@ gates:
       - gate-evidence
       - pr-description
       - pr-comments
+      - contradiction-lens
+      - code-conformance
+      - semantic-drift
     requireCi: true
     mandatoryAngles:
       - pr-description
@@ -56,12 +59,16 @@ gates:
       - renderer-security
       - pr-checklist-matrix
       - acceptance-criteria
+      - contradiction-lens
+      - correctness-final
+      - ui-validation
     # Mandatory angles always run in the fan-out (never dropped by dynamic
     # resolution); fully configurable — add/remove any angle from the pool.
     mandatoryAngles:
       - pr-checklist-matrix
       - acceptance-criteria
       - yagni
+      - contradiction-lens
 
     blockCleanOnFindingSeverities:
       - must-fix

@@ -20,6 +20,7 @@ import {
   resolveRefinement,
   resolveGateConfig,
   resolveGateAngles,
+  resolveGateAngleContract,
   resolveRejectForeignAngles,
   resolveGateAnglesDynamic,
   resolveAnglePool,
@@ -3217,6 +3218,62 @@ describe("gates.rejectForeignAngles (#1196)", () => {
   test("rejects non-boolean rejectForeignAngles", () => {
     const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { rejectForeignAngles: "yes" } });
     assert.equal(bad.success, false);
+  });
+});
+
+describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)", () => {
+  test("returns exclude-filtered mandatory angles + the resolveGateAngles pool by default", () => {
+    const config = {
+      gates: { preApproval: { angles: ["dry", "kiss"], mandatoryAngles: ["pr-checklist-matrix"] } },
+    };
+    const { mandatoryAngles, pool } = resolveGateAngleContract(config, "preApproval");
+    assert.deepEqual(mandatoryAngles, ["pr-checklist-matrix"]);
+    assert.deepEqual(pool, ["pr-checklist-matrix", "dry", "kiss"]);
+  });
+
+  test("an excluded mandatory angle is dropped from BOTH sides (no missing-mandatory/foreign deadlock)", () => {
+    const config = {
+      gates: {
+        preApproval: {
+          angles: ["dry", "kiss"],
+          mandatoryAngles: ["pr-checklist-matrix", "yagni"],
+          excludeAngles: ["yagni"],
+        },
+      },
+    };
+    const { mandatoryAngles, pool } = resolveGateAngleContract(config, "preApproval");
+    // yagni is neither required (missing-mandatory) nor allowed (foreign):
+    // it simply leaves the contract, so a fanout write omitting it passes.
+    assert.deepEqual(mandatoryAngles, ["pr-checklist-matrix"]);
+    assert.ok(!pool.includes("yagni"));
+  });
+
+  test("additiveAngles widens the pool to the global lens catalog, excludeAngles still a hard ceiling", () => {
+    const config = {
+      gates: {
+        anglePool: ["dry", "kiss", "catalog-extra", "catalog-blocked"],
+        preApproval: {
+          angles: ["dry"],
+          mandatoryAngles: [],
+          additiveAngles: true,
+          excludeAngles: ["catalog-blocked"],
+        },
+      },
+    };
+    const { pool } = resolveGateAngleContract(config, "preApproval");
+    assert.ok(pool.includes("catalog-extra"), "additively-selectable catalog angle must be in the enforcement pool");
+    assert.ok(!pool.includes("catalog-blocked"), "excludeAngles caps additive widening");
+    // Without additiveAngles the catalog angle stays foreign.
+    const strict = resolveGateAngleContract({
+      gates: { anglePool: ["dry", "catalog-extra"], preApproval: { angles: ["dry"], mandatoryAngles: [] } },
+    }, "preApproval");
+    assert.ok(!strict.pool.includes("catalog-extra"));
+  });
+
+  test("null pool passes through when the gate configures no angles at all", () => {
+    const { mandatoryAngles, pool } = resolveGateAngleContract({ version: 1 }, "draft");
+    assert.deepEqual(mandatoryAngles, []);
+    assert.equal(pool, null);
   });
 });
 

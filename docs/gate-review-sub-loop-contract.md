@@ -435,20 +435,30 @@ at child depth (see #1084).
 `GATE-EXEC-ANGLE-COVERAGE`: A `fanout_fanin` verdict's recorded per-angle results
 (`provenance.perAngle` on the write path / merge-evidence read path, and the
 `--findings-json` structured per-angle results on the verdict-comment path) MUST
-cover every angle in the gate's configured `mandatoryAngles`, and MUST NOT name an
-angle outside the gate's configured pool (`resolveGateAngles`: configured `angles`
-∪ `mandatoryAngles`) unless `gates.rejectForeignAngles` is explicitly set to
-`false`, in which case a foreign angle downgrades to a warning. A delta-suffixed
-angle (`<angle>-delta-at-...`, e.g. a re-review scoped to only the current head's
-delta) counts toward its base angle for both checks. This is independent of
-`requireFanoutProvenance`: it fires whenever a `fanout_fanin` verdict actually
-records per-angle results, regardless of that opt-in flag, and is exempt for
+cover every angle in the gate's effective `mandatoryAngles`, and MUST NOT name an
+angle outside the gate's effective pool unless `gates.rejectForeignAngles` is
+explicitly set to `false`, in which case a foreign angle downgrades to a warning.
+The effective contract is `resolveGateAngleContract` (`@dev-loops/core/config`),
+the single resolver every consumer uses: `mandatoryAngles` is filtered through
+`excludeAngles` (an excluded mandatory angle must not deadlock every fanout
+write), and the pool is `resolveGateAngles` (configured `angles` ∪
+`mandatoryAngles`, minus `excludeAngles`), widened to the global lens catalog
+(`resolveAnglePool`) when the gate enables `additiveAngles` — dynamic resolution
+may legitimately dispatch catalog angles then, with `excludeAngles` still a hard
+ceiling. A delta-suffixed angle (`<angle>-delta-at-...`, e.g. a re-review scoped
+to only the current head's delta) counts toward its base angle for both checks.
+This is independent of `requireFanoutProvenance`, and is exempt for
 `inline_single_agent` verdicts (light-mode inline runs carry no per-angle fan-out
-data to validate). Enforced identically by `write-gate-findings-log.mjs` and
-`upsert-checkpoint-verdict.mjs` (write time) and `detect-checkpoint-evidence.mjs`
-(merge-evidence time, re-validating the ledger so a hand-edited or shadow ledger
-cannot bypass it), sharing the same pure coverage check
-(`checkFanoutAngleCoverage` in `@dev-loops/core/loop/gate-fanin`).
+data to validate). At merge-evidence time, when a gate configures any mandatory
+angle, a `fanout_fanin` ledger MUST record internally-consistent provenance —
+absent or invalid provenance fails closed, so a hand-edited or shadow ledger
+cannot bypass mandatory-angle coverage by simply omitting provenance; gates with
+no mandatory angles keep the previous behavior (absent provenance adds no
+failure unless `requireFanoutProvenance` is on). Enforced identically by
+`write-gate-findings-log.mjs` and `upsert-checkpoint-verdict.mjs` (write time)
+and `detect-checkpoint-evidence.mjs` (merge-evidence time), sharing the same
+pure coverage check (`checkFanoutAngleCoverage` in
+`@dev-loops/core/loop/gate-fanin`).
 
 ### Fail-closed: fan-out unavailable → route to conductor
 

@@ -6,7 +6,7 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { checkFanoutAngleCoverage, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
-import { loadDevLoopConfig, resolveGateAngles, resolveGateConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> --findings <json> [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
@@ -167,10 +167,9 @@ export function parseProvenanceJson(raw) {
 export async function checkProvenanceAngleCoverage(provenance, gate, { repoRoot = process.cwd() } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const gateKey = GATE_CONFIG_KEY[gate];
-  const gateConfig = resolveGateConfig(config, gateKey);
-  const pool = resolveGateAngles(config, gateKey);
+  const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
   const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(provenance.perAngle, {
-    mandatoryAngles: gateConfig.mandatoryAngles,
+    mandatoryAngles,
     pool,
   });
   if (missingMandatory.length > 0) {

@@ -2846,6 +2846,7 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
         { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
         { angle: "acceptance-criteria", verdict: "clean", findings: [] },
         { angle: "yagni", verdict: "clean", findings: [] },
+        { angle: "contradiction-lens", verdict: "clean", findings: [] },
         { angle: "made-up-angle", verdict: "clean", findings: [] },
       ]),
       "utf8",
@@ -2964,6 +2965,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict carries the g
         { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
         { angle: "acceptance-criteria", verdict: "clean", findings: [] },
         { angle: "yagni", verdict: "clean", findings: [] },
+        { angle: "contradiction-lens", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -3022,7 +3024,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict carries the g
           "**Execution mode:** fanout_fanin",
           "- `dry` → findings_present",
           // The structured single-line digest carries the gateEvidenceNote.
-          `**Findings summary:** 4 angles reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`,
+          `**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`,
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
       },

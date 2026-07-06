@@ -270,3 +270,62 @@ test("detect-checkpoint-evidence: a fanout_fanin ledger missing a mandatory angl
     await rm(base, { recursive: true, force: true });
   }
 });
+
+test("detect-checkpoint-evidence: a fanout_fanin ledger naming a FOREIGN angle blocks merge at evidence time (AC2, through buildFanoutEnforcement)", async () => {
+  // Full read-path integration: the pool resolved by buildFanoutEnforcement must
+  // actually reach buildPreMergeGateCheck's foreign-angle check (guards against
+  // a field-name mismatch making the merge-time pool check dead code).
+  const { base, repoA, repoB } = await makeRepoWithWorktrees();
+  try {
+    const ledgerPath = buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" });
+    const fullLedgerPath = path.join(repoA, ledgerPath);
+    await mkdir(path.dirname(fullLedgerPath), { recursive: true });
+    await writeFile(fullLedgerPath, JSON.stringify({
+      repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
+      // Mandatory angle covered, but one recorded angle is outside the pool.
+      provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-checklist-matrix", reviewer: "review-a" }, { angle: "made-up-angle", reviewer: "review-b" }] },
+    }) + "\n", "utf8");
+
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: "42", currentHeadSha: HEAD,
+      draftGateMarker: NO_DRAFT_MARKER, preApprovalGateMarker: PA_MARKER,
+      config: ANGLE_CONFIG, cwd: repoB,
+    });
+    const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.deepEqual(pa.anglePool, ["pr-checklist-matrix", "dry"], "enforcement must carry the resolved pool as anglePool");
+    const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
+    assert.equal(check.ok, false);
+    assert.ok(
+      check.failures.some((f) => f.includes("outside the configured pool: made-up-angle")),
+      JSON.stringify(check.failures),
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("detect-checkpoint-evidence: a fanout_fanin ledger that simply OMITS provenance blocks merge when mandatory angles are configured", async () => {
+  const { base, repoA, repoB } = await makeRepoWithWorktrees();
+  try {
+    const ledgerPath = buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" });
+    const fullLedgerPath = path.join(repoA, ledgerPath);
+    await mkdir(path.dirname(fullLedgerPath), { recursive: true });
+    await writeFile(fullLedgerPath, JSON.stringify({
+      repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
+    }) + "\n", "utf8");
+
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: "42", currentHeadSha: HEAD,
+      draftGateMarker: NO_DRAFT_MARKER, preApprovalGateMarker: PA_MARKER,
+      config: ANGLE_CONFIG, cwd: repoB,
+    });
+    const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
+    assert.equal(check.ok, false);
+    assert.ok(
+      check.failures.some((f) => f.includes("no valid fan-out provenance") && f.includes("route to conductor")),
+      JSON.stringify(check.failures),
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});

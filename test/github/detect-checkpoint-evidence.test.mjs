@@ -1097,7 +1097,7 @@ test("buildPreMergeGateCheck accepts a delta-suffixed angle as covering its base
   assert.equal(result.ok, true, JSON.stringify(result.failures));
 });
 
-test("buildPreMergeGateCheck angle-coverage enforcement adds NO failure when provenance is absent (separate from requireFanoutProvenance)", () => {
+test("buildPreMergeGateCheck FAILS closed when mandatory angles are configured but the ledger records no provenance (shadow-ledger bypass)", () => {
   const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
     required: true,
     gates: [
@@ -1109,6 +1109,28 @@ test("buildPreMergeGateCheck angle-coverage enforcement adds NO failure when pro
         provenance: null,
         mandatoryAngles: ["pr-checklist-matrix"],
         anglePool: ["dry", "pr-checklist-matrix"],
+      },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("no valid fan-out provenance") && f.includes("route to conductor")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck adds NO failure for absent provenance when the gate configures no mandatory angles", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: null,
+        mandatoryAngles: [],
+        anglePool: ["dry", "kiss"],
       },
     ],
   });
@@ -1670,7 +1692,17 @@ function fanoutEvidenceGhEntries(executionMode, inlineReason = null) {
 async function writeLedger(tempDir, gate) {
   const dir = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-17");
   await import("node:fs/promises").then((fs) => fs.mkdir(dir, { recursive: true }));
-  await writeFile(path.join(dir, `${gate}-abc1234.json`), JSON.stringify({ gate, headSha: "abc1234", findings: [] }) + "\n", "utf8");
+  // Provenance covering the shipped extension-defaults mandatory angle for each
+  // gate: fanout_fanin ledgers must record it for merge-evidence angle coverage.
+  const mandatory = gate === "draft_gate" ? "pr-description" : "pr-checklist-matrix";
+  const provenance = {
+    distinctReviewers: 2,
+    perAngle: [
+      { angle: mandatory, reviewer: "review-a" },
+      { angle: gate === "draft_gate" ? "scope" : "dry", reviewer: "review-b" },
+    ],
+  };
+  await writeFile(path.join(dir, `${gate}-abc1234.json`), JSON.stringify({ gate, headSha: "abc1234", findings: [], provenance }) + "\n", "utf8");
 }
 
 test("detect-checkpoint-evidence surfaces executionMode in gate markers", async () => {

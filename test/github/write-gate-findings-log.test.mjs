@@ -616,3 +616,52 @@ test("checkProvenanceAngleCoverage passes for a fully-covered draft_gate and pre
     assert.equal(preApproval.warning, null);
   });
 });
+
+test("checkProvenanceAngleCoverage: excluding a mandatory angle does not deadlock the write (excludeAngles filters mandatoryAngles)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-exclude-deadlock-"));
+  try {
+    // The deadlock config: yagni is mandatory AND excluded. Without filtering,
+    // every write would fail — missing-mandatory if omitted, foreign if recorded.
+    await writeFile(path.join(repoRoot, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  preApproval:",
+      "    angles: [dry, kiss]",
+      "    mandatoryAngles: [pr-checklist-matrix, yagni]",
+      "    excludeAngles: [yagni]",
+      "",
+    ].join("\n"), "utf8");
+    const result = await checkProvenanceAngleCoverage(
+      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix" }] },
+      "pre_approval_gate",
+      { repoRoot },
+    );
+    assert.equal(result.warning, null);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("checkProvenanceAngleCoverage: additiveAngles widens the enforcement pool to the catalog (catalog angle is not foreign)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-additive-"));
+  try {
+    await writeFile(path.join(repoRoot, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  anglePool: [dry, catalog-extra]",
+      "  preApproval:",
+      "    angles: [dry]",
+      "    mandatoryAngles: []",
+      "    additiveAngles: true",
+      "",
+    ].join("\n"), "utf8");
+    const result = await checkProvenanceAngleCoverage(
+      { perAngle: [{ angle: "dry" }, { angle: "catalog-extra" }] },
+      "pre_approval_gate",
+      { repoRoot },
+    );
+    assert.equal(result.warning, null);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

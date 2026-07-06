@@ -1211,6 +1211,36 @@ export function resolveAnglePool(config) {
 }
 
 /**
+ * Resolve a gate's ANGLE ENFORCEMENT CONTRACT: the mandatory angles a
+ * fanout_fanin verdict must cover and the pool its recorded angles must stay
+ * within. Single source of truth for all angle-coverage enforcement consumers
+ * (ledger write, verdict-comment write, merge-evidence read) so they agree.
+ *
+ * - `mandatoryAngles` is filtered through `excludeAngles`: a config that
+ *   excludes a mandatory angle must not deadlock every fanout write (the
+ *   angle would be missing-mandatory if omitted yet foreign if recorded).
+ * - `pool` is `resolveGateAngles` (configured angles ∪ mandatoryAngles, minus
+ *   excludeAngles); when `additiveAngles` is enabled it widens to the global
+ *   lens catalog (`resolveAnglePool`) too — dynamic resolution may
+ *   legitimately dispatch catalog angles then — with `excludeAngles` still a
+ *   hard ceiling. A null pool skips the foreign-angle check entirely.
+ *
+ * @param {DevLoopConfig} config
+ * @param {"draft"|"preApproval"|"spike"} gate
+ * @returns {{ mandatoryAngles: string[], pool: string[]|null }}
+ */
+export function resolveGateAngleContract(config, gate) {
+  const gateConfig = resolveGateConfig(config, gate);
+  const excluded = new Set(gateConfig.excludeAngles);
+  const mandatoryAngles = gateConfig.mandatoryAngles.filter((a) => !excluded.has(a));
+  let pool = resolveGateAngles(config, gate);
+  if (gateConfig.additiveAngles && pool !== null) {
+    pool = [...new Set([...pool, ...resolveAnglePool(config)])].filter((a) => !excluded.has(a));
+  }
+  return { mandatoryAngles, pool };
+}
+
+/**
  * Resolve gate angles dynamically when `dynamicAngles` is enabled in config.
  *
  * Uses diff analysis helpers (from ../analysis/*) to filter the

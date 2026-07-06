@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngles, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -1182,9 +1182,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // data to validate.
   if (structuredFindings && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
     const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
-    const pool = resolveGateAngles(config, gateKey);
+    const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(structuredFindings, {
-      mandatoryAngles: activeGateConfig.mandatoryAngles,
+      mandatoryAngles,
       pool,
     });
     if (missingMandatory.length > 0) {
