@@ -15,7 +15,8 @@ Behavior:
   - honors an explicit \`--assignee <login>\` / \`-a <login>\` when supplied (no default injected)
   - rejects \`--ready\` before invoking \`gh\`
   - detects missing \`Closes #N\` / \`Fixes #N\` in \`--body\` or \`--body-file\` content (non-fatal stderr warning)
-  - \`--lightweight\` (consumed here, never forwarded to \`gh\`): when an explicit \`--body\`/
+  - \`--lightweight\` (consumed here in every form — bare or \`=true/1/false/0\`, last
+    occurrence wins — never forwarded to \`gh\`): when an explicit \`--body\`/
     \`--body-file\` also carries no \`Closes #N\`/\`Fixes #N\`, the new PR is issue-less
     lightweight and is auto-enqueued as a board PR item in the configured In Progress column
     (reuses \`queue.projectNumber\` / \`queue.boardTitle\` from \`.devloops\`, same as the queue
@@ -39,12 +40,17 @@ Exit codes:
   N  same non-zero exit code returned by \`gh pr create\``.trim();
 const parseError = buildParseError(USAGE);
 const READY_FLAG_PATTERN = /^--ready(?:$|=)/u;
-const LIGHTWEIGHT_FLAG_PATTERN = /^--lightweight$/u;
+// Bare and inline-boolean forms, mirroring DRAFT_FLAG_PATTERN below: every
+// matching token is consumed (never forwarded to gh, which rejects unknown
+// flags), and the LAST occurrence decides — bare or =true/=1 enables,
+// anything else (=false, =0, ...) disables.
+const LIGHTWEIGHT_FLAG_PATTERN = /^--lightweight(?:=(.*))?$/iu;
 // Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
 const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
 const PR_URL_NUMBER_PATTERN = /\/pull\/(\d+)(?:\D|$)/u;
 const DRAFT_FLAG_PATTERN = /^--draft(?:=(.*))?$/iu;
-const DRAFT_TRUE_VALUE_PATTERN = /^(?:true|1)$/iu;
+// Shared inline-boolean truthiness for --draft= and --lightweight= values.
+const TRUE_FLAG_VALUE_PATTERN = /^(?:true|1)$/iu;
 // Detect both the long `--assignee`/`--assignee=<login>` forms and the `-a`
 // short flag that `gh pr create` documents, so an explicit assignee in either
 // form suppresses the `--assignee @me` default (otherwise a caller passing
@@ -137,7 +143,7 @@ export function buildCreatePrArgs(argv) {
   }
   const draftTokens = args.filter((token) => DRAFT_FLAG_PATTERN.test(token));
   const lastDraftToken = draftTokens.length > 0 ? draftTokens.at(-1) : null;
-  const lastDraftSuppliesDraft = lastDraftToken === "--draft" || (typeof lastDraftToken === "string" && DRAFT_TRUE_VALUE_PATTERN.test(lastDraftToken.slice("--draft=".length)));
+  const lastDraftSuppliesDraft = lastDraftToken === "--draft" || (typeof lastDraftToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastDraftToken.slice("--draft=".length)));
   const hasAssignee = args.some((token) => ASSIGNEE_FLAG_PATTERN.test(token));
   return {
     help: false,
@@ -178,7 +184,10 @@ export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = 
   });
 }
 export async function main(argv = process.argv.slice(2), runtime = {}) {
-  const lightweight = argv.some((token) => LIGHTWEIGHT_FLAG_PATTERN.test(token));
+  // Last occurrence wins, same as the --draft handling in buildCreatePrArgs.
+  const lastLightweightToken = argv.filter((token) => LIGHTWEIGHT_FLAG_PATTERN.test(token)).at(-1) ?? null;
+  const lightweight = lastLightweightToken === "--lightweight" ||
+    (typeof lastLightweightToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastLightweightToken.slice("--lightweight=".length)));
   const forwardedArgv = argv.filter((token) => !LIGHTWEIGHT_FLAG_PATTERN.test(token));
   const { help, ghArgs } = buildCreatePrArgs(forwardedArgv);
   if (help) {

@@ -334,3 +334,50 @@ test("create-pr without --lightweight never calls the board and never prints a b
     assert.equal(ghCalls.length, 1); // gh pr create only — no board calls
   });
 });
+
+// --- --lightweight boolean forms: every token consumed, last occurrence wins ---
+// No .devloops board in the temp cwd, so an ENABLED run reports the
+// no-board-configured JSON line (proof the flag was consumed and honored)
+// while a DISABLED run prints the plain PR URL only. Either way the gh log
+// must never contain a --lightweight token.
+
+async function runLightweightForms(tempDir, lightweightTokens) {
+  const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/42\n" }], { logCalls: true });
+  const result = await runNode(
+    ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", "no closing keyword", ...lightweightTokens],
+    { env, cwd: tempDir },
+  );
+  assert.equal(result.code, 0);
+  const ghCalls = (await readFile(ghLogPath, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  assert.equal(ghCalls.length, 1); // gh pr create only — no board calls (no board configured)
+  assert.equal(ghCalls[0].some((arg) => arg.startsWith("--lightweight")), false); // consumed, never forwarded
+  return result.stdout;
+}
+
+test("create-pr --lightweight=true enables the lightweight path (inline boolean form)", async () => {
+  await withTempDir(async (tempDir) => {
+    const stdout = await runLightweightForms(tempDir, ["--lightweight=true"]);
+    assert.deepEqual(JSON.parse(stdout.trim().split("\n").at(-1)), { board: { enqueued: false, reason: "no-board-configured" } });
+  });
+});
+
+test("create-pr --lightweight=false disables the lightweight path and is NOT forwarded to gh", async () => {
+  await withTempDir(async (tempDir) => {
+    const stdout = await runLightweightForms(tempDir, ["--lightweight=false"]);
+    assert.equal(stdout, "https://github.com/owner/repo/pull/42\n");
+  });
+});
+
+test("create-pr --lightweight=false then bare --lightweight: last occurrence wins (enabled)", async () => {
+  await withTempDir(async (tempDir) => {
+    const stdout = await runLightweightForms(tempDir, ["--lightweight=false", "--lightweight"]);
+    assert.deepEqual(JSON.parse(stdout.trim().split("\n").at(-1)), { board: { enqueued: false, reason: "no-board-configured" } });
+  });
+});
+
+test("create-pr bare --lightweight then --lightweight=false: last occurrence wins (disabled)", async () => {
+  await withTempDir(async (tempDir) => {
+    const stdout = await runLightweightForms(tempDir, ["--lightweight", "--lightweight=false"]);
+    assert.equal(stdout, "https://github.com/owner/repo/pull/42\n");
+  });
+});
