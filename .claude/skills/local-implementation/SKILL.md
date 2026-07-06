@@ -61,14 +61,15 @@ When the local spec already lives in a tracker issue:
 - sync durable scope / acceptance / status changes back to the tracker issue rather than maintaining a duplicate local phase doc
 - keep `tmp/` as temporary local execution state only; it does not become a second durable spec surface
 - for tracker-backed sessions, the handoff path is always: push the working branch → open a PR → merge via GitHub
-- for tracker-backed sessions, always open PRs through the canonical `dev-loops pr create` path, which is ALWAYS draft and always assigned — self-assigned by default (`--assignee @me` when none is given; honors an explicit `--assignee <login>` / `-a <login>`), never via raw `gh pr create`. The PR body must contain `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge. When `.devloops` sets `workflow.requireDraftFirst` to true, use `dev-loops pr create --assignee @me ...`. Do not create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy for the current PR scope. The draft gate inspection is a real workflow boundary.
+- <!-- rule: LOCAL-PR-CREATE-CANONICAL --> for tracker-backed sessions, you MUST open PRs through the canonical `dev-loops pr create` path — always draft and always assigned — self-assigned by default (`--assignee @me` when none is given; honors an explicit `--assignee <login>` / `-a <login>`) — and MUST NOT open them via raw `gh pr create`. The PR body MUST contain `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge. When `.devloops` sets `workflow.requireDraftFirst` to true, use `dev-loops pr create --assignee @me ...`. Do not create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy for the current PR scope. The draft gate inspection is a real workflow boundary.
 - do not suggest a direct local-main merge for tracker-backed sessions; do not merge the working branch into local `main` at phase completion
 
 ## Primary execution rules
 
 ### Step 0: Pre-flight gate (mandatory for local_implementation)
 
-For the `local_implementation` strategy, before any planning or implementation mutation, run the pre-flight gate:
+<!-- rule: LOCAL-PREFLIGHT-GATE-MANDATORY -->
+For the `local_implementation` strategy, before any planning or implementation mutation, you MUST run the pre-flight gate:
 
 ```sh
 node scripts/loop/pre-flight-gate.mjs --expected-branch <working-branch> --check-subagents
@@ -80,22 +81,14 @@ Before creating or reusing a worktree for local implementation, use the canonica
 node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>
 ```
 
-This validates:
-- Worktree isolation (current directory is under `tmp/worktrees/`)
-- Branch identity (current branch matches the working branch)
-- Subagent availability (subagents should be used for fan-out when available)
+This validates worktree isolation (current directory under `tmp/worktrees/`) and branch identity (current branch matches the working branch); `--check-subagents` only reports subagent availability and is advisory (fails-open, does not block the gate). If the gate fails, **stop and fix the violation** before proceeding — do not bypass it in normal workflow execution.
 
-If the gate fails, **stop and fix the violation** before proceeding. Do not bypass the gate in normal workflow execution.
-
-Note: `--check-subagents` is advisory — it reports availability but does not block the gate. The worktree and branch checks are the mandatory gates.
-
-This gate does **not** apply to other routed strategies (`copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `wait_watch`, `final_approval`, `issue_intake`). Those strategies have their own execution rules and may edit code from any checkout as needed.
-
-Development-only bypass (`DEVLOOPS_PREFLIGHT_BYPASS=1`) exists for testing the gate itself but must not be used in production workflow runs. The bypass variable is a testing convenience, not an operational escape hatch.
+This gate does **not** apply to other routed strategies (`copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `wait_watch`, `final_approval`, `issue_intake`); those strategies have their own execution rules and may edit code from any checkout as needed. The development-only bypass (`DEVLOOPS_PREFLIGHT_BYPASS=1`) exists for testing the gate itself and MUST NOT be used in production workflow runs — it is a testing convenience, not an operational escape hatch.
 
 ## Narrow failure-triage fast path
 
-When resuming local implementation with dirty work or an observed failing command, use this path before broad discovery:
+<!-- rule: LOCAL-FAILURE-TRIAGE-ORDER -->
+When resuming local implementation with dirty work or an observed failing command, you MUST follow this ordered path before broad discovery:
 
 1. run startup once from the relevant worktree/context
 2. inspect current state with `git status` and the changed files
@@ -109,20 +102,13 @@ Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-interna
 
 ### Step 1
 
-- Implement **one phase at a time**.
-- Do not refine later phases in detail before the current phase is complete.
+- <!-- rule: LOCAL-PHASE-ONE-AT-A-TIME --> You MUST implement **one phase at a time** and MUST NOT refine later phases in detail before the current phase is complete.
 - Use the `refiner` agent for phase-refinement work when subagents are available; escalate RFC-worthy technical decisions to the parent session / human operator.
-- Work **test-first** for all non-trivial logic.
-- Maintain **90% coverage** thresholds.
+- <!-- rule: LOCAL-TEST-FIRST-COVERAGE --> You MUST work **test-first** for all non-trivial logic and SHOULD maintain **90% coverage** thresholds (coverage is not enforced by the shipped verify config; treat it as the working target).
 - Log detailed iteration artifacts under `tmp/` using the required structure below.
-- For phase-doc-backed local sessions, keep durable phase intent and acceptance criteria in [Phase Plan](../../docs/phases/phase-x.md); for tracker-backed local sessions, keep that durable intent in the tracker issue and do not duplicate it into [Phase Plan](../../docs/phases/phase-x.md). Keep detailed execution artifacts in `tmp/`.
-- Treat `tmp/` as temporary local execution state. Do not rely on it as durable repo history and do not force-add it to git unless the user explicitly wants checked-in examples or fixtures.
+- Spec-of-record split (phase-doc-backed vs. tracker-backed vs. lightweight): see [Tracker-backed local implementation](#tracker-backed-local-implementation) above.
 - When a phase changes durable product truth in ways `PLAN.md` should express (for example command surface, accepted product decisions, resolved open questions, or scope changes), update [Project Plan](../../PLAN.md) before closing the phase.
-- Do implementation work on a dedicated local branch, not directly on `main`.
-- If the repo has no commits yet, still create the working branch first so the first commits land off `main`; only move `main` forward after review and validation.
-- Use small atomic local commits as progress checkpoints whenever a coherent slice is green and reviewable.
-- Before a branch is considered review-complete, approval-ready, merge-ready, or ready for final handoff, run the default pre-approval gate as a full review / fix loop with the review angles resolved from config (`resolveGateAngles(config, "preApproval")`), then apply accepted fixes and rerun validation. Shipped defaults include the `deep` angle.
-- A phase is only fully complete when its scoped work, required support files, artifacts, validation, review/fix pass, commit(s), and finalization (merge into local `main` for phase-doc-backed sessions; PR merge for tracker-backed sessions) are done, or when the only remaining step is an explicitly noted authorization-gated finalization action.
+- Branch, commit, pre-approval-gate, and finalization mechanics: see [Branch / review / merge policy](#branch--review--merge-policy), [Commit policy](#commit-policy), and [Implementation loop for the phase](#implementation-loop-for-the-phase) below.
 - When subagents are used, log what each subagent was asked to do and what it concluded.
 - If [Project Plan](../../PLAN.md) is too rough or ambiguous to safely start the current phase, do not guess: run a clarification/interview step with the user first.
 
@@ -132,31 +118,13 @@ Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review
 
 ## Light mode (small changes)
 
-Light mode is wired into gate dispatch. A PR that is **under threshold** (≤ `maxLines` lines changed AND ≤ `maxFiles` files, per `.devloops` field `localImplementation.lightMode` — this repo sets `maxLines: 20`, `maxFiles: 2`; the shipped built-in default has light mode disabled (`enabled: false`); if enabled without explicit values it falls back to `maxFiles: 3` / `maxLines: 200`) AND carries no `gate:full` label collapses BOTH `draft_gate` and `pre_approval_gate` to a single inline single-agent correctness + no-op check. The Copilot review request and its polling are skipped.
-
-**Escalation:**
-1. Auto-escalate — if the inline check surfaces any finding whose severity is in the gate's `blockCleanOnFindingSeverities` (i.e. ≥ `worth-fixing-now`), dispatch escalates to full fan-out.
-2. Label override — the `gate:full` label forces full fan-out regardless of PR size.
-
-The `draft_gate` boundary (draft → ready) is still recorded because `requireDraftFirst` is honored: light mode only changes HOW the gate runs (inline vs fan-out), not WHETHER the draft boundary exists.
-
-Dispatch is resolved deterministically via `resolveGateDispatchMode(config, gate, { scope, hasFullLabel, inlineFindingSeverities })` from `@dev-loops/core/config`. `scripts/loop/resolve-gate-dispatch.mjs` is the CLI wrapper the orchestrator calls, combining `detect-change-scope.mjs` output with the `gate:full` label fact.
+<!-- rule: LOCAL-LIGHT-MODE-CONFIG-SURFACE -->
+`localImplementation.lightMode` (`.devloops` field; this repo sets `maxLines: 20`, `maxFiles: 2`) is this skill's config surface for light-mode gate dispatch. Gate-collapse mechanics, escalation, and dispatch resolution (`resolveGateDispatchMode`, `scripts/loop/resolve-gate-dispatch.mjs`) are owned by [Light-mode inline acceptance](../../docs/gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs); this skill MUST NOT redefine them.
 
 Use `scripts/loop/detect-change-scope.mjs` to determine scope:
 ```sh
 node scripts/loop/detect-change-scope.mjs
 ```
-
-**Override threshold:**
-```yaml
-localImplementation:
-  lightMode:
-    enabled: true
-    maxFiles: 2
-    maxLines: 20
-```
-
-Scope above threshold falls back to the full fan-out/fan-in path.
 
 ## Deterministic logging structure
 
@@ -403,7 +371,8 @@ If the review finds real issues, revise the merged plan and briefly update the r
 
 ### 6. Only then start implementation
 
-Do not begin coding before the merged phase plan has passed review.
+<!-- rule: LOCAL-PLAN-REVIEW-GATE -->
+You MUST NOT begin coding before the merged phase plan has passed review.
 Update `manifest.json` to show that phase implementation has started.
 
 ## Task breakdown & delegation
@@ -422,7 +391,8 @@ into parallel executable tasks and dispatch them to the right specialist subagen
 
 ### Delegation contract
 
-Dispatch implementation tasks to dedicated specialist agents:
+<!-- rule: LOCAL-DELEGATION-TABLE -->
+Implementation tasks MUST be dispatched to dedicated specialist agents per this table:
 
 | Task type | Delegate to |
 |---|---|
@@ -536,8 +506,8 @@ After the phase plan passes review:
 9. Write `Retrospective` (`tmp/phases/phase-x/retrospective.md`) using [Retrospective Template](../dev-loop/templates/retrospective.md).
 10. Update `tmp/phases/phase-x/manifest.json` and `tmp/phases/index.json`.
 11. Update [Implementation State](../../docs/IMPLEMENTATION_STATE.md).
-12. **Exit validation gate — no uncommitted changes.** Before the subagent session terminates, run `git status --porcelain` and verify the output is empty. If uncommitted changes exist, first determine whether they are intended implementation changes or unintended/post-validation deltas. Revert any unintended or speculative changes. For intended changes, rerun the narrowest justified validation (`npm run verify` or equivalent) before staging and committing with an appropriate message; for tracker-backed sessions, also push the branch. A subagent session that exits with uncommitted changes in the worktree is a workflow defect and must not be treated as a clean completion. After committing, verify `git status --porcelain` is empty before declaring phase completion.
-13. For tracker-backed sessions, create the PR from the working branch using the canonical `dev-loops pr create --assignee @me --repo <owner/name> --base main --head <branch> --title "..." --body-file <body-file>` (always draft, self-assigned by default; `--assignee @me` is the default and is shown here for clarity). When the `dev-loops` CLI helper is unavailable, use the equivalent `create-pr.mjs` script directly: `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base main --head <branch> --title "..." --body-file <body-file>`. Never open a PR with raw `gh pr create`. The PR body must contain `Closes #N` (or `Fixes #N`) for the linked issue. Do not create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy.
+12. <!-- rule: LOCAL-COMMIT-BEFORE-EXIT --> **Exit validation gate — no uncommitted changes.** Before the subagent session terminates, run `git status --porcelain` and verify the output is empty. If uncommitted changes exist, first determine whether they are intended implementation changes or unintended/post-validation deltas. Revert any unintended or speculative changes. For intended changes, rerun the narrowest justified validation (`npm run verify` or equivalent) before staging and committing with an appropriate message; for tracker-backed sessions, also push the branch. A subagent session that exits with uncommitted changes in the worktree is a workflow defect and MUST NOT be treated as a clean completion. After committing, verify `git status --porcelain` is empty before declaring phase completion.
+13. For tracker-backed sessions, create the PR from the working branch: `dev-loops pr create --assignee @me --repo <owner/name> --base main --head <branch> --title "..." --body-file <body-file>` (fallback when the CLI helper is unavailable: `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base main --head <branch> --title "..." --body-file <body-file>`); never raw `gh pr create`. Draft/assignment/`Closes #N` policy: [LOCAL-PR-CREATE-CANONICAL](#tracker-backed-local-implementation) above.
 14. If authorized, merge the fully reviewed, locally validated phase branch back into local `main` (phase-doc-backed sessions) or proceed through the PR gate pipeline (tracker-backed sessions).
 15. If authorization for PR creation or merge is still pending (commit authorization is already enforced by the exit validation gate in step 12), mark the phase as `awaiting-finalization` rather than `completed`, and record exactly which finalization step is pending.
 
@@ -550,85 +520,32 @@ The retrospective must capture:
 - what should change in the skill or workflow next time
 - what a fresh session should know before the next phase
 
-This is the infrastructure for self-improvement. Do not skip it.
+<!-- rule: LOCAL-RETROSPECTIVE-REQUIRED -->
+This is the infrastructure for self-improvement; you MUST NOT skip it.
 
 ## Dev mode
 
-Dev mode is for improving the local implementation loop itself while using it.
+Dev mode improves the local implementation loop itself while using it. A repo may declare a default via `.devloops` field `workflow.devModeDefault`; explicit user opt-in/opt-out for the current run still wins over that default. Trigger it when the user explicitly asks for dev mode, self-improvement mode, or says they want the skill to refine itself as it goes.
 
-A repository may also declare a formal-dev-mode default through `.devloops` field `workflow.devModeDefault`. Treat that config as the policy source of truth when present, but explicit user opt-in or opt-out for the current run still wins. Runtime consumption of that config may be staged separately from this documentation update.
+After the normal phase summary and retrospective, run one extra bounded self-improvement pass:
 
-Trigger it when the user explicitly asks for dev mode, self-improvement mode, or says they want the skill to refine itself as it goes.
+1. Collect a deterministic context bundle: `../dev-loop/scripts/dev-mode-context.mjs` → `tmp/phases/phase-x/dev-mode-context.json`.
+2. Review the phase artifacts/logs for planning quality, review quality, validation friction, bash exit-code-1 patterns, and places where prompts or deterministic tooling should improve.
+3. Write `Dev Mode Retrospective` (`tmp/phases/phase-x/dev-mode-retrospective.md`) — required; name the highest-value prompt/workflow follow-ups revealed by the phase.
+4. Optionally write `Dev Mode Review` (`tmp/phases/phase-x/dev-mode-review.md`) when separate analytical notes help.
+5. Apply at least one bounded follow-up update to a relevant skill and/or agent prompt (supporting tooling/docs/template changes may accompany it but do not replace the prompt update), kept phase-bounded and tied directly to the retrospective findings.
+6. Write `Dev Mode Skill Changes` (`tmp/phases/phase-x/dev-mode-skill-changes.md`) recording which prompts and supporting changes landed; if no prompt update can be justified safely, stop and report that dev-mode exit criteria were not met.
+7. If skill scripts or deterministic tooling changed, rerun the skill-local tests.
+8. Stop after this bounded pass — do not recurse into endless self-editing loops.
 
-In dev mode, after the normal phase summary and retrospective are written, run one extra bounded self-improvement pass before moving on:
-
-1. collect a deterministic context bundle for the phase using:
-   - `../dev-loop/scripts/dev-mode-context.mjs`
-   - output to `tmp/phases/phase-x/dev-mode-context.json`
-2. review the phase artifacts and logs with emphasis on the workflow itself:
-   - planning quality
-   - review quality
-   - validation friction
-   - bash exit-code-1 patterns
-   - places where skill or agent prompts should be tightened
-   - places where deterministic tooling should replace ad hoc work
-3. write `Dev Mode Retrospective` (`tmp/phases/phase-x/dev-mode-retrospective.md`)
-   - this is the required dev-mode retrospective artifact
-   - it should name the highest-value prompt/workflow follow-ups revealed by the phase
-4. optionally write `Dev Mode Review` (`tmp/phases/phase-x/dev-mode-review.md`) when separate analytical notes help support the retrospective
-5. apply at least one bounded follow-up update to a relevant skill and/or agent prompt
-   - deterministic tooling, docs, templates, or tests may accompany that change
-   - but they do not replace the required prompt update
-   - keep the change phase-bounded and tied directly to the retrospective findings
-6. write `Dev Mode Skill Changes` (`tmp/phases/phase-x/dev-mode-skill-changes.md`)
-   - record which skill and/or agent prompts changed
-   - record any supporting tooling/docs/template changes that accompanied them
-   - if no prompt update can be justified safely, stop and report that dev-mode exit criteria were not met
-7. if skill scripts or deterministic tooling changed, rerun the skill-local tests
-8. stop after this bounded self-improvement pass; do not recurse into endless self-editing loops
-
-Dev mode is still phase-bounded. It improves the loop around the completed phase; it does not authorize work on the next product phase.
+Dev mode is still phase-bounded: it improves the loop around the completed phase and does not authorize work on the next product phase.
 
 ## tmp/ logging requirements
 
-At minimum, each phase should leave behind:
-- a durable phase doc at [Phase Plan](../../docs/phases/phase-x.md)
-- local `tmp/` execution artifacts needed to resume and audit the phase, including:
-  - `manifest.json`
-  - `Variant A` (`tmp/phases/phase-x/variant-a.md`)
-  - `Variant B` (`tmp/phases/phase-x/variant-b.md`)
-  - `merged-plan.md`
-  - `review.md`
-  - `summary.md`
-  - `retrospective.md`
-  - optional `Variant C` (`tmp/phases/phase-x/variant-c.md`) when a third variant was actually useful
-  - `bash-exit-1.jsonl` when any bash call during the phase exited with code `1`
-  - `clarification.md` when a plan-sufficiency interview or auto-clarification step was needed
-  - subagent summaries when subagents were used
-  - raw subagent outputs only when they were saved separately on purpose
-  - in dev mode: `dev-mode-context.json`, `dev-mode-retrospective.md`, and `dev-mode-skill-changes.md`
-  - optional in dev mode: `dev-mode-review.md` when separate analytical notes were useful
+<!-- rule: LOCAL-TMP-EPHEMERAL-STATE -->
+The required durable-doc + `tmp/` artifact set for a phase is defined once in [Deterministic logging structure](#deterministic-logging-structure); this section MUST NOT duplicate that list. Those artifacts are normally temporary and do not need to be checked into git; do not force-add them unless the user explicitly wants checked-in examples or fixtures. Also log validation output summaries and notable decisions if they help evaluate the local dev loop later.
 
-These `tmp/` artifacts are normally temporary and do not need to be checked into git.
-
-Also log validation output summaries and notable decisions if they help evaluate the local dev loop later.
-
-Additionally, append every bash call that exits with code `1` to:
-- `tmp/phases/phase-x/bash-exit-1.jsonl`
-
-Use the deterministic helper:
-- `../dev-loop/scripts/log-bash-exit-1.mjs`
-
-Each line should be one JSON object with at least:
-- `timestamp`
-- `phase`
-- `cwd`
-- `command`
-- `exitCode`
-- `purpose`
-- `summary`
-
-If useful, also include truncated `stdout` and `stderr` fields or a path to a larger saved artifact. This log is for improving the local dev loop itself, so do not skip it just because the command was exploratory.
+Additionally, append every bash call that exits with code `1` to `tmp/phases/phase-x/bash-exit-1.jsonl` using the deterministic helper `../dev-loop/scripts/log-bash-exit-1.mjs`. Each line is one JSON object with at least `timestamp`, `phase`, `cwd`, `command`, `exitCode`, `purpose`, `summary` (optionally truncated `stdout`/`stderr` or a path to a larger saved artifact). This log improves the local dev loop itself, so do not skip it just because the command was exploratory.
 
 ## Stop conditions
 
@@ -636,29 +553,20 @@ See [Stop Conditions](../docs/stop-conditions.md). Local-specific stops: phase c
 
 ## Branch / review / merge policy
 
-- Do not implement directly on `main`.
-- Start or switch to a dedicated local working branch before the first mutating step.
-- If the repository is unborn (no commits yet), still create the working branch first and make the initial atomic commits there.
-- Use atomic local commits to log progress, but only for coherent reviewable slices.
-- Before merging, run a full parallel review / fix loop and resolve accepted findings on the same branch.
-- Rerun validation after review-driven fixes.
-- A phase is not operationally closed until its branch state is captured in commit history and the reviewed branch has been finalized according to session type (merged into local `main` for phase-doc-backed sessions; merged via GitHub PR for tracker-backed sessions), unless authorization for that finalization is still pending.
-- For tracker-backed sessions, the handoff path is always: push the working branch → open a PR → merge via GitHub; never merge the working branch into local `main`.
-- PR creation always goes through `dev-loops pr create`, which is ALWAYS draft and always assigned — self-assigned by default (`--assignee @me` when none is given; honors an explicit `--assignee <login>` / `-a <login>`), never via raw `gh pr create`, and the PR body must contain `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge. When `.devloops` sets `workflow.requireDraftFirst` to true, use `dev-loops pr create --assignee @me ...`. Do not create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy for the current PR scope. The draft gate inspection is a real workflow boundary, so a new PR must exist in draft before `gh pr ready` is eligible.
-- When authorization is pending, record the phase as `awaiting-finalization` and describe the exact missing step.
+- Implement on a dedicated local working branch, never directly on `main`, switching to it before the first mutating step; if the repo is unborn (no commits yet), still create the working branch first and make the initial atomic commits there.
+- Use atomic local commits to log progress, but only for coherent reviewable slices — [Commit policy](#commit-policy) below governs commit timing/authorization.
+- Before merging, run a full parallel review / fix loop and resolve accepted findings on the same branch; rerun validation after review-driven fixes.
+- A phase is not operationally closed until its branch state is captured in commit history and the reviewed branch has been finalized according to session type (merged into local `main` for phase-doc-backed sessions; merged via GitHub PR for tracker-backed sessions); when authorization for that finalization is still pending, record the phase as `awaiting-finalization` and describe the exact missing step.
+- For tracker-backed sessions, the handoff path is always: push the working branch → open a PR → merge via GitHub; never merge the working branch into local `main`. PR creation follows [LOCAL-PR-CREATE-CANONICAL](#tracker-backed-local-implementation) above; a new PR must exist in draft before `gh pr ready` is eligible.
 - For phase-doc-backed sessions, merge the fully reviewed, locally validated branch back into local `main` when authorized.
 - Behind-branch integration before merge (for example a sibling PR merged first and both touch shared files): prefer a merge commit (`git merge origin/main`) over rebase + force-push. Since dev-loop PRs are squash-merged, intermediate branch history is discarded at merge time, so a merge commit lands an identical result on `main` while avoiding a non-fast-forward push to the remote. Force-push (`--force-with-lease` only, never bare `--force`) remains acceptable only for a branch the loop solely owns and where no integration alternative exists (rare); document that carve-out rather than leaving it implicit. After any integration that changes the head SHA, re-verify gate evidence at the new head (existing behavior — see [Merge Preconditions](../docs/merge-preconditions.md#required-before-merge)).
 
 ## Commit policy
 
-- Do not commit speculative work.
-- Do not commit before the relevant validation for that slice passes.
+- Do not commit speculative work or before the relevant validation for that slice passes.
 - Immediately before every `git add && git commit` sequence, assert branch identity with `git branch --show-current` and stop if it does not match the intended local working branch.
-- Keep commits small and phase-bounded.
-- Do not leave completed phase work stranded off `main`; once the reviewed branch is ready and authorized, finalize it according to session type (merge into local `main` for phase-doc-backed sessions; complete via PR merge for tracker-backed sessions).
-- Commit only when the coordination/main agent has decided the slice or phase is ready. **Exception:** in non-interactive subagent sessions, commit authorization is implicit — the subagent was dispatched to implement and must commit before exiting (see the commit sub-bullet under implementation loop step 3 and the exit validation gate in step 12).
+- Commit only when the coordination/main agent has decided the slice or phase is ready. **Exception:** in non-interactive subagent sessions, commit authorization is implicit — the subagent was dispatched to implement and must commit before exiting, enforced by [LOCAL-COMMIT-BEFORE-EXIT](#implementation-loop-for-the-phase) (implementation loop step 12; `git status --porcelain` must be empty before the session terminates).
 - If commit/merge authorization has not yet been given, do not call the phase `completed`; call it `awaiting-finalization` instead.
-- **Subagent exit contract:** before a subagent session terminates, the exit validation gate (implementation loop step 12) must pass — `git status --porcelain` must be empty. A subagent that exits with uncommitted changes in the worktree has not completed its task, regardless of what was implemented.
 
 ## Anti-patterns
 

@@ -330,6 +330,14 @@ not — leaving today's rejection byte-identical:
   scope is not even measured);
 - the verdict records a non-empty `--inline-reason`.
 
+<!-- rule: GATE-EXEC-LIGHT-ESCALATION -->
+`GATE-EXEC-LIGHT-ESCALATION`: An inline pass surfacing a finding at a blocking severity MUST escalate to the full fan-out — escalation is two-trigger: the `gate:full` label override, and any finding at a severity in the gate's `blockCleanOnFindingSeverities`. The escalation goes to the full fan-out (`resolveGateDispatchMode` returns `mode: "full_fanout"` with `reason: "escalated"`) — the
+inline verdict never absorbs a blocking finding. When `lightMode` is enabled without
+explicit thresholds, the built-in defaults apply (`maxFiles: 3` / `maxLines: 200`); the
+shipped default is `enabled: false`. Light mode changes HOW the gate runs (inline vs
+fan-out), never WHETHER the draft boundary exists — `workflow.requireDraftFirst` is
+honored regardless.
+
 Evidence retention stays uniform: a light-accepted inline verdict **still requires a
 findings-log ledger** for the reviewed head (the single-agent path's
 `write-gate-findings-log.mjs` writes it). `requireFanoutProvenance`, when enabled, is

@@ -4,34 +4,44 @@ import {
   readRepo,
   test,
 } from "../imported-assets-helpers.mjs";
+import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
 
-test("local-implementation skill keeps narrow failure-triage ordering", async () => {
-  const content = await readRepo("skills/local-implementation/SKILL.md");
+const SKILL_PATH = "skills/local-implementation/SKILL.md";
 
-  const orderedPatterns = [
-    /## Narrow failure-triage fast path/i,
-    /run startup once from the relevant worktree/i,
-    /inspect current state[\s\S]{0,120}`git status`[\s\S]{0,120}changed files/i,
+test("local-implementation skill owns the narrow failure-triage order by rule ID", async () => {
+  assertRulePresent("LOCAL-FAILURE-TRIAGE-ORDER");
+  assertRuleOwned("LOCAL-FAILURE-TRIAGE-ORDER", SKILL_PATH);
+
+  const content = await readRepo(SKILL_PATH);
+  const headingIndex = content.indexOf("## Narrow failure-triage fast path");
+  assert.ok(headingIndex !== -1, "the Narrow failure-triage fast path section must exist");
+  const afterHeading = content.slice(headingIndex + 1);
+  const nextHeading = afterHeading.search(/^## /m);
+  const section = afterHeading.slice(0, nextHeading === -1 ? undefined : nextHeading);
+  const numberedSteps = section.match(/^\d+\.\s/gm) ?? [];
+
+  assert.ok(numberedSteps.length >= 7, "narrow failure-triage fast path should keep its 7 ordered steps");
+
+  // The ORDER is the rule's semantics: startup → inspect → reproduce →
+  // narrow search → minimal patch → focused smoke → default verification.
+  const orderedKeySteps = [
+    /startup once/i,
+    /`git status`/,
     /reproduce[^\n]*failing command/i,
-    /exact-pattern search in changed files/i,
-    /patch the minimum call sites/i,
+    /exact-pattern search/i,
+    /minimum call sites/i,
     /focused smoke checks/i,
     /default verification/i,
-    /general tooling-internals and duplicate-broad-search prohibition/i,
   ];
-
-  // Verify all patterns are present
-  assertMatchesAll(content, orderedPatterns, "skills/local-implementation/SKILL.md");
-
-  // Verify patterns appear in the declared order
   let lastPos = -1;
-  for (const pattern of orderedPatterns) {
-    const match = content.match(pattern);
-    assert.ok(match, `skills/local-implementation/SKILL.md should match ${pattern}`);
-    const pos = match.index;
-    assert.ok(pos > lastPos, `skills/local-implementation/SKILL.md pattern "${pattern}" (at ${pos}) should appear after previous match (last at ${lastPos})`);
-    lastPos = pos;
+  for (const pattern of orderedKeySteps) {
+    const match = section.match(pattern);
+    assert.ok(match, `failure-triage section should match ${pattern}`);
+    assert.ok(match.index > lastPos, `failure-triage step ${pattern} (at ${match.index}) should appear after the previous step (last at ${lastPos})`);
+    lastPos = match.index;
   }
+
+  assert.match(section, /general tooling-internals and duplicate-broad-search prohibition/i);
 });
 
 test("anti-patterns doc owns the general tooling-internals guidance", async () => {
