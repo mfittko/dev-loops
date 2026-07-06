@@ -38,7 +38,7 @@ For the active phase, require and produce:
 - if no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix
 - explicit risks, watchpoints, and unresolved questions
 - validation steps and tests to write first
-- durable decisions that should be preserved in the phase doc
+- durable decisions that SHOULD be preserved in the phase doc
 - when the phase includes a bounded audit or scan: prioritized findings, the highest-value follow-up candidates, and an explicit statement of what the current phase will not rewrite or broaden
 - When an audit artifact is provided, treat it as a first-class planning input: summarize the audited scope, list prioritized findings, include the highest-value follow-up candidates, and classify each meaningful finding as exactly one of current-phase scope/AC, DoD expectation, explicit non-goal / defer, or risk/watchpoint
 - Do not invent audit findings when no audit artifact was provided
@@ -83,4 +83,4 @@ Return:
 
 ## Completion quality bar
 - A refinement is complete only when no item in the AC/DoD/Non-goal coverage matrix has status `Partial`, `Unmet`, or `Unverified`.
-- Any `Partial`, `Unmet`, or `Unverified` item means the refinement is still incomplete and must not be presented as ready.
+- Any `Partial`, `Unmet`, or `Unverified` item means the refinement is still incomplete and MUST NOT be presented as ready.

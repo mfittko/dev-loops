@@ -5,12 +5,15 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  detectDuplicateImperativeSentences,
   detectModalityConflicts,
   detectNearDuplicates,
+  extractImperativeSentences,
   extractRuleDefinitions,
   extractRuleReferences,
   extractTermDefinitions,
   extractTermUses,
+  isImperativeSentence,
   validateRuleOwnership,
 } from "../../scripts/docs/validate-rule-ownership.mjs";
 
@@ -95,7 +98,7 @@ test("validateRuleOwnership fails duplicate and undefined terms", async () => {
   }
 });
 
-test("near-duplicate and modality conflict scans are advisory helpers", () => {
+test("near-duplicate and modality conflict scan helpers detect findings", () => {
   const defs = [
     { id: "A-001", body: "The agent MUST stop before merge." },
     { id: "A-002", body: "The agent MUST NOT stop before merge." },
@@ -105,6 +108,66 @@ test("near-duplicate and modality conflict scans are advisory helpers", () => {
     { id: "A-001", body: "The agent MUST stop before merge and report the gate." },
     { id: "A-002", body: "The agent SHOULD stop before merge and report the gate." },
   ]).length, 1);
+});
+
+test("validateRuleOwnership gates on a modality conflict (no longer advisory)", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The agent MUST stop before merge and report the gate. |",
+    "skills/docs/b.md": "<!-- rule: TEST-RULE-002 --> `TEST-RULE-002` | The agent SHOULD stop before merge and report the gate. |",
+  }, ["TEST-RULE-001", "TEST-RULE-002"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "modality_conflict"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("isImperativeSentence detects must/never/do not/require", () => {
+  assert.ok(isImperativeSentence("You must always run tests before every push."));
+  assert.ok(isImperativeSentence("Never push directly to the main branch."));
+  assert.ok(isImperativeSentence("Do not bypass the gate check mechanism."));
+  assert.ok(isImperativeSentence("This step requires explicit verification."));
+  assert.ok(!isImperativeSentence("This is a simple statement."));
+});
+
+test("extractImperativeSentences skips fenced code and headings", () => {
+  const content = ["# Required Startup Reads", "You must read the documentation before starting.", "```", "You must also check this inside code block.", "```"].join("\n");
+  const result = extractImperativeSentences(content);
+  assert.equal(result.length, 1);
+  assert.ok(result[0].text.includes("read the documentation"));
+});
+
+test("detectDuplicateImperativeSentences flags cross-file duplicates", () => {
+  const findings = detectDuplicateImperativeSentences([
+    { file: "skills/doc-a/SKILL.md", content: "You must always run tests before pushing changes to main." },
+    { file: "skills/doc-b/SKILL.md", content: "You must always run tests before pushing changes to main." },
+  ]);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "duplicate_imperative_sentence");
+});
+
+test("detectDuplicateImperativeSentences ignores known intentional duplicates", () => {
+  const findings = detectDuplicateImperativeSentences([
+    { file: "commands/loop-auto.command.md", content: "Do not pick an internal strategy name yourself." },
+    { file: "commands/loop-start.command.md", content: "Do not pick an internal strategy name yourself." },
+  ]);
+  assert.equal(findings.length, 0);
+});
+
+test("validateRuleOwnership gates on a duplicated imperative sentence", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "You must always run tests before pushing changes to main.",
+    "agents/b.agent.md": "You must always run tests before pushing changes to main.",
+  });
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "duplicate_imperative_sentence"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("repository rule ownership fixture is valid", async () => {

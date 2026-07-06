@@ -1,6 +1,6 @@
 # Public dev-loop contract
 
-This document is the canonical authority for the public `dev-loop` entrypoint: routed semantics, accepted shorthand, and the rule that internal strategy names stay behind the façade.
+Canonical owner for the public `dev-loop` entrypoint: routed semantics, accepted shorthand, and the rule that internal strategy names stay behind the façade.
 
 This canonical owner lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree. In installed layouts, read the same contract via [Public Dev Loop Contract](../docs/public-dev-loop-contract.md) from the installed skill directory.
 

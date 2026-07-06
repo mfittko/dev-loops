@@ -178,12 +178,10 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
   );
   // The "must be entered and completed before merge-ready" requirement is owned by
   // GATE-COMMENT-FAIL-CLOSED (rule-ID reference asserted below) rather than pinned as
-  // prose here; "not recoverable by asserting convergence" is skill-local framing not
-  // yet promoted to a rule ID, so check it via keyword tokens, not an exact sentence (#1154).
+  // prose here; "not recoverable by asserting convergence" is now GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE (#1159).
   assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "docs/gate-review-comment-contract.md");
   assert.match(step7, /GATE-COMMENT-FAIL-CLOSED/, "pre-approval gate sequencing should reference the fail-closed rule ID");
-  assert.match(step7, /\bnot recoverable\b/i, "pre-approval gate sequencing should reject convergence-only claims");
-  assert.match(step7, /\bconvergence\b/i, "pre-approval gate sequencing should reject convergence-only claims");
+  assertRuleOwned("GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE", "skills/copilot-pr-followup/SKILL.md");
   assert.match(
     step7,
     /### Merge-ready preconditions/i,
@@ -454,10 +452,8 @@ test("checkpoint verdict comment ownership stays explicit in the canonical inter
   assert.match(devLoopPreApprovalGate, /does \*\*not\*\* replace the required `draft_gate` evidence|does not replace the required `draft_gate` evidence/i);
   // The "must be entered and completed before merge-ready" gate-boundary requirement is
   // owned by GATE-COMMENT-FAIL-CLOSED (asserted below); the "not recoverable by asserting
-  // convergence" caution is skill-local framing not yet promoted to a rule ID, so check
-  // for it via keyword tokens rather than pinning the exact sentence (#1154).
-  assert.match(devLoopPreApprovalGate, /\bnot recoverable\b/i);
-  assert.match(devLoopPreApprovalGate, /\bconvergence\b/i);
+  // convergence" caution is now GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE (#1159).
+  assertRuleOwned("GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE", "skills/copilot-pr-followup/SKILL.md");
   assertRuleOwned("GATE-COMMENT-PREAPPROVAL-REQUIREMENTS", "docs/gate-review-comment-contract.md");
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-VALIDATION-REPORTING/);
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-PREAPPROVAL-REQUIREMENTS/);

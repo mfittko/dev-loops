@@ -3,9 +3,15 @@
  * validate-rule-ownership.mjs — L0/L1 contract rule ownership validator.
  *
  * This scan is deliberately lexical. It catches stable rule-ID ownership,
- * required-rule deletion, machine-checkable references, defined-term drift, and
- * simple RFC-2119 modality conflicts. Behavioral contradictions belong to the
- * L2/L3 harness; semantic contradictions belong to the gate contradiction lens.
+ * required-rule deletion, machine-checkable references, defined-term drift,
+ * RFC-2119 modality conflicts, near-duplicate rule bodies, and duplicated
+ * free-text imperative sentences across the corpus. All findings are gating
+ * (exit 1). Behavioral contradictions belong to the L2/L3 harness; semantic
+ * contradictions belong to the gate contradiction lens.
+ *
+ * Subsumes former scripts/docs/validate-no-duplicate-rules.mjs (retired):
+ * the duplicate-imperative-sentence scan below ports its unique check,
+ * widened from skills/ only to every SOURCE_ROOTS directory.
  */
 
 import { readFile, readdir } from "node:fs/promises";
@@ -24,14 +30,113 @@ const TERM_RE = /<!--\s*term:\s*(state|reason|gate):([a-zA-Z0-9_.:-]+)\s*-->/g;
 const CODE_TOKEN_RE = /`([a-z][a-z0-9_:-]+)`/g;
 const MODAL_RE = /\b(MUST NOT|SHALL NOT|MUST|SHALL|SHOULD|MAY)\b/g;
 
+// Duplicate-imperative-sentence scan (ported from validate-no-duplicate-rules.mjs).
+const IMPERATIVE_PATTERNS = [/\bmust\b/i, /\bnever\b/i, /\bdo not\b/i, /\brequire[sd]?\b/i];
+const MIN_SENTENCE_LENGTH = 20;
+
+// Contract docs that mirror each other's content by design.
+const CANONICAL_MIRROR_DOCS = new Set(["skills/docs/copilot-loop-operations.md", "skills/docs/public-dev-loop-contract.md"]);
+
+// Sentences deliberately duplicated across files (mirrored procedure text, or
+// command trigger-phrasing that STYLE/(c) guardrails require to stay verbatim
+// per file). Cross-file duplication of these is not a corpus authoring bug.
+const KNOWN_INTENTIONAL_DUPLICATE_SENTENCES = new Set([
+  "- **PERSISTENCE RULE: Do not exit your session until the PR is merged or you hit a hard stop that requires conductor authorization.**",
+  "If any required bundled contract doc is missing from the installed skill layout, treat that as a packaging/installer bug.",
+  "Each reviewer starts in fresh context with the briefing artifact, inspects the diff, returns findings via output artifacts only, and never edits files.",
+  "3. **Consolidation:** reconcile all review outputs into a consolidated fix plan with classified findings (must-fix, worth-fixing-now, defer).",
+  "5. **Fix cycle:** apply only accepted must-fix changes on the same branch.",
+  "- remains a stop/fix state, never a wait loop",
+  "Do not create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy for the current PR scope.",
+  "Each reviewer starts in fresh context (subagent({context:\"fresh\"}) mandatory), inspects the diff, returns findings via output artifacts only, and never edits files. **Before starting:** run to self-verify fresh context; refuse to proceed on contamination.",
+  "If includes , then worth-fixing-now findings must be fixed before the gate can reach .",
+  // agents/dev-loop.agent.md mirrors this CLI-fallback safety line from skills/dev-loop/SKILL.md;
+  // each doc's surrounding candidate-resolution list differs per install layout.
+  "NEVER fall back to or any unbounded filesystem walk to locate the CLI — it stalls and trips the needs-attention timeout.",
+  // commands/loop-auto.command.md and commands/loop-start.command.md — command trigger
+  // phrasing is load-bearing verbatim per-command guardrail (c); not a restatement bug.
+  "Do not pick an internal strategy name yourself.",
+  // docs/slides-story-review-loop.md and docs/ui-designer-review-loop.md are sibling
+  // non-normative review-loop docs (epic non-goal) that share boilerplate by design.
+  "The loop requires all of the following inputs before it may run:",
+  "If any required part of this bundle is missing, incomplete, or ambiguous, the loop fails closed instead of guessing.",
+  "- required acceptance criteria are missing",
+]);
+
 const USAGE = `Usage: validate-rule-ownership.mjs [--help]
 
-Validate rule markers, required IDs, rule references, term definitions, and
-lexical advisory duplicate/conflict findings.
-Exit 0 when gating checks pass. Advisory findings do not fail.
+Validate rule markers, required IDs, rule references, term definitions,
+near-duplicate/modality-conflict findings, and duplicated imperative
+sentences. All findings are gating (exit 1).
 
 Options:
   --help, -h   Show this help`.trim();
+
+export function isImperativeSentence(sentence) {
+  return IMPERATIVE_PATTERNS.some((pattern) => pattern.test(sentence));
+}
+
+export function normalizeSentence(text) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+export function extractImperativeSentences(content) {
+  const lines = content.split(/\r?\n/);
+  const sentences = [];
+  let inFencedBlock = false;
+  let fencedDelimiter = "";
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    const rawTrimmed = line.trim();
+
+    if (/^\s*#/.test(line) || /^\s*>/.test(line)) continue;
+
+    const fenceMatch = rawTrimmed.match(/^(```|~~~)/);
+    if (fenceMatch) {
+      if (!inFencedBlock) {
+        inFencedBlock = true;
+        fencedDelimiter = fenceMatch[1];
+        continue;
+      } else if (rawTrimmed.startsWith(fencedDelimiter)) {
+        inFencedBlock = false;
+        fencedDelimiter = "";
+        continue;
+      }
+    }
+    if (inFencedBlock) continue;
+
+    line = line.replace(/`[^`]*`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+
+    const parts = line.split(/(?<=[.!?])\s+(?=[A-Z])/);
+    for (const part of parts) {
+      const normalized = normalizeSentence(part);
+      if (normalized.length >= MIN_SENTENCE_LENGTH && isImperativeSentence(normalized)) {
+        sentences.push({ text: normalized, line: i + 1 });
+      }
+    }
+  }
+  return sentences;
+}
+
+export function detectDuplicateImperativeSentences(fileContents) {
+  const bySentence = new Map();
+  for (const { file, content } of fileContents) {
+    for (const { text, line } of extractImperativeSentences(content)) {
+      if (!bySentence.has(text)) bySentence.set(text, []);
+      bySentence.get(text).push({ file, line });
+    }
+  }
+  const findings = [];
+  for (const [text, occurrences] of bySentence) {
+    if (KNOWN_INTENTIONAL_DUPLICATE_SENTENCES.has(text)) continue;
+    const files = new Set(occurrences.map((o) => o.file));
+    if (files.size <= 1) continue;
+    if ([...files].every((f) => CANONICAL_MIRROR_DOCS.has(f))) continue;
+    findings.push({ kind: "duplicate_imperative_sentence", text, occurrences });
+  }
+  return findings;
+}
 
 function toPosix(p) {
   return p.replace(/\\/g, "/");
@@ -199,10 +304,12 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
   const references = [];
   const termDefs = [];
   const termUses = [];
+  const fileContents = [];
 
   for (const filePath of files) {
     const rel = toPosix(path.relative(repoRoot, filePath));
     const content = await readFile(filePath, "utf8");
+    fileContents.push({ file: rel, content });
     definitions.push(...extractRuleDefinitions(content, rel));
     references.push(...extractRuleReferences(content, rel));
     termDefs.push(...extractTermDefinitions(content, rel));
@@ -241,12 +348,17 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
     if (!termValues.has(use.token)) errors.push({ kind: "undefined_term_use", token: use.token, location: `${use.file}:${use.line}` });
   }
 
-  const advisory = [
-    ...detectNearDuplicates(definitions),
-    ...detectModalityConflicts(definitions),
-  ];
+  for (const finding of detectNearDuplicates(definitions)) {
+    errors.push({ kind: finding.kind, id: `${finding.a.id}~${finding.b.id}`, location: `${finding.a.file}:${finding.a.line} / ${finding.b.file}:${finding.b.line}` });
+  }
+  for (const finding of detectModalityConflicts(definitions)) {
+    errors.push({ kind: finding.kind, id: `${finding.a.id}~${finding.b.id}`, location: `${finding.a.file}:${finding.a.line} / ${finding.b.file}:${finding.b.line}` });
+  }
+  for (const finding of detectDuplicateImperativeSentences(fileContents)) {
+    errors.push({ kind: finding.kind, id: finding.text, location: finding.occurrences.map((o) => `${o.file}:${o.line}`).join(", ") });
+  }
 
-  return { ok: errors.length === 0, filesScanned: files.length, rules: definitions.length, references: references.length, terms: termDefs.length, errors, advisory };
+  return { ok: errors.length === 0, filesScanned: files.length, rules: definitions.length, references: references.length, terms: termDefs.length, errors };
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -257,12 +369,10 @@ async function main(argv = process.argv.slice(2)) {
   const result = await validateRuleOwnership(REPO_ROOT);
   if (result.ok) {
     process.stdout.write(`Rule ownership validation passed: ${result.rules} rules, ${result.references} references, ${result.terms} terms, ${result.filesScanned} files scanned.\n`);
-    if (result.advisory.length) process.stdout.write(`Advisory findings: ${result.advisory.length} near-duplicate/modality items (non-gating).\n`);
     return 0;
   }
   process.stdout.write(`Rule ownership validation failed:\n`);
   for (const error of result.errors) process.stdout.write(`- ${error.kind}: ${error.id || error.key || error.token} ${error.location || (error.locations || []).join(", ")}\n`);
-  if (result.advisory.length) process.stdout.write(`Advisory findings: ${result.advisory.length} near-duplicate/modality items (non-gating).\n`);
   return 1;
 }
 

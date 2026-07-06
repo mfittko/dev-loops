@@ -154,12 +154,16 @@ comment is the required auditable evidence, per the rules below.
 
 <!-- rule: GATE-COMMENT-RERUN-RULES -->
 `GATE-COMMENT-RERUN-RULES`: A gate rerun MUST follow the same-head vs. new-head handling
-defined below.
+defined below, scoped per gate recurrence (`GATE-COMMENT-SCOPE-ONLY` above): this table
+governs the **recurring** `pre_approval_gate`; the **one-time** `draft_gate` is exempt from
+the new-head row once its one-time transition record exists (`GATE-COMMENT-DRAFT-REQUIREMENTS`)
+so the two rules do not conflict.
 
 | Scenario | Rule |
 |---|---|
 | Same head SHA rerun | Idempotent behavior: do not post a second visible marker for the same gate+head. Reuse/suppress by default; if correction is needed, update/replace the existing marker in place. |
-| New head SHA rerun | A new visible checkpoint verdict comment MUST be posted for the new head; the older-head comment remains but does not satisfy readiness for the new head |
+| New head SHA rerun on the recurring `pre_approval_gate` | A new visible checkpoint verdict comment MUST be posted for the new head; the older-head comment remains but does not satisfy readiness for the new head |
+| New head SHA change on the one-time `draft_gate` after a clean transition record already exists | No new `draft_gate` comment is triggered for the new head — the one-time transition boundary already closed (`GATE-COMMENT-DRAFT-REQUIREMENTS`) |
 
 ## Fail-closed behavior
 

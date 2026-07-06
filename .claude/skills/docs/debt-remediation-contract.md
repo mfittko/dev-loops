@@ -1,6 +1,6 @@
 # Debt remediation contract
 
-Canonical authority for the debt remediation pipeline and its integration with the `dev-loop` execution path.
+Canonical owner for the debt remediation pipeline and its integration with the `dev-loop` execution path.
 
 ## Pipeline
 

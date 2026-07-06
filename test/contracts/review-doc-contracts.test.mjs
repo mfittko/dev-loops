@@ -76,8 +76,8 @@ test("review workflow resolves pre-approval gate angles from config with explici
   assert.match(reviewTemplate, /configured angle checks/i);
   assert.match(localImplementationSkill, /if parallel execution is impractical[\s\S]*run all angles sequentially and explicitly record why parallel execution was impractical/i);
   assert.match(copilotFollowupSkill, /gate-review-sub-loop-contract\.md.*pre-approval/i);
-  assert.match(subLoopContract, /fresh context/i);
-  assert.match(subLoopContract, /in parallel when practical/i);
+  assertRuleOwned("GATE-EXEC-BUILD-ONCE-SEED", "docs/gate-review-sub-loop-contract.md");
+  assertRuleOwned("GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK", "docs/gate-review-sub-loop-contract.md");
   assert.match(copilotFollowupSkill, /if parallel execution is impractical[\s\S]*still run all configured lenses and explicitly record the limitation/i);
   assert.match(reviewAgent, /if parallel execution is impractical[\s\S]*still cover all configured angles and explicitly record the limitation/i);
   assert.match(reviewAgent, /run those configured angle-focused passes in fresh context and in parallel when practical/i);

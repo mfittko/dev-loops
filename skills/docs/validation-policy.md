@@ -4,9 +4,8 @@ Canonical owner for validation requirements across all workflow families.
 
 ## Default validation
 
-- `npm run verify` is the default repo-level local validation path
-- Must pass before: PR creation, gate entry, merge
-- At minimum: `npm test && npm run test:dev-loop`
+<!-- rule: VALIDATE-VERIFY-BEFORE-GATE -->
+`VALIDATE-VERIFY-BEFORE-GATE`: `npm run verify` is the default repo-level local validation path and MUST pass before PR creation, gate entry, and merge; at minimum this means `npm test && npm run test:dev-loop`.
 
 ## Gate-specific requirements
 
@@ -17,8 +16,8 @@ Canonical owner for validation requirements across all workflow families.
 
 ## Coverage requirements
 
-- ≥90% coverage for lines, statements, functions, and branches on changed files
-- Test-first for all non-trivial logic
+<!-- rule: VALIDATE-COVERAGE-THRESHOLD -->
+`VALIDATE-COVERAGE-THRESHOLD`: Changed files MUST have ≥90% coverage for lines, statements, functions, and branches, and non-trivial logic MUST be test-first.
 
 ## Cross-references
 
