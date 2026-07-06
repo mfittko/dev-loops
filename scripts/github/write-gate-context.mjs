@@ -29,6 +29,7 @@
  *   <tmpRoot>/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -117,8 +118,10 @@ Optional:
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
   --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see docs/gate-review-sub-loop-contract.md.
-  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL)
+  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix
   --validation-posture <text>    Short description of the validation posture
+  --pr-body <text>               PR description text, inlined into the rendered briefing prefix
+  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label; omitted entirely when absent
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -231,6 +234,8 @@ export function parseWriteGateContextCliArgs(argv) {
       base: { type: "string" },
       "acceptance-criteria": { type: "string" },
       "validation-posture": { type: "string" },
+      "pr-body": { type: "string" },
+      "issue-body": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -250,6 +255,8 @@ export function parseWriteGateContextCliArgs(argv) {
     base: null,
     acceptanceCriteria: null,
     validationPosture: null,
+    prBody: null,
+    issueBody: null,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -310,6 +317,14 @@ export function parseWriteGateContextCliArgs(argv) {
     }
     if (token.name === "validation-posture") {
       options.validationPosture = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "pr-body") {
+      options.prBody = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "issue-body") {
+      options.issueBody = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "tmp-root") {
@@ -427,6 +442,136 @@ export function buildGateDiffPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) 
 }
 
 /**
+ * Build the deterministic path for the rendered invariant briefing prefix
+ * (GATE-EXEC-BRIEFING-PREFIX): the byte-identical block every per-angle
+ * reviewer of this gate pass is seeded with, before their angle-specific
+ * suffix. Mirrors buildGateContextPath/buildGateDiffPath. Exported so the
+ * fan-out reviewers and `verify-fresh-review-context.mjs --prefix-file` agree
+ * on the path with the context-builder.
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {string} relative briefing-prefix path
+ */
+export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.briefing-prefix.txt`);
+}
+
+/**
+ * Size cap (bytes) above which the rendered briefing prefix falls back to
+ * pointer mode for the diff section (scope.diffPath reference) instead of
+ * inlining the diff text verbatim. No `gates.*` config knob exists for this
+ * yet — a named constant is the right size for a single fixed threshold;
+ * promote to config only if a real need for tuning it emerges.
+ */
+export const BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES = 200 * 1024;
+
+/**
+ * Render the invariant briefing-prefix text (GATE-EXEC-BRIEFING-PREFIX):
+ * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
+ * instruction), PR body, linked-issue body (when present), the full diff at the
+ * reviewed head (inlined up to `capBytes`, else a pointer to `diffPath`), and a
+ * changed-files/adjacent-code summary — in that fixed order. Pure and
+ * deterministic: identical input always renders identical bytes, so two builds
+ * at the same head produce a byte-identical prefix (the fan-out's shared-prefix
+ * requirement).
+ *
+ * @param {object} input
+ * @param {string} input.repo
+ * @param {number|string} input.pr
+ * @param {string} input.gate
+ * @param {string} input.headSha
+ * @param {string} input.worktreeRoot — absolute path reviewers run in
+ * @param {string} input.contextPath — the sibling JSON artifact path
+ * @param {string} input.briefingPrefixPath — this rendered file's own path
+ * @param {string|null} [input.prBody]
+ * @param {string|null} [input.issueRef] — label for the linked-issue section (e.g. "#877")
+ * @param {string|null} [input.issueBody] — omit the whole section when null/empty
+ * @param {string|null} [input.diffOutput] — full diff text, when captured
+ * @param {string|null} [input.diffPath] — persisted `.diff` pointer (pointer-mode fallback)
+ * @param {string[]} [input.changedFiles]
+ * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
+ * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
+ * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
+ */
+export function renderBriefingPrefix({
+  repo, pr, gate, headSha, worktreeRoot, contextPath, briefingPrefixPath,
+  prBody = null, issueRef = null, issueBody = null,
+  diffOutput = null, diffPath = null, changedFiles = [], adjacentCode = null,
+  capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
+}) {
+  const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
+  const diffBytes = hasDiffText ? Buffer.byteLength(diffOutput, "utf8") : 0;
+  const prefixMode = hasDiffText && diffBytes > capBytes ? "pointer" : "inline";
+
+  const lines = [];
+  lines.push("# Gate Review Briefing — invariant prefix (GATE-EXEC-BRIEFING-PREFIX)");
+  lines.push("");
+  lines.push(`repo: ${repo}`);
+  lines.push(`pr: #${pr}`);
+  lines.push(`gate: ${gate}`);
+  lines.push(`head: ${headSha}`);
+  lines.push(`worktree: ${worktreeRoot}`);
+  lines.push(`prefixMode: ${prefixMode}`);
+  lines.push("");
+  lines.push(
+    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope <your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
+  );
+  lines.push("");
+  lines.push("## PR body");
+  lines.push("");
+  lines.push(typeof prBody === "string" && prBody.trim().length > 0 ? prBody.trim() : "(no PR body provided)");
+  lines.push("");
+  const hasIssueBody = typeof issueBody === "string" && issueBody.trim().length > 0;
+  if (hasIssueBody) {
+    lines.push(`## Linked issue${issueRef ? ` ${issueRef}` : ""}`);
+    lines.push("");
+    lines.push(issueBody.trim());
+    lines.push("");
+  }
+  lines.push(`## Diff at reviewed head (${headSha})`);
+  lines.push("");
+  if (!hasDiffText) {
+    lines.push("(no diff text captured for this bundle)");
+  } else if (prefixMode === "inline") {
+    lines.push("```diff");
+    lines.push(diffOutput.endsWith("\n") ? diffOutput.slice(0, -1) : diffOutput);
+    lines.push("```");
+  } else {
+    lines.push(
+      `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the full diff from:`,
+    );
+    lines.push(`  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
+  }
+  lines.push("");
+  lines.push("## Changed files + adjacent-code summary");
+  lines.push("");
+  const files = Array.isArray(changedFiles) ? changedFiles : [];
+  lines.push(`Changed files (${files.length}):`);
+  for (const f of files) lines.push(`- ${f}`);
+  const adjacentFiles = adjacentCode && Array.isArray(adjacentCode.files)
+    ? adjacentCode.files.filter((f) => f.role !== "changed")
+    : [];
+  if (adjacentCode) {
+    lines.push(`Adjacent files (${adjacentFiles.length}):`);
+    for (const f of adjacentFiles) lines.push(`- ${f.path} (${f.role})`);
+    lines.push(
+      `Stripped: ${adjacentCode.stripped?.length ?? 0}, Truncated: ${adjacentCode.truncated?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
+    );
+  } else {
+    lines.push("Adjacent files (0): (no adjacent-code bundle for this briefing)");
+  }
+
+  return { text: lines.join("\n") + "\n", prefixMode, diffBytes };
+}
+
+/**
  * Parse `git diff --name-status` output into full repo-relative changed file
  * paths. Handles rename/copy entries (R100 old new, C75 old new) by recording
  * the destination path. Tolerates blank lines and malformed rows.
@@ -500,6 +645,12 @@ export function buildGateContextArtifact(options) {
   if (options.adjacentCode && typeof options.adjacentCode === "object") {
     artifact.adjacentCode = options.adjacentCode;
   }
+  // Whether the rendered briefing prefix inlined the reviewed-head diff verbatim
+  // or fell back to the diffPath pointer (size cap). Only set when a caller
+  // actually rendered a prefix (writeGateContext does, always).
+  if (typeof options.prefixMode === "string" && options.prefixMode.length > 0) {
+    artifact.prefixMode = options.prefixMode;
+  }
   return artifact;
 }
 
@@ -520,7 +671,7 @@ export function buildGateContextArtifact(options) {
  * @param {string} input.tmpRoot
  * @param {number} [input.maxFileBytes]
  * @param {{ repoRoot: string }} opts
- * @returns {Promise<{ diffPath: string|null, changedFiles: string[], adjacentCode: object|null }>}
+ * @returns {Promise<{ diffPath: string|null, changedFiles: string[], adjacentCode: object|null, diffOutput: string|null }>}
  */
 async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes }, { repoRoot }) {
   const diffOutput = diff?.diffOutput;
@@ -562,7 +713,7 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
     }
   }
 
-  return { diffPath, changedFiles, adjacentCode };
+  return { diffPath, changedFiles, adjacentCode, diffOutput: typeof diffOutput === "string" ? diffOutput : null };
 }
 
 /**
@@ -647,6 +798,19 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
   return { nameStatusOutput, diffOutput };
 }
 
+/**
+ * Write both the JSON context artifact AND its sibling rendered briefing
+ * prefix (GATE-EXEC-BRIEFING-PREFIX): the byte-identical invariant block every
+ * per-angle reviewer of this gate pass is seeded with. The prefix's
+ * `prefixMode` (inline|pointer, from the diff-size cap) is recorded on the
+ * JSON artifact so both files stay in sync.
+ *
+ * @param {object} options — parsed CLI options shape, optionally carrying
+ *   `diffOutput`, `prBody`, `issueBody` (all null-safe; a caller with none of
+ *   these still gets a valid — if thin — prefix).
+ * @param {{ repoRoot?: string }} [runtime]
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer" }>}
+ */
 export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
   const contextPath = buildGateContextPath({
     repo: options.repo,
@@ -655,14 +819,44 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     headSha: options.headSha,
     tmpRoot: options.tmpRoot || "tmp",
   });
+  const briefingPrefixPath = buildGateBriefingPrefixPath({
+    repo: options.repo,
+    pr: options.pr,
+    gate: options.gate,
+    headSha: options.headSha,
+    tmpRoot: options.tmpRoot || "tmp",
+  });
+  const rendered = renderBriefingPrefix({
+    repo: options.repo,
+    pr: options.pr,
+    gate: options.gate,
+    headSha: options.headSha,
+    worktreeRoot: path.resolve(repoRoot),
+    contextPath,
+    briefingPrefixPath,
+    prBody: options.prBody ?? null,
+    issueRef: options.acceptanceCriteria ?? null,
+    issueBody: options.issueBody ?? null,
+    diffOutput: options.diffOutput ?? null,
+    diffPath: options.diffPath ?? null,
+    changedFiles: options.changedFiles ?? [],
+    adjacentCode: options.adjacentCode ?? null,
+  });
+
   const fullPath = path.resolve(repoRoot, contextPath);
   const artifact = {
-    ...buildGateContextArtifact(options),
+    ...buildGateContextArtifact({ ...options, prefixMode: rendered.prefixMode }),
     loggedAt: new Date().toISOString(),
   };
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
-  return { ok: true, path: contextPath, artifact };
+
+  const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
+  await mkdir(path.dirname(fullPrefixPath), { recursive: true });
+  await writeFile(fullPrefixPath, rendered.text, "utf8");
+  const prefixHash = createHash("sha256").update(rendered.text, "utf8").digest("hex");
+
+  return { ok: true, path: contextPath, artifact, prefixPath: briefingPrefixPath, prefixHash, prefixMode: rendered.prefixMode };
 }
 
 /**
@@ -685,10 +879,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string[]} [input.touchedFiles]
  * @param {string|null} [input.acceptanceCriteria]
  * @param {string|null} [input.validationPosture]
+ * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing prefix
+ * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, resolver: object }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object }>}
  *
  * The artifact additionally carries a deterministic, neutral `adjacentCode`
  * bundle (#895) when changed files are present: 1-hop import in/out-edges of the
@@ -707,7 +903,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // Diff-derived scope: persisted FULL diff (scope.diffPath), parsed
   // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
   // the shared resolveDiffScope helper (also used by the CLI --base path, #1140).
-  const { diffPath, changedFiles, adjacentCode } = await resolveDiffScope(
+  const { diffPath, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
     { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes },
     { repoRoot },
   );
@@ -724,9 +920,12 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       touchedFiles: input.touchedFiles ?? [],
       changedFiles,
       diffPath,
+      diffOutput,
       adjacentCode,
       acceptanceCriteria: input.acceptanceCriteria ?? null,
       validationPosture: input.validationPosture ?? null,
+      prBody: input.prBody ?? null,
+      issueBody: input.issueBody ?? null,
       tmpRoot,
     },
     { repoRoot },
@@ -800,6 +999,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       options.changedFiles = scope.changedFiles;
       options.diffPath = scope.diffPath;
       options.adjacentCode = scope.adjacentCode;
+      options.diffOutput = scope.diffOutput;
       options.diffSource = "base";
     } else {
       process.stderr.write("[write-gate-context] warning: no --base given; emitting a THIN briefing (scope.diffPath=null, scope.changedFiles=[], no adjacentCode). Pass --base <ref> for the full build-once bundle.\n");
