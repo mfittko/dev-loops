@@ -1,17 +1,17 @@
 # Artifact authority contract
 
-This document is the canonical authority for the artifact-selection model: whether a work item originates from a GitHub issue (tracker-first) or from a persisted markdown plan file (local-planning).
+This document is the canonical authority for the artifact-selection model: whether a work item originates from a GitHub issue (tracker-first), a persisted markdown plan file (local-planning), or the sanctioned lightweight PR-body-as-spec path.
 
 This canonical owner lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree. In installed layouts, read the same contract via [Artifact Authority Contract](../docs/artifact-authority-contract.md) from the installed skill directory.
 
 Other repo docs may summarize or link this contract, but they should not redefine it.
 
-## Two-tier model
+## Three-origin model
 
 <!-- rule: ARTIFACT-TWO-TIER-EXCLUSIVE -->
-dev-loops supports two mutually exclusive artifact authority modes. Every work item MUST originate from exactly one authoritative artifact: a GitHub issue or a persisted markdown plan file. Work MUST NOT originate from a PR or a direct local change unless explicitly requested.
+dev-loops supports three mutually exclusive artifact authority origins. Every work item MUST originate from exactly one authoritative artifact: a GitHub issue, a persisted markdown plan file, or — on the sanctioned lightweight path — the PR description itself as the spec-of-record (no committed plan artifact). Work MUST NOT originate from a PR (other than the sanctioned lightweight PR-body-as-spec path) or a direct local change unless explicitly requested.
 
-The shipped extension default selects local-planning; see [Shipped default posture](#shipped-default-posture) below. The mode names that follow describe the two tiers; "default" in their headings refers to the local-first code-level default in `BUILT_IN_DEFAULTS`.
+The shipped extension default selects local-planning; see [Shipped default posture](#shipped-default-posture) below. The mode names that follow describe the origins; "default" in their headings refers to the local-first code-level default in `BUILT_IN_DEFAULTS`.
 
 ### Tracker-first
 
