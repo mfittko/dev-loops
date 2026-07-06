@@ -215,7 +215,8 @@ export function compareDocCodeTransitions(docTransitions, transitionChecks) {
       // rest so other missing/unreferenced edges still surface in the same report.
       try {
         const outcome = check.verify();
-        if (outcome && outcome.result !== undefined) observations.push(outcome.result);
+        // A verify() may return one observation or an array (multi-variant fixtures).
+        if (outcome && outcome.result !== undefined) observations.push(...(Array.isArray(outcome.result) ? outcome.result : [outcome.result]));
         results.push({ from, to, status: outcome.ok ? "verified" : "divergent", detail: outcome.detail });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -768,11 +769,13 @@ const COPILOT_LOOP_STATE_MACHINE = {
   safetyRules: [
     {
       // Analog of "fail-closed states never dispatch a Backlog pull" for this machine
-      // (docs: COPILOT-STATE-UNRESOLVED-PRIORITY): unresolved feedback must never resolve
-      // to a wait state, even when an active review request is also present.
-      name: "unresolved-feedback-outranks-active-request-wait",
+      // (docs: COPILOT-STATE-UNRESOLVED-PRIORITY): unresolved feedback must land in a
+      // fix/reply-resolve state — stronger than merely "not a wait state", so a
+      // regression routing unresolved feedback anywhere else also trips this rule.
+      name: "unresolved-feedback-lands-in-fix-states",
       check: (observation) => observation.unresolvedThreadCount === 0
-        || (observation.state !== STATE.WAITING_FOR_COPILOT_REVIEW && observation.state !== STATE.WAITING_FOR_CI),
+        || observation.state === STATE.UNRESOLVED_FEEDBACK_PRESENT
+        || observation.state === STATE.ALREADY_FIXED_NEEDS_REPLY_RESOLVE,
     },
   ],
 };
@@ -834,8 +837,18 @@ const REVIEWER_LOOP_STATE_TO_FIXTURE = new Map([
   [REVIEWER_STATE.SUBMITTED_REVIEW, () => ({ prExists: true, prDraft: false, submittedReviewPresent: true, prHeadSha: "abc1234", submittedReviewCommitSha: "abc1234", reviewRequested: false })],
   [REVIEWER_STATE.REVIEW_INVALIDATED, () => ({ prExists: true, prDraft: false, draftReviewPosted: true, prHeadSha: "def5678", draftReviewCommitSha: "abc1234" })],
   [REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST, () => ({ prExists: false })],
-  [REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION, () => ({ prExists: true, prDraft: false, localPlanningStatus: "failed" })],
+  // Four variants — one per failure field the interpreter fail-closes on
+  // (reviewer-loop-state.mjs routes any of them to BLOCKED identically), so the
+  // fail-closed safety rule exercises every failure signal, not just planning.
+  [REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION, () => [
+    { prExists: true, prDraft: false, localPlanningStatus: "failed" },
+    { prExists: true, prDraft: false, localReviewRunsStatus: "failed" },
+    { prExists: true, prDraft: false, localMergeStatus: "failed" },
+    { prExists: true, prDraft: false, reviewSubmissionStatus: "failed" },
+  ]],
 ]);
+
+const REVIEWER_FAILURE_FIELDS = ["localPlanningStatus", "localReviewRunsStatus", "localMergeStatus", "reviewSubmissionStatus"];
 
 const REVIEWER_LOOP_STATE_TRANSITION_CHECKS = new Map();
 for (const [from, to] of REVIEWER_LOOP_STATE_OWNED_ELSEWHERE_EDGES) {
@@ -860,19 +873,17 @@ for (const [from, to] of realEdges(REVIEWER_LOOP_STATE_DOC_TRANSITIONS)) {
   REVIEWER_LOOP_STATE_TRANSITION_CHECKS.set(key, {
     status: "verified",
     verify: () => {
-      const fixture = buildFixture();
-      const interpretation = interpretReviewerLoopState(fixture);
-      const ok = interpretation.state === to && (REVIEWER_TRANSITIONS[from] || []).includes(to);
+      const built = buildFixture();
+      const fixtures = Array.isArray(built) ? built : [built];
+      const interpretations = fixtures.map((f) => interpretReviewerLoopState(f));
+      const ok = interpretations.every((i) => i.state === to) && (REVIEWER_TRANSITIONS[from] || []).includes(to);
       return {
         ok,
-        detail: interpretation,
-        result: {
-          state: interpretation.state,
-          // Only localPlanningStatus is ever set to "failed" by a registered
-          // fixture (the BLOCKED one); other failure fields join here if a
-          // future fixture exercises them.
-          failed: fixture.localPlanningStatus === "failed",
-        },
+        detail: interpretations.length === 1 ? interpretations[0] : interpretations,
+        result: fixtures.map((fixture, i) => ({
+          state: interpretations[i].state,
+          failed: REVIEWER_FAILURE_FIELDS.some((field) => fixture[field] === "failed"),
+        })),
       };
     },
   });

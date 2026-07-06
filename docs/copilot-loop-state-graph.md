@@ -27,7 +27,7 @@ The implementation lives in:
 | `review_request_unavailable` | Copilot review request returned `unavailable` and no observable in-progress review evidence exists; must stop/report |
 | <!-- term: state:waiting_for_ci --> `waiting_for_ci` | CI checks are in progress or no usable CI readiness signal exists yet; wait before proceeding |
 | `blocked_needs_user_decision` | Unexpected failure (CI failure, bad request result); requires user decision |
-| `done` | PR has been merged or closed |
+| `done` | The loop's work at this boundary is complete: the PR was merged or closed, or a terminal hand-off occurred (e.g. re-request handed back to the watcher, internal-tooling PR proceeding to `pre_approval_gate`) |
 | <!-- term: state:internal_tooling_direct_gate --> `internal_tooling_direct_gate` | Internal-tooling-only PR; Copilot external review is skipped and the loop proceeds directly to `pre_approval_gate`. Externally assigned by the routing layer, never derived from a snapshot by `interpretLoopState` — no snapshot field drives it |
 
 Three additional terminal states (`low_signal_converged`, `round_cap_reached`,
