@@ -81,26 +81,34 @@ function wrapBareSummonTokensInLine(line) {
 }
 
 // Does this single (non-fenced) line still arm the guard scan after inline code
-// spans are dropped? Mirrors stripMarkdownCodeForScan's per-line step.
+// spans are dropped? Mirrors stripMarkdownCodeForScan's per-line step. Spans are
+// replaced with a SPACE, not the empty string: the fragments flanking a span
+// must never be rejoined into a token that was not present ("@copi`x`lot" is not
+// a summon), while a token directly abutting a span ("text`x`@copilot", which
+// GitHub renders as a real mention) still arms.
 function lineArmsSummonGuard(line) {
-  return COPILOT_SUMMON_WORD_BOUNDARY_RE.test(line.replace(INLINE_CODE_SPAN_RE, ""));
+  return COPILOT_SUMMON_WORD_BOUNDARY_RE.test(line.replace(INLINE_CODE_SPAN_RE, " "));
 }
 
 const ZWJ_FALLBACK_RE = /(?<=^|\W)([@/])(copilot)/gi;
 
 // Sanitize one line, verifying against the guard scan. Backtick-wrapping is the
-// primary neutralization (visible, greppable), but a pre-existing UNBALANCED
-// backtick on the line can pair with an inserted one and re-expose the token to
-// the guard's span-stripping (and break idempotence). When the wrapped line
-// still arms the guard, additionally neutralize the residual tokens — the ones
-// still outside the re-paired spans of the WRAPPED line — with a zero-width
-// joiner between the sigil and "copilot": invisible, guard-inert, and idempotent
-// (the joined token no longer matches the summon shape). Working on the wrapped
-// line (not the original) preserves every successful backtick wrap and keeps the
-// joiner out of legitimate pre-existing code spans.
+// primary neutralization (visible, greppable), but pre-existing backticks on the
+// line can destabilize it two ways: an UNBALANCED stray backtick pairs with an
+// inserted one and re-exposes the token to the guard's span-stripping, and
+// adjacent spans (e.g. a span ending right before the token's new wrap) can make
+// the wrapped line re-tokenize differently on the next pass, re-wrapping the
+// token and growing the comment by one backtick per rewrite. The wrapped result
+// is therefore accepted only when it is BOTH guard-inert AND a fixed point of
+// the wrapper (re-wrapping it changes nothing); otherwise fall back to inserting
+// a zero-width joiner into the residual tokens still outside the wrapped line's
+// spans — invisible, guard-inert, and idempotent (the joined token no longer
+// matches the summon shape). Working on the wrapped line (not the original)
+// preserves every stable backtick wrap and keeps the joiner out of legitimate
+// pre-existing code spans.
 function sanitizeSummonLine(line) {
   const wrapped = wrapBareSummonTokensInLine(line);
-  if (!lineArmsSummonGuard(wrapped)) {
+  if (!lineArmsSummonGuard(wrapped) && wrapBareSummonTokensInLine(wrapped) === wrapped) {
     return wrapped;
   }
   return transformOutsideSpans(wrapped, (segment) => segment.replace(ZWJ_FALLBACK_RE, `$1${ZERO_WIDTH_JOINER}$2`));
@@ -137,7 +145,8 @@ function stripMarkdownCodeForScan(text) {
     if (inFencedBlock) {
       continue;
     }
-    kept.push(line.replace(INLINE_CODE_SPAN_RE, ""));
+    // Space (not empty-string) replacement: see lineArmsSummonGuard.
+    kept.push(line.replace(INLINE_CODE_SPAN_RE, " "));
   }
   return kept.join("\n");
 }

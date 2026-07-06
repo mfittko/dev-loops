@@ -685,6 +685,25 @@ test("a genuine bare summon still arms the guard after sanitizer fallback change
   assert.equal(containsBareCopilotSummon("@copilot please review"), true);
 });
 
+test("sanitizeCopilotSummonTokens stays byte-stable when adjacent code spans destabilize a backtick wrap", () => {
+  // Adjacent spans re-tokenize a wrapped line differently on the next pass; an
+  // unstable wrap must route to the ZWJ path instead of growing one backtick
+  // per rewrite (gate comments are rewritten on every gate pass).
+  const probe = "`a``b` /copilot";
+  const once = sanitizeCopilotSummonTokens(probe);
+  assert.equal(containsBareCopilotSummon(once), false, "sanitized output must not arm the guard");
+  assert.equal(sanitizeCopilotSummonTokens(once), once, "sanitizer must be byte-identical from pass 1 on");
+  assert.match(once, /\/\u200Dcopilot/, "unstable wrap neutralized with a zero-width joiner");
+});
+
+test("containsBareCopilotSummon does not rejoin fragments across a stripped code span into a phantom token", () => {
+  assert.equal(containsBareCopilotSummon("@copi`x`lot"), false);
+});
+
+test("containsBareCopilotSummon arms on a summon directly abutting a code span", () => {
+  assert.equal(containsBareCopilotSummon("text`x`@copilot"), true);
+});
+
 test("sanitizeCopilotSummonTokens does not mangle email-like text the guard never arms on", () => {
   const body = "contact user@copilot.example about path/copilot-adjacent naming";
   assert.equal(containsBareCopilotSummon(body), false);
