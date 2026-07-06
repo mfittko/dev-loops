@@ -1,10 +1,10 @@
 # Steering Contract
 
-This document describes the deterministic mid-flight operator steering contract
-for active dev loops. It covers how to submit steering directives, how the loop
-acknowledges them, what the safe-point rules are, and what each result means.
-In the first external slice, steering is a bounded mutation layer layered on top
-of the read-only inspection snapshot for one active Copilot PR outer-loop run.
+Canonical owner for the deterministic mid-flight operator steering contract for
+active dev loops: how to submit steering directives, how the loop acknowledges
+them, the safe-point rules, and what each result means. In the first external
+slice, steering is a bounded mutation layer layered on top of the read-only
+inspection snapshot for one active Copilot PR outer-loop run.
 
 ## Overview
 
@@ -39,13 +39,14 @@ in subsequent work.
 
 ## First-slice external directive boundary
 
+<!-- rule: STEERING-EXTERNAL-SCOPE-NARROW -->
 The first external operator-facing `submit` contract is intentionally narrow:
 
 - it targets one explicit Copilot PR outer-loop run at a time
 - it reuses the inspection identity model (`repo` + `pr` ⇒ `runId: pr-<number>`)
-- it must accept exactly one behavior-changing directive:
+- it MUST accept exactly one behavior-changing directive:
   `stop_at_next_safe_gate`
-- it must reject `hard_constraint`, `preference`, and `clarification` on the
+- it MUST reject `hard_constraint`, `preference`, and `clarification` on the
   external submit path
 
 The lower-level core/state surfaces may still model other steering kinds, but
@@ -60,7 +61,7 @@ they are not part of the v1 operator-facing submit contract.
 | `hard_constraint` | A hard requirement that must be respected by subsequent steps. Additive: multiple constraints stack. Exact duplicates (case-insensitive) are rejected. |
 | `preference` | A preference that should be followed but is not blocking. Multiple preferences accumulate on the effective stack. |
 | `clarification` | Additional context that does not change requirements but affects how the loop interprets its task. |
-| `stop_at_next_safe_gate` | Request the loop to stop at the next safe approval/mutation gate instead of continuing to the next loop step. |
+| <!-- term: gate:stop_at_next_safe_gate --> `stop_at_next_safe_gate` | Request the loop to stop at the next safe approval/mutation gate instead of continuing to the next loop step. |
 
 ---
 
@@ -92,7 +93,8 @@ conductor-wide control plane.
 
 ### Live-steering advertisement contract
 
-`inspect-run` must fail closed for live-steering availability:
+<!-- rule: STEERING-LIVE-ADVERTISEMENT-FAIL-CLOSED -->
+`inspect-run` MUST fail closed for live-steering availability:
 
 - a steering file can be present while live steering is still unavailable
 - `layers.steering.status: "available"` is only valid when inspection evidence is
@@ -191,7 +193,8 @@ You can override this with `--state-file <path>`.
 
 ## Ordering and sequencing
 
-Every steering event carries a `seq` field — a positive integer that must be
+<!-- rule: STEERING-SEQ-MONOTONIC -->
+Every steering event carries a `seq` field — a positive integer that MUST be
 monotonically increasing per run. The loop enforces this:
 
 - If `seq < nextSeq`, the event is rejected with `rejected_invalid_or_conflicting`.
@@ -204,12 +207,11 @@ replay.
 
 ## Conflict behavior
 
-For `hard_constraint` events:
-
-- Two constraints with **different** directives are allowed and stack additively.
-- An event with an **identical** directive (case-insensitive) to one already on the
-  effective stack is rejected with `rejected_invalid_or_conflicting` and the reason
-  includes the seq number of the existing constraint.
+<!-- rule: STEERING-HARD-CONSTRAINT-DEDUP -->
+For `hard_constraint` events: two constraints with **different** directives are allowed and
+stack additively; an event with an **identical** directive (case-insensitive) to one already
+on the effective stack MUST be rejected with `rejected_invalid_or_conflicting`, and the reason
+MUST include the seq number of the existing constraint.
 
 `preference`, `clarification`, and `stop_at_next_safe_gate` events do not conflict
 with each other in v1; they accumulate additively.
@@ -218,16 +220,11 @@ with each other in v1; they accumulate additively.
 
 ## What happens when steering arrives during a non-interruptible mutation?
 
-When the loop is in `already_fixed_needs_reply_resolve` (replying to and resolving
-review threads), it is in the middle of a multi-step GitHub mutation that must
-complete atomically. Interrupting it could leave threads in a half-resolved state.
-
-Steering submitted during this state is **queued** (`queued_for_safe_point`) and
-promoted automatically when the mutation finishes and the loop transitions to a
-safe point (`ready_to_rerequest_review`).
-
-The same applies to `unresolved_feedback_present`: the loop is about to apply code
-fixes. Steering is queued and promoted when the loop next reaches an idle state.
+`already_fixed_needs_reply_resolve` is a multi-step GitHub mutation that must complete
+atomically — interrupting it could leave threads half-resolved. Per the NEXT_POINT table
+above, steering submitted there (or during `unresolved_feedback_present`, which is about to
+apply code fixes) is **queued** (`queued_for_safe_point`) and promoted automatically when
+the loop next reaches an IMMEDIATE safe point (e.g. `ready_to_rerequest_review`).
 
 ---
 
@@ -474,3 +471,9 @@ const { steeringState: updated, promoted } = promoteQueuedSteering(
 - **Replacing pause/stop/restart** when the right answer is to stop the run.
 - **Mutation rewrites** in the middle of a non-interruptible action.
 - **Generalizing immediately** across every loop family (this first slice covers the copilot review/fix loop; other loop families are follow-up work).
+
+## Cross-references
+
+- [Stop Conditions](../skills/docs/stop-conditions.md) — the loop-state stop/wait vocabulary this contract overlays
+- [Public Dev Loop Contract](../skills/docs/public-dev-loop-contract.md) — the routing contract this steering layer sits on top of
+- [Contract Style Guide](../skills/docs/contract-style-guide.md) — rule-ID conventions used here

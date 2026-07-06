@@ -8,7 +8,8 @@ Other repo docs may summarize or link this contract, but they should not redefin
 
 ## Two-tier model
 
-dev-loops supports two mutually exclusive artifact authority modes. Every work item originates from exactly one authoritative artifact: a GitHub issue or a persisted markdown plan file. Work originates from a PR or a direct local change only when explicitly requested.
+<!-- rule: ARTIFACT-TWO-TIER-EXCLUSIVE -->
+dev-loops supports two mutually exclusive artifact authority modes. Every work item MUST originate from exactly one authoritative artifact: a GitHub issue or a persisted markdown plan file. Work MUST originate from a PR or a direct local change only when explicitly requested.
 
 The shipped extension default selects local-planning; see [Shipped default posture](#shipped-default-posture) below. The mode names that follow describe the two tiers; "default" in their headings refers to the local-first code-level default in `BUILT_IN_DEFAULTS`.
 
@@ -19,7 +20,7 @@ The shipped extension default selects local-planning; see [Shipped default postu
 Artifacts:
 - **Planning artifact:** GitHub issue (title, body, labels, assignees, acceptance criteria)
 - **Execution artifact:** GitHub PR (linked to issue; created during implementation)
-- **No local duplicate:** Do not create `docs/phases/phase-<n>.md` for the same session when a GitHub issue is the canonical spec
+- <!-- rule: ARTIFACT-TRACKER-FIRST-NO-DUP --> **No local duplicate:** A tracker-first session MUST NOT create `docs/phases/phase-<n>.md` for the same session when a GitHub issue is the canonical spec
 
 Key contract:
 - GitHub issue state is authoritative — not local notes or chat context
@@ -40,7 +41,7 @@ Artifacts:
 Key contract:
 - The markdown plan file is the canonical spec — not a duplicate of a tracker issue
 - GitHub issues may still be used for tracking or linking, but the plan file is authoritative for scope and acceptance criteria
-- A tracker-backed local implementation session (GitHub issue as canonical spec) must not also maintain a duplicate `docs/phases/phase-<n>.md` — see [Public Dev Loop Contract](public-dev-loop-contract.md) "Tracker-backed local implementation input-source contract"
+- A tracker-backed local implementation session (GitHub issue as canonical spec) is bound by [ARTIFACT-TRACKER-FIRST-NO-DUP](#tracker-first) above — see [Public Dev Loop Contract](public-dev-loop-contract.md) "Tracker-backed local implementation input-source contract"
 
 ### Lightweight (PR-body-as-spec)
 
@@ -51,11 +52,10 @@ Artifacts:
 - **No committed plan doc:** no `docs/phases/*.md` is created for the session
 
 Key contract:
-- The PR body must carry the same invariants a durable spec would: **Objective/why, in-scope + explicit non-goals, testable acceptance criteria, definition of done, open questions/risks**. `scripts/loop/validate-pr-body-spec.mjs` (reusing the generic markdown logic of `@dev-loops/core/loop/issue-refinement-artifact`, `validatePrBodySpec`) validates these and **fails closed** with a distinct `missing_*` reason per absent invariant.
-- The PR body MUST also carry the `Closes #N` linkage (GitHub's other closing keywords count too); `validate-pr-body-spec` fails closed with `missing_closing_issue_reference` without it, and with `closes_wrong_issue` when an `--expected-issue` is given and doesn't match — the lightweight path's issue-tracking state must never silently diverge from PR state (issue #1181).
+- <!-- rule: ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS --> The PR body MUST carry the same invariants a durable spec would: **Objective/why, in-scope + explicit non-goals, testable acceptance criteria, definition of done, open questions/risks**, and MUST carry the `Closes #N` linkage (GitHub's other closing keywords count too). `scripts/loop/validate-pr-body-spec.mjs` (reusing the generic markdown logic of `@dev-loops/core/loop/issue-refinement-artifact`, `validatePrBodySpec`) validates these and fails closed with a distinct `missing_*` reason per absent invariant — `missing_closing_issue_reference` without the linkage, `closes_wrong_issue` when an `--expected-issue` is given and doesn't match — so the lightweight path's issue-tracking state never silently diverges from PR state (issue #1181).
 - This flips the promotion invariant below (P4, "the PR body carries the committed plan-doc **path**"): under lightweight there is no committed plan doc — the PR body **is** the spec, not a pointer to one.
 - The explicit `--lightweight` flag is the primary, deterministic trigger. The secondary heuristic (chore/fix commit type + no `--plan-file` + small change) is a documented manual signal for when to reach for the flag; it is not an automatic selector.
-- `--lightweight` is rejected when combined with `--plan-file` (they are opposites: `--plan-file` commits a durable plan doc as the spec, `--lightweight` makes the PR body the spec) and only composes with `--issue`.
+- <!-- rule: ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE --> `--lightweight` MUST be rejected when combined with `--plan-file` (they are opposites: `--plan-file` commits a durable plan doc as the spec, `--lightweight` makes the PR body the spec) and only composes with `--issue`.
 - Pre-approval acceptance-criteria verification reads the AC/DoD/invariants directly from the PR body rather than a linked issue body; see [Acceptance Criteria Verification](acceptance-criteria-verification.md).
 
 ### Mode selection table
@@ -106,13 +106,14 @@ The effective default for a consumer comes from the config-merge layering in `pa
 
 With nothing but the shipped package in place, the extension layer resolves `strategy.default` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy.default: github-first` in its own `.devloops`.
 
-Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`). They differ in how they load: `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`; `.pi/dev-loop/settings.*` (and the older `overrides.*`) load only when no `.devloops` is present — when `.devloops` exists it is authoritative and those files are ignored (with a deprecation warning). The full precedence, low to high, is: `BUILT_IN_DEFAULTS` < extension defaults < `.pi/dev-loop/defaults.*` < repo `.devloops` (or, when `.devloops` is absent, `.pi/dev-loop/settings.*` / `overrides.*`).
+Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`). They differ in how they load, per the precedence list above: `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`; `.pi/dev-loop/settings.*` (and the older `overrides.*`) load only when no `.devloops` is present — when `.devloops` exists it is authoritative and those files are ignored (with a deprecation warning).
 
 ### Explicit non-knobs
 
+<!-- rule: ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED -->
 These are not valid artifact authority mode selectors:
-- `strategy.default: copilot` — not a valid mode; the enum accepts only `github-first` or `local-first` (`packages/core/src/config/config.mjs`)
-- Free-form string values — fail closed
+- `strategy.default: copilot` — not a valid mode; the enum MUST accept only `github-first` or `local-first` (`packages/core/src/config/config.mjs`)
+- Free-form string values — MUST fail closed
 - Omitting `strategy.default` from every layer — resolves to `local-first` from `BUILT_IN_DEFAULTS`
 
 ## Local-first plan-file flow end to end

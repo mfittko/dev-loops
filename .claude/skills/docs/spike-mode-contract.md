@@ -1,6 +1,6 @@
 # Spike-mode contract
 
-A spike is a time-boxed, exploratory dev-loop run started from a local question with no GitHub issue. Its deliverable is a findings document. When the exploration reaches a recommendation, the operator concludes it with one of two exits: **discard** (drop it with zero tracker artifacts) or **graduate** (emit a #947-style local-first plan file that enters the existing plan→PR promotion path).
+Canonical owner for spike mode: the time-boxed, exploratory dev-loop run started from a local question with no GitHub issue. Its deliverable is a findings document. When the exploration reaches a recommendation, the operator concludes it with one of two exits: **discard** (drop it with zero tracker artifacts) or **graduate** (emit a #947-style local-first plan file that enters the existing plan→PR promotion path).
 
 This doc is the canonical operator sequence for spike mode and carries a worked example showing both exits. The spike artifact lives outside the tracker; it is exempt from the production-gate ceremony at entry and runs under a relaxed gate profile (`gates.spike`). The [Artifact Authority Contract](artifact-authority-contract.md) owns the local-planning model a graduated spike feeds into.
 
@@ -53,7 +53,10 @@ Hand the artifact to startup with `--spike` (mutually exclusive with `--issue`, 
 node scripts/loop/resolve-dev-loop-startup.mjs --spike <spike.md>
 ```
 
-`buildSpikeInput` (`scripts/loop/resolve-dev-loop-startup.mjs`) reads the file read-only — no tracker mutation, no GitHub call, no issue or PR number. It requires the exploration scaffold; a missing/unreadable file, or one failing `validateSpikeExplorationSections`, throws and startup fails closed (exit 1, no readiness bundle). On success it builds a `local_phase` startup input with the resolved spike path as the target `phase` and threads `spikeIntakeState` onto the output. A spike with no Recommendation reports `spike_in_progress`. The spike path is exempt from the worktree-isolation guard because there is no issue to key a worktree on (`planFileExempt: true`).
+`buildSpikeInput` (`scripts/loop/resolve-dev-loop-startup.mjs`) reads the file read-only — no tracker mutation, no GitHub call, no issue or PR number.
+
+<!-- rule: SPIKE-STARTUP-SCAFFOLD-GATE -->
+Startup MUST require the exploration scaffold: a missing/unreadable file, or one failing `validateSpikeExplorationSections`, MUST throw, and startup MUST fail closed (exit 1, no readiness bundle). On success it builds a `local_phase` startup input with the resolved spike path as the target `phase` and threads `spikeIntakeState` onto the output. A spike with no Recommendation reports `spike_in_progress`. The spike path is exempt from the worktree-isolation guard because there is no issue to key a worktree on (`planFileExempt: true`).
 
 ### 3. Run under the relaxed gate profile
 
@@ -67,7 +70,8 @@ When the exploration concludes, fill in `## Recommendation`. The intake state is
 node scripts/refine/exit-spike.mjs --spike-file <spike.md> --disposition <discard|graduate> [--plan-file <path>] [--json]
 ```
 
-`evaluateSpikeExit` (`packages/core/src/loop/spike-exit-contract.mjs`) is eligible only from `spike_ready_for_exit`. From any other state it fails closed with `not_ready_for_exit`; an unrecognized disposition fails closed with `unknown_disposition`. On a fail-closed path the CLI makes zero tracker mutation, writes no plan file, and exits 1.
+<!-- rule: SPIKE-EXIT-ELIGIBILITY -->
+`evaluateSpikeExit` (`packages/core/src/loop/spike-exit-contract.mjs`) MUST be eligible only from `spike_ready_for_exit`: from any other state it MUST fail closed with `not_ready_for_exit`, and an unrecognized disposition MUST fail closed with `unknown_disposition`. On a fail-closed path the CLI MUST make zero tracker mutation, write no plan file, and exit 1.
 
 ## Exit dispositions
 
@@ -75,22 +79,25 @@ The two dispositions are `SPIKE_EXIT_DISPOSITION.DISCARD` (`"discard"`) and `SPI
 
 ### discard
 
-The recommendation is "don't pursue". The spike is dropped with zero tracker artifacts; the findings document on disk is the whole record. The CLI writes nothing and creates no GitHub artifact. `--plan-file` is irrelevant for a discard.
+<!-- rule: SPIKE-DISCARD-ZERO-MUTATION -->
+The recommendation is "don't pursue". Discard MUST drop the spike with zero tracker artifacts — the findings document on disk is the whole record. The CLI MUST write nothing and MUST create no GitHub artifact. `--plan-file` is irrelevant for a discard.
 
 ### graduate
 
-The recommendation is "pursue this". `buildGraduatedPlanBody` builds a #947-consumable plan-file body from the spike's `Question`, `Approach`, `Findings`, and `Recommendation`, and `exit-spike.mjs` writes it to the required `--plan-file` path. The mapping:
+<!-- rule: SPIKE-GRADUATE-PLAN-FILE-REQUIRED -->
+The recommendation is "pursue this". `buildGraduatedPlanBody` builds a #947-consumable plan-file body from the spike's `Question`, `Approach`, `Findings`, and `Recommendation`, and `exit-spike.mjs` writes it to the required `--plan-file` path — `--plan-file` MUST be present for a graduate exit; the CLI MUST NOT guess an output path. The mapping:
 
 - `Question` + `Approach` become the Objective's context.
 - `Recommendation` becomes the In-scope work.
 - `Findings` are recorded as supporting evidence.
 - A fixed Explicit non-goals block keeps the plan from re-opening the concluded exploration.
 
-The emitted body carries the four plan-file base sections (`## Status`, `## Objective`, `## In scope`, `## Explicit non-goals` — see [Plan-file Contract](plan-file-contract.md)), so it passes `validatePlanFile` and enters the local-first plan→PR promotion path (#952) unchanged: refine it, hold the local human-review checkpoint, then `promote-plan.mjs`. Graduation is idempotent — `buildGraduatedPlanBody` is pure, so re-running reproduces the same plan file. `buildGraduatedPlanBody` fails closed (throws) on an empty required section, so a graduate exit cannot emit a plan the validator would reject. `--plan-file` is required for graduate (the CLI never guesses an output path).
+The emitted body carries the four plan-file base sections (`## Status`, `## Objective`, `## In scope`, `## Explicit non-goals` — see [Plan-file Contract](plan-file-contract.md)), so it passes `validatePlanFile` and enters the local-first plan→PR promotion path (#952) unchanged: refine it, hold the local human-review checkpoint, then `promote-plan.mjs`. Graduation is idempotent — `buildGraduatedPlanBody` is pure, so re-running reproduces the same plan file, and it fails closed (throws) on an empty required section, so a graduate exit cannot emit a plan the validator would reject.
 
 ## Relaxed gate profile
 
-A spike's deliverable is a findings doc, so it does not carry the full production draft → pre-approval → Copilot gate set. `gates.spike` is a relaxed profile, shipped in `packages/core/src/config/extension-defaults.yaml`:
+<!-- rule: SPIKE-RELAXED-GATE-PROFILE -->
+A spike's deliverable is a findings doc, so it MUST NOT carry the full production draft → pre-approval → Copilot gate set; it runs under `gates.spike`, a relaxed profile shipped in `packages/core/src/config/extension-defaults.yaml`:
 
 ```yaml
 gates:

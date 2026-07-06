@@ -1,7 +1,7 @@
 # Epic tree refinement procedure
 
-This document is the canonical procedure for depth-first, top-down-then-bottom-up refinement of
-an existing GitHub sub-issue tree (parent → children → grandchildren).
+Canonical owner for depth-first, top-down-then-bottom-up refinement of an existing GitHub
+sub-issue tree (parent → children → grandchildren).
 
 Use it together with:
 - [Issue Intake Procedure](./issue-intake-procedure.md) — Phase 3b calls this procedure for epic decomposition
@@ -67,7 +67,8 @@ For the root issue:
 9. Show the diff and obtain confirmation before mutating GitHub
 10. Apply: `gh issue edit <root> --repo <repo> --body-file tmp/issues/<root>/refinement/root-body.md`
 
-**Gate:** Phase B must not start until Phase A is complete and the root body is updated on GitHub.
+<!-- rule: EPIC-REFINEMENT-SERIAL-PHASE-GATE -->
+**Gate:** Phase B MUST NOT start until Phase A is complete and the root body is updated on GitHub. The same serial-gate discipline applies at every phase boundary below: a level/phase MUST fully complete (siblings may run in parallel within it) before the next one starts.
 
 ---
 
@@ -96,7 +97,7 @@ parent's updated body, not each other's output.
 **Parallelism rule:** All siblings at the same level can be refined concurrently. No child needs
 another child's output; each child only reads the parent's contract and its own current body.
 
-**Serial gate between levels:** All children at level N must complete before descending to level N+1.
+**Serial gate between levels** ([EPIC-REFINEMENT-SERIAL-PHASE-GATE](#phase-a--root-refinement-serial)): all children at level N must complete before descending to level N+1.
 
 Repeat Phase B until all leaves are refined.
 
@@ -122,7 +123,7 @@ updated bodies, not sibling parents).
 6. Show the diff and obtain confirmation before mutating
 7. Apply: `gh issue edit <parent> --repo <repo> --body-file tmp/issues/<parent>/refinement/parent-reconciled-body.md`
 
-**Serial gate between levels:** All parents at depth N must complete reconciliation before ascending to depth N-1.
+**Serial gate between levels** ([EPIC-REFINEMENT-SERIAL-PHASE-GATE](#phase-a--root-refinement-serial)): all parents at depth N must complete reconciliation before ascending to depth N-1.
 
 ---
 
@@ -146,21 +147,28 @@ After all immediate children of the root have been reconciled:
      --repo <repo> --issue <root> --expected <n1,n2,...> --ordered
    ```
 
-**Gate:** Root final reconcile completes the procedure. All issues in the tree must now have:
-- AC checklist, DoD checklist, AC/DoD matrix, non-goals, explicit scope boundary
+**Gate:** Root final reconcile completes the procedure. Every issue in the tree must now satisfy
+[EPIC-REFINEMENT-REQUIRED-CONTRACTS](#rules).
 
 ---
 
 ## Rules
 
-- **No implementation, no PRs, no Copilot assignment** — this procedure is refinement-only
-- **Use `gh issue edit`** to apply changes directly — do not create new issues or PRs
-- **No prose parent/child links in bodies** — GitHub sub-issues API handles hierarchy
-- **Each issue must have:** AC checklist, DoD checklist, non-goals, AC/DoD matrix, scope boundary
-- **Scope boundary format:** `"This issue owns X. It does NOT own Y (#NNN) or Z (#MMM)."`
-- **Show the diff** and get confirmation before each `gh issue edit` mutation (unless unattended with explicit authorization)
-- **Write tmp artifacts** under `tmp/issues/<number>/refinement/` before applying
-- **Do not duplicate** the child list in parent bodies — the sub-issue tree API owns hierarchy
+<!-- rule: EPIC-REFINEMENT-SCOPE-BOUNDARY -->
+This procedure MUST stay refinement-only: no implementation, no PRs, no Copilot assignment.
+Apply changes directly with `gh issue edit` — never create new issues or PRs. Hierarchy MUST
+stay in the GitHub sub-issues API, not prose parent/child links or a duplicated child-list
+checklist in parent bodies.
+
+<!-- rule: EPIC-REFINEMENT-REQUIRED-CONTRACTS -->
+Each issue in the tree MUST carry: an AC checklist, a DoD checklist, a non-goals section, an
+AC/DoD matrix, and an explicit scope boundary in the format
+`"This issue owns X. It does NOT own Y (#NNN) or Z (#MMM)."`
+
+<!-- rule: EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE -->
+Write the refined body to `tmp/issues/<number>/refinement/` first. Show the diff and get
+confirmation before each `gh issue edit` mutation, unless running unattended with explicit
+authorization.
 
 ---
 
@@ -179,18 +187,13 @@ Phase D:  [root]                            serial (1 step)
 
 Total serial steps for a tree with depth D: `1 + (D-1) + (D-1) + 1 = 2D`
 
-**Fan-out rule:** At any level, when a parent is refined, ALL its children can be refined in parallel.
-
-**Serial gates:**
-- Root refinement must complete before any child starts
-- A parent's reconciliation must wait for ALL its children to finish
-- Root reconciliation must wait for all immediate children to reconcile
+**Fan-out rule:** At any level, when a parent is refined, ALL its children can be refined in parallel. Root/leaf/child ordering follows [EPIC-REFINEMENT-SERIAL-PHASE-GATE](#phase-a--root-refinement-serial) throughout.
 
 ---
 
 ## Completion criteria
 
-The procedure is complete when all issues in the tree satisfy:
+The procedure is complete when all issues in the tree satisfy [EPIC-REFINEMENT-REQUIRED-CONTRACTS](#rules), verified as:
 
 | Check | How to verify |
 |---|---|
