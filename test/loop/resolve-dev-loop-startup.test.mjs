@@ -1048,6 +1048,16 @@ test("parseResolveDevLoopStartupCliArgs rejects --lightweight without --issue", 
   );
 });
 
+test("parseResolveDevLoopStartupCliArgs accepts --lightweight ALONE (issue-less PR-first, #1210)", () => {
+  const opts = parseResolveDevLoopStartupCliArgs(["--lightweight"]);
+  assert.equal(opts.lightweight, true);
+  assert.equal(opts.issue, undefined);
+  assert.equal(opts.pr, undefined);
+  assert.equal(opts.inputPath, undefined);
+  assert.equal(opts.planFile, undefined);
+  assert.equal(opts.spike, undefined);
+});
+
 test("buildResolveDevLoopStartupResult threads canonicalSpecSource:pr_body onto the result", () => {
   const input = {
     intent: "start_issue_locally",
@@ -1143,6 +1153,89 @@ test("runCli --issue --lightweight threads canonicalSpecSource:pr_body onto the 
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.selectedStrategy, "local_implementation");
     assert.equal(parsed.canonicalSpecSource, "pr_body");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+function initTempGitRepo(tempDir) {
+  execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: tempDir, stdio: "ignore" });
+}
+
+test("runCli --lightweight ALONE (no --issue): light mode disabled fails closed with a distinct reason (AC2)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
+  try {
+    initTempGitRepo(tempDir);
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 3\n    maxLines: 200\n",
+      "utf8",
+    );
+    const result = await runNode(["--lightweight"], { cwd: tempDir });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /lightMode\.enabled/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --lightweight ALONE (no --issue): undetectable scope (no commits) fails closed with a distinct reason (AC2)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
+  try {
+    initTempGitRepo(tempDir);
+    // No commits at all: `git diff --stat HEAD~1..HEAD` fails — undetectable scope.
+    const result = await runNode(["--lightweight"], { cwd: tempDir });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /measurable change scope/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --lightweight ALONE (no --issue): above-threshold change fails closed with a distinct reason (AC2)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
+  try {
+    initTempGitRepo(tempDir);
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 2\n",
+      "utf8",
+    );
+    await writeFile(path.join(tempDir, "a.txt"), "line1\n", "utf8");
+    execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd: tempDir, stdio: "ignore" });
+    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\n", "utf8");
+    execFileSync("git", ["commit", "-am", "over threshold change"], { cwd: tempDir, stdio: "ignore" });
+    const result = await runNode(["--lightweight"], { cwd: tempDir });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /exceeds|stay within the light-mode threshold/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --lightweight ALONE (no --issue): under-threshold change resolves issue-less PR-first (AC-adjacent success path)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
+  try {
+    initTempGitRepo(tempDir);
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 200\n",
+      "utf8",
+    );
+    await writeFile(path.join(tempDir, "a.txt"), "line1\n", "utf8");
+    execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd: tempDir, stdio: "ignore" });
+    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\n", "utf8");
+    execFileSync("git", ["commit", "-am", "small change"], { cwd: tempDir, stdio: "ignore" });
+    const result = await runNode(["--lightweight"], { cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.selectedStrategy, "local_implementation");
+    assert.equal(parsed.canonicalSpecSource, "pr_body");
+    assert.equal(parsed.canonicalStateSummary.target.issue, null);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

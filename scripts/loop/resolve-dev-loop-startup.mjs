@@ -625,7 +625,7 @@ export function buildLightweightIssuelessInput({ config }) {
     canonicalSpecSource: "pr_body",
     planFileExempt: true,
     currentState: {
-      target: { kind: "local_phase", issue: null, pr: null, linkedPr: null, branch: null, phase: null },
+      target: { kind: "local_phase", issue: null, pr: null, linkedPr: null, branch: null, phase: "lightweight-issueless" },
       ownership: "local",
       nextActor: "local",
       status: "active",
