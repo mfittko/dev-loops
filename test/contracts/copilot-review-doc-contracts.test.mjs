@@ -64,7 +64,7 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
 });
 test("copilot-pr-followup skill routes review requests and wait seams through deterministic helpers", async () => {
   const skillContent = await readRepo("skills/copilot-pr-followup/SKILL.md");
-  const requestSectionMatch = skillContent.match(/When confirming whether Copilot is requested as a reviewer,[\s\S]*?## Step 6: Async watch behavior/);
+  const requestSectionMatch = skillContent.match(/<!-- rule: COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY -->[\s\S]*?## Step 6: Async watch behavior/);
   const requestSection = requestSectionMatch ? requestSectionMatch[0] : "";
   assert.ok(requestSection.length > 0, "request/wait section not found");
   assert.match(requestSection, /request-copilot-review\.mjs/i);

@@ -373,8 +373,8 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   assert.match(localImplementationSkill, /always draft and always assigned — self-assigned by default/i);
   assert.match(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}dev-loops pr create --assignee @me/i);
   assert.doesNotMatch(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}gh pr create --draft --assignee @me/i);
-  assert.match(localImplementationSkill, /Do not create a fresh PR directly in ready-for-review state/i);
-  assert.match(localImplementationSkill, /draft gate inspection is a real workflow boundary/i);
+  assertRuleOwned("OPS-DRAFT-FIRST-PR", "skills/docs/copilot-loop-operations.md");
+  assert.match(localImplementationSkill, /OPS-DRAFT-FIRST-PR/);
 
   assert.match(finalApprovalSkill, /redirect/i);
   assert.match(finalApprovalSkill, /Human approval checkpoint/i);
