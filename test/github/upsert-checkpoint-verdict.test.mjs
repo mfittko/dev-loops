@@ -2870,6 +2870,42 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
   }
 });
 
+test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angle when gates.rejectForeignAngles is false", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-warn-"));
+  try {
+    // Repo config opting into warn mode; extension defaults still supply the
+    // draft pool + mandatory pr-description.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  rejectForeignAngles: false\n", "utf8");
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "totally-made-up", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-json", findingsPath,
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stderr, /WARNING: .*outside the configured pool: totally-made-up/);
+    assert.match(result.stderr, /rejectForeignAngles is false/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict does NOT enforce angle coverage for an inline_single_agent verdict (AC3 exemption)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-coverage-inline-"));
   try {

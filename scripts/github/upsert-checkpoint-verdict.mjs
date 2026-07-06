@@ -1192,10 +1192,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         `--findings-json for ${options.gate} is missing mandatory angle(s): ${missingMandatory.join(", ")} (configured in gates.${gateKey}.mandatoryAngles; add a per-angle entry for each before posting a fanout_fanin verdict)`,
       );
     }
-    if (foreignAngles.length > 0 && resolveRejectForeignAngles(config)) {
-      throw new Error(
-        `--findings-json for ${options.gate} names angle(s) outside the configured pool: ${foreignAngles.join(", ")} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`,
-      );
+    if (foreignAngles.length > 0) {
+      const message = `--findings-json for ${options.gate} names angle(s) outside the configured pool: ${foreignAngles.join(", ")}`;
+      if (resolveRejectForeignAngles(config)) {
+        throw new Error(
+          `${message} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`,
+        );
+      }
+      // rejectForeignAngles: false is WARNING mode, not silence — one line per call.
+      if (!options.silent) {
+        process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
+      }
     }
   }
   // --findings-json takes precedence; when structured findings are present, do not

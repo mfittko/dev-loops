@@ -240,6 +240,7 @@ function normalizeGateMarkerSummary(summary) {
 }
 export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null) {
   const failures = [];
+  const warnings = [];
   if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
     failures.push("missing visible clean draft_gate comment");
   }
@@ -335,10 +336,14 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
               `${gate.name}: fan-out provenance is missing mandatory angle(s): ${missingMandatory.join(", ")}; ${FANOUT_UNAVAILABLE_MESSAGE}`,
             );
           }
-          if (foreignAngles.length > 0 && (fanoutEnforcement.rejectForeignAngles ?? true)) {
-            failures.push(
-              `${gate.name}: fan-out provenance names angle(s) outside the configured pool: ${foreignAngles.join(", ")}; ${FANOUT_UNAVAILABLE_MESSAGE}`,
-            );
+          if (foreignAngles.length > 0) {
+            const message = `${gate.name}: fan-out provenance names angle(s) outside the configured pool: ${foreignAngles.join(", ")}`;
+            if (fanoutEnforcement.rejectForeignAngles ?? true) {
+              failures.push(`${message}; ${FANOUT_UNAVAILABLE_MESSAGE}`);
+            } else {
+              // rejectForeignAngles: false is WARNING mode, not silence.
+              warnings.push(`${message} (gates.rejectForeignAngles is false; recorded as a warning)`);
+            }
           }
         }
       }
@@ -359,6 +364,8 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   return {
     ok: failures.length === 0,
     failures,
+    // Additive: only present when non-empty, preserving the existing {ok, failures} shape.
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 async function ledgerExists(fullPath) {
@@ -669,6 +676,13 @@ async function main() {
       })}\n`);
       process.exitCode = 1;
       return;
+    }
+    // Warnings (e.g. foreign angles under gates.rejectForeignAngles: false) do
+    // not fail the check but must not pass silently. Suppressed under --silent.
+    if (Array.isArray(preMergeGateCheck.warnings) && !options.silent) {
+      for (const warning of preMergeGateCheck.warnings) {
+        process.stderr.write(`WARNING: ${warning}\n`);
+      }
     }
     process.exitCode = emitResult(output, { jq: options.jq, silent: options.silent });
   } catch (error) {

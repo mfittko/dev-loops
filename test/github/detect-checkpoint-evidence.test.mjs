@@ -1077,6 +1077,10 @@ test("buildPreMergeGateCheck WARNS (does not fail) on a foreign angle when rejec
     ],
   });
   assert.equal(result.ok, true, JSON.stringify(result.failures));
+  // Warning mode is not silence: the foreign angle surfaces on the result.
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /outside the configured pool: made-up-angle/);
+  assert.match(result.warnings[0], /rejectForeignAngles is false/);
 });
 
 test("buildPreMergeGateCheck accepts a delta-suffixed angle as covering its base mandatory angle", () => {

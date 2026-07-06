@@ -178,11 +178,11 @@ export async function checkProvenanceAngleCoverage(provenance, gate, { repoRoot 
     );
   }
   if (foreignAngles.length > 0) {
-    const message = `--provenance.perAngle names angle(s) outside the configured pool for ${gate}: ${foreignAngles.join(", ")} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`;
+    const message = `--provenance.perAngle names angle(s) outside the configured pool for ${gate}: ${foreignAngles.join(", ")}`;
     if (resolveRejectForeignAngles(config)) {
-      throw parseError(message);
+      throw parseError(`${message} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`);
     }
-    return { warning: message };
+    return { warning: `${message} (gates.rejectForeignAngles is false; recorded as a warning)` };
   }
   return { warning: null };
 }
@@ -339,6 +339,12 @@ async function main() {
   }
   try {
     const result = await writeGateFindingsLog(options);
+    // rejectForeignAngles: false is WARNING mode, not silence — surface the
+    // angle-coverage warning on stderr too (the JSON result carries it as
+    // `warning`). Suppressed under --silent.
+    if (result.warning && !options.silent) {
+      process.stderr.write(`WARNING: ${result.warning}\n`);
+    }
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
     process.stderr.write(JSON.stringify({
