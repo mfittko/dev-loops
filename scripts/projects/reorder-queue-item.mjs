@@ -522,7 +522,7 @@ function executePosition(projectId, itemId, afterId) {
 async function mainFlagForm(args, { env, child, repo, owner, repoName, project }) {
   const itemRef = parseItemRef(args.item);
   let afterRef = null;
-  if (args.after !== undefined) afterRef = parseItemRef(args.after);
+  if (args.after !== undefined) afterRef = parseItemRef(args.after, "--after");
 
   const item = await resolveProjectItem(project.id, itemRef, owner, repoName, repo, env, child);
 
@@ -596,7 +596,7 @@ async function mainSubcommand(args, { env, child, repo, project }) {
   const items = await fetchAllItems(project.id, env, child);
 
   // Resolve all referenced items up-front (fail closed before any mutation).
-  const refs = positional.map((p) => parseItemRef(p));
+  const refs = positional.map((p) => parseItemRef(p, "<ref>"));
   const resolved = refs.map((ref) => resolveFromItems(items, ref, repo));
 
   // Reordering positions within a single Status column. The before/after snapshot is scoped

@@ -270,7 +270,10 @@ describe("reconcile-queue main (#1069)", () => {
       { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: hyphenId } } } },
     ];
     let ghCall = 0;
-    const runChild = async (_cmd, _argv, _env) => {
+    const runChild = async (cmd, argv, _env) => {
+      if (ghCall >= ghResponses.length) {
+        throw new Error(`Unexpected gh call #${ghCall + 1} (only ${ghResponses.length} mocked): ${cmd} ${argv.join(" ")}`);
+      }
       const payload = ghResponses[ghCall++];
       return { code: 0, stdout: JSON.stringify(payload), stderr: "" };
     };

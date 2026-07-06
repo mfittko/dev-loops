@@ -31,10 +31,13 @@ function resolveSettings(cwd) {
   return null;
 }
 
-// Shape of a GitHub GraphQL global node ID: a type prefix (e.g. "PVT",
-// "PVTI", "I", "PR") followed by "_" and a base64url-ish payload. The payload
-// alphabet includes "-" and "_" (base64url), which a plain [A-Za-z0-9_] class
-// rejects — the exact shape that broke real PVTI_ ids containing a hyphen.
+// Shape of the node IDs this tooling actually receives from the Projects V2
+// API (e.g. "PVT_…", "PVTI_…", "I_…", "PR_…"): a type prefix, "_", then a
+// base64url-ish payload. Intentionally narrower than an arbitrary GraphQL
+// global node ID (which is opaque and carries no guaranteed prefix_payload
+// shape). The payload alphabet includes "-" and "_" (base64url), which a
+// plain [A-Za-z0-9_] class rejects — the exact shape that broke real PVTI_
+// ids containing a hyphen.
 const NODE_ID_RE = /^[A-Za-z]+_[A-Za-z0-9_-]+$/;
 
 // Parse a --project value into { kind:"id"|"number"|"uri", ... }. Throws
@@ -92,17 +95,18 @@ function parseProjectRef(raw) {
   );
 }
 
-// Parse a --item value into { kind:"id"|"number" }. Throws INVALID_ITEM on
-// empty/malformed input (bare "0" is rejected too). Shared by every --item
-// consumer (move-queue-item, reorder-queue-item) so the accepted node-ID
-// alphabet is defined once.
+// Parse an item ref into { kind:"id"|"number" }. Throws INVALID_ITEM on
+// empty/malformed input (bare "0" is rejected too). Shared by every item-ref
+// consumer (move-queue-item --item; reorder-queue-item --item/--after/
+// positionals) so the accepted node-ID alphabet is defined once. `label`
+// names the flag/argument in error messages.
 //
 // Supported forms:
 //   <n>           positive integer → { kind:"number", value:<n> }
-//   <NODE_ID>     GraphQL node ID   → { kind:"id", value:<NODE_ID> }
-function parseItemRef(raw) {
+//   <NODE_ID>     item node ID      → { kind:"id", value:<NODE_ID> }
+function parseItemRef(raw, label = "--item") {
   if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
-    throw Object.assign(new Error("--item is required"), { code: "INVALID_ITEM" });
+    throw Object.assign(new Error(`${label} is required`), { code: "INVALID_ITEM" });
   }
   const trimmed = raw.trim();
   const asNum = Number(trimmed);
@@ -110,12 +114,12 @@ function parseItemRef(raw) {
     return { kind: "number", value: asNum };
   }
   if (trimmed === "0") {
-    throw Object.assign(new Error(`--item must be a positive integer or an item node ID, got "${raw}"`), { code: "INVALID_ITEM" });
+    throw Object.assign(new Error(`${label} must be a positive integer or an item node ID, got "${raw}"`), { code: "INVALID_ITEM" });
   }
   if (NODE_ID_RE.test(trimmed)) {
     return { kind: "id", value: trimmed };
   }
-  throw Object.assign(new Error(`--item must be a positive integer or an item node ID, got "${raw}"`), { code: "INVALID_ITEM" });
+  throw Object.assign(new Error(`${label} must be a positive integer or an item node ID, got "${raw}"`), { code: "INVALID_ITEM" });
 }
 
 // Selector precedence: explicit --project ref wins; else resolve by board title
