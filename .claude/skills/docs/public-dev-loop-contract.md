@@ -337,6 +337,28 @@ First-match-wins routing posture:
 11. PR owned by Copilot -> `copilot_pr_followup`
 12. anything else -> fail closed to `needs_reconcile`
 
+## Required transitions
+
+The gate graph (`DEV_LOOP_GATE` / `PUBLIC_DEV_LOOP_GATE_CONTRACT` in
+`public-dev-loop-routing.mjs`) is stateless per cycle: each `evaluatePublicDevLoopRouting`
+call re-derives one gate from fresh authoritative state, so every non-terminal (route/wait)
+gate can be followed, on the next cycle, by any of the gates.
+
+- `final_approval` -> any dev-loop gate
+- `wait_watch` -> any dev-loop gate
+- `local_implementation` -> any dev-loop gate
+- `issue_intake` -> any dev-loop gate
+- `external_pr_followup` -> any dev-loop gate
+- `reviewer_fixer` -> any dev-loop gate
+- `copilot_pr_followup` -> any dev-loop gate
+
+Terminal gates (`stop_blocked_or_not_authorized`, `stop_done_terminal`,
+`waiting_for_merge_authorization`, `fail_closed_reconcile`) have no outgoing transitions —
+reaching one ends the current evaluation cycle. Their route-kind classification
+(`stop` / `needs_reconcile`) is the authoritative terminal marker; the route/wait gates above
+are the authoritative non-terminal set. This machine is wired into the L2/L3 state-machine
+conformance harness (`validate-state-machine-conformance.mjs`).
+
 ## Conflict reconciliation path (`CONFLICTING` / `DIRTY`)
 
 When an open linked PR reports merge conflict against `main`, treat this as an explicit bounded local-agent reconciliation path, not as a blind merge/update step:
