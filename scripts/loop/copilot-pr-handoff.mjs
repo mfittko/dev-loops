@@ -567,6 +567,10 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
         // still refuses unless the head actually advanced past the last review
         // (its hasNewCommits guard), so this cannot force an over-cap same-head request.
         forceRerequestReview: reopenedCapCycle,
+        // Thread the light-dispatch signal so the requester enforces the same
+        // composed round cap this handoff resolved (#1210) — the enforcement
+        // backstop must never permit rounds the interpreter already forbids.
+        lightweight: options.lightweight,
       },
       { env, ghCommand },
     );

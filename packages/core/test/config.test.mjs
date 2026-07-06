@@ -2488,6 +2488,16 @@ test("resolveEffectiveCopilotRoundCap: lightweight cap composes as min(lightCap,
   assert.equal(resolveEffectiveCopilotRoundCap(config, { lightweight: true }), 2);
 });
 
+test("resolveEffectiveCopilotRoundCap: negative caps from programmatically-built configs clamp to 0", () => {
+  const config = {
+    version: 1,
+    refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: -3 },
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20, maxCopilotRounds: -1 } },
+  };
+  assert.equal(resolveEffectiveCopilotRoundCap(config), 0);
+  assert.equal(resolveEffectiveCopilotRoundCap(config, { lightweight: true }), 0);
+});
+
 test("resolveEffectiveCopilotRoundCap: schema default supplies lightMode.maxCopilotRounds=1 when parsed", () => {
   const parsed = DevLoopConfigSchema.parse({
     version: 1,

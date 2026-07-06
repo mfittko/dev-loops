@@ -152,6 +152,13 @@ test("validatePrBodySpec: issueLess mode with a Closes reference present fails c
   assert.ok(!result.errors.some((e) => e.code === "missing_closing_issue_reference"));
 });
 
+test("validatePrBodySpec: issueLess + expectedIssue together throw (mutually exclusive modes, fail closed at the library boundary)", () => {
+  assert.throws(
+    () => validatePrBodySpec({ body: COMPLETE_BODY, issueLess: true, expectedIssue: 123 }),
+    /mutually exclusive/,
+  );
+});
+
 test("validatePrBodySpec: the same spec-complete body still fails when an expected issue is supplied and unlinked (AC1 negative)", () => {
   const body = COMPLETE_BODY.replace("Closes #123\n\n", "");
   const result = validatePrBodySpec({ body, expectedIssue: 456 });

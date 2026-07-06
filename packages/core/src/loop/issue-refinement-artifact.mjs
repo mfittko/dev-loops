@@ -434,6 +434,11 @@ function sectionHasBody(section) {
  * @returns {{ checker: "validate-pr-body-spec", ok: boolean, errors: { code: string, message: string }[], sections: string[], acItems: string[], dodItems: string[], closesIssues: number[] }}
  */
 export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess = false } = {}) {
+  if (issueLess && Number.isInteger(expectedIssue)) {
+    // Fail closed at the library boundary too (not just the CLI): the two modes
+    // are contradictory and silently preferring one would hide caller bugs.
+    throw new Error("validatePrBodySpec: issueLess and expectedIssue are mutually exclusive; pass exactly one issue-linkage mode");
+  }
   const bodyText = typeof body === "string" ? body : "";
   const sections = parseMarkdownSections(bodyText);
   const errors = [];

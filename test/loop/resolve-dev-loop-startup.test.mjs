@@ -1164,6 +1164,18 @@ function initTempGitRepo(tempDir) {
   execFileSync("git", ["config", "user.name", "Test"], { cwd: tempDir, stdio: "ignore" });
 }
 
+// Issue-less scope is measured merge-base(default branch)...working tree, so
+// these fixtures put the change on a feature branch off main (matching the
+// real PR-first shape): initial commit on main, then a feature branch.
+async function initFeatureBranchRepo(tempDir) {
+  initTempGitRepo(tempDir);
+  await writeFile(path.join(tempDir, "a.txt"), "line1\n", "utf8");
+  execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["branch", "-M", "main"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["checkout", "-b", "feature"], { cwd: tempDir, stdio: "ignore" });
+}
+
 test("runCli --lightweight ALONE (no --issue): light mode disabled fails closed with a distinct reason (AC2)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
   try {
@@ -1185,7 +1197,7 @@ test("runCli --lightweight ALONE (no --issue): undetectable scope (no commits) f
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
   try {
     initTempGitRepo(tempDir);
-    // No commits at all: `git diff --stat HEAD~1..HEAD` fails — undetectable scope.
+    // No commits at all: no default-branch merge-base is resolvable — undetectable scope.
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /measurable change scope/);
@@ -1194,23 +1206,61 @@ test("runCli --lightweight ALONE (no --issue): undetectable scope (no commits) f
   }
 });
 
-test("runCli --lightweight ALONE (no --issue): above-threshold change fails closed with a distinct reason (AC2)", async () => {
+test("runCli --lightweight ALONE (no --issue): MULTI-COMMIT above-threshold branch fails closed even though the LAST commit is tiny (AC2, merge-base scoping)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
   try {
-    initTempGitRepo(tempDir);
+    await initFeatureBranchRepo(tempDir);
     await writeFile(
       path.join(tempDir, ".devloops"),
-      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 2\n",
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n",
       "utf8",
     );
-    await writeFile(path.join(tempDir, "a.txt"), "line1\n", "utf8");
-    execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
-    execFileSync("git", ["commit", "-m", "initial"], { cwd: tempDir, stdio: "ignore" });
-    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\n", "utf8");
-    execFileSync("git", ["commit", "-am", "over threshold change"], { cwd: tempDir, stdio: "ignore" });
+    // Commit 1 on the branch is already over the 3-line threshold.
+    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\n", "utf8");
+    execFileSync("git", ["commit", "-am", "big change"], { cwd: tempDir, stdio: "ignore" });
+    // Commit 2 (the HEAD~1..HEAD diff) is a single line — a HEAD~1-only scope
+    // measure would fail OPEN here; the merge-base measure must not.
+    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
+    execFileSync("git", ["commit", "-am", "tiny follow-up"], { cwd: tempDir, stdio: "ignore" });
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /exceeds|stay within the light-mode threshold/);
+    assert.match(result.stderr, /stay within the light-mode threshold/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --lightweight ALONE (no --issue): DIRTY-TREE above-threshold changes fail closed even with clean under-threshold commits (AC2, merge-base scoping)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
+  try {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n",
+      "utf8",
+    );
+    // One tiny committed change (under threshold on its own)...
+    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\n", "utf8");
+    execFileSync("git", ["commit", "-am", "small committed change"], { cwd: tempDir, stdio: "ignore" });
+    // ...plus a large UNCOMMITTED change: the working tree is part of the scope.
+    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\nline7\n", "utf8");
+    const result = await runNode(["--lightweight"], { cwd: tempDir });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /stay within the light-mode threshold/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --lightweight ALONE (no --issue): invalid config fails closed naming the config failure, not light_mode_disabled", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
+  try {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nnot_a_real_key: true\n", "utf8");
+    const result = await runNode(["--lightweight"], { cwd: tempDir });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /config loading failed/);
+    assert.doesNotMatch(result.stderr, /lightMode\.enabled/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1219,15 +1269,12 @@ test("runCli --lightweight ALONE (no --issue): above-threshold change fails clos
 test("runCli --lightweight ALONE (no --issue): under-threshold change resolves issue-less PR-first (AC-adjacent success path)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-"));
   try {
-    initTempGitRepo(tempDir);
+    await initFeatureBranchRepo(tempDir);
     await writeFile(
       path.join(tempDir, ".devloops"),
       "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 200\n",
       "utf8",
     );
-    await writeFile(path.join(tempDir, "a.txt"), "line1\n", "utf8");
-    execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
-    execFileSync("git", ["commit", "-m", "initial"], { cwd: tempDir, stdio: "ignore" });
     await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\n", "utf8");
     execFileSync("git", ["commit", "-am", "small change"], { cwd: tempDir, stdio: "ignore" });
     const result = await runNode(["--lightweight"], { cwd: tempDir });

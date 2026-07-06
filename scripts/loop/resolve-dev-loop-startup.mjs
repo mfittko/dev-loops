@@ -560,14 +560,38 @@ export function buildSpikeInput({ spikeFilePath }) {
     },
   };
 }
+// Candidate default-branch refs for issue-less scope measurement, in preference
+// order. origin/HEAD tracks the remote default branch when set; the rest cover
+// the common names.
+const ISSUELESS_BASE_REF_CANDIDATES = ["origin/HEAD", "origin/main", "origin/master", "main", "master"];
+
+function resolveIssuelessMergeBase() {
+  for (const ref of ISSUELESS_BASE_REF_CANDIDATES) {
+    try {
+      return execFileSync("git", ["merge-base", ref, "HEAD"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
 /**
- * Decide whether the live change scope (git diff, via detectScope) is eligible
- * for issue-less lightweight PR-first (#1210): reuses the same
- * localImplementation.lightMode threshold that gates inline vs full-fanout gate
- * dispatch, so "genuinely small" means the same thing everywhere in the repo.
- * Fails CLOSED on every negative path (disabled / undetectable / over
- * threshold) with a distinct reason so the caller can report why --issue is
- * required instead of silently defaulting one way or the other.
+ * Decide whether the live change scope is eligible for issue-less lightweight
+ * PR-first (#1210): reuses the same localImplementation.lightMode threshold
+ * that gates inline vs full-fanout gate dispatch, so "genuinely small" means
+ * the same thing everywhere in the repo.
+ *
+ * Scope is measured from the merge-base with the default branch to the WORKING
+ * TREE (`git diff --stat <merge-base>`), so multi-commit branches and
+ * uncommitted changes are both counted — a HEAD~1-only measure would fail OPEN
+ * on a branch whose earlier commits already exceed the threshold. Fails CLOSED
+ * on every negative path (disabled / no resolvable base / undetectable diff /
+ * over threshold) with a distinct reason so the caller can report why --issue
+ * is required instead of silently defaulting one way or the other.
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig} config
  * @returns {{ eligible: true, scope: object, threshold: {maxFiles:number,maxLines:number} } | { eligible: false, reason: "light_mode_disabled"|"scope_detection_failed"|"over_threshold", scope?: object, threshold?: object, detail?: string }}
@@ -577,7 +601,17 @@ export function resolveIssuelessLightweightEligibility(config) {
   if (!threshold) {
     return { eligible: false, reason: "light_mode_disabled" };
   }
-  const scope = detectScope({});
+  const mergeBase = resolveIssuelessMergeBase();
+  if (mergeBase === null) {
+    return {
+      eligible: false,
+      reason: "scope_detection_failed",
+      detail: `no merge-base with any default-branch candidate (${ISSUELESS_BASE_REF_CANDIDATES.join(", ")})`,
+    };
+  }
+  // detectScope with only `base` diffs base..working-tree in one measure
+  // (committed branch delta + uncommitted changes).
+  const scope = detectScope({ base: mergeBase });
   if (scope.ok === false) {
     return { eligible: false, reason: "scope_detection_failed", detail: scope.error };
   }
@@ -836,9 +870,12 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     }
   } else if (options.lightweight) {
     // --lightweight used ALONE (no other mode flag): issue-less PR-first (#1210).
-    input = buildLightweightIssuelessInput({
-      config: configErrors.length === 0 ? devLoopConfig : { version: 1 },
-    });
+    // A broken config must surface as ITS OWN failure, not decay to the
+    // misleading light_mode_disabled reason a bare {version:1} would produce.
+    if (configErrors.length > 0) {
+      throw new Error(`--lightweight without --issue (issue-less PR-first) requires a loadable dev-loop config, but config loading failed: ${configErrors.map((e) => e?.message ?? String(e)).join("; ")}. Fix the config or provide --issue <n>.`);
+    }
+    input = buildLightweightIssuelessInput({ config: devLoopConfig });
   } else {
     input = buildAutoResolvedInput({
       pr: options.pr,

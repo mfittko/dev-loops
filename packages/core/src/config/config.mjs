@@ -1080,11 +1080,14 @@ export function resolveLightMode(config) {
  * @returns {number}
  */
 export function resolveEffectiveCopilotRoundCap(config, { lightweight = false } = {}) {
-  const maxCopilotRounds = /** @type {number} */ (resolveRefinementConfig(config, "maxCopilotRounds"));
+  // Clamp here, not only in the zod schema: programmatically-built config
+  // objects bypass schema defaulting/validation, and a negative cap must never
+  // reach round-cap comparisons.
+  const maxCopilotRounds = Math.max(0, /** @type {number} */ (resolveRefinementConfig(config, "maxCopilotRounds")));
   if (!lightweight) return maxCopilotRounds;
   const lightMaxRounds = config?.localImplementation?.lightMode?.maxCopilotRounds;
   const effectiveLightCap = typeof lightMaxRounds === "number" && Number.isFinite(lightMaxRounds)
-    ? lightMaxRounds
+    ? Math.max(0, lightMaxRounds)
     : 1;
   return Math.min(effectiveLightCap, maxCopilotRounds);
 }

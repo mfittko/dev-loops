@@ -846,6 +846,53 @@ test("request-copilot-review returns round_cap_reached when cap is exhausted wit
   }
 });
 
+test("request-copilot-review --lightweight enforces the composed cap: light PR at 1 completed round returns round_cap_reached (#1210)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-lightweight-cap-"));
+
+  try {
+    // Full cap 5, lightweight cap defaults to 1 -> composed cap = min(1, 5) = 1.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "",
+      "refinement:",
+      "  maxCopilotRounds: 5",
+      "",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 2",
+      "    maxLines: 20",
+      "",
+    ].join("\n"), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}}]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--lightweight"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.status, "round_cap_reached");
+    assert.equal(parsed.completedRounds, 1);
+    assert.equal(parsed.maxRounds, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("request-copilot-review respects low-signal refinement config before auto re-requesting at round cap", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-roundcap-low-signal-"));
 

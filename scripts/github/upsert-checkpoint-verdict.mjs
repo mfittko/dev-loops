@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
@@ -72,6 +72,11 @@ Optional:
   --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
                                             when omitted. Explicit gate is validated
                                             against allowed coordination actions.
+  --lightweight                             This PR is light-dispatched (#1210):
+                                            resolve the Copilot round cap as
+                                            min(lightMode.maxCopilotRounds ?? 1,
+                                            refinement.maxCopilotRounds) instead of
+                                            refinement.maxCopilotRounds alone.
   --findings-severity-counts <json>         JSON object mapping severity to count
                                              (e.g. '{"must-fix":0,"worth-fixing-now":0}').
                                              Required for --verdict clean when
@@ -261,6 +266,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "findings-severity-counts": { type: "string" },
       "execution-mode": { type: "string" },
       "inline-reason": { type: "string" },
+      lightweight: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -281,6 +287,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     findingsSeverityCounts: undefined,
     executionMode: undefined,
     inlineReason: undefined,
+    lightweight: false,
     jq: undefined,
     silent: false,
   };
@@ -304,6 +311,10 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     }
     if (token.name === "pr") {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "lightweight") {
+      options.lightweight = true;
       continue;
     }
     if (token.name === "gate") {
@@ -949,13 +960,18 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // loadPrGateCoordinationContext call will surface the real error.
     }
   }
-  const coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+  // Thread the light-dispatch signal (#1210) so the context interpreter and the
+  // maxCopilotRounds resolution below both use the composed lightweight cap —
+  // the two must never disagree at the cap boundary (#1126).
+  const coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true }, { env, ghCommand });
   const evidence = coordinationContext.gateEvidence;
   const canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
   const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
-  const maxCopilotRounds = resolveRefinementConfig(config, "maxCopilotRounds");
+  const maxCopilotRounds = options.lightweight === true
+    ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
+    : resolveRefinementConfig(config, "maxCopilotRounds");
   // Root cause 2: detect internal-only PRs so the Copilot convergence requirement
   // is suppressed. Docs-only / tooling-only PRs should go straight to pre_approval_gate
   // without requiring an external Copilot review cycle.

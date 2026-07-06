@@ -14,7 +14,7 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
-import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
@@ -30,6 +30,10 @@ Optional:
   --force-rerequest-review  Bypass the round cap when new commits exist since
                             the last Copilot review. Refused when the PR head
                             has not changed since the last review.
+  --lightweight             This PR is light-dispatched (#1210): enforce the
+                            composed round cap min(localImplementation.lightMode.
+                            maxCopilotRounds ?? 1, refinement.maxCopilotRounds)
+                            instead of refinement.maxCopilotRounds alone.
 Debug:
   DEVLOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
                             convergence detection falls back to unsuppressed behavior
@@ -63,6 +67,7 @@ export function parseRequestCliArgs(argv) {
     options: {
       help: { type: "boolean", short: "h" },
       "force-rerequest-review": { type: "boolean" },
+      lightweight: { type: "boolean" },
       repo: { type: "string" },
       pr: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -76,6 +81,7 @@ export function parseRequestCliArgs(argv) {
     repo: undefined,
     pr: undefined,
     forceRerequestReview: false,
+    lightweight: false,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -90,6 +96,10 @@ export function parseRequestCliArgs(argv) {
     }
     if (token.name === "force-rerequest-review") {
       options.forceRerequestReview = true;
+      continue;
+    }
+    if (token.name === "lightweight") {
+      options.lightweight = true;
       continue;
     }
     if (token.name === "repo") {
@@ -483,8 +493,17 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
     const { config, errors } = await loadDevLoopConfig();
     if (!errors || errors.length === 0) {
       refinementConfig = resolveRefinement(config);
-      if (Number.isFinite(refinementConfig.maxCopilotRounds) && refinementConfig.maxCopilotRounds > 0) {
-        maxRounds = refinementConfig.maxCopilotRounds;
+      // Light-dispatched PRs (#1210) enforce the COMPOSED cap —
+      // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds) — so
+      // this enforcement backstop cannot permit rounds beyond the lightweight cap.
+      const effectiveCap = options.lightweight
+        ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
+        : refinementConfig.maxCopilotRounds;
+      if (Number.isFinite(effectiveCap) && effectiveCap > 0) {
+        maxRounds = effectiveCap;
+      }
+      if (options.lightweight) {
+        refinementConfig = { ...refinementConfig, maxCopilotRounds: effectiveCap };
       }
     }
   } catch {
