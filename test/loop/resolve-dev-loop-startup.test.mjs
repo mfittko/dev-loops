@@ -13,6 +13,7 @@ import {
   buildAutoResolvedInput,
   parseResolveDevLoopStartupCliArgs,
   summarizeCanonicalState,
+  resolveIssuelessLightweightEligibility,
 } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 
 const scriptPath = path.resolve("scripts/loop/resolve-dev-loop-startup.mjs");
@@ -1285,6 +1286,33 @@ test("runCli --lightweight ALONE (no --issue): under-threshold change resolves i
     assert.equal(parsed.canonicalStateSummary.target.issue, null);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveIssuelessLightweightEligibility scopes git merge-base/diff to the given cwd, not process.cwd() (review: bind cwd like other git calls in this file)", async () => {
+  // Outer dir: a plain non-repo directory. If the merge-base/detectScope git
+  // calls fell back to inheriting process.cwd() instead of the explicit cwd
+  // param, running them from here would fail to find any default-branch ref.
+  const outerDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-cwd-outer-"));
+  // Inner dir: the actual small under-threshold repo the caller intends to target.
+  const innerRepoDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-cwd-inner-"));
+  const originalCwd = process.cwd();
+  try {
+    await initFeatureBranchRepo(innerRepoDir);
+    await writeFile(path.join(innerRepoDir, "a.txt"), "line1\nline2\n", "utf8");
+    execFileSync("git", ["commit", "-am", "small change"], { cwd: innerRepoDir, stdio: "ignore" });
+    const config = {
+      version: 1,
+      localImplementation: { lightMode: { enabled: true, maxFiles: 3, maxLines: 200 } },
+    };
+    process.chdir(outerDir);
+    const result = resolveIssuelessLightweightEligibility(config, innerRepoDir);
+    assert.equal(result.eligible, true, JSON.stringify(result));
+    assert.equal(result.scope.filesChanged, 1);
+  } finally {
+    process.chdir(originalCwd);
+    await rm(outerDir, { recursive: true, force: true });
+    await rm(innerRepoDir, { recursive: true, force: true });
   }
 });
 

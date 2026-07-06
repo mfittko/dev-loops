@@ -40,7 +40,9 @@ Debug:
 Output (stdout, JSON):
   { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_draft",
     "repo": "...", "pr": N, "reviewer": "Copilot", "detail"?: "...",
-    "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N }
+    "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N,
+    "configWarning"?: "..." (present only when --lightweight and dev-loop config failed to load/validate;
+                             the lightweight default cap of 1 was applied instead of the full-PR default) }
 Request statuses:
   requested                     Copilot review was successfully requested
   already-requested             Copilot review was already observably in progress; no new request needed
@@ -489,6 +491,12 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
   }
   let refinementConfig = { maxCopilotRounds: 5 };
   let maxRounds = 5; // Built-in default; overridden by config when loadable
+  // Lightweight fallback when config is unreadable/invalid: fail toward the
+  // SAFE (smaller) lightweight cap instead of silently inheriting the
+  // full-PR default of 5 above, which would let a light-dispatched PR run
+  // far more review rounds than intended whenever the config can't be read.
+  const LIGHTWEIGHT_DEFAULT_CAP = 1;
+  let configWarning = null;
   try {
     const { config, errors } = await loadDevLoopConfig();
     if (!errors || errors.length === 0) {
@@ -499,15 +507,31 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
       const effectiveCap = options.lightweight
         ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
         : refinementConfig.maxCopilotRounds;
-      if (Number.isFinite(effectiveCap) && effectiveCap > 0) {
+      // >= 0 (not > 0): maxCopilotRounds: 0 is documented as "disable Copilot
+      // rounds"; it must be honored as an immediate refusal, not silently
+      // ignored in favor of the built-in default of 5.
+      if (Number.isFinite(effectiveCap) && effectiveCap >= 0) {
         maxRounds = effectiveCap;
       }
       if (options.lightweight) {
         refinementConfig = { ...refinementConfig, maxCopilotRounds: effectiveCap };
       }
+    } else if (options.lightweight) {
+      maxRounds = LIGHTWEIGHT_DEFAULT_CAP;
+      refinementConfig = { ...refinementConfig, maxCopilotRounds: LIGHTWEIGHT_DEFAULT_CAP };
+      configWarning = `dev-loop config could not be validated; using the lightweight default cap of ${LIGHTWEIGHT_DEFAULT_CAP} instead of the full-PR default. errors=${JSON.stringify(errors)}`;
     }
-  } catch {
+  } catch (err) {
+    if (options.lightweight) {
+      maxRounds = LIGHTWEIGHT_DEFAULT_CAP;
+      refinementConfig = { ...refinementConfig, maxCopilotRounds: LIGHTWEIGHT_DEFAULT_CAP };
+      configWarning = `dev-loop config could not be loaded; using the lightweight default cap of ${LIGHTWEIGHT_DEFAULT_CAP} instead of the full-PR default. error=${err instanceof Error ? err.message : String(err)}`;
+    }
   }
+  // Every remaining return in this function is config-dependent (round-cap
+  // decisions, the request itself); surface a config-load fallback on all of
+  // them rather than just the path a given test happens to exercise.
+  const withConfigWarning = (result) => (configWarning ? { ...result, configWarning } : result);
   // Reconcile the completed-round count with detect-pr-gate-coordination-state (#896):
   // when the raw count has reached the cap, re-derive it with the draft-gate round
   // reset applied. A clean draft_gate re-pass on an earlier head resets the count, so
@@ -530,7 +554,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
         refinementConfig,
       );
       if (!roundCapAutoRerequest.eligible) {
-        return {
+        return withConfigWarning({
           ok: true,
           status: ROUND_CAP_REACHED_STATUS,
           repo: options.repo,
@@ -539,7 +563,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
           completedRounds,
           maxRounds,
           detail: `Round cap of ${maxRounds} reached with ${completedRounds} completed rounds. No further re-requests will be made.`,
-        };
+        });
       }
     }
     // --force-rerequest-review: only bypass when there are new commits since the last review
@@ -550,7 +574,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
     const canCompare = currentHeadSha !== null && lastReviewSha !== null;
     const hasNewCommits = canCompare && currentHeadSha !== lastReviewSha;
     if (!canCompare) {
-      return {
+      return withConfigWarning({
         ok: true,
         status: ROUND_CAP_REACHED_STATUS,
         repo: options.repo,
@@ -559,10 +583,10 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
         detail: `Round cap of ${maxRounds} reached with ${completedRounds} completed rounds. --force-rerequest-review was supplied but commit SHA data is unavailable, so change-since-last-review could not be evaluated.`,
         completedRounds,
         maxRounds,
-      };
+      });
     }
     if (!hasNewCommits) {
-      return {
+      return withConfigWarning({
         ok: true,
         status: NO_CHANGES_SINCE_LAST_REVIEW_STATUS,
         repo: options.repo,
@@ -571,7 +595,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
         detail: "No changes since last Copilot review. --force-rerequest-review requires new commits on the PR head.",
         completedRounds,
         maxRounds,
-      };
+      });
     }
     // Has new commits — bypass the round cap and proceed with the request
   }
@@ -581,7 +605,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
     before,
   );
   if (sameHeadCleanConverged) {
-    return {
+    return withConfigWarning({
       ok: true,
       status: SUPPRESSED_SAME_HEAD_CLEAN_STATUS,
       repo: options.repo,
@@ -589,35 +613,35 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
       reviewer: "Copilot",
       sameHeadCleanConverged: true,
       detail: "Current head already has a clean submitted Copilot review; same-head clean-convergence suppression is always enforced.",
-    };
+    });
   }
   if (before.requested || before.hasPendingReviewOnCurrentHead) {
-    return {
+    return withConfigWarning({
       ok: true,
       status: "already-requested",
       repo: options.repo,
       pr: options.pr,
       reviewer: "Copilot",
-    };
+    });
   }
   const requestResult = await requestCopilotReview(options, { env, ghCommand });
   if (requestResult.status === "unavailable") {
     const after = await fetchCopilotReviewState(options, { env, ghCommand });
     if (after.requested || after.hasPendingReviewOnCurrentHead || after.hasSubmittedReviewOnCurrentHead) {
-      return {
+      return withConfigWarning({
         ok: true,
         status: "already-requested",
         repo: options.repo,
         pr: options.pr,
         reviewer: "Copilot",
-      };
+      });
     }
-    return {
+    return withConfigWarning({
       ...requestResult,
-    };
+    });
   }
   if (requestResult.status === "already-requested") {
-    return requestResult;
+    return withConfigWarning(requestResult);
   }
   const after = await fetchCopilotReviewState(options, { env, ghCommand });
   const reviewCountIncreased = after.copilotReviewIds.length > before.copilotReviewIds.length;
@@ -625,9 +649,9 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
   if (!reviewNowObservablyInProgress) {
     throw new Error("Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
   }
-  return {
+  return withConfigWarning({
     ...requestResult,
-  };
+  });
 }
 export async function runCli(
   argv = process.argv.slice(2),

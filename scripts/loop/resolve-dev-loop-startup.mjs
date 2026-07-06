@@ -565,10 +565,11 @@ export function buildSpikeInput({ spikeFilePath }) {
 // the common names.
 const ISSUELESS_BASE_REF_CANDIDATES = ["origin/HEAD", "origin/main", "origin/master", "main", "master"];
 
-function resolveIssuelessMergeBase() {
+function resolveIssuelessMergeBase(cwd) {
   for (const ref of ISSUELESS_BASE_REF_CANDIDATES) {
     try {
       return execFileSync("git", ["merge-base", ref, "HEAD"], {
+        cwd,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }).trim();
@@ -593,15 +594,21 @@ function resolveIssuelessMergeBase() {
  * over threshold) with a distinct reason so the caller can report why --issue
  * is required instead of silently defaulting one way or the other.
  *
+ * Every git invocation is bound to `cwd` (the adapter-resolved repoRoot),
+ * matching the rest of this file's git calls — process.cwd() is never relied
+ * on implicitly so this stays correct when invoked from a subdirectory or
+ * with a harness cwd that differs from the OS process cwd.
+ *
  * @param {import("@dev-loops/core/config").DevLoopConfig} config
+ * @param {string} [cwd] - Repo root to run git commands in (defaults to process.cwd() when omitted).
  * @returns {{ eligible: true, scope: object, threshold: {maxFiles:number,maxLines:number} } | { eligible: false, reason: "light_mode_disabled"|"scope_detection_failed"|"over_threshold", scope?: object, threshold?: object, detail?: string }}
  */
-export function resolveIssuelessLightweightEligibility(config) {
+export function resolveIssuelessLightweightEligibility(config, cwd) {
   const threshold = resolveLightMode(config);
   if (!threshold) {
     return { eligible: false, reason: "light_mode_disabled" };
   }
-  const mergeBase = resolveIssuelessMergeBase();
+  const mergeBase = resolveIssuelessMergeBase(cwd);
   if (mergeBase === null) {
     return {
       eligible: false,
@@ -611,7 +618,7 @@ export function resolveIssuelessLightweightEligibility(config) {
   }
   // detectScope with only `base` diffs base..working-tree in one measure
   // (committed branch delta + uncommitted changes).
-  const scope = detectScope({ base: mergeBase });
+  const scope = detectScope({ base: mergeBase, cwd });
   if (scope.ok === false) {
     return { eligible: false, reason: "scope_detection_failed", detail: scope.error };
   }
@@ -633,11 +640,11 @@ export function resolveIssuelessLightweightEligibility(config) {
  * guard like the plan-file/spike paths: there is no issue number to key a
  * worktree on.
  *
- * @param {{ config: import("@dev-loops/core/config").DevLoopConfig }} params
+ * @param {{ config: import("@dev-loops/core/config").DevLoopConfig, cwd?: string }} params
  * @returns {object} startup input with canonicalSpecSource: "pr_body"
  */
-export function buildLightweightIssuelessInput({ config }) {
-  const eligibility = resolveIssuelessLightweightEligibility(config);
+export function buildLightweightIssuelessInput({ config, cwd }) {
+  const eligibility = resolveIssuelessLightweightEligibility(config, cwd);
   if (!eligibility.eligible) {
     if (eligibility.reason === "light_mode_disabled") {
       throw new Error("--lightweight without --issue (issue-less PR-first) requires localImplementation.lightMode.enabled in .devloops; enable light mode or provide --issue <n>.");
@@ -875,7 +882,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     if (configErrors.length > 0) {
       throw new Error(`--lightweight without --issue (issue-less PR-first) requires a loadable dev-loop config, but config loading failed: ${configErrors.map((e) => e?.message ?? String(e)).join("; ")}. Fix the config or provide --issue <n>.`);
     }
-    input = buildLightweightIssuelessInput({ config: devLoopConfig });
+    input = buildLightweightIssuelessInput({ config: devLoopConfig, cwd: repoRoot });
   } else {
     input = buildAutoResolvedInput({
       pr: options.pr,
