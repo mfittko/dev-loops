@@ -379,9 +379,9 @@ export function buildStateAtlasHtml() {
   .diagram .expand:hover { color: var(--heading); border-color: var(--accent); }
   .diagram .mermaid { cursor: zoom-in; }
   .diagram .mermaid:fullscreen { cursor: zoom-out; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 2rem; }
-  .diagram .mermaid:fullscreen svg { max-width: 96vw; max-height: 92vh; width: auto; height: auto; }
+  .diagram .mermaid:fullscreen svg { max-width: calc(100vw - 4rem); max-height: calc(100vh - 4rem); width: auto; height: auto; }
   .diagram .mermaid.fs-fallback { position: fixed; inset: 0; z-index: 50; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 1rem; cursor: zoom-out; overflow: auto; }
-  .diagram .mermaid.fs-fallback svg { max-width: 96vw; max-height: 92vh; width: auto; height: auto; }
+  .diagram .mermaid.fs-fallback svg { max-width: calc(100vw - 2rem); max-height: calc(100vh - 2rem); width: auto; height: auto; }
 </style>
 </head>
 <body>
