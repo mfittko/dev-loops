@@ -81,7 +81,7 @@ function gateClass(row) {
 }
 
 function renderGateFlowchart(contract) {
-  const lines = ['flowchart TD', '    router(["dev-loop router"])'];
+  const lines = ['flowchart LR', '    router(["dev-loop router"])'];
   for (const row of contract) {
     const strategy = row.selectedStrategy ?? 'none';
     lines.push(`    router -->|${row.routeKind}| ${row.gate}["${row.gate} — ${strategy}"]`);
