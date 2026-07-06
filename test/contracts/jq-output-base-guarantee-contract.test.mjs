@@ -91,6 +91,10 @@ const EXCLUDED = new Map([
     "loop/run-queue.mjs",
     "Dormant no-op queue adapter: its runQueue() driver is not on any live pickup path (the active path is `scripts/projects/resolve-active-board-item.mjs`, wired into `loop-continue`), and its pretty-printed JSON is a human-readable dump, not a --jq-consumed tool result. Wire to emitResult if it is ever reactivated.",
   ],
+  [
+    "github/create-pr.mjs",
+    "Thin passthrough wrapper around `gh pr create`; its stdout IS gh's own PR URL, never a JSON tool-result to filter with --jq. The optional trailing board-enqueue line is an advisory side note appended for the issue-less lightweight path, not the command's queryable output.",
+  ],
 ]);
 
 async function walk(dir) {
