@@ -98,6 +98,12 @@ const GatesConfig = z.strictObject({
   // and every angle configured across this config's own draft/preApproval/
   // spike gates (angles + mandatoryAngles).
   anglePool: z.array(z.string().trim().min(1)).optional(),
+  // Fail-closed enforcement that a fanout_fanin gate's recorded per-angle
+  // provenance names only angles in the gate's configured pool (angles +
+  // mandatoryAngles) — ad-hoc/foreign angle labels are rejected rather than
+  // silently accepted. Default true (reject); set false to warn instead of
+  // fail. See resolveRejectForeignAngles / docs/gate-review-sub-loop-contract.md.
+  rejectForeignAngles: z.boolean().default(true),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -197,6 +203,7 @@ const FileGatesConfig = z.strictObject({
   maxFanoutReviewers: z.number().int().min(1).max(64).optional(),
   postFindingsComments: z.boolean().optional(),
   anglePool: z.array(z.string().trim().min(1)).optional(),
+  rejectForeignAngles: z.boolean().optional(),
 });
 
 // Partial persona entries for file-level config (allows omitting fields)
@@ -1023,6 +1030,17 @@ export const FANOUT_PROVENANCE_MIN_REVIEWERS = 2;
  */
 export function resolveRequireFanoutProvenance(config) {
   return config?.gates?.requireFanoutProvenance === true;
+}
+
+/**
+ * Resolve whether a fan-out provenance entry naming an angle outside the
+ * gate's configured pool should FAIL (default) or only WARN.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {boolean}
+ */
+export function resolveRejectForeignAngles(config) {
+  return config?.gates?.rejectForeignAngles !== false;
 }
 
 /**

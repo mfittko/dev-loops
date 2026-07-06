@@ -429,6 +429,27 @@ does NOT claim un-forgeable enforcement. Un-forgeable recording (the harness att
 actually ran each per-angle review) is the Pi-harness bridge — the subagent tool honored
 at child depth (see #1084).
 
+### Angle-coverage enforcement (mandatory angles + pool membership)
+
+<!-- rule: GATE-EXEC-ANGLE-COVERAGE -->
+`GATE-EXEC-ANGLE-COVERAGE`: A `fanout_fanin` verdict's recorded per-angle results
+(`provenance.perAngle` on the write path / merge-evidence read path, and the
+`--findings-json` structured per-angle results on the verdict-comment path) MUST
+cover every angle in the gate's configured `mandatoryAngles`, and MUST NOT name an
+angle outside the gate's configured pool (`resolveGateAngles`: configured `angles`
+∪ `mandatoryAngles`) unless `gates.rejectForeignAngles` is explicitly set to
+`false`, in which case a foreign angle downgrades to a warning. A delta-suffixed
+angle (`<angle>-delta-at-...`, e.g. a re-review scoped to only the current head's
+delta) counts toward its base angle for both checks. This is independent of
+`requireFanoutProvenance`: it fires whenever a `fanout_fanin` verdict actually
+records per-angle results, regardless of that opt-in flag, and is exempt for
+`inline_single_agent` verdicts (light-mode inline runs carry no per-angle fan-out
+data to validate). Enforced identically by `write-gate-findings-log.mjs` and
+`upsert-checkpoint-verdict.mjs` (write time) and `detect-checkpoint-evidence.mjs`
+(merge-evidence time, re-validating the ledger so a hand-edited or shadow ledger
+cannot bypass it), sharing the same pure coverage check
+(`checkFanoutAngleCoverage` in `@dev-loops/core/loop/gate-fanin`).
+
 ### Fail-closed: fan-out unavailable → route to conductor
 
 When a child/agent **cannot** perform real parallel fan-out (e.g. a harness that does not

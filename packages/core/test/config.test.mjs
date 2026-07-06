@@ -20,6 +20,7 @@ import {
   resolveRefinement,
   resolveGateConfig,
   resolveGateAngles,
+  resolveRejectForeignAngles,
   resolveGateAnglesDynamic,
   resolveAnglePool,
   resolveWorkflowConfig,
@@ -3193,6 +3194,29 @@ describe("gates.requireFanoutProvenance", () => {
 
   test("floor constant is 2 (smallest count that is not a single agent)", () => {
     assert.equal(FANOUT_PROVENANCE_MIN_REVIEWERS, 2);
+  });
+});
+
+describe("gates.rejectForeignAngles (#1196)", () => {
+  test("defaults to true (fail-closed) when absent", () => {
+    assert.equal(resolveRejectForeignAngles({}), true);
+    assert.equal(resolveRejectForeignAngles({ gates: {} }), true);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.rejectForeignAngles, true);
+    assert.equal(resolveRejectForeignAngles(parsed.data), true);
+  });
+
+  test("opt-out: explicit rejectForeignAngles: false switches to warn-only", () => {
+    assert.equal(resolveRejectForeignAngles({ gates: { rejectForeignAngles: false } }), false);
+    const full = DevLoopConfigSchema.safeParse({ version: 1, gates: { rejectForeignAngles: false } });
+    assert.equal(full.success, true);
+    assert.equal(resolveRejectForeignAngles(full.data), false);
+  });
+
+  test("rejects non-boolean rejectForeignAngles", () => {
+    const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { rejectForeignAngles: "yes" } });
+    assert.equal(bad.success, false);
   });
 });
 

@@ -1012,6 +1012,131 @@ test("buildPreMergeGateCheck with requireProvenance ON fails closed on a non-int
   );
 });
 
+// --- Angle-coverage enforcement (#1196: mandatory angles + pool membership) ---
+// Independent of requireFanoutProvenance: fires whenever a fanout_fanin gate
+// recorded ANY internally-consistent provenance.
+
+test("buildPreMergeGateCheck FAILS closed when fan-out provenance is missing a mandatory angle (AC1, merge-evidence time)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }] },
+        mandatoryAngles: ["pr-checklist-matrix", "yagni"],
+        anglePool: ["dry", "kiss", "pr-checklist-matrix", "yagni"],
+      },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("missing mandatory angle(s): pr-checklist-matrix, yagni") && f.includes("route to conductor")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck FAILS closed by default when fan-out provenance names an angle outside the configured pool (AC2)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "made-up-angle", reviewer: "review-b" }] },
+        mandatoryAngles: [],
+        anglePool: ["dry", "kiss"],
+      },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("outside the configured pool: made-up-angle")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck WARNS (does not fail) on a foreign angle when rejectForeignAngles is false", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    rejectForeignAngles: false,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "made-up-angle", reviewer: "review-b" }] },
+        mandatoryAngles: [],
+        anglePool: ["dry", "kiss"],
+      },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck accepts a delta-suffixed angle as covering its base mandatory angle", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix-delta-at-current-head", reviewer: "review-b" }] },
+        mandatoryAngles: ["pr-checklist-matrix"],
+        anglePool: ["dry", "kiss", "pr-checklist-matrix"],
+      },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck angle-coverage enforcement adds NO failure when provenance is absent (separate from requireFanoutProvenance)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: null,
+        mandatoryAngles: ["pr-checklist-matrix"],
+        anglePool: ["dry", "pr-checklist-matrix"],
+      },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck angle-coverage enforcement is skipped for an inline_single_agent verdict (AC3)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: true,
+    hasFullLabel: false,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "inline_single_agent",
+        inlineReason: "under_threshold",
+        scopeUnderThreshold: true,
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: null,
+        mandatoryAngles: ["pr-checklist-matrix"],
+        anglePool: ["pr-checklist-matrix"],
+      },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
 // --- #1174: light-mode-aware pre-merge acceptance of inline verdicts ---------
 // A genuinely under-threshold micro-PR collapses the gate fan-out to a single
 // inline check (#1043). buildPreMergeGateCheck accepts that inline verdict ONLY

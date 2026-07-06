@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngles, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
@@ -1171,6 +1172,30 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     if (!structuredFindings) {
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
+    }
+  }
+  // Fan-out angle-coverage enforcement (fail closed): a fanout_fanin verdict's
+  // structured per-angle results must cover every configured mandatory angle,
+  // and (default) must not name an angle outside the gate's configured pool.
+  // Only applies when structured per-angle results were actually supplied —
+  // a free-text --findings-summary fanout_fanin verdict carries no per-angle
+  // data to validate.
+  if (structuredFindings && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
+    const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
+    const pool = resolveGateAngles(config, gateKey);
+    const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(structuredFindings, {
+      mandatoryAngles: activeGateConfig.mandatoryAngles,
+      pool,
+    });
+    if (missingMandatory.length > 0) {
+      throw new Error(
+        `--findings-json for ${options.gate} is missing mandatory angle(s): ${missingMandatory.join(", ")} (configured in gates.${gateKey}.mandatoryAngles; add a per-angle entry for each before posting a fanout_fanin verdict)`,
+      );
+    }
+    if (foreignAngles.length > 0 && resolveRejectForeignAngles(config)) {
+      throw new Error(
+        `--findings-json for ${options.gate} names angle(s) outside the configured pool: ${foreignAngles.join(", ")} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`,
+      );
     }
   }
   // --findings-json takes precedence; when structured findings are present, do not

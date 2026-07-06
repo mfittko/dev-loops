@@ -10,6 +10,7 @@ import {
   fanoutUnavailableError,
   countDistinctReviewers,
   provenanceConsistencyError,
+  checkFanoutAngleCoverage,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -233,5 +234,51 @@ describe("provenance consistency (closes the self-produced loophole)", () => {
     assert.match(provenanceConsistencyError({ distinctReviewers: 1.5, perAngle: [] }), /non-negative integer/);
     assert.match(provenanceConsistencyError({ distinctReviewers: 2, perAngle: [] }), /perAngle must be non-empty/);
     assert.match(provenanceConsistencyError({ distinctReviewers: 2, perAngle: [{ angle: "a", reviewer: "x" }] }), /exceeds distinct recorded reviewer identities/);
+  });
+});
+
+describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool membership)", () => {
+  test("passes when every mandatory angle is recorded and every angle is in the pool", () => {
+    const result = checkFanoutAngleCoverage(
+      [{ angle: "pr-checklist-matrix" }, { angle: "yagni" }],
+      { mandatoryAngles: ["pr-checklist-matrix"], pool: ["yagni", "pr-checklist-matrix", "dry"] },
+    );
+    assert.deepEqual(result, { missingMandatory: [], foreignAngles: [] });
+  });
+
+  test("reports every mandatory angle absent from the recorded angles", () => {
+    const result = checkFanoutAngleCoverage(
+      [{ angle: "yagni" }],
+      { mandatoryAngles: ["pr-checklist-matrix", "acceptance-criteria", "yagni"] },
+    );
+    assert.deepEqual(result.missingMandatory, ["pr-checklist-matrix", "acceptance-criteria"]);
+  });
+
+  test("reports recorded angles that are outside the configured pool (ad-hoc labels)", () => {
+    const result = checkFanoutAngleCoverage(
+      [{ angle: "dry" }, { angle: "made-up-angle" }],
+      { mandatoryAngles: [], pool: ["dry", "kiss"] },
+    );
+    assert.deepEqual(result.foreignAngles, ["made-up-angle"]);
+  });
+
+  test("skips the foreign-angle check when no pool is supplied (null/absent)", () => {
+    assert.deepEqual(
+      checkFanoutAngleCoverage([{ angle: "anything" }], { mandatoryAngles: [] }),
+      { missingMandatory: [], foreignAngles: [] },
+    );
+  });
+
+  test("delta-suffixed angles (<angle>-delta-at-...) count toward their base angle for BOTH checks", () => {
+    const result = checkFanoutAngleCoverage(
+      [{ angle: "pr-checklist-matrix-delta-at-current-head" }],
+      { mandatoryAngles: ["pr-checklist-matrix"], pool: ["pr-checklist-matrix"] },
+    );
+    assert.deepEqual(result, { missingMandatory: [], foreignAngles: [] });
+  });
+
+  test("tolerates malformed/missing input (non-array, entries without a usable .angle)", () => {
+    assert.deepEqual(checkFanoutAngleCoverage(undefined, { mandatoryAngles: ["a"] }).missingMandatory, ["a"]);
+    assert.deepEqual(checkFanoutAngleCoverage([null, { angle: "" }, "nope"], { mandatoryAngles: [] }).foreignAngles, []);
   });
 });

@@ -5,7 +5,8 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { checkFanoutAngleCoverage, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { loadDevLoopConfig, resolveGateAngles, resolveGateConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> --findings <json> [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
@@ -30,6 +31,7 @@ function normalizeGate(value) {
   const normalized = String(value).trim().toLowerCase();
   return gates.has(normalized) ? normalized : null;
 }
+const GATE_CONFIG_KEY = { draft_gate: "draft", pre_approval_gate: "preApproval" };
 function normalizeVerdict(value) {
   const verdicts = new Set(["clean", "findings_present", "blocked"]);
   const normalized = String(value).trim().toLowerCase();
@@ -148,6 +150,43 @@ export function parseProvenanceJson(raw) {
   }
   return normalized;
 }
+/**
+ * Validate recorded provenance.perAngle against the gate's configured angle
+ * contract (mandatoryAngles + pool, resolved from .devloops/defaults). A
+ * missing mandatory angle always fails the write. A foreign (out-of-pool)
+ * angle fails the write unless `gates.rejectForeignAngles: false`, in which
+ * case it is returned as a warning instead. Throws a `parseError`-shaped Error
+ * (matching this module's other validation failures) on a fail-closed
+ * rejection.
+ *
+ * @param {{ perAngle: Array<{ angle: string }> }} provenance
+ * @param {"draft_gate"|"pre_approval_gate"} gate
+ * @param {{ repoRoot?: string }} [options]
+ * @returns {Promise<{ warning: string|null }>}
+ */
+export async function checkProvenanceAngleCoverage(provenance, gate, { repoRoot = process.cwd() } = {}) {
+  const { config } = await loadDevLoopConfig({ repoRoot });
+  const gateKey = GATE_CONFIG_KEY[gate];
+  const gateConfig = resolveGateConfig(config, gateKey);
+  const pool = resolveGateAngles(config, gateKey);
+  const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(provenance.perAngle, {
+    mandatoryAngles: gateConfig.mandatoryAngles,
+    pool,
+  });
+  if (missingMandatory.length > 0) {
+    throw parseError(
+      `--provenance.perAngle is missing mandatory angle(s) for ${gate}: ${missingMandatory.join(", ")} (configured in gates.${gateKey}.mandatoryAngles)`,
+    );
+  }
+  if (foreignAngles.length > 0) {
+    const message = `--provenance.perAngle names angle(s) outside the configured pool for ${gate}: ${foreignAngles.join(", ")} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`;
+    if (resolveRejectForeignAngles(config)) {
+      throw parseError(message);
+    }
+    return { warning: message };
+  }
+  return { warning: null };
+}
 export function parseWriteGateFindingsLogCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
@@ -250,6 +289,12 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   const findings = parseFindingsJson(options.findings);
   const provenance = options.provenance === undefined ? undefined : parseProvenanceJson(options.provenance);
+  // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
+  // angles) only applies when provenance is actually recorded — provenance
+  // remains optional and additive (inline_single_agent writes never carry it).
+  const angleCoverage = provenance !== undefined
+    ? await checkProvenanceAngleCoverage(provenance, options.gate, { repoRoot })
+    : { warning: null };
   const logPath = buildLogPath({
     repo: options.repo,
     pr: options.pr,
@@ -276,7 +321,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   }
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(log, null, 2) + "\n", "utf8");
-  return { ok: true, path: logPath, log };
+  return angleCoverage.warning
+    ? { ok: true, path: logPath, log, warning: angleCoverage.warning }
+    : { ok: true, path: logPath, log };
 }
 async function main() {
   let options;
