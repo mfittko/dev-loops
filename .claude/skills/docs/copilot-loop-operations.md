@@ -98,7 +98,7 @@ Useful checks:
 
 If the user asks for status/progress/readiness/merge-state/next-step (including “what is next”):
 - resolve authoritative active artifact identity first (issue/PR, plus branch/head SHA when useful)
-- for issue targets, do not assert "no open PR" until authoritative issue↔PR linkage is resolved via the startup resolver (`dev-loops loop startup --issue <number>`, run inside the `dev-loop` async subagent) — do not run `detect-linked-issue-pr.mjs` manually
+- for issue targets, resolve authoritative issue↔PR linkage via the startup resolver (`dev-loops loop startup --issue <number>`, run inside the `dev-loop` async subagent) rather than running `detect-linked-issue-pr.mjs` manually; the fail-closed-until-resolved requirement is owned by `FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED` in [Public Dev Loop Contract](./public-dev-loop-contract.md)
 - resolve artifact state (`open`/`closed`/`merged`/`not_applicable`)
 - resolve current loop state and next action from deterministic helper/state output
 - include explicit resolved artifact identity in the answer
@@ -166,7 +166,8 @@ Follow the PR description contract (see [Agent Instructions](../../AGENTS.md) if
 
 Checkbox rule: acceptance criteria, definition-of-done items, and any task list must be rendered as real GitHub markdown checkboxes inside list items (`- [ ]` / `- [x]`, also `* [ ]` / `* [x]`). Do not wrap checkbox markers (e.g. `[x]`) in backticks. Do not place checkbox markers inside table cells — task lists are not interactive there even with a leading `- `.
 
-New PRs in this workflow must be opened as **draft** PRs first when the repository enables `.devloops` at repo root `workflow.requireDraftFirst`. The built-in shipped default remains permissive; this repo opts in. Do not create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy for the current PR scope. The draft gate inspection is a real workflow boundary, so a new PR must exist in draft before `gh pr ready` is even eligible.
+<!-- rule: OPS-DRAFT-FIRST-PR -->
+`OPS-DRAFT-FIRST-PR`: New PRs in this workflow MUST be opened as **draft** PRs first when the repository enables `.devloops` at repo root `workflow.requireDraftFirst` (the built-in shipped default remains permissive; this repo opts in) — mechanically enforced by the `create-pr.mjs` wrapper below. Agents MUST NOT create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy for the current PR scope. The draft gate inspection is a real workflow boundary, so a new PR must exist in draft before `gh pr ready` is even eligible.
 
 Only use `node <resolved-skill-scripts>/github/create-pr.mjs` when authoritative issue↔PR resolution says there is no already-open linked PR. If a PR already exists, reuse/update that canonical PR instead of opening another one. This wrapper preserves the underlying `gh pr create` output contract while enforcing draft-first mechanically and self-assigning the PR by default (`--assignee @me`).
 

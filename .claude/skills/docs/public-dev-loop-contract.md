@@ -259,7 +259,7 @@ Internal strategy naming is implementation detail; normal orchestration always s
 
 Tracker-backed local implementation is an input-source addition to the existing `local_implementation` strategy. It does **not** create a new routing mode, strategy family, or public workflow entrypoint.
 
-For tracker-backed local sessions, the tracker issue is canonical. `docs/phases/phase-<n>.md` must not exist for that same session, and local execution must not maintain a second durable phase-doc copy of the same spec.
+For tracker-backed local sessions, the tracker issue is canonical; the no-duplicate-phase-doc rule is owned by `ARTIFACT-TRACKER-FIRST-NO-DUP` in [Artifact Authority Contract](artifact-authority-contract.md).
 
 Deterministic GitHub-backed spec resolution:
 
@@ -350,7 +350,7 @@ When an open linked PR reports merge conflict against `main`, treat this as an e
    - local validation surface for the touched conflict slice
 3. <!-- rule: FACADE-CONFLICT-CONTEXT-FAIL-CLOSED --> `FACADE-CONFLICT-CONTEXT-FAIL-CLOSED`: if required authoritative context is missing, stale for the current head, or contradictory, orchestration MUST fail closed to reconcile
 4. only when that context is complete for one current head, resolve the conflict locally on the PR branch
-5. after conflict resolution, rerun required local validation, gate checks, and required CI checks for the new head before approval/merge evaluation
+5. <!-- rule: FACADE-CONFLICT-REVALIDATE-NEW-HEAD --> `FACADE-CONFLICT-REVALIDATE-NEW-HEAD`: after conflict resolution, orchestration MUST rerun required local validation, gate checks, and required CI checks for the new head before approval/merge evaluation
 
 ## `auto dev loop` durable auto contract
 

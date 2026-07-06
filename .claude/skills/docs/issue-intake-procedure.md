@@ -72,7 +72,7 @@ Under that unattended execution contract:
 - If a PR already exists, classify the post-assignment seam before follow-up
 - `waiting_for_initial_copilot_implementation`: keep waiting
 - `linked_pr_ready_for_followup`: route to the existing PR follow-up path immediately; resume from that PR
-- when routing leaves bootstrap wait for `linked_pr_ready_for_followup`, do not stop only because local isolation is required; re-enter the same PR follow-up from a safe isolated checkout/worktree
+- when routing leaves bootstrap wait for `linked_pr_ready_for_followup`, follow [FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION](public-dev-loop-contract.md): re-enter the same PR follow-up from a safe isolated checkout/worktree instead of stopping solely because local isolation is required
 - When the draft PR appears, classify whether it is still the bootstrap-only Copilot draft before entering normal follow-up
 - if a child async run exits while the deterministic state is still non-terminal (for example `waiting_for_copilot_review`), automatically resume/restart follow-up when continuation is feasible instead of requiring manual operator restart
 - continue unattended until the human approval checkpoint unless a genuine stop condition is reached
@@ -112,10 +112,9 @@ Preflight verdicts:
 - detect an existing linked PR with the deterministic linked-PR helper:
   `node <resolved-skill-scripts>/github/detect-linked-issue-pr.mjs --repo <resolved-repo> --issue <number>`
 - treat the helper output as authoritative for linked-PR detection/selection
-- do not re-implement linked-event query behavior, pagination, repo filtering, or tie-break logic
-- do not rely only on PR title/body containing a literal issue number
+- <!-- rule: INTAKE-LINKED-PR-HELPER-DELEGATION --> `INTAKE-LINKED-PR-HELPER-DELEGATION`: Agents MUST NOT re-implement linked-event query behavior, pagination, repo filtering, or tie-break logic, and MUST NOT rely only on PR title/body containing a literal issue number.
 - treat an open linked PR as the active implementation for this issue
-- once an open linked PR exists, that PR is the only canonical follow-up artifact for the issue; attach follow-up work to it and do not open another PR unless the prior PR was explicitly superseded and reconciled first (this operationalizes [FACADE-LINKED-PR-SINGLE-ARTIFACT](public-dev-loop-contract.md) for the `issue_intake` strategy)
+- once an open linked PR exists, attach follow-up work to it per `FACADE-LINKED-PR-SINGLE-ARTIFACT` (owned in [Public Dev Loop Contract](public-dev-loop-contract.md)) for the `issue_intake` strategy
 - **follow-up-capture rule:** when a follow-up is discovered while working a PR/loop, note it on the originating issue (or the PR body); file a standalone issue only if the follow-up is genuinely independent of the PR **and** outlives it (a real separate bug/feature that would be lost as a note on a soon-closed issue). Prefer noting PR-scoped follow-ups on the originating artifact over spinning up standalone tracker items for work that is part of the same effort or will be resolved imminently. See [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md).
 - if a PR already exists, classify bootstrap-wait versus follow-up:
   `node <resolved-skill-scripts>/loop/detect-initial-copilot-pr-state.mjs --repo <resolved-repo> --issue <number>`
@@ -123,7 +122,7 @@ Preflight verdicts:
   ```sh
   node <resolved-skill-scripts>/loop/watch-initial-copilot-pr.mjs --repo <resolved-repo> --issue <number>
   ```
-  - must use the dedicated `watch-initial-copilot-pr.mjs` watcher and its default 1-hour watch budget (owner rule: [FACADE-BOOTSTRAP-WATCH-ROUTE](public-dev-loop-contract.md))
+  - durable-auto ownership of this seam (the dedicated watcher + its default 1-hour watch budget) is owned by [FACADE-BOOTSTRAP-WATCH-ROUTE](public-dev-loop-contract.md); this procedure does not restate that rule
   - quiet/no-activity watch observations alone are non-terminal
   - `ready_for_followup`: linked PR has become substantive; resume from that PR
   - `timed_out`: observational first; refresh authoritative state
@@ -204,8 +203,10 @@ node <resolved-skill-scripts>/github/manage-sub-issues.mjs list \
   --repo <resolved-repo> --issue <parent-number>
 ```
 
-Do **not** re-implement sub-issue management ad hoc or bypass `manage-sub-issues.mjs`.
-Do **not** maintain a body checklist that duplicates the sub-issue tree.
+Ad-hoc bypass of `manage-sub-issues.mjs` and duplicating the tree in the parent body are owned
+by `SUBISSUE-NO-ADHOC-BYPASS` and `SUBISSUE-LEAN-BODY-NO-DUPLICATE` in
+[Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md); this procedure does not
+restate those rules.
 
 For the full `manage-sub-issues.mjs` contract, use [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md) when working in the `dev-loops` source repository. That contract is a source-repo reference, not part of the bundled installed skill-doc surface. For installed or normalized skill copies, inspect the target repository docs/source directly instead of assuming a bundled shared-doc copy exists.
 

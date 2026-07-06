@@ -86,7 +86,7 @@ Verify all material claims against source, tests, configuration, and CI.
 When this skill refers to helper paths such as `scripts/...` or `docs/...`, resolve them from the actual skill installation layout you are running, not from the active target repository checkout.
 
 Use this rule:
-- if the skill is installed as a normalized standalone copy, the required bundled contract docs live under the shared `../docs/` directory next to the installed skill directories; do not assume helper scripts are bundled unless that installed layout actually contains them
+- if the skill is installed as a normalized standalone copy, the required bundled contract docs live under the shared `../docs/` directory next to the installed skill directories. <!-- rule: ASSET-PATH-INSTALLED-NO-ASSUME --> `ASSET-PATH-INSTALLED-NO-ASSUME`: Agents MUST NOT assume helper scripts are bundled unless that installed layout actually contains them.
 - if you are working in the `dev-loops` source repository, this skill file lives under `skills/copilot-pr-followup/`, so source-repo helper scripts live two levels up at `../../scripts/`, while required bundled contract docs live one level up at `../docs/`
 - when in doubt, resolve helper paths relative to this [skill file](./SKILL.md) first, then verify the target file exists before running it
 
@@ -97,7 +97,7 @@ Required bundled runtime contract docs for installed copies of this skill:
 - [Copilot Loop Operations](../docs/copilot-loop-operations.md)
 
 Read those bundled `../docs/` files from the installed skill layout instead of assuming the source repository checkout is present. If any required bundled contract doc is missing from the installed skill layout, treat that as a packaging/installer bug.
-Do not assume `scripts/...` is repo-local to the target codebase you are operating on.
+<!-- rule: ASSET-PATH-SOURCE-NO-REPO-LOCAL --> `ASSET-PATH-SOURCE-NO-REPO-LOCAL`: Agents MUST NOT assume `scripts/...` is repo-local to the target codebase they are operating on.
 
 ## Authority and safety rules
 
@@ -115,7 +115,8 @@ Inspect: PR body/title (must satisfy [PR description contract](../docs/copilot-l
 
 At the issue-assignment seam, use `detect-initial-copilot-pr-state.mjs` and keep waiting when `waiting_for_initial_copilot_implementation`.
 
-When confirming whether Copilot is requested as a reviewer, do not rely solely on `gh pr view --json reviewRequests`. Use `request-copilot-review.mjs` (see [Operational cookbook](#operational-cookbook)). Do **not** request Copilot by posting literal `/copilot` or `/copilot re-review` PR comments. After draft→ready or fix push, explicitly decide whether another pass is desired; if yes, ensure green/credibly green posture first.
+<!-- rule: COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY -->
+`COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY`: Copilot review requests MUST go through `request-copilot-review.mjs` (see [Operational cookbook](#operational-cookbook)); the agent MUST NOT request Copilot by posting literal `/copilot` or `/copilot re-review` PR comments, and MUST NOT rely solely on `gh pr view --json reviewRequests` to confirm a request. After draft→ready or fix push, explicitly decide whether another pass is desired; if yes, ensure green/credibly green posture first.
 
 <!-- rule: COPILOT-FOLLOWUP-REQUEST-BRANCHING -->
 `COPILOT-FOLLOWUP-REQUEST-BRANCHING`: The agent MUST branch on the `request-copilot-review.mjs` machine-readable result exactly as follows, and MUST NOT treat an attempted request as equivalent to a confirmed request:
@@ -250,7 +251,10 @@ Do not treat `fix applied locally` as the end of the loop when the workflow also
 
 ### Mandatory gate-comment command contract
 
-For every `draft_gate` or `pre_approval_gate` comment, you MUST run:
+<!-- rule: COPILOT-FOLLOWUP-GATE-COMMENT-CANONICAL -->
+`COPILOT-FOLLOWUP-GATE-COMMENT-CANONICAL`: For every `draft_gate` or `pre_approval_gate` comment, agents MUST run `upsert-checkpoint-verdict.mjs` and MUST NOT use `gh pr comment`, `gh api`, or `gh pr review` for gate comments.
+
+Per `COPILOT-FOLLOWUP-GATE-COMMENT-CANONICAL` above, run:
 
 For a gate that ran via the fan-out/fan-in sub-loop, pass the structured per-angle review results via `--findings-json` (NOT the wall-of-text `--findings-summary`). The operator/loop writes that JSON file from the collected per-angle results — the same per-angle `{angle, verdict, findings}` objects the fan-out reviewers wrote to `tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json` that feed `consolidateFanin`. The helper renders a readable per-angle breakdown and derives the single-line `**Findings summary:**` digest itself:
 
@@ -284,8 +288,6 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
 
 `--execution-mode <fanout_fanin|inline_single_agent>` records how the gate review ran (default `inline_single_agent`). When the gate did not run via the fan-out/fan-in sub-loop ([Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md)), you MUST pass `--execution-mode inline_single_agent --inline-reason "<why>"` — silent inline runs are no longer allowed: inline mode requires a non-empty `--inline-reason` and emits a stderr warning. Because inline is the default mode, a bare call with neither flag now fails with an argument error, so always pass `--execution-mode` explicitly (and `--inline-reason` for inline). The recorded `executionMode` is surfaced by `detect-checkpoint-evidence.mjs` and gated by `gates.requireFanoutEvidence`.
 
-Do NOT use `gh pr comment`, `gh api`, or `gh pr review` for gate comments.
-
 `--force --force-reason` on `upsert-checkpoint-verdict.mjs` is a narrow operator-authorized CI override for the helper itself, not the default gate path. Use it only when the helper refuses gate entry solely because the current head is `blocked_needs_user_decision` with `ciStatus="failure"`, and only after the user explicitly authorizes ignoring that current-head CI failure for this one gate-comment upsert. It does **not** bypass stale-head checks, unresolved-thread / unsettled-review refusal, non-draft `draft_gate` refusal, merge conflicts, or other legality checks.
 
 ### Gate fan-out/fan-in procedure (agent-orchestrated)
@@ -313,7 +315,7 @@ The canonical checkpoint verdict comment contract is [Gate Review Comment Contra
 - **Pass criteria:** all configured draft gate angles pass; all findings at severities in `blockCleanOnFindingSeverities` are addressed; validation passes; no unrelated files are included.
 - **Next step after passing:** mark the PR ready for review.
 - **Board status sync (built-in, after ready-for-review):** the In-Progress board move is now performed automatically as a deterministic tail of `ready-for-review.mjs` — marking the PR ready couples the board move to the ready transition (#1069), so no separate `sync-item-status` step is needed. It stays best-effort and NON-FATAL: it uses local `gh` auth (no CI/PAT), exits 0 when the board is not configured / the item is not on the board / the API fails, and never blocks marking the PR ready.
-- **Non-substitution rule:** a clean `draft_gate` comment only authorizes the draft → ready-for-review transition for that head SHA. It does **not** satisfy `pre_approval_gate`, final-approval readiness, or merge-ready requirements.
+- **Non-substitution rule:** a clean `draft_gate` comment only authorizes the draft → ready-for-review transition for that head SHA; cross-gate non-substitution is owned by `GATE-COMMENT-NON-SUBSTITUTION` in [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md). This skill does not restate that rule.
 - **Required PR comment:** post a visible checkpoint verdict comment using the mandatory [Gate comment command](#mandatory-gate-comment-command-contract). Comment field content and validation-reporting format are owned by `GATE-COMMENT-VALIDATION-REPORTING`; the draft-boundary comment requirement is owned by `GATE-COMMENT-DRAFT-REQUIREMENTS`; posting-failure fail-closed behavior is owned by `GATE-COMMENT-FAIL-CLOSED` — all in [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md). This skill does not restate those field/format/fail-closed rules.
 
 ### Pre-approval gate contract
@@ -325,10 +327,10 @@ This is the default pre-approval gate for this workflow boundary. The canonical 
 - **Execution directive:** run the [Gate fan-out/fan-in procedure](#gate-fan-outfan-in-procedure-agent-orchestrated) (the agent-orchestrated chain defined in [Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md)) with the pre-approval gate inspection angles resolved from config. The `acceptance-criteria` angle is mandatory for this gate (see `.devloops` `gates.preApproval.mandatoryAngles`) and always survives dynamic resolution. Retry rule: in subsequent cycles, only re-run reviewers that produced `findings_present` in the previous pass.
 - **Review angles:** resolved at runtime from config via `resolveGateAngles(config, "preApproval")` from `@dev-loops/core/config`. Default config enables all configured pre-approval gate angle families; consumer repos may opt out individual angles via `excludeAngles`.
 - **Persona mapping:** each angle resolves to a reviewer persona via `resolveReviewerRole(config, angle)` from `@dev-loops/core/config`. Include this prompt in each reviewer's briefing so the reviewer knows exactly what to look for.
-- **Pass criteria:** the sub-loop completes with verdict `clean`; all configured angles pass; if parallel execution is impractical, still run all configured lenses and explicitly record the limitation.
+- **Pass criteria:** the sub-loop completes with verdict `clean`; all configured angles pass, following the sequential-fallback rule owned by `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK` in [Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md).
 - **Acceptance criteria verification:** follow the canonical procedure in [Acceptance Criteria Verification](../docs/acceptance-criteria-verification.md) before posting the `pre_approval_gate` comment. After a clean verification this also ticks the verified PR-body checkboxes via `scripts/github/tick-verified-checkboxes.mjs`, so the merged PR shows checked AC.
 - **Next step after passing:** continue the Step 7 flow and then proceed to the human approval checkpoint below.
-- **Non-substitution rule:** a clean `pre_approval_gate` comment is separate from `draft_gate` evidence. It governs final-approval readiness for that head SHA; it does **not** replace the required `draft_gate` evidence for leaving draft.
+- **Non-substitution rule:** a clean `pre_approval_gate` comment governs final-approval readiness for that head SHA and is separate from `draft_gate` evidence; cross-gate non-substitution is owned by `GATE-COMMENT-NON-SUBSTITUTION` in [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md). This skill does not restate that rule.
 - **Required PR comment:** post a visible checkpoint verdict comment using the mandatory [Gate comment command](#mandatory-gate-comment-command-contract). Comment field content and validation-reporting format are owned by `GATE-COMMENT-VALIDATION-REPORTING`; the pre-approval-boundary comment requirement is owned by `GATE-COMMENT-PREAPPROVAL-REQUIREMENTS`; posting-failure fail-closed behavior is owned by `GATE-COMMENT-FAIL-CLOSED` — all in [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md). This skill does not restate those field/format/fail-closed rules.
 - <!-- rule: GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE --> `GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE`: Skipping the gate MUST NOT be treated as recoverable by asserting convergence.
 

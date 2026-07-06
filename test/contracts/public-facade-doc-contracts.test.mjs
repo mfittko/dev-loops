@@ -36,7 +36,8 @@ test("installed skill guidance owns packaging guarantees and contract docs stay 
 
   assert.match(copilotFollowupSkill, /Required bundled runtime contract docs for installed copies of this skill/i);
   assert.match(copilotFollowupSkill, /required bundled contract docs live under the shared `\.\.\/docs\/` directory next to the installed skill directories/i);
-  assert.match(copilotFollowupSkill, /do not assume helper scripts are bundled unless that installed layout actually contains them/i);
+  assertRuleOwned("ASSET-PATH-INSTALLED-NO-ASSUME", "skills/copilot-pr-followup/SKILL.md");
+  assert.match(copilotFollowupSkill, /ASSET-PATH-INSTALLED-NO-ASSUME/);
   assert.match(copilotFollowupSkill, /Read those bundled `\.\.\/docs\/` files from the installed skill layout/i);
   assert.match(copilotFollowupSkill, /packaging\/installer bug/i);
   assert.match(publicContract, /canonical owner lives in the shipped `skills\/docs\/` surface/i);
@@ -81,7 +82,8 @@ test("workflow docs keep helper/runtime authority code-owned and dev-loop scope 
   assert.match(workflowDoc, /shipped helper\/runtime semantics stay owned by code, tests, and the relevant contract docs/i);
   assert.match(workflowDoc, /\[Scripts Documentation\]\(\.\.\/scripts\/README\.md\) summarizes those semantics/i);
   assert.match(workflowDoc, /state-graph\/contract docs under `docs\/` remain part of the authoritative shipped contract surface/i);
-  assert.match(workflowDoc, /skills and phase docs explain workflow procedure and durable planning intent; they must not silently redefine shipped helper behavior/i);
+  assertRuleOwned("WORKFLOW-DOCS-NO-REDEFINE-HELPER", "docs/IMPLEMENTATION_WORKFLOW.md");
+  assert.match(workflowDoc, /WORKFLOW-DOCS-NO-REDEFINE-HELPER/);
 
   assert.match(scriptsReadme, /code, tests, and the helper entrypoints themselves are authoritative for shipped runtime behavior/i);
   assert.match(scriptsReadme, /this README summarizes those contracts for operators and maintainers; if behavior changes, update the code\/tests and then sync this document/i);
@@ -241,22 +243,22 @@ test("status reporting contract requires authoritative state-first resolution an
 
   assert.match(copilotFollowupSkill, /status\/progress\/readiness\/merge-state\/next-step/i);
   assert.match(copilotFollowupSkill, /reconcile\/unknown instead of guessing from chat context/i);
-  assert.match(copilotFollowupSkill, /do not assert "no open PR" until authoritative issue↔PR linkage is resolved/i);
+  assert.match(copilotFollowupSkill, /FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED/);
   assertRuleOwned("FACADE-LINKED-PR-SINGLE-ARTIFACT", PUBLIC_CONTRACT_PATH);
   assert.match(devLoopSkill, /single canonical artifact for the issue and reuse it instead of opening another PR/i);
-  assert.match(copilotFollowupSkill, /do not open another PR unless the prior PR was explicitly superseded and reconciled first/i);
+  assert.match(copilotFollowupSkill, /FACADE-LINKED-PR-SINGLE-ARTIFACT/);
   assert.match(copilotFollowupSkill, /reuse\/update that canonical PR instead of opening another one/i);
 });
 
 test("copilot-pr-followup mandates upsert helper command for gate comments", async () => {
   const copilotFollowupSkill = await readRepo("skills/copilot-pr-followup/SKILL.md");
 
-  assert.match(copilotFollowupSkill, /For every `draft_gate` or `pre_approval_gate` comment, you MUST run:/);
+  assertRuleOwned("COPILOT-FOLLOWUP-GATE-COMMENT-CANONICAL", "skills/copilot-pr-followup/SKILL.md");
+  assert.match(copilotFollowupSkill, /COPILOT-FOLLOWUP-GATE-COMMENT-CANONICAL/);
   assert.match(copilotFollowupSkill, /node\s+<resolved-skill-scripts>\/github\/upsert-checkpoint-verdict\.mjs/i);
   assert.match(copilotFollowupSkill, /--head-sha\s+<current_head_sha>/);
   assert.match(copilotFollowupSkill, /--verdict\s+<clean\|findings_present\|blocked>/);
   assert.match(copilotFollowupSkill, /--gate\s+<draft_gate\|pre_approval_gate>/);
-  assert.match(copilotFollowupSkill, /Do NOT use `gh pr comment`, `gh api`, or `gh pr review` for gate comments\./);
   assert.match(copilotFollowupSkill, /Do NOT use.*gh pr comment.*gh pr review.*gate comments.*upsert-checkpoint-verdict/i);
 });
 
@@ -272,7 +274,8 @@ test("public dev-loop contract keeps conflict reconciliation local and context-f
   assert.match(publicContract, /current-head gate evidence and relevant unresolved review feedback/i);
   assertRuleOwned("FACADE-CONFLICT-CONTEXT-FAIL-CLOSED", PUBLIC_CONTRACT_PATH);
   assert.match(publicContract, /resolve the conflict locally on the PR branch/i);
-  assert.match(publicContract, /rerun required local validation, gate checks, and required CI checks for the new head before approval\/merge evaluation/i);
+  assertRuleOwned("FACADE-CONFLICT-REVALIDATE-NEW-HEAD", PUBLIC_CONTRACT_PATH);
+  assert.match(publicContract, /FACADE-CONFLICT-REVALIDATE-NEW-HEAD/);
   assert.doesNotMatch(publicContract, /resolve the conflict .*blind merge\/update step/i);
 });
 
@@ -286,16 +289,18 @@ test("public dev-loop contract keeps tracker-backed local work inside local_impl
   assert.match(publicContract, /input-source addition to the existing `local_implementation` strategy/i);
   assert.match(publicContract, /does \*\*not\*\* create a new routing mode/i);
   assert.match(publicContract, /tracker issue is canonical/i);
-  assert.match(publicContract, /`docs\/phases\/phase-<n>\.md` must not exist for that same session/i);
+  assertRuleOwned("ARTIFACT-TRACKER-FIRST-NO-DUP", "skills/docs/artifact-authority-contract.md");
+  assert.match(publicContract, /ARTIFACT-TRACKER-FIRST-NO-DUP/);
   assert.match(publicContract, /resolve-tracker-local-spec\.mjs/i);
 
   assert.match(localImplSkill, /Tracker-backed local implementation/i);
   assert.match(localImplSkill, /stays inside the existing `local_implementation` path/i);
-  assert.match(localImplSkill, /do not create or read \[Phase Plan\]\(\.\.\/\.\.\/docs\/phases\/phase-x\.md\) for that same tracker-backed session/i);
+  assert.match(localImplSkill, /ARTIFACT-TRACKER-FIRST-NO-DUP/);
+  assert.match(localImplSkill, /do not read \[Phase Plan\]\(\.\.\/\.\.\/docs\/phases\/phase-x\.md\) for that same tracker-backed session/i);
   assert.match(localImplSkill, /sync durable scope \/ acceptance \/ status changes back to the tracker issue/i);
   assert.match(localImplSkill, /for tracker-backed sessions, the handoff path is always.*push.*branch.*open.*PR.*merge via GitHub/i);
-  assert.match(localImplSkill, /do not suggest a direct local-main merge/i);
-  assert.match(localImplSkill, /do not merge the working branch into local `main` at phase completion/i);
+  assertRuleOwned("LOCAL-TRACKER-NO-DIRECT-MERGE", "skills/local-implementation/SKILL.md");
+  assert.match(localImplSkill, /LOCAL-TRACKER-NO-DIRECT-MERGE/);
 });
 
 test("checkpoint review chain contract exists and is referenced by both gates", async () => {
@@ -359,8 +364,8 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   assert.match(copilotFollowupSkill, /gh issue create --repo <resolved-repo> --assignee @me/i);
   assert.match(copilotFollowupSkill, /node <resolved-skill-scripts>\/github\/create-pr\.mjs --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.doesNotMatch(copilotFollowupSkill, /gh pr create --draft --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
-  assert.match(copilotFollowupSkill, /New PRs in this workflow must be opened as \*\*draft\*\* PRs first/i);
-  assert.match(copilotFollowupSkill, /Do not create a fresh PR directly in ready-for-review state/i);
+  assertRuleOwned("OPS-DRAFT-FIRST-PR", "skills/docs/copilot-loop-operations.md");
+  assert.match(copilotFollowupSkill, /OPS-DRAFT-FIRST-PR/);
   assert.match(copilotFollowupSkill, /draft gate inspection is a real workflow boundary/i);
 
   // local-implementation: PRs are always draft and always assigned — self-assigned
@@ -368,8 +373,8 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   assert.match(localImplementationSkill, /always draft and always assigned — self-assigned by default/i);
   assert.match(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}dev-loops pr create --assignee @me/i);
   assert.doesNotMatch(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}gh pr create --draft --assignee @me/i);
-  assert.match(localImplementationSkill, /Do not create a fresh PR directly in ready-for-review state/i);
-  assert.match(localImplementationSkill, /draft gate inspection is a real workflow boundary/i);
+  assertRuleOwned("OPS-DRAFT-FIRST-PR", "skills/docs/copilot-loop-operations.md");
+  assert.match(localImplementationSkill, /OPS-DRAFT-FIRST-PR/);
 
   assert.match(finalApprovalSkill, /redirect/i);
   assert.match(finalApprovalSkill, /Human approval checkpoint/i);
