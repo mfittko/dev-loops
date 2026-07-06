@@ -199,6 +199,13 @@ test("wait-pr-checks rejects malformed arguments deterministically", async () =>
   const badPoll = await runNode(["--repo", "owner/repo", "--pr", "7", "--poll", "0"]);
   assert.equal(badPoll.code, 1);
   assert.match(JSON.parse(badPoll.stderr).error, /--poll must be a positive integer/);
+
+  // Canonical digits only: JS-coercible spellings (1e3, hex, decimals) are rejected.
+  for (const nonCanonical of ["1e3", "0x10", "1.0"]) {
+    const badSpelling = await runNode(["--repo", "owner/repo", "--pr", "7", "--timeout", nonCanonical]);
+    assert.equal(badSpelling.code, 1, `--timeout ${nonCanonical} must be rejected`);
+    assert.match(JSON.parse(badSpelling.stderr).error, /--timeout must be a non-negative integer/);
+  }
 });
 
 test("wait-pr-checks --help prints usage and exits 0", async () => {

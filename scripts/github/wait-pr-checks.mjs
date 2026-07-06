@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { parseNonNegativeInteger, parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
@@ -53,15 +53,6 @@ With --jq/--silent, the standard jq-output contract above applies instead
 
 const parseError = buildParseError(USAGE);
 
-function parseSecondsFlag(raw, flag, { allowZero }) {
-  const value = Number(raw);
-  const minimum = allowZero ? 0 : 1;
-  if (!Number.isInteger(value) || value < minimum) {
-    throw parseError(`${flag} must be a${allowZero ? " non-negative" : " positive"} integer (seconds)`);
-  }
-  return value;
-}
-
 export function parseWaitPrChecksCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
@@ -104,11 +95,13 @@ export function parseWaitPrChecksCliArgs(argv) {
       continue;
     }
     if (token.name === "timeout") {
-      options.timeoutMs = parseSecondsFlag(requireTokenValue(token, parseError), "--timeout", { allowZero: true }) * 1000;
+      // Canonical-digits validation (shared /^\d+$/ primitives): rejects
+      // JS-coercible spellings like 1e3, 0x10, "1.0", or " 5 ".
+      options.timeoutMs = parseNonNegativeInteger(requireTokenValue(token, parseError), "--timeout", parseError) * 1000;
       continue;
     }
     if (token.name === "poll") {
-      options.pollIntervalMs = parseSecondsFlag(requireTokenValue(token, parseError), "--poll", { allowZero: false }) * 1000;
+      options.pollIntervalMs = parsePositiveInteger(requireTokenValue(token, parseError), "--poll", parseError) * 1000;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
