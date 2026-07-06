@@ -451,7 +451,7 @@ test("--prefix-file fails closed when the file is missing", async () => {
     assert.equal(result.status, 1, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.fresh, false);
-    assert.ok(output.reason.includes("not found"));
+    assert.ok(output.reason.includes("unreadable"));
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
