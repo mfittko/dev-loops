@@ -60,8 +60,9 @@ import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
-import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
+import { DISPOSITION, interpretLoopState, STATE, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateConductorRouting, getAllowedOuterTransitions, OUTER_STATE, OUTER_TERMINAL_STATES } from "@dev-loops/core/loop/conductor-routing";
+import { interpretReviewerLoopState, REVIEWER_STATE, REVIEWER_TRANSITIONS } from "@dev-loops/core/loop/reviewer-loop-state";
 import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from "./_pr-lifecycle-tables.mjs";
 
 const USAGE = `Usage: validate-state-machine-conformance.mjs [--help]
@@ -214,7 +215,8 @@ export function compareDocCodeTransitions(docTransitions, transitionChecks) {
       // rest so other missing/unreferenced edges still surface in the same report.
       try {
         const outcome = check.verify();
-        if (outcome && outcome.result !== undefined) observations.push(outcome.result);
+        // A verify() may return one observation or an array (multi-variant fixtures).
+        if (outcome && outcome.result !== undefined) observations.push(...(Array.isArray(outcome.result) ? outcome.result : [outcome.result]));
         results.push({ from, to, status: outcome.ok ? "verified" : "divergent", detail: outcome.detail });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -672,6 +674,240 @@ const CONDUCTOR_ROUTING_MACHINE = {
 };
 
 registerMachine(CONDUCTOR_ROUTING_MACHINE);
+
+// ---------------------------------------------------------------------------
+// Third machine (issue #1157): copilot-loop-state.
+//
+// Doc side: docs/copilot-loop-state-graph.md's "## Required transitions" bullets,
+// parsed at load time via parseRequiredTransitions.
+//
+// Code side: packages/core/src/loop/copilot-loop-state.mjs exports STATE, TRANSITIONS,
+// and interpretLoopState. Both STATE/TRANSITIONS are a plain lookup table (there is no
+// "evaluate a from->to edge" function), so each doc transition is checked two ways: (1)
+// structurally, TRANSITIONS[from] must include `to` (the real code table, not a hand-copied
+// assumption); (2) behaviorally, a real snapshot fixture reaching `to` is run through the
+// real interpretLoopState and must actually land on `to` — one fixture per reachable `to`
+// state, reused across every `from` that doc-declares an edge into it (same pattern as
+// conductor-routing's OUTER_TO_FIXTURE).
+// ---------------------------------------------------------------------------
+
+// Independent doc<->code binding required by the parseRequiredTransitions header caveat:
+// the transitionChecks below are DERIVED from the parsed doc, so on their own they are
+// one-directional (a silently dropped/deleted doc bullet would just shrink both tables in
+// lockstep and keep passing). This load-time set-equality against the code's own transition
+// table (mirroring pr-gate-coordination's atlas binding) makes any dropped, mangled, or
+// deleted bullet throw loudly.
+function bindDocToCodeTable(machineName, docTransitions, codeEdges) {
+  const docSet = new Set(realEdges(docTransitions).map(([a, b]) => `${a}->${b}`));
+  const codeSet = new Set(codeEdges.map(([a, b]) => `${a}->${b}`));
+  const onlyDoc = [...docSet].filter((k) => !codeSet.has(k));
+  const onlyCode = [...codeSet].filter((k) => !docSet.has(k));
+  if (onlyDoc.length > 0 || onlyCode.length > 0) {
+    throw new Error(
+      `${machineName}: doc "Required transitions" and the code transition table have drifted apart. `
+      + `Only in doc: [${onlyDoc.join(", ")}]. Only in code: [${onlyCode.join(", ")}].`,
+    );
+  }
+}
+
+function tableEdges(table) {
+  return Object.entries(table).flatMap(([from, tos]) => tos.map((to) => [from, to]));
+}
+
+function tableTerminalStates(table) {
+  return Object.entries(table).filter(([, tos]) => tos.length === 0).map(([state]) => state);
+}
+
+const COPILOT_LOOP_STATE_DOC_TRANSITIONS = parseRequiredTransitions(
+  readFileSync(path.join(REPO_ROOT, "docs", "copilot-loop-state-graph.md"), "utf8"),
+);
+
+bindDocToCodeTable("copilot-loop-state", COPILOT_LOOP_STATE_DOC_TRANSITIONS, tableEdges(TRANSITIONS));
+
+const COPILOT_LOOP_STATE_TO_FIXTURE = new Map([
+  [STATE.PR_READY_NO_FEEDBACK, () => ({ prExists: true, prDraft: false, copilotReviewRequestStatus: "none", copilotReviewPresent: false, unresolvedThreadCount: 0, ciStatus: "success" })],
+  [STATE.WAITING_FOR_COPILOT_REVIEW, () => ({ prExists: true, prDraft: false, copilotReviewRequestStatus: "requested", unresolvedThreadCount: 0 })],
+  [STATE.UNRESOLVED_FEEDBACK_PRESENT, () => ({ prExists: true, prDraft: false, unresolvedThreadCount: 2, agentFixStatus: null })],
+  [STATE.ALREADY_FIXED_NEEDS_REPLY_RESOLVE, () => ({ prExists: true, prDraft: false, unresolvedThreadCount: 2, agentFixStatus: "applied" })],
+  [STATE.READY_TO_REREQUEST_REVIEW, () => ({ prExists: true, prDraft: false, copilotReviewPresent: true, unresolvedThreadCount: 0, ciStatus: "success", copilotReviewRequestStatus: "none" })],
+  [STATE.WAITING_FOR_CI, () => ({ prExists: true, prDraft: false, copilotReviewPresent: true, unresolvedThreadCount: 0, ciStatus: "pending", copilotReviewRequestStatus: "none" })],
+  [STATE.BLOCKED_NEEDS_USER_DECISION, () => ({ prExists: true, prDraft: false, copilotReviewRequestStatus: "failed" })],
+  [STATE.REVIEW_REQUEST_UNAVAILABLE, () => ({ prExists: true, prDraft: false, copilotReviewRequestStatus: "unavailable" })],
+  [STATE.DONE, () => ({ prExists: true, prMerged: true })],
+]);
+
+const COPILOT_LOOP_STATE_TRANSITION_CHECKS = new Map();
+for (const [from, to] of realEdges(COPILOT_LOOP_STATE_DOC_TRANSITIONS)) {
+  const buildFixture = COPILOT_LOOP_STATE_TO_FIXTURE.get(to);
+  if (!buildFixture) throw new Error(`copilot-loop-state: no fixture registered for reachable state "${to}"`);
+  COPILOT_LOOP_STATE_TRANSITION_CHECKS.set(`${from}->${to}`, {
+    status: "verified",
+    verify: () => {
+      const fixture = buildFixture();
+      const interpretation = interpretLoopState(fixture);
+      const ok = interpretation.state === to && (TRANSITIONS[from] || []).includes(to);
+      return {
+        ok,
+        detail: interpretation,
+        result: {
+          state: interpretation.state,
+          unresolvedThreadCount: fixture.unresolvedThreadCount ?? 0,
+          copilotReviewRequestStatus: fixture.copilotReviewRequestStatus ?? "none",
+        },
+      };
+    },
+  });
+}
+
+const COPILOT_LOOP_STATE_MACHINE = {
+  name: "copilot-loop-state",
+  states: Object.values(STATE),
+  terminalStates: tableTerminalStates(TRANSITIONS),
+  transitions: tableEdges(TRANSITIONS),
+  docTransitions: COPILOT_LOOP_STATE_DOC_TRANSITIONS,
+  transitionChecks: COPILOT_LOOP_STATE_TRANSITION_CHECKS,
+  safetyRules: [
+    {
+      // Analog of "fail-closed states never dispatch a Backlog pull" for this machine
+      // (docs: COPILOT-STATE-UNRESOLVED-PRIORITY): unresolved feedback must land in a
+      // fix/reply-resolve state — stronger than merely "not a wait state", so a
+      // regression routing unresolved feedback anywhere else also trips this rule.
+      name: "unresolved-feedback-lands-in-fix-states",
+      check: (observation) => observation.unresolvedThreadCount === 0
+        || observation.state === STATE.UNRESOLVED_FEEDBACK_PRESENT
+        || observation.state === STATE.ALREADY_FIXED_NEEDS_REPLY_RESOLVE,
+    },
+  ],
+};
+
+registerMachine(COPILOT_LOOP_STATE_MACHINE);
+
+// ---------------------------------------------------------------------------
+// Fourth machine (issue #1157): reviewer-loop-state.
+//
+// Doc side: docs/reviewer-loop-state-graph.md's "## Required transitions" bullets. The doc
+// bullets one abstract row for the five reviewer-pass states that all fail closed into
+// `blocked_needs_user_decision` on an unexpected failure, expanded below.
+//
+// Code side: packages/core/src/loop/reviewer-loop-state.mjs exports REVIEWER_STATE,
+// REVIEWER_TRANSITIONS, and interpretReviewerLoopState. Checked the same two ways as
+// copilot-loop-state above. `waiting_for_author_followup` / `waiting_for_re_request` are
+// legacy compatibility states `interpretReviewerLoopState` never assigns as its own output
+// (see the doc's note); their re-entry transitions are owned_elsewhere (the outer-loop
+// compatibility layer), not by this pure interpreter.
+// ---------------------------------------------------------------------------
+
+const REVIEWER_LOOP_STATE_ABSTRACT_ROWS = new Map([
+  ["any active reviewer-pass state->`blocked_needs_user_decision`", [
+    [REVIEWER_STATE.REVIEW_REQUESTED, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [REVIEWER_STATE.DETERMINE_REVIEW_PLAN, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [REVIEWER_STATE.REVIEWS_RUNNING, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [REVIEWER_STATE.MERGE_RESULTS, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [REVIEWER_STATE.DRAFT_REVIEW_READY, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+  ]],
+]);
+
+const REVIEWER_LOOP_STATE_DOC_TRANSITIONS = parseRequiredTransitions(
+  readFileSync(path.join(REPO_ROOT, "docs", "reviewer-loop-state-graph.md"), "utf8"),
+  { abstractRows: REVIEWER_LOOP_STATE_ABSTRACT_ROWS },
+);
+
+bindDocToCodeTable("reviewer-loop-state", REVIEWER_LOOP_STATE_DOC_TRANSITIONS, tableEdges(REVIEWER_TRANSITIONS));
+
+// Transitions owned by the outer-loop legacy-compatibility layer, not by this pure
+// interpreter (see header comment): interpretReviewerLoopState never assigns
+// WAITING_FOR_AUTHOR_FOLLOWUP or WAITING_FOR_RE_REQUEST as its own output state, so no
+// fixture can characterize a real "from" call landing on either of them.
+const REVIEWER_LOOP_STATE_OWNED_ELSEWHERE_EDGES = [
+  [REVIEWER_STATE.WAITING_FOR_AUTHOR_FOLLOWUP, REVIEWER_STATE.SUBMITTED_REVIEW],
+  [REVIEWER_STATE.WAITING_FOR_AUTHOR_FOLLOWUP, REVIEWER_STATE.REVIEW_REQUESTED],
+  [REVIEWER_STATE.WAITING_FOR_AUTHOR_FOLLOWUP, REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST],
+  [REVIEWER_STATE.WAITING_FOR_RE_REQUEST, REVIEWER_STATE.REVIEW_REQUESTED],
+  [REVIEWER_STATE.WAITING_FOR_RE_REQUEST, REVIEWER_STATE.SUBMITTED_REVIEW],
+];
+
+const REVIEWER_LOOP_STATE_TO_FIXTURE = new Map([
+  [REVIEWER_STATE.REVIEW_REQUESTED, () => ({ prExists: true, prDraft: false, reviewRequested: true })],
+  [REVIEWER_STATE.DETERMINE_REVIEW_PLAN, () => ({ prExists: true, prDraft: false, localPlanningStatus: "determining" })],
+  [REVIEWER_STATE.REVIEWS_RUNNING, () => ({ prExists: true, prDraft: false, localReviewRunsStatus: "running" })],
+  [REVIEWER_STATE.MERGE_RESULTS, () => ({ prExists: true, prDraft: false, localReviewRunsStatus: "completed" })],
+  [REVIEWER_STATE.DRAFT_REVIEW_READY, () => ({ prExists: true, prDraft: false, draftReviewPrepared: true })],
+  [REVIEWER_STATE.DRAFT_REVIEW_POSTED, () => ({ prExists: true, prDraft: false, draftReviewPosted: true, draftReviewNotificationStatus: "none", prHeadSha: "abc1234", draftReviewCommitSha: "abc1234" })],
+  [REVIEWER_STATE.WAITING_FOR_USER_SUBMIT, () => ({ prExists: true, prDraft: false, draftReviewPosted: true, draftReviewNotificationStatus: "notified", prHeadSha: "abc1234", draftReviewCommitSha: "abc1234" })],
+  [REVIEWER_STATE.SUBMITTED_REVIEW, () => ({ prExists: true, prDraft: false, submittedReviewPresent: true, prHeadSha: "abc1234", submittedReviewCommitSha: "abc1234", reviewRequested: false })],
+  [REVIEWER_STATE.REVIEW_INVALIDATED, () => ({ prExists: true, prDraft: false, draftReviewPosted: true, prHeadSha: "def5678", draftReviewCommitSha: "abc1234" })],
+  [REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST, () => ({ prExists: false })],
+  // Four variants — one per failure field the interpreter fail-closes on
+  // (reviewer-loop-state.mjs routes any of them to BLOCKED identically), so the
+  // fail-closed safety rule exercises every failure signal, not just planning.
+  [REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION, () => [
+    { prExists: true, prDraft: false, localPlanningStatus: "failed" },
+    { prExists: true, prDraft: false, localReviewRunsStatus: "failed" },
+    { prExists: true, prDraft: false, localMergeStatus: "failed" },
+    { prExists: true, prDraft: false, reviewSubmissionStatus: "failed" },
+  ]],
+]);
+
+const REVIEWER_FAILURE_FIELDS = ["localPlanningStatus", "localReviewRunsStatus", "localMergeStatus", "reviewSubmissionStatus"];
+
+const REVIEWER_LOOP_STATE_TRANSITION_CHECKS = new Map();
+for (const [from, to] of REVIEWER_LOOP_STATE_OWNED_ELSEWHERE_EDGES) {
+  // owned_elsewhere skips the behavioral verify(), but the cheap structural check still
+  // applies: the edge must exist in the real code table, so removing it from
+  // REVIEWER_TRANSITIONS surfaces here instead of passing silently.
+  if (!(REVIEWER_TRANSITIONS[from] || []).includes(to)) {
+    throw new Error(`reviewer-loop-state: owned_elsewhere edge ${from}->${to} is not in REVIEWER_TRANSITIONS`);
+  }
+  REVIEWER_LOOP_STATE_TRANSITION_CHECKS.set(`${from}->${to}`, {
+    status: "owned_elsewhere",
+    note: "Legacy external-wait compatibility state re-entry is owned by the outer-loop "
+      + "compatibility layer, not by interpretReviewerLoopState, which never assigns "
+      + `"${from}" as its own output state (see docs/reviewer-loop-state-graph.md).`,
+  });
+}
+for (const [from, to] of realEdges(REVIEWER_LOOP_STATE_DOC_TRANSITIONS)) {
+  const key = `${from}->${to}`;
+  if (REVIEWER_LOOP_STATE_TRANSITION_CHECKS.has(key)) continue;
+  const buildFixture = REVIEWER_LOOP_STATE_TO_FIXTURE.get(to);
+  if (!buildFixture) throw new Error(`reviewer-loop-state: no fixture registered for reachable state "${to}"`);
+  REVIEWER_LOOP_STATE_TRANSITION_CHECKS.set(key, {
+    status: "verified",
+    verify: () => {
+      const built = buildFixture();
+      const fixtures = Array.isArray(built) ? built : [built];
+      const interpretations = fixtures.map((f) => interpretReviewerLoopState(f));
+      const ok = interpretations.every((i) => i.state === to) && (REVIEWER_TRANSITIONS[from] || []).includes(to);
+      return {
+        ok,
+        detail: interpretations.length === 1 ? interpretations[0] : interpretations,
+        result: fixtures.map((fixture, i) => ({
+          state: interpretations[i].state,
+          failed: REVIEWER_FAILURE_FIELDS.some((field) => fixture[field] === "failed"),
+        })),
+      };
+    },
+  });
+}
+
+const REVIEWER_LOOP_STATE_MACHINE = {
+  name: "reviewer-loop-state",
+  states: Object.values(REVIEWER_STATE),
+  terminalStates: tableTerminalStates(REVIEWER_TRANSITIONS),
+  transitions: tableEdges(REVIEWER_TRANSITIONS),
+  docTransitions: REVIEWER_LOOP_STATE_DOC_TRANSITIONS,
+  transitionChecks: REVIEWER_LOOP_STATE_TRANSITION_CHECKS,
+  safetyRules: [
+    {
+      // Analog of "fail-closed states never dispatch a Backlog pull" for this machine:
+      // any local-status failure must fail closed into blocked_needs_user_decision, never
+      // silently proceed into a draft/submit/wait branch.
+      name: "local-failure-always-fails-closed",
+      check: (observation) => !observation.failed || observation.state === REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION,
+    },
+  ],
+};
+
+registerMachine(REVIEWER_LOOP_STATE_MACHINE);
 
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {

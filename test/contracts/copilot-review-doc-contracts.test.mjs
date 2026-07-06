@@ -102,8 +102,8 @@ test("copilot-pr-followup skill keeps async watch persistence explicit", async (
   assert.match(skillContent, /child async run exits[\s\S]*waiting_for_copilot_review[\s\S]*main session re-dispatches the same-PR follow-up path when feasible/i);
   assert.match(scriptsReadme, /`cycleDisposition: "pending"` with `terminal: false` means stay attached and run another watch boundary rather than exiting as clean success/i);
   assert.match(scriptsReadme, /handoff-only behavior must be explicitly requested/i);
-  assert.match(stateGraph, /`waiting_for_copilot_review` is a persistence boundary for explicit async loop entry/i);
-  assert.match(stateGraph, /If the next deterministic state returns to `waiting_for_copilot_review`, resume watch mode again instead of treating the re-request handoff as the end of the async run/i);
+  assertRuleOwned("COPILOT-STATE-WATCH-PERSISTENCE", "docs/copilot-loop-state-graph.md");
+  assert.match(stateGraph, /COPILOT-STATE-WATCH-PERSISTENCE/);
 });
 test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merge-ready checks", async () => {
   const skillContent = await readRepo("skills/copilot-pr-followup/SKILL.md");

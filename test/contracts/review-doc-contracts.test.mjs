@@ -81,8 +81,8 @@ test("review workflow resolves pre-approval gate angles from config with explici
   assert.match(copilotFollowupSkill, /if parallel execution is impractical[\s\S]*still run all configured lenses and explicitly record the limitation/i);
   assert.match(reviewAgent, /if parallel execution is impractical[\s\S]*still cover all configured angles and explicitly record the limitation/i);
   assert.match(reviewAgent, /run those configured angle-focused passes in fresh context and in parallel when practical/i);
-  assert.match(reviewerGraph, /workflow lenses that reviewer\s+runs must cover for the change/i);
-  assert.match(reviewerGraph, /do not replace the state machine's supported\s+review-angle taxonomy/i);
+  assertRuleOwned("REVIEWER-STATE-GATE-ANGLE-MAPPING", "docs/reviewer-loop-state-graph.md");
+  assert.match(reviewerGraph, /REVIEWER-STATE-GATE-ANGLE-MAPPING/);
 });
 
 test("reviewer-loop contract documents submitted-review handoff and explicit external waits", async () => {
@@ -91,9 +91,8 @@ test("reviewer-loop contract documents submitted-review handoff and explicit ext
     readRepo("scripts/README.md"),
   ]);
 
-  assert.match(reviewerGraph, /A pure internal reviewer pass must end in a concrete review result boundary \(`submitted_review`\)/i);
-  assert.match(reviewerGraph, /If a wait state is used, it must be an explicit named external-participant boundary/i);
-  assert.match(reviewerGraph, /A new review request after fixes starts a new reviewer-pass context \(`review_requested`\)/i);
+  assertRuleOwned("REVIEWER-BOUNDARY-CONTRACT", "docs/reviewer-loop-state-graph.md");
+  assert.match(reviewerGraph, /REVIEWER-BOUNDARY-CONTRACT/);
   assert.match(reviewerGraph, /skills\/docs\/pr-lifecycle-contract\.md/i);
   assert.match(scriptsReadme, /reviewer `submitted_review`\s+as outer-loop-owned `continue_wait` states at explicit external\/handoff boundaries/i);
   assert.match(scriptsReadme, /preserves compatibility for reviewer `waiting_for_author_followup` and `waiting_for_re_request`\s+as legacy named external-wait boundaries/i);
