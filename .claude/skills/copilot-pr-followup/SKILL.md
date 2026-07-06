@@ -174,6 +174,7 @@ Preferred approach:
 - after a successful fix / reply-resolve / re-request cycle, returning to `waiting_for_copilot_review` is a persistence boundary: resume the watcher instead of reporting completion
 - dispatch fix findings to the `fixer` agent; do not run inline fix passes in-watcher
 - do not report completion while unresolved Copilot feedback remains
+- once a watch/probe settles, do not parse its raw output: re-read via `detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>` and `list-review-threads.mjs --repo <owner/name> --pr <number> --unresolved-only` — inline interpreters are barred by `OPS-NO-INLINE-INTERPRETER` in [Copilot loop operations](../docs/copilot-loop-operations.md)
 
 ### Canonical async dispatch wording
 
