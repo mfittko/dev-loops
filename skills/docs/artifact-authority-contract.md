@@ -111,8 +111,8 @@ Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no lo
 ### Explicit non-knobs
 
 <!-- rule: ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED -->
-These are not valid artifact authority mode selectors:
-- `strategy.default: copilot` — not a valid mode; the enum MUST accept only `github-first` or `local-first` (`packages/core/src/config/config.mjs`)
+`ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED`: The strategy enum MUST accept only `github-first` or `local-first` and MUST fail closed on any other value (`packages/core/src/config/config.mjs`). These are not valid artifact authority mode selectors:
+- `strategy.default: copilot` — not a valid mode
 - Free-form string values — MUST fail closed
 - Omitting `strategy.default` from every layer — resolves to `local-first` from `BUILT_IN_DEFAULTS`
 

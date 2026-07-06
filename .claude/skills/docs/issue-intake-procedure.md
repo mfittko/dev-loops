@@ -57,6 +57,7 @@ Proposal artifact contract:
 If the Phase 1 preflight verdict is `pause_for_clarification`, the procedure MUST stop and ask.
 If the intake state machine stops at `stopped_overlap_needs_decision` or `stopped_low_confidence`, the procedure MUST stop and ask.
 If the intake state machine stops at `stopped_explicit_reject`, the procedure MUST stop and record that the proposal was rejected; it MUST NOT mutate GitHub.
+
 After approval, start a separate async mutation pass (dispatched via the procedure) that consumes the approved proposal and emits a post-mutation verification artifact. Emit a concise post-mutation verification artifact and record what the mutation pass actually changed and verify the resulting issue/artifact state.
 
 ## Unattended issue-first execution and automatic re-entry
