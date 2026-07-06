@@ -241,6 +241,17 @@ test("#1190: outstanding Copilot review request refuses pre_approval_gate entry 
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
   assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
   assert.match(result.reason, /outstanding/i);
+  // Bypass regression: the synthesized wait result must forbid the FULL
+  // postDraftForbidden set — dropping run_draft_gate here would let
+  // upsert-checkpoint-verdict post a draft_gate verdict on a non-draft PR
+  // (gate=draft_gate, no clean draft evidence, outstanding request) where the
+  // replaced boundary result would have refused it.
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY));
+  // Shape consistency with sibling wait-state results.
+  assert.equal(result.copilotReviewRoundCount, 0);
 });
 
 test("#1190: already-requested Copilot review also refuses pre_approval_gate entry", () => {
@@ -256,6 +267,47 @@ test("#1190: already-requested Copilot review also refuses pre_approval_gate ent
   });
 
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("#1190: round-cap clean fallback with a lingering review request still permits pre_approval_gate "
+  + "entry (no re-introduction of the #896 infinite-wait dead-end)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    ciStatus: "success",
+    copilotReviewRoundCount: 3,
+    maxCopilotRounds: 3,
+    // Past the cap this lingering request is for a round that can never come;
+    // the entry guard must NOT treat it as unsettled (#896/#848 exemption).
+    copilotReviewRequestStatus: "requested",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("#1190: at the cap, significant post-convergence changes re-arm the outstanding-review entry guard "
+  + "(clean-fallback exemption does not apply when a new cycle is required)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    ciStatus: "success",
+    sameHeadCleanConverged: true,
+    copilotReviewRoundCount: 3,
+    maxCopilotRounds: 3,
+    copilotReviewRequestStatus: "requested",
+    postConvergenceSignificantChange: true,
+    preApprovalGate: gate({ visible: false }),
+  });
+
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 

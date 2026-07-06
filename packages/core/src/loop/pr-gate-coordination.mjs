@@ -513,11 +513,39 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   if (copilotReviewRequestStatus !== "requested" && copilotReviewRequestStatus !== "already-requested") {
     return null;
   }
+  // Round-cap exemption (mirrors shouldGuardCopilotReviewRequest, #896/#848):
+  // past the cap a lingering requested/already-requested status is for a review
+  // that can never come (no further round is permitted), so treating it as
+  // "unsettled" here would re-introduce the infinite-wait dead-end the
+  // ROUND_CAP_CLEAN_FALLBACK routing exists to prevent. When the cap is reached
+  // and the head is clean — either sameHeadCleanConverged or the interpreter's
+  // round_cap_clean_fallback state — the pre_approval_gate proceeds unless
+  // significant post-convergence changes require a new review cycle.
+  const roundCapReached = isCopilotRoundCapReached({
+    copilotReviewRoundCount: input.copilotReviewRoundCount,
+    maxCopilotRounds: input.maxCopilotRounds,
+  });
+  const lifecycleState = typeof input.lifecycleState === "string" ? input.lifecycleState.trim().toLowerCase() : "";
+  const roundCapCleanFallback = lifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK;
+  if (
+    roundCapReached
+    && (input.sameHeadCleanConverged === true || roundCapCleanFallback)
+    && input.postConvergenceSignificantChange !== true
+  ) {
+    return null;
+  }
 
   const allowedNextActions = [];
   const forbiddenActions = [];
   pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW]);
+  // Full postDraftForbidden set (matching the canonical WAITING_FOR_COPILOT_REVIEW
+  // result this guard synthesizes) plus the final-approval actions the replaced
+  // boundary result also forbade — dropping RUN_DRAFT_GATE/MARK_READY_FOR_REVIEW
+  // here would let a draft_gate verdict post on a non-draft PR slip through where
+  // the replaced result would have refused it.
   pushUnique(forbiddenActions, [
+    PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+    PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
     PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
     PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
     PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
@@ -542,6 +570,7 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
     mergeStateStatus: result.mergeStateStatus ?? null,
     conflictFiles: result.conflictFiles ?? [],
     refinementArtifact: result.refinementArtifact ?? null,
+    copilotReviewRoundCount: normalizeNonNegativeInteger(input.copilotReviewRoundCount),
   });
 }
 
