@@ -134,6 +134,8 @@ At minimum, the lifecycle MUST enforce these transitions:
   - pre-approval gate findings require changes
 - `final_local_preapproval_gate` -> `waiting_for_human_pr_approval`
   - clean current-head `pre_approval_gate` evidence exists
+- `final_gate_remediation` -> `final_local_preapproval_gate`
+  - fixes pushed after pre-approval gate findings
 - `waiting_for_human_pr_approval` -> `waiting_for_merge`
   - approval arrives
 - `waiting_for_human_pr_approval` -> `draft_local_review_gate`

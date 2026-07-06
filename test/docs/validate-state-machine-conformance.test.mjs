@@ -159,9 +159,9 @@ test("compareDocCodeTransitions fails when the code check itself reports diverge
 
 // ---------------------------------------------------------------------------
 // Reference machine: pr-gate-coordination, wired against the real
-// skills/docs/pr-lifecycle-contract.md-derived table (imported via
-// scripts/docs/_pr-lifecycle-tables.mjs, the shared pure-data module also used
-// by scripts/pages/build-state-atlas.mjs) and the real exported
+// skills/docs/pr-lifecycle-contract.md-derived table (imported from
+// @dev-loops/core/loop/pr-lifecycle, the exported module also used by
+// scripts/pages/build-state-atlas.mjs) and the real exported
 // evaluatePrGateCoordination function.
 // ---------------------------------------------------------------------------
 

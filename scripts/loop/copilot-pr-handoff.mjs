@@ -9,6 +9,7 @@ import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
 import { detectInternalOnly as detectPrInternalOnly } from "./detect-internal-only-pr.mjs";
 import { applyConfirmedReviewRequest, interpretLoopState, NEXT_ACTIONS, STATE, summarizeLoopInterpretation, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
+import { PR_LIFECYCLE_STATE } from "@dev-loops/core/loop/pr-lifecycle";
 import { ensureAsyncRunnerOwnership, releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
@@ -100,7 +101,7 @@ function summarizeRequestWatchContract({
     || interpretation.state === STATE.READY_TO_REREQUEST_REVIEW
     && interpretation.sameHeadCleanConverged !== true
   ) {
-    routingState = "ready_state_needs_copilot_request";
+    routingState = PR_LIFECYCLE_STATE.READY_STATE_NEEDS_COPILOT_REQUEST;
   } else if (interpretation.state === STATE.INTERNAL_TOOLING_DIRECT_GATE) {
     routingState = "internal_tooling_skip_copilot";
   }

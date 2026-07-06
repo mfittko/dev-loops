@@ -63,7 +63,7 @@ import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from 
 import { DISPOSITION, interpretLoopState, STATE, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateConductorRouting, getAllowedOuterTransitions, OUTER_STATE, OUTER_TERMINAL_STATES } from "@dev-loops/core/loop/conductor-routing";
 import { interpretReviewerLoopState, REVIEWER_STATE, REVIEWER_TRANSITIONS } from "@dev-loops/core/loop/reviewer-loop-state";
-import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from "./_pr-lifecycle-tables.mjs";
+import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TERMINAL_STATES, PR_LIFECYCLE_TRANSITIONS } from "@dev-loops/core/loop/pr-lifecycle";
 
 const USAGE = `Usage: validate-state-machine-conformance.mjs [--help]
 
@@ -287,8 +287,8 @@ export function runMachineConformance(machine) {
 // bullets, parsed at load time via parseRequiredTransitions so a doc edit is
 // immediately visible to the harness. The two abstract (non-backtick) rows are
 // mapped explicitly to their concrete representatives below. The parsed table
-// is additionally asserted to bind 1:1 to _pr-lifecycle-tables.mjs's
-// PR_LIFECYCLE_TRANSITIONS (the shared pure-data table also consumed by
+// is additionally asserted to bind 1:1 to @dev-loops/core/loop/pr-lifecycle's
+// PR_LIFECYCLE_TRANSITIONS (the exported table also consumed by
 // build-state-atlas.mjs's diagram), so that constant cannot drift from the doc
 // either.
 //
@@ -314,43 +314,24 @@ const PR_LIFECYCLE_ABSTRACT_ROWS = new Map([
   ["`merge_conflict_resolution`->normal lifecycle re-entry state", [["merge_conflict_resolution", "waiting_for_copilot_review"]]],
 ]);
 
-// Edges the doc implies but does not bullet under "Required transitions".
-// pr-lifecycle-contract.md sends pre-approval findings to final_gate_remediation
-// and its "Remediation ownership boundary" section routes that remediation back
-// to the gate, but no explicit re-entry bullet exists (unlike the draft pair's
-// draft_local_remediation -> draft_local_review_gate). Without this edge the
-// state is a non-terminal dead-end, so the atlas diagram carries it; it is
-// allowlisted here explicitly instead of silently — remove this entry if the
-// doc ever gains the bullet.
-const PR_LIFECYCLE_IMPLIED_EDGES = [["final_gate_remediation", "final_local_preapproval_gate"]];
-
-const PR_LIFECYCLE_PARSED_DOC_TRANSITIONS = parseRequiredTransitions(
+// Issue #1193 added the doc's `final_gate_remediation` -> `final_local_preapproval_gate`
+// bullet (mirroring the draft pair's `draft_local_remediation` -> `draft_local_review_gate`
+// re-entry bullet), retiring the implied-edge allowlist that used to stand in for it here.
+const PR_LIFECYCLE_DOC_TRANSITIONS = parseRequiredTransitions(
   readFileSync(path.join(REPO_ROOT, "skills", "docs", "pr-lifecycle-contract.md"), "utf8"),
   { abstractRows: PR_LIFECYCLE_ABSTRACT_ROWS },
 );
 
-// Self-retiring seam: once the doc bullets an implied edge, this entry is stale.
-for (const [from, to] of PR_LIFECYCLE_IMPLIED_EDGES) {
-  if (PR_LIFECYCLE_PARSED_DOC_TRANSITIONS.some(([a, b]) => a === from && b === to)) {
-    throw new Error(`implied edge ${from}->${to} now appears in the doc — remove it from PR_LIFECYCLE_IMPLIED_EDGES`);
-  }
-}
-
-const PR_LIFECYCLE_DOC_TRANSITIONS = [
-  ...PR_LIFECYCLE_PARSED_DOC_TRANSITIONS,
-  ...PR_LIFECYCLE_IMPLIED_EDGES,
-];
-
-// Bind the parsed doc table 1:1 to the atlas constant (order-insensitive).
+// Bind the parsed doc table 1:1 to the exported constant (order-insensitive).
 {
   const docSet = new Set(PR_LIFECYCLE_DOC_TRANSITIONS.map(([a, b]) => `${a}->${b}`));
-  const atlasSet = new Set(realEdges(PR_LIFECYCLE_TRANSITIONS).map(([a, b]) => `${a}->${b}`));
-  const onlyDoc = [...docSet].filter((k) => !atlasSet.has(k));
-  const onlyAtlas = [...atlasSet].filter((k) => !docSet.has(k));
-  if (onlyDoc.length > 0 || onlyAtlas.length > 0) {
+  const codeSet = new Set(realEdges(PR_LIFECYCLE_TRANSITIONS).map(([a, b]) => `${a}->${b}`));
+  const onlyDoc = [...docSet].filter((k) => !codeSet.has(k));
+  const onlyCode = [...codeSet].filter((k) => !docSet.has(k));
+  if (onlyDoc.length > 0 || onlyCode.length > 0) {
     throw new Error(
-      "pr-lifecycle-contract.md Required transitions and build-state-atlas.mjs PR_LIFECYCLE_TRANSITIONS have drifted apart. "
-      + `Only in doc: [${onlyDoc.join(", ")}]. Only in atlas: [${onlyAtlas.join(", ")}].`,
+      "pr-lifecycle-contract.md Required transitions and @dev-loops/core/loop/pr-lifecycle's PR_LIFECYCLE_TRANSITIONS have drifted apart. "
+      + `Only in doc: [${onlyDoc.join(", ")}]. Only in code: [${onlyCode.join(", ")}].`,
     );
   }
 }
@@ -554,7 +535,7 @@ for (const key of [
 const PR_GATE_COORDINATION_MACHINE = {
   name: "pr-gate-coordination",
   states: PR_LIFECYCLE_STATES,
-  terminalStates: ["terminal_slice_complete", "stopped_needs_user_decision"],
+  terminalStates: PR_LIFECYCLE_TERMINAL_STATES,
   transitions: PR_LIFECYCLE_TRANSITIONS,
   docTransitions: PR_LIFECYCLE_DOC_TRANSITIONS,
   transitionChecks: PR_GATE_TRANSITION_CHECKS,
