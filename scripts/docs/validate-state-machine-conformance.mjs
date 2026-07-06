@@ -972,21 +972,11 @@ const PUBLIC_DEV_LOOP_ROUTING_DOC_TRANSITIONS = parseRequiredTransitions(
   { abstractRows: PUBLIC_DEV_LOOP_ROUTING_ABSTRACT_ROWS },
 );
 
-// Independent doc<->code binding (parseRequiredTransitions header caveat): the doc's
-// non-terminal `from` gates must equal the code's non-terminal gate set, so a dropped or
-// renamed bullet throws loudly instead of shrinking both tables in lockstep.
-{
-  const docFrom = new Set(PUBLIC_DEV_LOOP_ROUTING_DOC_TRANSITIONS.map(([from]) => from));
-  const codeFrom = new Set(PUBLIC_DEV_LOOP_NON_TERMINAL_GATES);
-  const onlyDoc = [...docFrom].filter((g) => !codeFrom.has(g));
-  const onlyCode = [...codeFrom].filter((g) => !docFrom.has(g));
-  if (onlyDoc.length > 0 || onlyCode.length > 0) {
-    throw new Error(
-      "public-dev-loop-contract.md Required transitions and PUBLIC_DEV_LOOP_GATE_CONTRACT non-terminal gates have drifted apart. "
-      + `Only in doc: [${onlyDoc.join(", ")}]. Only in code: [${onlyCode.join(", ")}].`,
-    );
-  }
-}
+const PUBLIC_DEV_LOOP_ROUTING_TRANSITIONS = PUBLIC_DEV_LOOP_NON_TERMINAL_GATES.flatMap((from) => DEV_LOOP_GATE_VALUES.map((to) => [from, to]));
+
+// Independent doc<->code binding (parseRequiredTransitions header caveat): a dropped or
+// renamed doc bullet throws loudly here instead of silently shrinking both tables in lockstep.
+bindDocToCodeTable("public-dev-loop-routing", PUBLIC_DEV_LOOP_ROUTING_DOC_TRANSITIONS, PUBLIC_DEV_LOOP_ROUTING_TRANSITIONS);
 
 // Clean current-head pre_approval_gate evidence (inlined from the routing unit tests' helper).
 const PUBLIC_DEV_LOOP_CLEAN_PREAPPROVAL_EVIDENCE = {
@@ -1022,8 +1012,6 @@ const PUBLIC_DEV_LOOP_GATE_TO_FIXTURE = new Map([
   [DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({}), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
   [DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_ON_PR, target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 } })],
 ]);
-
-const PUBLIC_DEV_LOOP_ROUTING_TRANSITIONS = PUBLIC_DEV_LOOP_NON_TERMINAL_GATES.flatMap((from) => DEV_LOOP_GATE_VALUES.map((to) => [from, to]));
 
 const PUBLIC_DEV_LOOP_ROUTING_TRANSITION_CHECKS = new Map();
 for (const from of PUBLIC_DEV_LOOP_NON_TERMINAL_GATES) {
