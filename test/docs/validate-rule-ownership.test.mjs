@@ -136,6 +136,21 @@ test("modality conflict scan catches MUST NOT vs SHOULD NOT negative-pair downgr
   assert.equal(detectModalityConflicts(shouldNotFirst).length, 1, "SHOULD NOT-then-MUST NOT (reverse order) must be flagged identically");
 });
 
+test("modality conflict scan treats SHALL/SHALL NOT as strong forms (RFC 2119 equivalence)", () => {
+  assert.equal(detectModalityConflicts([
+    { id: "D-001", body: "The agent SHALL stop before merge." },
+    { id: "D-002", body: "The agent SHOULD stop before merge." },
+  ]).length, 1, "SHALL vs SHOULD downgrade must be flagged");
+  assert.equal(detectModalityConflicts([
+    { id: "E-001", body: "The agent SHALL NOT merge without a clean gate." },
+    { id: "E-002", body: "The agent SHOULD NOT merge without a clean gate." },
+  ]).length, 1, "SHALL NOT vs SHOULD NOT downgrade must be flagged");
+  assert.equal(detectModalityConflicts([
+    { id: "F-001", body: "The agent SHALL stop before merge." },
+    { id: "F-002", body: "The agent MUST stop before merge." },
+  ]).length, 0, "two strong positive forms are not a conflict");
+});
+
 test("validateRuleOwnership gates on a modality conflict (no longer advisory)", async () => {
   const dir = await fixture({
     "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The agent MUST stop before merge and report the gate. |",

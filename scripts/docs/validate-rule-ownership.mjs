@@ -286,10 +286,16 @@ export function detectModalityConflicts(definitions) {
         const b = entries[j];
         const aNegative = a.modalities.some((m) => m.endsWith("NOT"));
         const bNegative = b.modalities.some((m) => m.endsWith("NOT"));
-        const weaker = (a.modalities.includes("MUST") && b.modalities.some((m) => m === "SHOULD" || m === "MAY"))
-          || (b.modalities.includes("MUST") && a.modalities.some((m) => m === "SHOULD" || m === "MAY"))
-          || (a.modalities.includes("MUST NOT") && b.modalities.some((m) => m === "SHOULD NOT" || m === "MAY NOT"))
-          || (b.modalities.includes("MUST NOT") && a.modalities.some((m) => m === "SHOULD NOT" || m === "MAY NOT"));
+        // MUST and SHALL are equivalent strong forms (RFC 2119); either
+        // downgrading to SHOULD/MAY (or the negative equivalents) flags.
+        const strongPositive = (mods) => mods.some((m) => m === "MUST" || m === "SHALL");
+        const strongNegative = (mods) => mods.some((m) => m === "MUST NOT" || m === "SHALL NOT");
+        const weakPositive = (mods) => mods.some((m) => m === "SHOULD" || m === "MAY");
+        const weakNegative = (mods) => mods.some((m) => m === "SHOULD NOT" || m === "MAY NOT");
+        const weaker = (strongPositive(a.modalities) && weakPositive(b.modalities))
+          || (strongPositive(b.modalities) && weakPositive(a.modalities))
+          || (strongNegative(a.modalities) && weakNegative(b.modalities))
+          || (strongNegative(b.modalities) && weakNegative(a.modalities));
         if (aNegative !== bNegative || weaker) findings.push({ kind: "modality_conflict", a: a.def, b: b.def });
       }
     }

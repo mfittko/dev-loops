@@ -54,9 +54,7 @@ When refining an umbrella issue into executable slices:
 
 Once a real sub-issue tree exists:
 
-<!-- rule: SUBISSUE-LEAN-BODY-NO-DUPLICATE -->
-`SUBISSUE-LEAN-BODY-NO-DUPLICATE`: The parent body MUST NOT maintain an ordered checklist that duplicates the tree, and MUST NOT be updated to reflect child completion status; GitHub renders both
-from the tree automatically.
+- <!-- rule: SUBISSUE-LEAN-BODY-NO-DUPLICATE --> `SUBISSUE-LEAN-BODY-NO-DUPLICATE`: The parent body MUST NOT maintain an ordered checklist that duplicates the tree, and MUST NOT be updated to reflect child completion status; GitHub renders both from the tree automatically.
 - **Do** keep scope, framing, acceptance criteria, and non-goals in the parent body because
   those are not structurally represented by the tree.
 
@@ -138,6 +136,4 @@ issue writing, refinement, or the normal PR-based execution loop.
 The `dev-loop` skill invokes `manage-sub-issues.mjs` when epic decomposition work includes a
 real sub-issue tree step.
 
-<!-- rule: SUBISSUE-NO-ADHOC-BYPASS -->
-`SUBISSUE-NO-ADHOC-BYPASS`: Agents MUST NOT implement sub-issue management ad hoc or bypass
-`manage-sub-issues.mjs`.
+- <!-- rule: SUBISSUE-NO-ADHOC-BYPASS --> `SUBISSUE-NO-ADHOC-BYPASS`: Agents MUST NOT implement sub-issue management ad hoc or bypass `manage-sub-issues.mjs`.

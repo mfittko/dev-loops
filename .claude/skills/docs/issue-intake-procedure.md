@@ -112,8 +112,7 @@ Preflight verdicts:
 - detect an existing linked PR with the deterministic linked-PR helper:
   `node <resolved-skill-scripts>/github/detect-linked-issue-pr.mjs --repo <resolved-repo> --issue <number>`
 - treat the helper output as authoritative for linked-PR detection/selection
-<!-- rule: INTAKE-LINKED-PR-HELPER-DELEGATION -->
-`INTAKE-LINKED-PR-HELPER-DELEGATION`: Agents MUST NOT re-implement linked-event query behavior, pagination, repo filtering, or tie-break logic, and MUST NOT rely only on PR title/body containing a literal issue number.
+- <!-- rule: INTAKE-LINKED-PR-HELPER-DELEGATION --> `INTAKE-LINKED-PR-HELPER-DELEGATION`: Agents MUST NOT re-implement linked-event query behavior, pagination, repo filtering, or tie-break logic, and MUST NOT rely only on PR title/body containing a literal issue number.
 - treat an open linked PR as the active implementation for this issue
 - once an open linked PR exists, attach follow-up work to it per `FACADE-LINKED-PR-SINGLE-ARTIFACT` (owned in [Public Dev Loop Contract](public-dev-loop-contract.md)) for the `issue_intake` strategy
 - **follow-up-capture rule:** when a follow-up is discovered while working a PR/loop, note it on the originating issue (or the PR body); file a standalone issue only if the follow-up is genuinely independent of the PR **and** outlives it (a real separate bug/feature that would be lost as a note on a soon-closed issue). Prefer noting PR-scoped follow-ups on the originating artifact over spinning up standalone tracker items for work that is part of the same effort or will be resolved imminently. See [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md).
