@@ -18,10 +18,12 @@ export const REVIEWER_STATE = Object.freeze({
   BLOCKED_NEEDS_USER_DECISION: "blocked_needs_user_decision",
 });
 
-// The interpreter is a global-precedence classifier (#1200): `reviewSubmissionStatus:
-// "failed"` fail-closes into blocked_needs_user_decision from ANY otherwise-derivable
-// state, and `"submitted"` outranks every pre-posted local-metadata branch into
-// submitted_review. The table declares every such interpreter-reachable pair so
+// The interpreter checks its {!prExists, prMerged, prClosed, prDraft} pre-gates first,
+// routing those snapshots straight to waiting_for_review_request; only once a snapshot
+// passes those pre-gates does the reviewSubmissionStatus guard apply (#1200):
+// `"failed"` fail-closes into blocked_needs_user_decision ahead of every state-specific
+// branch below it, and `"submitted"` outranks every pre-posted local-metadata branch
+// into submitted_review. The table declares every such interpreter-reachable pair so
 // interpreter outputs are always reachable via declared edges (single truth).
 export const REVIEWER_TRANSITIONS = Object.freeze({
   [REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST]: [

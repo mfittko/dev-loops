@@ -232,9 +232,11 @@ test("interpretReviewerLoopState routes failures to blocked_needs_user_decision"
 // Property test (#1200 AC1): interpreter outputs are always reachable via declared
 // REVIEWER_TRANSITIONS edges. Sweep: one representative snapshot per interpreter-producible
 // state x every reviewSubmissionStatus value; every non-identity (before, after) pair the
-// interpreter produces must be a declared edge. The reviewSubmissionStatus guards are
-// global-precedence in the interpreter, so this sweep is exactly what forced the
-// blocked/submitted edges into the table; it fails on the pre-#1200 table.
+// interpreter produces must be a declared edge. The interpreter checks its
+// {!prExists, prMerged, prClosed, prDraft} pre-gates first; only past those pre-gates do the
+// reviewSubmissionStatus guards fire ahead of every state-specific branch below them, so this
+// sweep is exactly what forced the blocked/submitted edges into the table; it fails on the
+// pre-#1200 table.
 test("interpretReviewerLoopState outputs stay reachable via REVIEWER_TRANSITIONS across a reviewSubmissionStatus sweep", () => {
   // Base fixtures leave reviewSubmissionStatus at its "none" default so the sweep mutation
   // never clobbers a state-defining field; the blocked representative uses the

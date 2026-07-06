@@ -769,11 +769,13 @@ registerMachine(COPILOT_LOOP_STATE_MACHINE);
 // Doc side: docs/reviewer-loop-state-graph.md's "## Required transitions" bullets. The doc
 // bullets one abstract row for the five reviewer-pass states that all fail closed into
 // `blocked_needs_user_decision` on an unexpected local failure, expanded below, plus
-// explicit bullets (#1200) for the remaining interpreter-reachable pairs: the
-// `reviewSubmissionStatus: "failed"` guard is global-precedence and fail-closes into
-// blocked from every interpreter-producible state, and `"submitted"` outranks the
-// pre-posted local-metadata branches into `submitted_review`. That precedence is
-// deliberate, so the table gained the edges rather than the interpreter losing the guards.
+// explicit bullets (#1200) for the remaining interpreter-reachable pairs: the interpreter
+// checks its {!prExists, prMerged, prClosed, prDraft} pre-gates first (those snapshots stay
+// `waiting_for_review_request`), and only past those pre-gates does the
+// `reviewSubmissionStatus: "failed"` guard fail-close into blocked ahead of every
+// state-specific branch below it, with `"submitted"` outranking the pre-posted
+// local-metadata branches into `submitted_review`. That precedence is deliberate, so the
+// table gained the edges rather than the interpreter losing the guards.
 //
 // Code side: packages/core/src/loop/reviewer-loop-state.mjs exports REVIEWER_STATE,
 // REVIEWER_TRANSITIONS, and interpretReviewerLoopState. Checked the same two ways as
