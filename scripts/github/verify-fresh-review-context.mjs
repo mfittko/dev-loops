@@ -254,13 +254,16 @@ async function main(argv = process.argv.slice(2)) {
     try {
       prefixFileBytes = await readFile(path.resolve(process.cwd(), prefixFileArg));
     } catch (err) {
-      if (err.code !== "ENOENT") throw err;
+      // ANY read failure (ENOENT, EACCES, EPERM, ...) refuses the review in the
+      // normal fail-closed shape — an unreadable prefix file means the
+      // invariant-briefing proof cannot be established, which is an enforcement
+      // refusal, not a tool crash.
       return finish({
         ok: true,
         fresh: false,
         sentinelCreated: false,
         round: round ?? null,
-        reason: `--prefix-file "${prefixFileArg}" not found — cannot compute the invariant-briefing prefix hash (GATE-EXEC-BRIEFING-PREFIX).`,
+        reason: `--prefix-file "${prefixFileArg}" unreadable (${err.code ?? "error"}) — cannot compute the invariant-briefing prefix hash (GATE-EXEC-BRIEFING-PREFIX).`,
       }, false);
     }
     prefixHash = createHash("sha256").update(prefixFileBytes).digest("hex");

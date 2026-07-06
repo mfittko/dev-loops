@@ -81,7 +81,10 @@ async function readRoundSentinels(tmpRoot, headSha) {
       file: e.name,
       scope: e.name.slice(SENTINEL_PREFIX.length, -suffix.length),
     }))
-    .filter((m) => m.scope.length > 0); // exclude the round-only (no-scope) sentinel name shape
+    .filter((m) => m.scope.length > 0) // exclude the round-only (no-scope) sentinel name shape
+    // readdir order is filesystem-dependent; sort by scope so missing/mismatched
+    // output is deterministic across runs (this is a deterministic fan-in check).
+    .sort((a, b) => a.scope.localeCompare(b.scope));
   const results = [];
   for (const { file, scope } of matches) {
     let prefixHash = null;
