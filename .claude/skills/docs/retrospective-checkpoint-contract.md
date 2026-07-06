@@ -140,6 +140,13 @@ verifier records these as `allowedWriteOps` rather than violations so they are
 surfaced distinctly, not as breaches. Close the gap with a wrapper to remove an
 entry. None of these block anything.
 
+**Inline-interpreter check item:** the raw-call scan below mechanically catches
+`node -e`/`python3 -c`/heredoc calls as a `rawCallViolations` entry — the same
+class barred by `OPS-NO-INLINE-INTERPRETER` in
+[Copilot loop operations](copilot-loop-operations.md). This is an addition to
+what the retrospective records, not a new gate: `RETRO-ADVISORY-NEVER-GATE`
+semantics are unchanged.
+
 ### Deterministic verifier (findings-producer)
 
 `node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]` reads a

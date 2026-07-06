@@ -187,6 +187,7 @@ Preferred approach:
 <!-- /pi-only -->
 - dispatch fix findings to the `fixer` agent; do not run inline fix passes in-watcher
 - do not report completion while unresolved Copilot feedback remains
+- once a watch/probe settles, do not parse its raw output: re-read via `detect-copilot-loop-state.mjs` and `list-review-threads.mjs --unresolved-only` — inline interpreters are barred by `OPS-NO-INLINE-INTERPRETER` in [Copilot loop operations](../docs/copilot-loop-operations.md)
 
 ### Canonical async dispatch wording
 
