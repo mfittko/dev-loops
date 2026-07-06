@@ -374,6 +374,9 @@ export function buildStateAtlasHtml() {
   }
   .diagram .mermaid { text-align: center; }
   .diagram .mermaid svg { max-width: 100%; height: auto; }
+  .diagram .mermaid { cursor: zoom-in; }
+  .diagram .mermaid:fullscreen { cursor: zoom-out; background: #0b1220; display: flex; align-items: center; justify-content: center; padding: 2rem; }
+  .diagram .mermaid:fullscreen svg { max-width: 96vw; max-height: 92vh; width: auto; height: auto; }
 </style>
 </head>
 <body>
@@ -386,6 +389,12 @@ ${sections}
     </main>
     <script src="assets/mermaid.min.js"></script>
     <script>
+      document.addEventListener('click', (e) => {
+        const box = e.target.closest('.diagram .mermaid');
+        if (!box) return;
+        if (document.fullscreenElement) document.exitFullscreen();
+        else box.requestFullscreen?.();
+      });
       mermaid.initialize({
         startOnLoad: true,
         securityLevel: 'strict',
