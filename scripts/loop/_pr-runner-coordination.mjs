@@ -88,8 +88,13 @@ function resolveRepoCoordinationRoot(cwd) {
   let canonicalCwd = cwd;
   try {
     canonicalCwd = fs.realpathSync(cwd);
-  } catch {
-    // cwd may not exist yet (or realpath unavailable) — resolve against the raw path
+  } catch (err) {
+    // ponytail: realpathSync on an existing checkout dir virtually never fails;
+    // warn (don't throw) so the rare transient failure — which can desync the
+    // coordination path across worktrees — is diagnosable instead of silent.
+    console.warn(
+      `[runner-coordination] realpathSync(${cwd}) failed; using raw cwd, coordination path may diverge across worktrees: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
   if (coordinationRootCache.has(canonicalCwd)) return coordinationRootCache.get(canonicalCwd);
   let root = canonicalCwd;
