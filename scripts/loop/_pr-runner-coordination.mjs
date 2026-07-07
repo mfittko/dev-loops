@@ -11,7 +11,7 @@ import {
 } from "./_steering-state-file.mjs";
 export const RUNNER_COORDINATION_SCHEMA_VERSION = 2;
 export const RUNNER_COORDINATION_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
-export const RUNNER_COORDINATION_HISTORY_LIMIT = 50; // ponytail: cap audit trail; heartbeats append per-round, keep the most recent 50 events
+export const RUNNER_COORDINATION_HISTORY_LIMIT = 50; // cap audit trail; heartbeats append per-round, keep the most recent 50 events
 export const RUNNER_OWNERSHIP_ERROR = Object.freeze({
   ACTIVE_RUN_EXISTS: "active_run_exists",
   OWNERSHIP_LOST: "ownership_lost",
