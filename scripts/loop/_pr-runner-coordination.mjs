@@ -89,7 +89,7 @@ function resolveRepoCoordinationRoot(cwd) {
   try {
     canonicalCwd = fs.realpathSync(cwd);
   } catch (err) {
-    // ponytail: realpathSync on an existing checkout dir virtually never fails;
+    // realpathSync on an existing checkout dir virtually never fails;
     // warn (don't throw) so the rare transient failure — which can desync the
     // coordination path across worktrees — is diagnosable instead of silent.
     console.warn(
