@@ -1475,6 +1475,67 @@ test("loadRefinementArtifact: plan-file marker + bare linked-refinement-doc ment
   assert.equal(result.finding, "missing_refinement_artifact");
 });
 
+test("loadRefinementArtifact: plan-file promotion body carrying a cross-repo closing reference stays missing (fail closed)", async () => {
+  // Plan-file promotion is issue-less by design (buildPromotionPrBody neutralizes
+  // closing keywords); a body that pairs the marker + real AC/DoD content with a
+  // GitHub closing reference — including the cross-repo `owner/repo#N` form
+  // validatePrBodySpec also accepts — must still fail closed instead of being
+  // treated as a valid plan-file promotion that could auto-close someone else's issue.
+  const body =
+    "Spec-of-record: the committed plan doc `docs/phases/phase-9.md` is the authority for this work.\n\n" +
+    "Closes owner/repo#123\n\n" +
+    "## Acceptance criteria\n- [ ] a\n\n## Definition of done\n- [ ] b\n";
+  const result = await loadRefinementArtifact({
+    repo: "owner/repo",
+    prData: { number: 14, closingIssuesReferences: [], body },
+    prDraft: true,
+    prClosed: false,
+    prMerged: false,
+  });
+  assert.equal(result.status, "missing");
+  assert.equal(result.specSource, "plan_file");
+  assert.equal(result.finding, "missing_refinement_artifact");
+  assert.match(result.reason, /closing reference/i);
+  assert.match(result.reason, /#123/);
+});
+
+test("loadRefinementArtifact: issue-less pr_body branch rejects a cross-repo closing reference too (regression, validatePrBodySpec unexpected_closing_issue_reference)", async () => {
+  // No plan-file marker, so this exercises the pr_body branch's validatePrBodySpec({
+  // issueLess: true }) call directly with the cross-repo owner/repo#N form the core
+  // validator explicitly supports (packages/core/test/pr-body-spec-lightweight.test.mjs).
+  const body = `Closes owner/repo#456
+
+## Objective
+Ship the lightweight path because reasons.
+
+## In scope
+- the lightweight modifier
+
+## Explicit non-goals
+- rewriting the phase-doc path
+
+## Acceptance criteria
+- [ ] The PR body is the spec-of-record
+
+## Definition of done
+- [ ] npm run verify is green
+
+## Open questions / risks
+- none
+`;
+  const result = await loadRefinementArtifact({
+    repo: "owner/repo",
+    prData: { number: 15, closingIssuesReferences: [], body },
+    prDraft: true,
+    prClosed: false,
+    prMerged: false,
+  });
+  assert.equal(result.status, "missing");
+  assert.equal(result.specSource, "pr_body");
+  assert.equal(result.finding, "missing_refinement_artifact");
+  assert.match(result.reason, /unexpected_closing_issue_reference/);
+});
+
 test("detect-pr-gate-coordination-state: issue-less draft PR whose body fails spec validation stays BLOCKED (fail closed)", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
   try {

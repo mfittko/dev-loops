@@ -323,7 +323,25 @@ async function resolveNoIssueRefinementArtifact(body) {
     // right OR for a linked ISSUE body but not for a plan-file promotion PR body —
     // a plan-file claim must be backed by actual AC/DoD checklist items, not just
     // another doc mention next to the marker.
-    const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+    const { detectIssueRefinementArtifact, validatePrBodySpec } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+    // Plan-file promotion is issue-less by design (`buildPromotionPrBody`
+    // neutralizes closing keywords): any closing reference the body carries —
+    // including the cross-repo `owner/repo#N` form validatePrBodySpec also
+    // accepts — means the body would auto-close an issue it doesn't actually
+    // back. Reuse validatePrBodySpec's closing-reference extraction
+    // (issueLess mode's `closesIssues`) instead of a second regex.
+    const closesIssues = validatePrBodySpec({ body, issueLess: true }).closesIssues;
+    if (closesIssues.length > 0) {
+      return {
+        status: "missing",
+        linkedIssue: null,
+        linkedIssues: [],
+        specSource: "plan_file",
+        planDocPath,
+        reason: `PR body names the promoted plan doc \`${planDocPath}\` as the spec-of-record but also carries a GitHub closing reference (${closesIssues.map((n) => `#${n}`).join(", ")}); plan-file promotion is issue-less by design and must not carry a reference that would auto-close an issue it doesn't back.`,
+        finding: "missing_refinement_artifact",
+      };
+    }
     const artifact = detectIssueRefinementArtifact({ body });
     if (artifact.acItems.length > 0 || artifact.dodItems.length > 0) {
       return {
