@@ -21,7 +21,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const CORE_DIR = path.join(REPO_ROOT, "packages/core");
 
-test("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async () => {
+// Network failures against the npm registry (offline CI, flaky proxy, DNS
+// hiccup) are an environment condition, not a regression in this package —
+// skip rather than fail so the suite stays green on a bad connection while
+// still catching genuine install breakage (bad tarball, missing dep, etc).
+const NETWORK_FAILURE_RE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ENETUNREACH|EHOSTUNREACH|socket hang up|network|ERR_SOCKET|registry\.npmjs\.org.*(unreachable|timeout)/i;
+
+test("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async (t) => {
   const tmpRoot = mkdtempSync(path.join(tmpdir(), "dev-loops-pack-"));
   try {
     // 1. Pack both packages into the temp dir. `npm pack` prints the packed
@@ -40,7 +46,16 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
     const installDir = path.join(tmpRoot, "install");
     mkdirSync(installDir);
     writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ name: "packaged-install-smoke", version: "1.0.0", private: true }, null, 2));
-    execFileSync("npm", ["install", "--silent", "--no-audit", "--no-fund", rootTarball, coreTarball], { cwd: installDir });
+    try {
+      execFileSync("npm", ["install", "--silent", "--no-audit", "--no-fund", "--prefer-offline", rootTarball, coreTarball], { cwd: installDir });
+    } catch (err) {
+      const detail = `${err.stderr?.toString() ?? ""}${err.message ?? ""}`;
+      if (NETWORK_FAILURE_RE.test(detail)) {
+        t.skip(`npm registry unreachable — skipping packaged-install smoke: ${detail.split("\n")[0]}`);
+        return;
+      }
+      throw err;
+    }
 
     // 3. Import every @dev-loops/core export-map entry from a probe script run
     // with cwd inside the install dir, so bare-specifier resolution happens
