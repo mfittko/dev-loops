@@ -525,8 +525,9 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
     "linked refinement doc",
   ];
   const reason =
-    `Issue has no refinement artifact (missing: ${missing.join(", ")}). ` +
-    "Run `/loop-grill <issue> --auto` (or the refiner) to add ACs/DoD before it enters the pickup queue.";
+    `Issue has no refinement artifact (none of: ${missing.join(", ")}). ` +
+    "Add at least ONE of them — an Acceptance criteria section, a Definition of done section, or a linked refinement doc " +
+    "(e.g. run `/loop-grill <issue> --auto`, or the refiner) — before it enters the pickup queue.";
   return { action: auto ? "divert" : "block", reason, missing };
 }
 
