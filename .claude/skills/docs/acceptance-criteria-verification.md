@@ -5,7 +5,7 @@ Canonical owner for the acceptance-criteria verification procedure run during th
 ## Procedure
 
 <!-- rule: ACCEPT-CRITERIA-VERIFY-AND-REFLECT -->
-`ACCEPT-CRITERIA-VERIFY-AND-REFLECT`: Before posting the `pre_approval_gate` comment, the agent MUST verify every acceptance criteria checklist item in the issue linked to this PR, and MUST reflect the verified items back into both the linked issue body and the PR body (exception: when the linked issue body is not the spec-of-record — under a lightweight `specSource: pr_body` session (tracker-backed or issue-less; the PR body is the spec) or a plan-file promotion `specSource: plan_file` session (the committed plan doc the PR body points to is the spec) — the step 5 issue-body mirroring is skipped; see the fork below):
+`ACCEPT-CRITERIA-VERIFY-AND-REFLECT`: Before posting the `pre_approval_gate` comment, the agent MUST verify every acceptance criteria checklist item in the issue linked to this PR, and MUST reflect the verified items back into both the linked issue body and the PR body (exception: when the linked issue body is not the spec-of-record — under a lightweight session (tracker-backed or issue-less; the PR body is the spec) or a plan-file promotion session (the committed plan doc the PR body points to is the spec) — the step 5 issue-body mirroring is skipped; see the fork below):
 
 > **Non-tracker spec-source fork:** when the linked issue body is not the spec-of-record, the fork covers three arms — lightweight (the PR body itself is the spec; splits on whether a backing issue exists) and plan-file promotion (a distinct local-planning origin whose committed plan doc, pointed to from the PR body, is the spec). Handle each arm as below.
 >
