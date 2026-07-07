@@ -522,7 +522,7 @@ export function renderBriefingPrefix({
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   lines.push(
-    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope <your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
+    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gate.replace(/_/g, "-")}-<your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
   lines.push("## PR body");

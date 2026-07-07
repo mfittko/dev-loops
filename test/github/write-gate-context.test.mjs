@@ -1251,6 +1251,9 @@ test("renderBriefingPrefix: under-cap — inline mode, fixed section order, all 
   assert.ok(text.includes("Changed files (1):"));
   assert.ok(text.includes("- x.mjs"));
   assert.ok(text.includes("verify-fresh-review-context.mjs"));
+  // Reviewer scope is gate-prefixed (issue #1246) so each reviewer's sentinel
+  // self-identifies its gate; renderInput() defaults to gate: "draft_gate".
+  assert.ok(text.includes("--scope draft-gate-<your-angle>"));
 });
 
 test("renderBriefingPrefix: deterministic — two renders of identical input produce byte-identical text", () => {

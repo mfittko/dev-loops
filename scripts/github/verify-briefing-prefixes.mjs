@@ -31,11 +31,14 @@ Exit codes:
      hash is treated as a mismatch, never grandfathered
   2  Usage or internal error, or invalid --jq filter
 
-Caveat: rounds are keyed by head SHA only. Two different gates reviewed at the
-SAME head share one sentinel namespace, so run this check per gate pass (the head
-advances between gate passes per GATE-EXEC-REGATE-MANDATORY; never manually clear sentinels); legitimately different per-gate prefixes at an identical
-head would otherwise flag as a mismatch (conservative fail-closed, never
-fail-open).`.trim();
+Gate scoping: sentinels are partitioned by gate (recovered from the reviewer
+scope's <gate>- prefix, e.g. draft-gate-<angle> / pre-approval-gate-<angle>) and
+each gate's reviewers are verified independently. Two gates reviewed at the SAME
+head (e.g. a small change clearing draft_gate and pre_approval_gate without an
+intervening push) therefore each verify against their own prefix record instead
+of colliding into a spurious mismatch. Within one gate the byte-identity check is
+unchanged. Bare-angle scopes with no recognized gate prefix form one "ungated"
+group (legacy behavior). Never manually clear sentinels.`.trim();
 
 // Full 40-char SHA required: sentinel filenames embed the full `git rev-parse
 // HEAD` value, so a short prefix would glob zero sentinels and read as a
@@ -106,16 +109,32 @@ async function readRoundSentinels(tmpRoot, headSha) {
   return results;
 }
 
-/**
- * Pure comparison: given the round's sentinels, decide verified/reason/missing/mismatched.
- * Exported for direct unit testing without touching the filesystem.
- * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
- * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}> }}
- */
-export function evaluateBriefingPrefixes(sentinels) {
-  if (sentinels.length === 0) {
-    return { verified: true, reason: "no sentinels found for this round" };
+// Gate prefixes a reviewer scope may carry (hyphenated form of the gate names,
+// since `--scope` forbids underscores). write-gate-context.mjs renders the
+// reviewer instruction with a `<gate>-<angle>` scope so each reviewer's sentinel
+// self-identifies its gate. Ordered longest-first for unambiguous prefix match.
+const GATE_SCOPE_PREFIXES = ["pre-approval-gate", "draft-gate"];
+
+// Recover the gate a sentinel belongs to from its scope. A scope that carries no
+// recognized gate prefix is "ungated" (legacy bare-angle scope) and all such
+// sentinels share one implicit group — preserving pre-gate-scoping behavior.
+function gateOfScope(scope) {
+  for (const gate of GATE_SCOPE_PREFIXES) {
+    if (scope === gate || scope.startsWith(`${gate}-`)) return gate;
   }
+  return "";
+}
+
+/**
+ * Evaluate a SINGLE gate's (or the ungated legacy) reviewer sentinels for the
+ * round: every sentinel must record a hash (no grandfathering) and all recorded
+ * hashes must be identical (byte-identical seeded briefings).
+ * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
+ * @param {string} [gateLabel] — prefixed onto the reason when > 1 gate shares the head
+ * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}>, prefixHash?: string }}
+ */
+function evaluateGroup(sentinels, gateLabel = "") {
+  const where = gateLabel ? ` (gate "${gateLabel}")` : "";
   // A hashless sentinel fails closed even when it is the ONLY sentinel (a
   // one-angle Phase-5 retry round is a real case): "never grandfathered" means
   // the invariant-prefix proof must exist for every reviewer, not just when a
@@ -125,7 +144,7 @@ export function evaluateBriefingPrefixes(sentinels) {
   if (missing.length > 0) {
     return {
       verified: false,
-      reason: `${missing.length} of ${sentinels.length} reviewer sentinel(s) for this round have no recorded prefix hash — the invariant-briefing-prefix proof (GATE-EXEC-BRIEFING-PREFIX) was never established for them. Missing hashes are treated as a mismatch, not grandfathered in.`,
+      reason: `${missing.length} of ${sentinels.length} reviewer sentinel(s) for this round${where} have no recorded prefix hash — the invariant-briefing-prefix proof (GATE-EXEC-BRIEFING-PREFIX) was never established for them. Missing hashes are treated as a mismatch, not grandfathered in.`,
       missing,
     };
   }
@@ -138,11 +157,55 @@ export function evaluateBriefingPrefixes(sentinels) {
     const mismatched = sentinels.map(({ scope, prefixHash }) => ({ scope, prefixHash }));
     return {
       verified: false,
-      reason: `Reviewer sentinels for this round recorded ${distinct.size} DIFFERENT invariant-briefing prefix hashes — the seeded briefings were not byte-identical (GATE-EXEC-BRIEFING-PREFIX).`,
+      reason: `Reviewer sentinels for this round${where} recorded ${distinct.size} DIFFERENT invariant-briefing prefix hashes — the seeded briefings were not byte-identical (GATE-EXEC-BRIEFING-PREFIX).`,
       mismatched,
     };
   }
   return { verified: true, prefixHash: sentinels[0].prefixHash };
+}
+
+/**
+ * Pure comparison: given the round's sentinels, decide verified/reason/missing/mismatched.
+ * Exported for direct unit testing without touching the filesystem.
+ *
+ * Sentinels are first PARTITIONED BY GATE (recovered from the scope's `<gate>-`
+ * prefix), then each gate's reviewers are evaluated independently. This is the
+ * fix for the false fail-closed when two gates run at one head: a small change
+ * that clears draft_gate and pre_approval_gate without an intervening push writes
+ * both gates' sentinels under the SAME head SHA, and each gate legitimately has
+ * its own (different) invariant-briefing hash. Comparing across gates flagged
+ * that as a mismatch; comparing WITHIN each gate does not. The real invariant —
+ * reviewers of ONE gate pass must share a byte-identical briefing — is preserved
+ * per group. Ungated (legacy bare-angle) scopes form one group with the original
+ * behavior.
+ *
+ * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
+ * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}>, prefixHash?: string, gates?: Array<{gate:string, prefixHash:string}> }}
+ */
+export function evaluateBriefingPrefixes(sentinels) {
+  if (sentinels.length === 0) {
+    return { verified: true, reason: "no sentinels found for this round" };
+  }
+  const groups = new Map();
+  for (const s of sentinels) {
+    const gate = gateOfScope(s.scope);
+    if (!groups.has(gate)) groups.set(gate, []);
+    groups.get(gate).push(s);
+  }
+  // Single group (one gate, or all-ungated legacy) keeps the exact original
+  // shape, including the top-level `prefixHash` on success.
+  if (groups.size === 1) {
+    return evaluateGroup([...groups.values()][0]);
+  }
+  // Multiple gates share this head: verified only when EVERY gate's own
+  // reviewers are internally consistent. Fail closed on the first bad gate.
+  const gates = [];
+  for (const [gate, group] of groups) {
+    const result = evaluateGroup(group, gate || "ungated");
+    if (!result.verified) return { ...result, gate: gate || "ungated" };
+    gates.push({ gate: gate || "ungated", prefixHash: result.prefixHash });
+  }
+  return { verified: true, gates };
 }
 
 export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(process.cwd(), "tmp") } = {}) {
