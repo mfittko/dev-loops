@@ -9,6 +9,13 @@
  * (exit 1). Behavioral contradictions belong to the L2/L3 harness; semantic
  * contradictions belong to the gate contradiction lens.
  *
+ * Also gates corpus→manifest completeness: every defined rule must be listed
+ * in required-rules.json's requiredRules or its optOutRules (unregistered_rule),
+ * the optOutRules manifest itself must be internally consistent (no ID in both
+ * lists — conflicting_manifest_entry; no opt-out for an undefined rule —
+ * dead_opt_out_entry), and the duplicate-sentence allowlist must not contain
+ * stale entries (dead_allowlist_entry).
+ *
  * Subsumes former scripts/docs/validate-no-duplicate-rules.mjs (retired):
  * the duplicate-imperative-sentence scan below ports its unique check,
  * widened from skills/ only to every SOURCE_ROOTS directory.
@@ -41,15 +48,6 @@ const CANONICAL_MIRROR_DOCS = new Set(["skills/docs/copilot-loop-operations.md",
 // command trigger-phrasing that STYLE/(c) guardrails require to stay verbatim
 // per file). Cross-file duplication of these is not a corpus authoring bug.
 const KNOWN_INTENTIONAL_DUPLICATE_SENTENCES = new Set([
-  "- **PERSISTENCE RULE: Do not exit your session until the PR is merged or you hit a hard stop that requires conductor authorization.**",
-  "If any required bundled contract doc is missing from the installed skill layout, treat that as a packaging/installer bug.",
-  "Each reviewer starts in fresh context with the briefing artifact, inspects the diff, returns findings via output artifacts only, and never edits files.",
-  "3. **Consolidation:** reconcile all review outputs into a consolidated fix plan with classified findings (must-fix, worth-fixing-now, defer).",
-  "5. **Fix cycle:** apply only accepted must-fix changes on the same branch.",
-  "- remains a stop/fix state, never a wait loop",
-  "Do not create a fresh PR directly in ready-for-review state unless the user explicitly overrides that policy for the current PR scope.",
-  "Each reviewer starts in fresh context (subagent({context:\"fresh\"}) mandatory), inspects the diff, returns findings via output artifacts only, and never edits files. **Before starting:** run to self-verify fresh context; refuse to proceed on contamination.",
-  "If includes , then worth-fixing-now findings must be fixed before the gate can reach .",
   // agents/dev-loop.agent.md mirrors this CLI-fallback safety line from skills/dev-loop/SKILL.md;
   // each doc's surrounding candidate-resolution list differs per install layout.
   "NEVER fall back to or any unbounded filesystem walk to locate the CLI — it stalls and trips the needs-attention timeout.",
@@ -67,7 +65,12 @@ const USAGE = `Usage: validate-rule-ownership.mjs [--help]
 
 Validate rule markers, required IDs, rule references, term definitions,
 near-duplicate/modality-conflict findings, and duplicated imperative
-sentences. All findings are gating (exit 1).
+sentences. Also validates corpus→manifest completeness (every defined rule
+must be in requiredRules or explicitly opted out via optOutRules in
+required-rules.json), optOutRules manifest hygiene (no rule listed as both
+required and opted-out; no opt-out for an undefined rule), and that the
+duplicate-sentence allowlist has no stale (dead) entries. All findings are
+gating (exit 1).
 
 Options:
   --help, -h   Show this help`.trim();
@@ -312,7 +315,32 @@ async function readRequiredRules(repoRoot) {
   } catch (error) {
     throw new Error(`Malformed JSON in ${rulesPath}`, { cause: error });
   }
-  return Array.isArray(parsed.requiredRules) ? parsed.requiredRules : [];
+  return {
+    requiredRules: Array.isArray(parsed.requiredRules) ? parsed.requiredRules : [],
+    // Explicit opt-out for a defined rule that is intentionally NOT deletion-protected. Empty by default.
+    optOutRules: Array.isArray(parsed.optOutRules) ? parsed.optOutRules : [],
+  };
+}
+
+// A KNOWN_INTENTIONAL_DUPLICATE_SENTENCES entry is "dead" when it no longer suppresses a real
+// cross-file duplicate: the sentence would not be flagged even without the allowlist (absent,
+// single-file, or only across canonical-mirror docs). A dead entry silently pre-authorizes
+// reintroducing that exact duplicate, so it gates.
+export function detectDeadAllowlistEntries(fileContents, allowlist = KNOWN_INTENTIONAL_DUPLICATE_SENTENCES) {
+  const filesBySentence = new Map();
+  for (const { file, content } of fileContents) {
+    for (const { text } of extractImperativeSentences(content)) {
+      if (!filesBySentence.has(text)) filesBySentence.set(text, new Set());
+      filesBySentence.get(text).add(file);
+    }
+  }
+  const dead = [];
+  for (const text of allowlist) {
+    const files = filesBySentence.get(text);
+    const wouldFlag = files && files.size > 1 && ![...files].every((f) => CANONICAL_MIRROR_DOCS.has(f));
+    if (!wouldFlag) dead.push(text);
+  }
+  return dead;
 }
 
 export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
@@ -343,9 +371,22 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
     if (defs.length !== 1) errors.push({ kind: "duplicate_rule_definition", id, locations: defs.map(({ file, line }) => `${file}:${line}`) });
   }
 
-  const requiredRules = await readRequiredRules(repoRoot);
+  const { requiredRules, optOutRules } = await readRequiredRules(repoRoot);
+  const requiredSet = new Set(requiredRules);
+  const optOutSet = new Set(optOutRules);
   for (const id of requiredRules) {
     if (!byId.has(id)) errors.push({ kind: "required_rule_missing", id });
+  }
+  // corpus→manifest completeness: every defined rule must be registered in the manifest or explicitly opted out.
+  for (const [id, defs] of byId) {
+    if (!requiredSet.has(id) && !optOutSet.has(id)) {
+      errors.push({ kind: "unregistered_rule", id, location: defs.map(({ file, line }) => `${file}:${line}`).join(", ") });
+    }
+  }
+  // optOutRules manifest hygiene, in file order for deterministic error ordering.
+  for (const id of optOutRules) {
+    if (requiredSet.has(id)) errors.push({ kind: "conflicting_manifest_entry", id });
+    if (!byId.has(id)) errors.push({ kind: "dead_opt_out_entry", id });
   }
 
   for (const ref of references) {
@@ -373,6 +414,9 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
   }
   for (const finding of detectDuplicateImperativeSentences(fileContents)) {
     errors.push({ kind: finding.kind, id: finding.text, location: finding.occurrences.map((o) => `${o.file}:${o.line}`).join(", ") });
+  }
+  for (const text of detectDeadAllowlistEntries(fileContents)) {
+    errors.push({ kind: "dead_allowlist_entry", id: text });
   }
 
   return { ok: errors.length === 0, filesScanned: files.length, rules: definitions.length, references: references.length, terms: termDefs.length, errors };

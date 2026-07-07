@@ -38,13 +38,14 @@ doing manually; it is not a general conflict-resolution engine.
 
 ## Required before merge
 
+<!-- rule: MERGE-PRECOND-REQUIRED -->
 1. ✅ Conflict-free with base (`mergeable: MERGEABLE`; not `CONFLICTING`/`DIRTY`/`BEHIND`/`UNKNOWN`)
 2. ✅ CI green on current head (or crediblyGreen via `--local-validation-head-sha`)
 3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](../../docs/gate-review-comment-contract.md))
 4. ✅ Pre-approval gate satisfied — clean `pre_approval_gate` verdict on the current head, same rule
 5. ✅ All review threads resolved
 6. ✅ Explicit merge authorization from operator
-7. ✅ PR body contains `Closes #N` or `Fixes #N`
+7. ✅ Issue-backed work: PR body contains `Closes #N` or `Fixes #N`; for an issue-less lightweight PR the closing reference is instead absent by design (owned by `ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS` in [Artifact Authority Contract](artifact-authority-contract.md))
 8. ✅ PR **title** free of merge-blocking markers — `WIP`, `[WIP]`, `DRAFT`, `DO NOT MERGE`, `🚧` (case-insensitive)
 
 > Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
