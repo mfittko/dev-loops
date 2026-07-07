@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
@@ -74,24 +75,37 @@ const coordinationRootCache = new Map();
  * that a worktree runner and a repo-root detector both anchor to — eliminating the
  * split-copy false-stale stall where each read a different `.pi/runner-coordination`
  * file. Falls back to `cwd` when git is unavailable or the dir is not a checkout
- * (preserves legacy behavior for non-git temp dirs). Cached per cwd for the process.
+ * (preserves legacy behavior for non-git temp dirs).
+ *
+ * `cwd` is realpath'd once at entry: git returns a relative `--git-common-dir` from
+ * a main checkout but an already-realpath'd absolute one from a linked worktree, so
+ * resolving against a symlinked cwd (e.g. macOS /tmp -> /private/tmp) would make the
+ * two sides compute different roots for the same physical repo. Canonicalizing first
+ * makes both sides converge, and doubles as the cache key so symlink-variant cwd
+ * spellings share one cache entry. Cached per canonical cwd for the process.
  */
 function resolveRepoCoordinationRoot(cwd) {
-  if (coordinationRootCache.has(cwd)) return coordinationRootCache.get(cwd);
-  let root = cwd;
+  let canonicalCwd = cwd;
+  try {
+    canonicalCwd = fs.realpathSync(cwd);
+  } catch {
+    // cwd may not exist yet (or realpath unavailable) — resolve against the raw path
+  }
+  if (coordinationRootCache.has(canonicalCwd)) return coordinationRootCache.get(canonicalCwd);
+  let root = canonicalCwd;
   try {
     const commonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
-      cwd,
+      cwd: canonicalCwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
     if (commonDir) {
-      root = path.dirname(path.resolve(cwd, commonDir));
+      root = path.dirname(path.resolve(canonicalCwd, commonDir));
     }
   } catch {
-    // not a git checkout / git unavailable — anchor at cwd (legacy behavior)
+    // not a git checkout / git unavailable — anchor at canonicalCwd (legacy behavior)
   }
-  coordinationRootCache.set(cwd, root);
+  coordinationRootCache.set(canonicalCwd, root);
   return root;
 }
 export function defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd = process.cwd()) {

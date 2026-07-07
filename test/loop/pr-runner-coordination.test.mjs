@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -20,12 +21,15 @@ import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordinati
 
 // Builds a throwaway git repo with a linked worktree so cross-CWD coordination
 // path resolution (git-common-dir anchoring) can be exercised for real.
+//
+// repoRoot/wtPath are deliberately left un-realpath'd (raw mkdtemp() output,
+// e.g. macOS's symlinked /var/... rather than /private/var/...): git returns a
+// relative --git-common-dir from a main checkout but an already-realpath'd
+// absolute one from a linked worktree, so the un-normalized paths are what
+// exercise resolveRepoCoordinationRoot's own canonicalization instead of
+// masking a divergence the test helper resolved away.
 async function makeRepoWithWorktree() {
-  // realpath both dirs: macOS mkdtemp() returns /var/... which is a symlink to
-  // /private/var/...; git resolves symlinks internally, so leaving these
-  // unresolved makes the worktree and repo-root paths diverge for reasons
-  // unrelated to the coordination-root fix under test.
-  const repoRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-git-")));
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-git-"));
   const git = (args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" });
   git(["init", "-q"]);
   git(["config", "user.email", "test@example.com"]);
@@ -33,7 +37,7 @@ async function makeRepoWithWorktree() {
   await writeFile(path.join(repoRoot, "README.md"), "init\n", "utf8");
   git(["add", "README.md"]);
   git(["commit", "-q", "-m", "init"]);
-  const wtPath = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-wt-")));
+  const wtPath = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-wt-"));
   git(["worktree", "add", "-q", wtPath, "-b", "issue-1245-wt"]);
   return { repoRoot, wtPath };
 }
@@ -422,10 +426,14 @@ test("cross-CWD claim visibility: worktree and repo root resolve the same coordi
   const { repoRoot, wtPath } = await makeRepoWithWorktree();
 
   try {
-    assert.equal(
-      defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, wtPath),
-      defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, repoRoot),
-    );
+    const pathFromWorktree = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, wtPath);
+    const pathFromRoot = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, repoRoot);
+    assert.equal(pathFromWorktree, pathFromRoot);
+    // repoRoot/wtPath are raw (potentially symlinked) mkdtemp paths; both resolved
+    // coordination paths must land under the *realpath'd* repo root, proving
+    // resolveRepoCoordinationRoot canonicalizes cwd instead of relying on the
+    // caller (or the test helper) to have already done so.
+    assert.ok(pathFromRoot.startsWith(realpathSync(repoRoot)));
 
     const claimedFromWorktree = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-wt", cwd: wtPath });
     assert.equal(claimedFromWorktree.ok, true);
