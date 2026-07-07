@@ -26,6 +26,10 @@ For **all new ideas** that are not already anchored to an existing issue (includ
 - after approval, run a second async mutation pass (dispatched via the procedure) instead of mutating directly from inherited context
 - verify post-mutation artifact state and record what actually changed
 
+**Quick-capture exemption:** board quick-capture enqueue (freeform text turned directly
+into a minimal issue and added to the board, confirmed and grilled inline) MAY defer the
+proposal artifact to later refinement instead of blocking on it up front.
+
 Deterministic intake + mutation-gate state machine:
 
 ```text

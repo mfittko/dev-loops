@@ -17,7 +17,7 @@ Canonical owner for validation requirements across all workflow families.
 ## Coverage requirements
 
 <!-- rule: VALIDATE-COVERAGE-THRESHOLD -->
-`VALIDATE-COVERAGE-THRESHOLD`: Changed files MUST have ≥90% coverage for lines, statements, functions, and branches, and non-trivial logic MUST be test-first.
+`VALIDATE-COVERAGE-THRESHOLD`: Changed files SHOULD maintain ≥90% coverage for lines, statements, functions, and branches (not enforced by the shipped verify config; treat it as the working target), and non-trivial logic MUST be test-first.
 
 ## Cross-references
 

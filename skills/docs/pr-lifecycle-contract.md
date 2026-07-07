@@ -80,7 +80,7 @@ This gate uses review angles resolved from config (`resolveGateAngles(config, "p
 Boundary note:
 - `pre_approval_gate` governs only final approval readiness for the reviewed head
 - a clean verdict requires no findings at any severity in the gate's `blockCleanOnFindingSeverities` (resolved from config via `resolveGateConfig(config, "preApproval").blockCleanOnFindingSeverities`)
-- non-draft PRs do not need visible `draft_gate` evidence to enter the post-draft review / `pre_approval_gate` lifecycle; only the draft -> ready transition depends on `draft_gate`
+- non-draft PRs do not need *per-head* `draft_gate` evidence to enter the post-draft review / `pre_approval_gate` lifecycle — the one-time draft -> ready transition record still applies; a non-draft PR with no clean `draft_gate` evidence at all fails closed and must reconcile that missing evidence first (see the current-head `draft_gate` evidence bullet under [Fail-closed rules](#fail-closed-rules))
 
 ## Lifecycle states
 

@@ -104,7 +104,7 @@ Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-interna
 
 - <!-- rule: LOCAL-PHASE-ONE-AT-A-TIME --> You MUST implement **one phase at a time** and MUST NOT refine later phases in detail before the current phase is complete.
 - Use the `refiner` agent for phase-refinement work when subagents are available; escalate RFC-worthy technical decisions to the parent session / human operator.
-- <!-- rule: LOCAL-TEST-FIRST-COVERAGE --> You MUST work **test-first** for all non-trivial logic and SHOULD maintain **90% coverage** thresholds (coverage is not enforced by the shipped verify config; treat it as the working target).
+- <!-- rule: LOCAL-TEST-FIRST-COVERAGE --> You MUST work **test-first** for all non-trivial logic; coverage thresholds are owned by [VALIDATE-COVERAGE-THRESHOLD](../docs/validation-policy.md).
 - Log detailed iteration artifacts under `tmp/` using the required structure below.
 - Spec-of-record split (phase-doc-backed vs. tracker-backed vs. lightweight): see [Tracker-backed local implementation](#tracker-backed-local-implementation) above.
 - When a phase changes durable product truth in ways `PLAN.md` should express (for example command surface, accepted product decisions, resolved open questions, or scope changes), update [Project Plan](../../PLAN.md) before closing the phase.

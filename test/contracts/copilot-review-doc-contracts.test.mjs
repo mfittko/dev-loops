@@ -308,7 +308,7 @@ test("copilot-pr-followup skill caps Copilot re-review rounds via config and sna
   assert.match(step7, /resolveRefinementConfig\(config, "maxCopilotRounds"\)/i);
   assert.match(step7, /default config ships `maxCopilotRounds: 5`/i);
   assert.match(step7, /completed Copilot review-round count/i);
-  assert.match(step7, /if completed review rounds have reached the maximum/i);
+  assert.match(step7, /if completed review rounds have reached the resolved round cap/i);
   assert.match(step7, /`deferred to follow-up` note/i);
   assert.match(step7, /stop and report that the Copilot round limit was reached/i);
   assertRuleOwned("COPILOT-FOLLOWUP-ROUND-CAP", "skills/copilot-pr-followup/SKILL.md");

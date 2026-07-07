@@ -290,7 +290,7 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 
 After applying fixes and advancing the head SHA:
 
-- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean.
+- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean. The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule.
 - rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA)
 - continue the fix-then-retry cycle until the synthesis verdict is `clean`
 - on retry, only re-invoke reviewers that previously returned `findings_present`; the context-builder and consolidation always run fresh
