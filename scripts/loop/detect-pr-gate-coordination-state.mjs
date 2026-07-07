@@ -79,6 +79,8 @@ Output (stdout, JSON):
     "nextAction": "resolve_merge_conflicts",
     "reason": "..."
   }
+  (planDocPath is a string only when refinementArtifact.specSource is
+  "plan_file"; null for "linked_issue" and "pr_body")
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
@@ -317,9 +319,14 @@ async function resolveNoIssueRefinementArtifact(body) {
     // The marker sentence alone is spoofable (any body can paste it): require the
     // body to still carry real AC/DoD checklist content, the same invariant
     // `buildPromotionPrBody` actually embeds, before trusting the plan-file claim.
+    // Deliberately narrower than `artifact.hasACs`: that flag also turns true on a
+    // bare linked-refinement-doc mention (no checklist items at all), which is the
+    // right OR for a linked ISSUE body but not for a plan-file promotion PR body —
+    // a plan-file claim must be backed by actual AC/DoD checklist items, not just
+    // another doc mention next to the marker.
     const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
     const artifact = detectIssueRefinementArtifact({ body });
-    if (artifact.hasACs === true) {
+    if (artifact.acItems.length > 0 || artifact.dodItems.length > 0) {
       return {
         status: "present",
         linkedIssue: null,

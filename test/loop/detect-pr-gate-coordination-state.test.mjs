@@ -1454,6 +1454,27 @@ test("detect-pr-gate-coordination-state: spoofed plan-file marker (no AC/DoD) st
   }
 });
 
+test("loadRefinementArtifact: plan-file marker + bare linked-refinement-doc mention (no checklists) stays missing (fail closed)", async () => {
+  // A crafted body pairs the plan-file promotion marker with a plain
+  // `tmp/refinement/x.md` mention and zero AC/DoD checklist items. That mention
+  // alone flips detectIssueRefinementArtifact().hasACs to true (the OR is
+  // correct for a linked ISSUE body), but the plan-file branch here must not
+  // trust it in place of real checklist content the marker sentence promises.
+  const body =
+    "Spec-of-record: the committed plan doc `docs/phases/phase-9.md` is the authority for this work.\n\n" +
+    "See tmp/refinement/spoof.md for details.\n";
+  const result = await loadRefinementArtifact({
+    repo: "owner/repo",
+    prData: { number: 13, closingIssuesReferences: [], body },
+    prDraft: true,
+    prClosed: false,
+    prMerged: false,
+  });
+  assert.equal(result.status, "missing");
+  assert.equal(result.specSource, "plan_file");
+  assert.equal(result.finding, "missing_refinement_artifact");
+});
+
 test("detect-pr-gate-coordination-state: issue-less draft PR whose body fails spec validation stays BLOCKED (fail closed)", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
   try {
