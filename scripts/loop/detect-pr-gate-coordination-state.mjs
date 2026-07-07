@@ -70,7 +70,6 @@ Output (stdout, JSON):
     "refinementArtifact": {
       "status": "present",
       "specSource": "linked_issue",
-      "planDocPath": null,
       "reason": "...",
       "finding": null
     },
@@ -79,8 +78,8 @@ Output (stdout, JSON):
     "nextAction": "resolve_merge_conflicts",
     "reason": "..."
   }
-  (planDocPath is a string only when refinementArtifact.specSource is
-  "plan_file"; null for "linked_issue" and "pr_body")
+  (refinementArtifact.planDocPath is present only when specSource is
+  "plan_file"; the key is omitted entirely for "linked_issue" and "pr_body")
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
