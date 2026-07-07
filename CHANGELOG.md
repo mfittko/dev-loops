@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.7.2 - 2026-07-06
+
+### Fixed
+
+- **Package-escaping imports in `@dev-loops/core` broke every consumer install (#1241).** `queue-board-sync.mjs` and `queue-board-ordering.mjs` imported `move-queue-item`/`list-queue-items` via `../../../../scripts/projects/*`, paths outside the package root that the published tarball (src/**+bin/** only) cannot resolve — so `resolve-active-board-item` (loop startup) and `ready-for-review` threw `ERR_MODULE_NOT_FOUND` on install for every release from 0.3.0 to 0.7.1. The `main` implementations now live in `@dev-loops/core` (`src/projects/`, exported via the package map); the two `scripts/projects/*` files are thin CLI wrappers importing core by package name. A packaged-install smoke test (`test:pack`) npm-packs both packages, installs them in a temp dir, imports every `@dev-loops/core` export-map entry, and runs the affected CLIs with `--help` — closing the artifact-layout gap that let five releases ship broken.
+
 ## 0.7.1 - 2026-07-05
 
 ### Changed

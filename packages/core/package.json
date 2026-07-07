@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -56,6 +56,9 @@
     "./loop/timeout-policy": "./src/loop/timeout-policy.mjs",
     "./loop/tracker-pr-state": "./src/loop/tracker-pr-state.mjs",
     "./loop/ui-e2e-scoping": "./src/loop/ui-e2e-scoping.mjs",
+    "./projects/list-queue-items": "./src/projects/list-queue-items.mjs",
+    "./projects/move-queue-item": "./src/projects/move-queue-item.mjs",
+    "./projects/resolve-project": "./src/projects/resolve-project.mjs",
     "./harness": "./src/harness/index.mjs",
     "./loop/worktree-guard": "./src/loop/worktree-guard.mjs",
     "./loop/tracker-first-loop-state": "./src/loop/tracker-first-loop-state.mjs"

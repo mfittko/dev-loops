@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { runChild as coreRunChild } from "../cli/primitives.mjs";
-import { main as moveQueueItemMain } from "../../../../scripts/projects/move-queue-item.mjs";
+import { main as moveQueueItemMain } from "../projects/move-queue-item.mjs";
 
 const DEFAULT_NON_SUCCESS_COLUMN = "Backlog";
 
