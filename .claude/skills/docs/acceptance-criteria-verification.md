@@ -5,7 +5,7 @@ Canonical owner for the acceptance-criteria verification procedure run during th
 ## Procedure
 
 <!-- rule: ACCEPT-CRITERIA-VERIFY-AND-REFLECT -->
-`ACCEPT-CRITERIA-VERIFY-AND-REFLECT`: Before posting the `pre_approval_gate` comment, the agent MUST verify every acceptance criteria checklist item in the issue linked to this PR, and MUST reflect the verified items back into both the linked issue body and the PR body (exception: under the lightweight path — `specSource: pr_body` — the step 5 issue-body mirroring is skipped, since the PR body, not the issue body, is the canonical spec surface; see the lightweight fork below):
+`ACCEPT-CRITERIA-VERIFY-AND-REFLECT`: Before posting the `pre_approval_gate` comment, the agent MUST verify every acceptance criteria checklist item in the issue linked to this PR, and MUST reflect the verified items back into both the linked issue body and the PR body (exception: under an issue-less spec source — lightweight `specSource: pr_body` or plan-file promotion `specSource: plan_file` — the step 5 issue-body mirroring is skipped, since the PR body, not the issue body, is the canonical spec surface; see the lightweight fork below):
 
 > **Lightweight (PR-body-as-spec) fork:** when the session is lightweight — the resolver output / handoff envelope carries `specSource: pr_body` (`canonicalSpecSource: pr_body`) — the fork splits on whether a backing issue exists.
 >
@@ -13,7 +13,7 @@ Canonical owner for the acceptance-criteria verification procedure run during th
 >
 > **Issue-less lightweight** (`--lightweight` alone): no linked issue exists — by design, not a gap. There is nothing to resolve at step 1 and nothing to read or mirror at steps 2 and 5; skip all three. Read AC/DoD/invariants directly from the PR body and run `node scripts/loop/validate-pr-body-spec.mjs --repo <owner/name> --pr <pr-number> --no-issue`, which fails closed with a per-section `missing_*` reason for any absent invariant and with `unexpected_closing_issue_reference` if the body carries a closing reference to an issue that doesn't back it (a closing reference MUST NOT be present). On any validation failure, post the gate comment with verdict `blocked`. Step 1's "zero candidates → blocked" rule is scoped to tracker-backed sessions; for a deliberately issue-less session, zero closing references is the expected state, not a blocked condition. Continue at step 3 against the PR body, then step 4 and 6 as usual.
 >
-> **Plan-file promotion (P4):** AC/DoD live in the PR body, copied from the committed plan doc that is the spec-of-record; the same PR-body read applies.
+> **Plan-file promotion (P4):** no linked issue exists — like the issue-less lightweight arm, there is nothing to resolve at step 1 and nothing to read or mirror at steps 2 and 5; skip all three. AC/DoD live in the PR body, copied from the committed plan doc that is the spec-of-record; read them from the PR body as usual.
 >
 > The default issue-backed procedure below is unchanged.
 

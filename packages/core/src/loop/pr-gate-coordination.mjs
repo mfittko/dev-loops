@@ -243,7 +243,7 @@ function normalizeRefinementArtifactStatus(value) {
 // spec-of-record and no linked issue was ever expected.
 function formatRefinementBlockedReason(linkedIssue, status, refinementArtifact) {
   const specSource = refinementArtifact?.specSource;
-  if ((specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY || specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PLAN_FILE) && typeof refinementArtifact?.reason === "string" && refinementArtifact.reason.length > 0) {
+  if (specSource != null && specSource !== REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE && typeof refinementArtifact?.reason === "string" && refinementArtifact.reason.length > 0) {
     return `The draft gate cannot complete: ${refinementArtifact.reason} finding=${REFINEMENT_ARTIFACT_FINDING}`;
   }
   if (linkedIssue !== null && Number.isInteger(linkedIssue)) {
