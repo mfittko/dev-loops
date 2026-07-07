@@ -456,6 +456,13 @@ test("detector from repo root sees a worktree runner's refresh (no false-stale)"
   const { repoRoot, wtPath } = await makeRepoWithWorktree();
 
   try {
+    // Resolved coordination path must converge as a STRING across cwds (proves
+    // fs.realpathSync canonicalization, not just I/O round-trip transparency).
+    const fromWt = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, wtPath);
+    const fromRoot = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, repoRoot);
+    assert.equal(fromWt, fromRoot);
+    assert.ok(fromWt.startsWith(realpathSync(repoRoot)));
+
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-wt", cwd: wtPath, now: "2026-06-05T08:00:00.000Z" });
     const refreshed = await claimRunnerOwnership({
       repo: "owner/repo",
@@ -486,6 +493,13 @@ test("no false-stale split: worktree and repo root converge on one coordination 
   const { repoRoot, wtPath } = await makeRepoWithWorktree();
 
   try {
+    // Resolved coordination path must converge as a STRING across cwds (proves
+    // fs.realpathSync canonicalization, not just I/O round-trip transparency).
+    const pathFromWt = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, wtPath);
+    const pathFromRoot = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, repoRoot);
+    assert.equal(pathFromWt, pathFromRoot);
+    assert.ok(pathFromWt.startsWith(realpathSync(repoRoot)));
+
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-wt", cwd: wtPath, now: "2026-06-05T08:00:00.000Z" });
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-wt", cwd: wtPath, now: "2026-06-05T08:15:00.000Z" });
 
