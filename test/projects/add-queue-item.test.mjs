@@ -831,6 +831,46 @@ describe("add-queue-item", () => {
       assert.equal(result.refinement.refined, true);
     });
 
+    it("lands a DoD-only refined issue in Next Up untouched", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: issueBodyResponse("## Definition of done\n\n- [ ] DoD1\n") },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.status, "Next Up");
+      assert.equal(result.refinement.refined, true);
+    });
+
+    it("lands a linked-doc-only refined issue in Next Up untouched", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: issueBodyResponse("## Plan\n\nSee tmp/refinement/10-plan.md for details.\n") },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.status, "Next Up");
+      assert.equal(result.refinement.refined, true);
+    });
+
     it("skips the gate for a non-pickup target column (default Backlog)", async () => {
       const responses = [
         { payload: userPayload() },

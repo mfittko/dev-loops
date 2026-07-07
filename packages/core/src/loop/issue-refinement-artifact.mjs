@@ -516,7 +516,10 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
  * @returns {{ action: "enqueue" } | { action: "block"|"divert", reason: string, missing: string[] }}
  */
 export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = false }) {
-  if (!targetIsPickup || artifact.hasACs) {
+  // `artifact.finding === null` is the explicit "has ANY refinement artifact"
+  // signal (AC checklist OR DoD checklist OR linked doc) — clearer than reading
+  // `hasACs`, whose name understates that a DoD or linked doc also satisfies it.
+  if (!targetIsPickup || artifact.finding === null) {
     return { action: "enqueue" };
   }
   const missing = [

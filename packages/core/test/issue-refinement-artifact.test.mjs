@@ -198,6 +198,18 @@ test("decideEnqueueRefinementGate enqueues a refined issue into the pickup colum
   assert.deepEqual(decision, { action: "enqueue" });
 });
 
+test("decideEnqueueRefinementGate enqueues a DoD-only refined issue into the pickup column", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Definition of done\n\n- [ ] DoD1\n" });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
+  assert.deepEqual(decision, { action: "enqueue" });
+});
+
+test("decideEnqueueRefinementGate enqueues a linked-doc-only refined issue into the pickup column", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Plan\n\nSee tmp/refinement/10-plan.md for details.\n" });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
+  assert.deepEqual(decision, { action: "enqueue" });
+});
+
 test("decideEnqueueRefinementGate blocks an un-refined issue targeting pickup interactively", () => {
   const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
