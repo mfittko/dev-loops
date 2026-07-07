@@ -104,7 +104,8 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
         reason:
           "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned " +
           "node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, " +
-          "review-thread replies via scripts/github/reply-resolve*.mjs, board sync, or scripts/github/comment-issue.mjs. " +
+          "review-thread replies via scripts/github/reply-resolve*.mjs, board sync, issue comments via " +
+          "scripts/github/comment-issue.mjs, or issue-body edits via scripts/github/edit-issue.mjs. " +
           "Direct `gh issue create` is reserved for the main agent / operator.",
       };
     }
