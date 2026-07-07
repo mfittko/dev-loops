@@ -1,6 +1,6 @@
 # Copilot loop operations
 
-This document is the canonical operational reference for the deterministic Copilot PR follow-up state machine used by the routed `copilot_pr_followup`, `wait_watch`, `reviewer_fixer`, and `final_approval` paths behind `dev-loop`.
+Canonical owner for operating the deterministic Copilot PR follow-up state machine — the operational reference for the routed `copilot_pr_followup`, `wait_watch`, `reviewer_fixer`, and `final_approval` paths behind `dev-loop`. The machine's states and transitions are defined by [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md).
 
 Use it together with:
 - [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md)

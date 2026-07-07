@@ -5,6 +5,7 @@ import {
   readRepo,
   test,
 } from "../imported-assets-helpers.mjs";
+import { assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
 
 const SUB_ISSUE_TREE_GUIDANCE = [
   /prefer real GitHub sub-issue trees as the durable execution structure/i,
@@ -65,9 +66,17 @@ test("defaults config exposes a customizable refiner coverage-matrix prompt", as
     /\| Item \| Type \(AC\/DoD\/Non-goal\) \| Status \(Met\/Partial\/Unmet\/Unverified\) \| Evidence \| Notes \|/i,
     /Use exact wording from the source issue\(s\); when the governing input is a phase doc or other spec instead of an issue, use that source wording exactly for every explicit item/i,
     /Include every explicit acceptance criterion, definition-of-done item, and non-goal; do not skip items/i,
+    // The yaml is a shipped config mirror of the owner rule REFINER-DOD-PROPOSED-SUBSECTION;
+    // pin fidelity of the mirror here, the owner doc's owned text is checked below.
     /If no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix/i,
     /A refinement is complete only when no item has `Partial`, `Unmet`, or `Unverified` status/i,
   ], "packages/core/src/config/extension-defaults.yaml");
+  assertRuleOwned("REFINER-DOD-PROPOSED-SUBSECTION", "agents/refiner.agent.md");
+  // Owned-text check — marker survival alone must not mask dropping the Proposed-DoD clause.
+  assert.match(
+    extractOwnedText(await readRepo("agents/refiner.agent.md"), "REFINER-DOD-PROPOSED-SUBSECTION"),
+    /Proposed DoD/,
+  );
 });
 
 test("local-implementation skill uses the refiner for phase planning and delegates RFC decisions to the parent session", async () => {
@@ -248,8 +257,10 @@ test("refinement docs and prompts wire the optional audit handoff into the refin
     /explicit non-goal \/ defer|non-goal\/defer/i,
     /risk\/watchpoint/i,
     /not.+rewrite or broaden/i,
-    /Do not invent audit findings when no audit artifact was provided/i,
   ], "agents/refiner.agent.md");
+  assertRuleOwned("REFINER-NO-INVENT-AUDIT-FINDINGS", "agents/refiner.agent.md");
+  // Owned-text check — marker survival alone must not mask dropping the no-invent clause.
+  assert.match(extractOwnedText(refinerAgent, "REFINER-NO-INVENT-AUDIT-FINDINGS"), /invent audit findings/i);
 
   assertMatchesAll(defaultsConfig, [
     /Audit inputs/i,

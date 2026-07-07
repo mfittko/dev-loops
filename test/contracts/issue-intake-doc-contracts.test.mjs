@@ -8,7 +8,7 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
-import { assertRuleOwned } from "./_rule-helpers.mjs";
+import { assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
@@ -46,7 +46,16 @@ test("issue-intake surface requires github reply/resolve follow-up and gates wai
   assert.match(content, /reply\/resolve work is done for the addressed threads/);
   assert.match(content, /if that local validation is still known red, continue remediation instead of re-requesting Copilot/);
   assert.match(content, /if GitHub CI\/checks for the updated head are known red for a fixable issue, continue remediation instead of re-requesting Copilot/);
-  assert.match(content, /only once the updated head is green or credibly green, explicitly re-request Copilot review for the new head/);
+  // The green/credibly-green re-request gating is its own normative rule
+  // (owned in the same skill file); loose token instead of the full sentence.
+  assertRuleOwned("COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE", "skills/copilot-pr-followup/SKILL.md");
+  assert.match(content, /COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE/);
+  // Owned-text check — marker survival alone must not mask dropping the CI-gating clause.
+  assert.match(
+    extractOwnedText(await readRepo("skills/copilot-pr-followup/SKILL.md"), "COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE"),
+    /green or credibly green/i,
+  );
+  assert.match(content, /explicitly re-request Copilot review for the new head/i);
   assert.match(content, /wait\/watch loop if the request result is confirmed as `requested` or `already-requested`/);
   assert.match(content, /`requested`: if another Copilot pass is actually desired, immediately re-baseline/i);
   assert.match(content, /`already-requested`: apply the same detector-first rebasing and wait branching as `requested`/i);
@@ -268,10 +277,22 @@ test("issue-intake overlay wires waiting_for_initial_copilot_implementation to d
   assert.match(skillContent, /ready_for_followup.*linked PR has.*substantive/i);
   assert.match(skillContent, /timed_out.*observational first; refresh authoritative state/i);
   assert.match(skillContent, /if refreshed state is still `waiting_for_initial_copilot_implementation`, remain attached/i);
-  assert.match(skillContent, /if the refreshed state exits this seam, route based on that refreshed state instead of surfacing timeout attention/i);
+  // Owned-text check — marker survival alone must not mask dropping the seam-exit routing clause.
+  assertRuleOwned("INTAKE-TIMEOUT-ROUTE-ON-SEAM-EXIT", "skills/docs/issue-intake-procedure.md");
+  assert.match(skillContent, /INTAKE-TIMEOUT-ROUTE-ON-SEAM-EXIT/);
+  assert.match(
+    extractOwnedText(await readRepo("skills/docs/issue-intake-procedure.md"), "INTAKE-TIMEOUT-ROUTE-ON-SEAM-EXIT"),
+    /route based on that refreshed state instead of surfacing timeout attention/i,
+  );
   assert.match(skillContent, /when the refreshed state is `linked_pr_ready_for_followup`, re-enter normal PR follow-up/i);
   assert.match(skillContent, /follow-up handoff carries `conductorRouting\.handoffEnvelope\.requiresLocalIsolation=true`[\s\S]*isolated-checkout\/worktree handoff and continue/i);
-  assert.match(skillContent, /only surface timeout attention when the seam's durable watch budget is actually exhausted/i);
+  // Owned-text check — marker survival alone must not mask dropping the budget-exhausted gating clause.
+  assertRuleOwned("INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED", "skills/docs/issue-intake-procedure.md");
+  assert.match(skillContent, /INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED/);
+  assert.match(
+    extractOwnedText(await readRepo("skills/docs/issue-intake-procedure.md"), "INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED"),
+    /durable watch budget is actually exhausted/i,
+  );
   assert.match(skillContent, /quiet\/no-activity watch observations alone are non-terminal/i);
   assert.match(skillContent, /inspect\/status requests.*still-waiting state and exit normally/i);
   assert.doesNotMatch(skillContent, /timed_out.*still-waiting timeout outcome.*implementation failure/i);
@@ -294,7 +315,13 @@ test("issue-intake overlay resolves the target repo for non-issue inputs and REA
   const skillContent = await readIssueIntakeSurface();
   const readmeContent = await readRepo("README.md");
 
-  assert.match(skillContent, /Resolve the target repository slug for this work item before any GitHub search or mutation/i);
+  assertRuleOwned("INTAKE-REPO-SLUG-RESOLVE-FIRST", "skills/docs/issue-intake-procedure.md");
+  assert.match(skillContent, /INTAKE-REPO-SLUG-RESOLVE-FIRST/);
+  // Owned-text check — marker survival alone must not mask dropping the resolve-before-mutation clause.
+  assert.match(
+    extractOwnedText(await readRepo("skills/docs/issue-intake-procedure.md"), "INTAKE-REPO-SLUG-RESOLVE-FIRST"),
+    /before any GitHub search or mutation/i,
+  );
   assert.match(skillContent, /default to the current repository slug/i);
   assert.match(skillContent, /if the plan-doc reference explicitly points at another GitHub repository/i);
   assert.match(skillContent, /resolve `<resolved-repo>` for this work item using the same rule as the plan-doc path/i);

@@ -55,6 +55,10 @@ test("shared docs + dev-loop templates are bundled so generated skill links reso
   // while the source retains the Pi persistence prose.
   const followup = assets.find((a) => a.target === ".claude/skills/copilot-pr-followup/SKILL.md");
   assert.ok(followup, "copilot-pr-followup skill must be generated");
+  // This exact phrase is intentionally load-bearing, not a stray phrase pin: it is the
+  // literal payload inside the source's `<!-- pi-only -->...<!-- /pi-only -->` block, so
+  // asserting on it verifies the strip transform actually removed that block's content
+  // (not just similar wording) while the source retains the block untouched.
   assert.equal(
     followup.content.includes("the subagent exits on the wait boundary; the main session re-dispatches"),
     false,

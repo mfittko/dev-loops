@@ -127,15 +127,15 @@ Preflight verdicts:
   - `ready_for_followup`: linked PR has become substantive; resume from that PR
   - `timed_out`: observational first; refresh authoritative state
   - if refreshed state is still `waiting_for_initial_copilot_implementation`, remain attached to the same durable wait seam and continue waiting
-  - if the refreshed state exits this seam, route based on that refreshed state instead of surfacing timeout attention
+  - <!-- rule: INTAKE-TIMEOUT-ROUTE-ON-SEAM-EXIT --> `INTAKE-TIMEOUT-ROUTE-ON-SEAM-EXIT`: if the refreshed state exits this seam, route based on that refreshed state instead of surfacing timeout attention
   - when the refreshed state is `linked_pr_ready_for_followup`, re-enter normal PR follow-up per [FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION](public-dev-loop-contract.md): if the follow-up handoff carries `conductorRouting.handoffEnvelope.requiresLocalIsolation=true`, perform the expected isolated-checkout/worktree handoff and continue
-  - only surface timeout attention when the seam's durable watch budget is actually exhausted
+  - <!-- rule: INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED --> `INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED`: only surface timeout attention when the seam's durable watch budget is actually exhausted
   - for explicit inspect/status requests, report the still-waiting state and exit normally
 - carry that resolved repo slug through every later GitHub issue/PR command
 
 ### From a plan-doc path
 
-- Resolve the target repository slug for this work item before any GitHub search or mutation
+- <!-- rule: INTAKE-REPO-SLUG-RESOLVE-FIRST --> `INTAKE-REPO-SLUG-RESOLVE-FIRST`: Resolve the target repository slug for this work item before any GitHub search or mutation
 - default to the current repository slug
 - if the plan-doc reference explicitly points at another GitHub repository, resolve `<resolved-repo>` first
 - search existing issues with:
