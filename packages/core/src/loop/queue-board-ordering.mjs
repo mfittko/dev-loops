@@ -1,5 +1,5 @@
 import { loadBoardConfig, resolveProjectNumber, loadStateColumnMap, LOGICAL_COLUMN } from "./queue-board-sync.mjs";
-import { main as listQueueItemsMain } from "../../../../scripts/projects/list-queue-items.mjs";
+import { main as listQueueItemsMain } from "../projects/list-queue-items.mjs";
 
 // Canonical fail-closed Next Up tokens — the SINGLE source of truth so the reason
 // codes and the empty-queue message stay byte-identical across every layer that
