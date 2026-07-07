@@ -26,9 +26,14 @@ For **all new ideas** that are not already anchored to an existing issue (includ
 - after approval, run a second async mutation pass (dispatched via the procedure) instead of mutating directly from inherited context
 - verify post-mutation artifact state and record what actually changed
 
-**Quick-capture exemption:** board quick-capture enqueue (freeform text turned directly
-into a minimal issue and added to the board, confirmed and grilled inline) MAY defer the
-proposal artifact to later refinement instead of blocking on it up front.
+**Quick-capture exemption:** board quick-capture enqueue (the `/loop-enqueue` freeform
+path — freeform text turned directly into a minimal issue, gated on explicit human
+approval, then grilled inline and added to the board) MAY defer the up-front proposal
+artifact, the async classification pass, the async fan-out/fan-in proposal generation, and
+the second async mutation pass; its inline confirm→create→grill steps stand in for them,
+with grilling supplying classification/refinement after creation. The human-gated-mutation
+and create-new-only safeties still apply — it always creates a new issue and never
+repurposes/overwrites an existing one.
 
 Deterministic intake + mutation-gate state machine:
 

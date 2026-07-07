@@ -17,8 +17,10 @@ Add work to the dev-loop queue. Parse `$ARGUMENTS` before acting. The project is
 
 3. **Freeform path (quick-capture a new idea):** run these steps in order. This is the
    quick-capture exemption from `INTAKE-NEW-IDEA-SAFETY`
-   ([Issue intake procedure](../skills/docs/issue-intake-procedure.md)) — the proposal
-   artifact is deferred to later refinement in favor of the inline confirm/grill steps below.
+   ([Issue intake procedure](../skills/docs/issue-intake-procedure.md)) — the up-front
+   proposal artifact, async classification, and second async mutation pass are deferred in
+   favor of the inline confirm→create→grill steps below (it always creates a new issue,
+   human-gated).
    1. **Confirm first — no mutation before approval.** Print a one-line preview of the issue to be created (`About to create issue: "<concise title>"`) and STOP for approval. Do not create the issue, grill, or enqueue anything until the human approves.
    2. **Create the issue.** After approval, create a minimal GitHub issue from the text. The repo has no dedicated create-issue wrapper under `scripts/github/`; the sanctioned create path in this codebase is `gh issue create --repo <owner/repo> --assignee @me --title "<concise title>" --body "<freeform text>"` (the same path used by `skills/docs/issue-intake-procedure.md` and permitted by `skills/docs/main-agent-contract.md`). Title = a concise summary of the text; body = the verbatim freeform text.
    3. **Grill it.** Run `/loop-grill <n> --auto` (delegates to the `loop-grill` skill). The skill writes a `## Grill findings` section back into the issue body and flags any unresolved items there, so they are visible before pickup. Do not re-implement grilling.
