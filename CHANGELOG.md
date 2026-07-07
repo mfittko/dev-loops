@@ -13,22 +13,22 @@ Everything merged since v0.7.1 — the v0.7.x contract-audit epic (#1104) plus f
 ### Added
 
 - **Issue-less lightweight PR-first flow (#1210/#1215).** A PR with no backing issue can drive the lightweight path with a configurable composed Copilot round cap; such PRs auto-enqueue as board items so they are still tracked (#1218/#1226).
-- **State-machine conformance + invariant harness (#1148/#1189)** on a rule-ownership foundation (#1183). The PR lifecycle state machine is exported from `@dev-loops/core` as the single source for docs, the state atlas, and the conformance harness (#1193/#1216), and `public-dev-loop-routing` is wired into the L2/L3 conformance harness so all five machines are covered (#1233/#1239).
-- **Inline reviewer briefing prefix (#1220/#1229)** — the reviewed content is carried inline, size-capped and hash-enforced, on top of invariant-prefix-first reviewer briefings with prefix-hash enforcement (#1207/#1214).
-- **First-class loop primitives** `list-review-threads` and `wait-pr-checks` (#1198/#1223), a sanctioned `edit-issue.mjs` wrapper for AC-reflection body edits (#1253), and a refinement-artifact-at-enqueue requirement so no un-refined item enters Next Up (#1251/#1254).
-- **State-atlas fullscreen lightbox for diagrams (#1217).**
+- **State-machine conformance and invariant harness (#1148/#1189).** Built on a rule-ownership foundation (#1183). The PR lifecycle state machine is exported from `@dev-loops/core` as the single source for docs, the state atlas, and the conformance harness (#1193/#1216), and `public-dev-loop-routing` is wired into the L2/L3 conformance harness so all five machines are covered (#1233/#1239).
+- **Inline reviewer briefing prefix (#1220/#1229).** The reviewed content is carried inline, size-capped and hash-enforced, on top of invariant-prefix-first reviewer briefings with prefix-hash enforcement (#1207/#1214).
+- **First-class loop primitives (#1198/#1223).** `list-review-threads` and `wait-pr-checks`, plus a sanctioned `edit-issue.mjs` wrapper for AC-reflection body edits (#1253) and a refinement-artifact-at-enqueue requirement so no un-refined item enters Next Up (#1251/#1254).
+- **State-atlas fullscreen lightbox for diagrams (#1217).** Diagrams open in a fullscreen lightbox for readable inspection.
 
 ### Fixed
 
-- **Package-escaping `@dev-loops/core` imports broke consumer installs (#1241)** — shipped as the v0.7.2 hotfix; full detail is in the 0.7.2 section below.
-- **Converge-then-gate enforced at `pre_approval` entry (#1190/#1219)**, retiring the known gap where a gate could run before Copilot convergence.
-- **Fanout provenance fails closed on missing mandatory or foreign angles (#1196/#1225)**; briefing-prefix verification scoped by (gate, headSha) (#1249).
-- **Reviewer-loop submission-failure edges join the transition table (#1200/#1221)**; Copilot summon literals sanitized on write with a code-span-aware guard and an honest blocked status (#1213/#1222).
-- **Issue-less lightweight PR-first three-origin contracts reconciled** with a gate-coordination `specSource` branch (#1242); contradiction sweep across gate-skip scoping, coverage-modality ownership, and advisory wording (#1244).
+- **Package-escaping `@dev-loops/core` imports broke consumer installs (#1241).** Shipped as the v0.7.2 hotfix; full detail is in the 0.7.2 section below.
+- **Converge-then-gate enforced at `pre_approval` entry (#1190/#1219).** Retires the known gap where a gate could run before Copilot convergence.
+- **Fanout provenance fails closed on missing mandatory or foreign angles (#1196/#1225).** Briefing-prefix verification is also scoped by (gate, headSha) (#1249).
+- **Reviewer-loop submission-failure edges join the transition table (#1200/#1221).** Copilot summon literals are sanitized on write with a code-span-aware guard and an honest blocked status (#1213/#1222).
+- **Issue-less lightweight PR-first three-origin contracts reconciled (#1242).** Adds a gate-coordination `specSource` branch; a contradiction sweep covers gate-skip scoping, coverage-modality ownership, and advisory wording (#1244).
 - **run-claim coordination file anchored at the git common dir, not CWD (#1250).**
 - **`queue --item` accepts the full node-ID alphabet across the projects scripts (#1227/#1230).**
-- **release.yml dispatches npm-publish.yml explicitly after creating the release (#1187/#1188)**; Pages deploy bumped to deploy-pages v5 (#1211/#1212) and the gate-hub flowchart renders left-to-right (#1208/#1209).
-- **docs-validator manifest gap + corpus→manifest completeness (#1238)**; epic AC1/AC2 zero-states restored — canonical-owner openers plus remaining phrase pins (#1240).
+- **release.yml dispatches npm-publish.yml explicitly after creating the release (#1187/#1188).** Pages deploy is bumped to deploy-pages v5 (#1211/#1212) and the gate-hub flowchart renders left-to-right (#1208/#1209).
+- **docs-validator manifest gap and corpus→manifest completeness (#1238).** Epic AC1/AC2 zero-states restored — canonical-owner openers plus remaining phrase pins (#1240).
 
 ### Changed
 
