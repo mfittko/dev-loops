@@ -4,7 +4,8 @@ import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import { loadStateColumnMap, LOGICAL_COLUMN, nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
+import { decideEnqueueRefinementGate, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 
 const USAGE = `Usage: dev-loops queue add --repo <owner/name> [--project <number|id>] --item <number>
        dev-loops project add … (back-compat alias for "queue add")
@@ -24,10 +25,20 @@ Options:
                               default, honors queue.statusColumns.next_up). Sugar
                               for --column <that column>; cannot be combined with
                               a conflicting --column/--status.
+  --auto                      Headless mode. When an issue targets the pickup
+                              (next_up) column without a refinement artifact
+                              (Acceptance criteria/DoD/linked doc), divert it
+                              to the non-pickup park column instead of failing.
+                              Without --auto, the same case throws
+                              MISSING_REFINEMENT_ARTIFACT.
   --help, -h                  Show this help.
 
 Output (stdout):
-  JSON: { ok: true, item: { itemId, issueNumber, prNumber, status, alreadyPresent } }
+  JSON: { ok: true, item: { itemId, issueNumber, prNumber, status, alreadyPresent },
+          refinement? }
+  refinement (present only when the pickup-column gate ran): either
+    { refined: true } or, on a headless --auto divert,
+    { refined: false, diverted: true, requestedColumn, parkedColumn, reason, missing }.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -36,6 +47,8 @@ Exit codes:
   1 — usage or argument error
   2 — GitHub API error / invalid --jq filter
   3 — project, field, column, or issue/PR not found
+  4 — issue targets the pickup column without a refinement artifact
+      (MISSING_REFINEMENT_ARTIFACT; interactive only, --auto diverts instead)
 `.trim();
 
 function parseCliArgs(argv) {
@@ -58,6 +71,7 @@ function parseCliArgs(argv) {
       column: { type: "string" },
       status: { type: "string" },
       "next-up": { type: "boolean" },
+      auto: { type: "boolean" },
       help: { type: "boolean", short: "h" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -112,6 +126,12 @@ function parseCliArgs(argv) {
           throw Object.assign(new Error(`Unknown flag: ${token.rawName}=${token.value}`), { code: "INVALID_ARGS", usage: USAGE });
         }
         args.nextUp = true;
+        break;
+      case "auto":
+        if (token.value !== undefined) {
+          throw Object.assign(new Error(`Unknown flag: ${token.rawName}=${token.value}`), { code: "INVALID_ARGS", usage: USAGE });
+        }
+        args.auto = true;
         break;
       default: {
         if (matchJqOutputToken(token, args, (t) => requireValue(t, "--jq requires a filter"))) break;
@@ -367,6 +387,7 @@ function classifyExitCode(err) {
       err.code === "INVALID_STATUS" || err.code === "INVALID_ARGS") return 1;
   if (err.code === "PROJECT_NOT_FOUND" || err.code === "FIELD_NOT_FOUND" || err.code === "COLUMN_NOT_FOUND" ||
       err.code === "ITEM_NOT_FOUND" || err.code === "CONTENT_NOT_FOUND") return 3;
+  if (err.code === "MISSING_REFINEMENT_ARTIFACT") return 4;
   return 2;
 }
 
@@ -502,6 +523,67 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
   let issueNumber = fullResult.__typename === "Issue" ? itemNumber : null;
   let prNumber = fullResult.__typename === "PullRequest" ? itemNumber : null;
 
+  // 5b. Refinement-artifact gate: shift the draft-gate check
+  // LEFT to enqueue time so an un-refined issue never lands in the Next Up
+  // pickup column. Scoped to issues (not PRs) targeting the pickup column —
+  // create-pr.mjs auto-enqueues PRs into In Progress, which never trips this.
+  let refinement;
+  let effectiveTargetOption = targetOption;
+  let effectiveTargetStatus = targetStatus;
+  if (issueNumber !== null && targetStatus === nextUpColumn) {
+    const bodyResult = await child(
+      "gh",
+      ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
+      env,
+    );
+    if (bodyResult.code !== 0) {
+      const detail = bodyResult.stderr.trim() || `exit code ${bodyResult.code}`;
+      throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
+    }
+    const bodyPayload = parseJsonText(bodyResult.stdout, { label: "gh issue view" });
+    const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
+    const artifact = detectIssueRefinementArtifact({ body, issueNumber });
+    const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: !!args.auto });
+    if (decision.action === "block") {
+      throw Object.assign(new Error(decision.reason), {
+        code: "MISSING_REFINEMENT_ARTIFACT",
+        missing: decision.missing,
+      });
+    }
+    if (decision.action === "divert") {
+      const parkedColumn = nonSuccessBoardColumn(cwd);
+      if (parkedColumn === nextUpColumn) {
+        // A non-success park column equal to the pickup column would divert the
+        // un-refined item straight back into Next Up, defeating the gate. Fail
+        // closed on that misconfiguration rather than parking into pickup.
+        throw Object.assign(
+          new Error(`Park column "${parkedColumn}" (queue.nonSuccessStatus) is the pickup column; cannot divert an un-refined item into Next Up.`),
+          { code: "INVALID_STATUS" },
+        );
+      }
+      const parkedOption = statusField.options.find((o) => o.name === parkedColumn);
+      if (!parkedOption) {
+        const available = statusField.options.map((o) => o.name).join(", ");
+        throw Object.assign(
+          new Error(`Park column "${parkedColumn}" (queue.nonSuccessStatus) not found in Status field. Available: ${available}`),
+          { code: "COLUMN_NOT_FOUND" },
+        );
+      }
+      effectiveTargetOption = parkedOption;
+      effectiveTargetStatus = parkedColumn;
+      refinement = {
+        refined: false,
+        diverted: true,
+        requestedColumn: nextUpColumn,
+        parkedColumn,
+        reason: decision.reason,
+        missing: decision.missing,
+      };
+    } else {
+      refinement = { refined: true };
+    }
+  }
+
   // 6. Add item to project
   const addPayload = await ghGraphql(ADD_PROJECT_ITEM, {
     projectId: project.id,
@@ -518,7 +600,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     projectId: project.id,
     itemId: newItem.id,
     fieldId: statusField.id,
-    optionId: targetOption.id,
+    optionId: effectiveTargetOption.id,
   }, env, child);
 
   const updated = updatePayload?.data?.updateProjectV2ItemFieldValue?.projectV2Item;
@@ -532,9 +614,10 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
       itemId: newItem.id,
       issueNumber,
       prNumber,
-      status: targetStatus,
+      status: effectiveTargetStatus,
       alreadyPresent: false,
     },
+    ...(refinement ? { refinement } : {}),
   };
 }
 

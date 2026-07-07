@@ -500,6 +500,41 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
 }
 
 /**
+ * Decide what an enqueue caller should do with a refinement-artifact result,
+ * so an un-refined item never lands in the Next Up pickup column in the first
+ * place. The draft gate remains the backstop for whatever slips through.
+ *
+ * Pure decision table, no I/O:
+ *   - target isn't the pickup column, or the artifact is present → enqueue
+ *     as requested.
+ *   - pickup target, artifact missing, interactive caller → block (caller
+ *     throws; no mutation).
+ *   - pickup target, artifact missing, headless/auto caller → divert (caller
+ *     parks the item in the non-pickup column instead of failing the run).
+ *
+ * @param {{ artifact: ReturnType<typeof detectIssueRefinementArtifact>, targetIsPickup: boolean, auto?: boolean }} input
+ * @returns {{ action: "enqueue" } | { action: "block"|"divert", reason: string, missing: string[] }}
+ */
+export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = false }) {
+  // `artifact.finding === null` is the explicit "has ANY refinement artifact"
+  // signal (AC checklist OR DoD checklist OR linked doc) — clearer than reading
+  // `hasACs`, whose name understates that a DoD or linked doc also satisfies it.
+  if (!targetIsPickup || artifact.finding === null) {
+    return { action: "enqueue" };
+  }
+  const missing = [
+    "Acceptance criteria section",
+    "Definition of done section",
+    "linked refinement doc",
+  ];
+  const reason =
+    `Issue has no refinement artifact (none of: ${missing.join(", ")}). ` +
+    "Add at least ONE of them — an Acceptance criteria section, a Definition of done section, or a linked refinement doc " +
+    "(e.g. run `/loop-grill <issue> --auto`, or the refiner) — before it enters the pickup queue.";
+  return { action: auto ? "divert" : "block", reason, missing };
+}
+
+/**
  * Map a draft-gate refinement check to the result surface consumed by
  * `evaluatePrGateCoordination`. The mapping keeps the contract
  * deterministic: the draft gate must not produce a `clean` verdict

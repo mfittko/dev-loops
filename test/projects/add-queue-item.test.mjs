@@ -103,6 +103,20 @@ function resolvePrResponse(prId) {
   };
 }
 
+// `gh issue view --json body` response for the refinement-artifact gate
+// (issue #1251), fired only when an issue targets the pickup column.
+function issueBodyResponse(body) {
+  return { body };
+}
+
+function refinedIssueBodyResponse() {
+  return issueBodyResponse("## Acceptance criteria\n\n- [ ] AC1\n");
+}
+
+function unrefinedIssueBodyResponse() {
+  return issueBodyResponse("## Problem\n\nSomething is wrong.\n");
+}
+
 function resolveBothResponse() {
   return {
     data: {
@@ -536,6 +550,7 @@ describe("add-queue-item", () => {
         { payload: getFieldsResponse([STATUS_FIELD]) },
         { payload: emptyItemsResponse() },
         { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: refinedIssueBodyResponse() },
         { payload: addItemResponse("PVTI_new") },
         { payload: updateFieldResponse() },
       ];
@@ -564,6 +579,7 @@ describe("add-queue-item", () => {
         { payload: getFieldsResponse([STATUS_FIELD]) },
         { payload: emptyItemsResponse() },
         { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: refinedIssueBodyResponse() },
         { payload: addItemResponse("PVTI_new") },
         { payload: updateFieldResponse() },
       ];
@@ -590,6 +606,7 @@ describe("add-queue-item", () => {
         { payload: getFieldsResponse([STATUS_FIELD]) },
         { payload: emptyItemsResponse() },
         { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: refinedIssueBodyResponse() },
         { payload: addItemResponse("PVTI_new") },
         { payload: updateFieldResponse() },
       ];
@@ -608,6 +625,7 @@ describe("add-queue-item", () => {
         { payload: getFieldsResponse([STATUS_FIELD]) },
         { payload: emptyItemsResponse() },
         { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: refinedIssueBodyResponse() },
         { payload: addItemResponse("PVTI_new") },
         { payload: updateFieldResponse() },
       ];
@@ -660,6 +678,7 @@ describe("add-queue-item", () => {
           { payload: getFieldsResponse([TODO_STATUS_FIELD]) },
           { payload: emptyItemsResponse() },
           { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: refinedIssueBodyResponse() },
           { payload: addItemResponse("PVTI_new") },
           { payload: updateFieldResponse() },
         ];
@@ -680,6 +699,7 @@ describe("add-queue-item", () => {
           { payload: getFieldsResponse([TODO_STATUS_FIELD]) },
           { payload: emptyItemsResponse() },
           { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: refinedIssueBodyResponse() },
           { payload: addItemResponse("PVTI_new") },
           { payload: updateFieldResponse() },
         ];
@@ -730,6 +750,7 @@ describe("add-queue-item", () => {
           { payload: getFieldsResponse([STATUS_FIELD]) },
           { payload: emptyItemsResponse() },
           { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: refinedIssueBodyResponse() },
           { payload: addItemResponse("PVTI_new") },
           { payload: updateFieldResponse() },
         ];
@@ -740,6 +761,207 @@ describe("add-queue-item", () => {
         assert.equal(result.ok, true);
         assert.equal(result.item.status, "Next Up");
       });
+    });
+  });
+
+  describe("refinement-artifact enqueue gate (issue #1251)", () => {
+    it("throws MISSING_REFINEMENT_ARTIFACT (no mutation) for an un-refined issue + --next-up, interactive", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: unrefinedIssueBodyResponse() },
+        // No addItemResponse/updateFieldResponse: block must not mutate the board.
+      ];
+      try {
+        await main(
+          { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+          { env: {}, runChild: mockRunChild(responses) },
+        );
+        assert.fail("should have thrown");
+      } catch (err) {
+        assert.equal(err.code, "MISSING_REFINEMENT_ARTIFACT");
+        assert.match(err.message, /loop-grill/);
+      }
+    });
+
+    it("diverts an un-refined issue + --next-up + --auto to the non-pickup park column", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: unrefinedIssueBodyResponse() },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, auto: true },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.status, "Backlog");
+      assert.equal(result.refinement.refined, false);
+      assert.equal(result.refinement.diverted, true);
+      assert.equal(result.refinement.requestedColumn, "Next Up");
+      assert.equal(result.refinement.parkedColumn, "Backlog");
+      assert.match(result.refinement.reason, /loop-grill/);
+    });
+
+    it("lands an already-refined issue in Next Up untouched", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: refinedIssueBodyResponse() },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.status, "Next Up");
+      assert.equal(result.refinement.refined, true);
+    });
+
+    it("lands a DoD-only refined issue in Next Up untouched", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: issueBodyResponse("## Definition of done\n\n- [ ] DoD1\n") },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.status, "Next Up");
+      assert.equal(result.refinement.refined, true);
+    });
+
+    it("lands a linked-doc-only refined issue in Next Up untouched", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        { payload: issueBodyResponse("## Plan\n\nSee tmp/refinement/10-plan.md for details.\n") },
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.status, "Next Up");
+      assert.equal(result.refinement.refined, true);
+    });
+
+    it("skips the gate for a non-pickup target column (default Backlog)", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolveIssueResponse("I_kwDO_10") },
+        // No gh-issue-view call expected: the gate only fires for pickup targets.
+        { payload: addItemResponse("PVTI_new") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10 },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.status, "Backlog");
+      assert.equal(result.refinement, undefined);
+    });
+
+    it("skips the gate for a PR targeting --next-up", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { payload: resolvePrResponse("PR_kwDO_20") },
+        // No gh-issue-view call expected: the gate is scoped to issues.
+        { payload: addItemResponse("PVTI_pr") },
+        { payload: updateFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 20, nextUp: true },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.status, "Next Up");
+      assert.equal(result.refinement, undefined);
+    });
+
+    it("fails closed (COLUMN_NOT_FOUND) on divert when the configured park column is absent from the board", async () => {
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "add-queue-park-"));
+      try {
+        // queue.nonSuccessStatus names a column that does not exist in STATUS_FIELD.
+        writeFileSync(nodePath.join(dir, ".devloops"), "queue:\n  nonSuccessStatus: \"Ice Box\"\n", "utf-8");
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          { payload: emptyItemsResponse() },
+          { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: unrefinedIssueBodyResponse() },
+          // No add/update mocks: the divert must fail before mutating the board.
+        ];
+        await assert.rejects(
+          main(
+            { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, auto: true },
+            { env: {}, runChild: mockRunChild(responses), cwd: dir },
+          ),
+          (err) => err.code === "COLUMN_NOT_FOUND" && /Ice Box/.test(err.message),
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails closed (INVALID_STATUS) when the configured park column equals the pickup column", async () => {
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "add-queue-parkeqpickup-"));
+      try {
+        // nonSuccessStatus == the pickup column would divert an un-refined item
+        // back into Next Up, defeating the gate — must fail closed.
+        writeFileSync(nodePath.join(dir, ".devloops"), "queue:\n  nonSuccessStatus: \"Next Up\"\n", "utf-8");
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          { payload: emptyItemsResponse() },
+          { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: unrefinedIssueBodyResponse() },
+          // No add/update mocks: must fail before mutating the board.
+        ];
+        await assert.rejects(
+          main(
+            { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, auto: true },
+            { env: {}, runChild: mockRunChild(responses), cwd: dir },
+          ),
+          (err) => err.code === "INVALID_STATUS" && /pickup column/.test(err.message),
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 
