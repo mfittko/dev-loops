@@ -12,7 +12,8 @@ Add work to the dev-loop queue. Parse `$ARGUMENTS` before acting. The project is
    - Run `node scripts/projects/add-queue-item.mjs --repo <owner/repo> --item <n>`.
    - The script is idempotent and returns `{ ok, item: { status, alreadyPresent } }`. Report the resulting Status column and whether it was already present, e.g. `#<n> is in "Backlog" (already on the board)` or `#<n> added to "Backlog"`.
    - Exit `3` means the issue/PR was not found (`ITEM_NOT_FOUND` / `CONTENT_NOT_FOUND`): print `Error: issue/PR #<n> not found.` and stop. Do not retry with a guessed project.
-   - Exit `4` means the issue targets the pickup (`Next Up`) column without a refinement artifact (`MISSING_REFINEMENT_ARTIFACT`): print the error naming the missing sections and point at `/loop-grill <n> --auto`. In headless/auto contexts pass `--auto` on the `add-queue-item.mjs` call instead, so the item parks in the non-pickup column with a recorded reason rather than failing the run; re-enqueue with `--next-up` after grilling.
+   - Exit `4` means the issue targets the pickup (`Next Up`) column without a refinement artifact (`MISSING_REFINEMENT_ARTIFACT`): print the error naming the missing sections and point at `/loop-grill <n> --auto`.
+   - **Headless / auto ordering (who grills):** the `add-queue-item.mjs` gate enforces and parks; it never grills. So in a headless/auto run, **first** run `/loop-grill <n> --auto` to synthesize AC/DoD, **then** enqueue with `--next-up`. Only if grilling cannot produce a usable artifact, pass `--auto` on the `add-queue-item.mjs` call so the issue parks in the non-pickup column with a recorded reason (from the JSON `refinement` field) rather than failing the run — surface that reason and leave the issue parked for a human to refine.
 
 3. **Freeform path (quick-capture a new idea):** run these steps in order. This is the
    quick-capture exemption from `INTAKE-NEW-IDEA-SAFETY`

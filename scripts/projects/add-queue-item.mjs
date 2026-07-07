@@ -34,7 +34,11 @@ Options:
   --help, -h                  Show this help.
 
 Output (stdout):
-  JSON: { ok: true, item: { itemId, issueNumber, prNumber, status, alreadyPresent }, refinement? }
+  JSON: { ok: true, item: { itemId, issueNumber, prNumber, status, alreadyPresent },
+          refinement? }
+  refinement (present only when the pickup-column gate ran): either
+    { refined: true } or, on a headless --auto divert,
+    { refined: false, diverted: true, requestedColumn, parkedColumn, reason, missing }.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -548,6 +552,15 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     }
     if (decision.action === "divert") {
       const parkedColumn = nonSuccessBoardColumn(cwd);
+      if (parkedColumn === nextUpColumn) {
+        // A non-success park column equal to the pickup column would divert the
+        // un-refined item straight back into Next Up, defeating the gate. Fail
+        // closed on that misconfiguration rather than parking into pickup.
+        throw Object.assign(
+          new Error(`Park column "${parkedColumn}" (queue.nonSuccessStatus) is the pickup column; cannot divert an un-refined item into Next Up.`),
+          { code: "INVALID_STATUS" },
+        );
+      }
       const parkedOption = statusField.options.find((o) => o.name === parkedColumn);
       if (!parkedOption) {
         const available = statusField.options.map((o) => o.name).join(", ");

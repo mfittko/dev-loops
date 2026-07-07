@@ -870,6 +870,59 @@ describe("add-queue-item", () => {
       assert.equal(result.item.status, "Next Up");
       assert.equal(result.refinement, undefined);
     });
+
+    it("fails closed (COLUMN_NOT_FOUND) on divert when the configured park column is absent from the board", async () => {
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "add-queue-park-"));
+      try {
+        // queue.nonSuccessStatus names a column that does not exist in STATUS_FIELD.
+        writeFileSync(nodePath.join(dir, ".devloops"), "queue:\n  nonSuccessStatus: \"Ice Box\"\n", "utf-8");
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          { payload: emptyItemsResponse() },
+          { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: unrefinedIssueBodyResponse() },
+          // No add/update mocks: the divert must fail before mutating the board.
+        ];
+        await assert.rejects(
+          main(
+            { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, auto: true },
+            { env: {}, runChild: mockRunChild(responses), cwd: dir },
+          ),
+          (err) => err.code === "COLUMN_NOT_FOUND" && /Ice Box/.test(err.message),
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails closed (INVALID_STATUS) when the configured park column equals the pickup column", async () => {
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "add-queue-parkeqpickup-"));
+      try {
+        // nonSuccessStatus == the pickup column would divert an un-refined item
+        // back into Next Up, defeating the gate — must fail closed.
+        writeFileSync(nodePath.join(dir, ".devloops"), "queue:\n  nonSuccessStatus: \"Next Up\"\n", "utf-8");
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          { payload: emptyItemsResponse() },
+          { payload: resolveIssueResponse("I_kwDO_10") },
+          { payload: unrefinedIssueBodyResponse() },
+          // No add/update mocks: must fail before mutating the board.
+        ];
+        await assert.rejects(
+          main(
+            { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true, auto: true },
+            { env: {}, runChild: mockRunChild(responses), cwd: dir },
+          ),
+          (err) => err.code === "INVALID_STATUS" && /pickup column/.test(err.message),
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("optional --project resolved from .devloops (#1035)", () => {
