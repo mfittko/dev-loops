@@ -359,6 +359,29 @@ test("verify-briefing-prefixes: identical-byte records under different gates att
   }
 });
 
+test("verify-briefing-prefixes: a stray non-canonical-gate briefing record is ignored (fails closed)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
+    await mkdir(gateContextDir, { recursive: true });
+    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "DRAFT");
+    await writeFile(path.join(gateContextDir, `bogus_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "STRAY");
+    const strayHash = createHash("sha256").update("STRAY").digest("hex");
+    await writeFile(
+      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-coverage-${FULL_TEST_SHA}.json`),
+      JSON.stringify({ scope: "coverage", prefixHash: strayHash }),
+    );
+    const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.verified, false);
+    assert.ok(output.reason.includes("matches no gate briefing-prefix record"));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Dogfood-style integration (issue #1207 AC3): simulate the exact live flow —
 // write two reviewer sentinels via the REAL verify-fresh-review-context.mjs

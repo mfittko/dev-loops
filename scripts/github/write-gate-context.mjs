@@ -377,7 +377,7 @@ export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" 
  */
 function validatePathSegments({ pr, gate, headSha }) {
   if (!GATE_NAMES.includes(gate)) {
-    throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected draft_gate or pre_approval_gate)`);
+    throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected ${GATE_NAMES.join(" or ")})`);
   }
   // Require a CANONICAL positive integer: the trimmed string must be all digits
   // (`/^\d+$/`) and > 0. This mirrors the CLI's parsePrNumber rule so the path

@@ -157,6 +157,9 @@ async function readGateBriefingRecords(tmpRoot, headSha) {
     .sort((a, b) => a.name.localeCompare(b.name));
   for (const e of matches) {
     const gate = e.name.slice(0, -suffix.length);
+    // Only canonical gate records are trusted: a stray/leftover file whose
+    // prefix isn't a real gate name must not be able to satisfy record-matching.
+    if (!GATE_NAMES.includes(gate)) continue;
     const dir = e.parentPath ?? root;
     let bytes;
     try {
