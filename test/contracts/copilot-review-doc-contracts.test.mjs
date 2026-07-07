@@ -8,7 +8,7 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
-import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
+import { assertRuleOwned, assertRulePresent, extractOwnedText } from "./_rule-helpers.mjs";
 
 async function readCopilotSkillSurface() {
   const [skill, operationsDoc, intakeDoc] = await Promise.all([
@@ -175,8 +175,14 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
   // before the resolve-step phrase, content-anchored rather than by ordinal
   // list position (which is tautological for any numbered list).
   const verifyIndex = step7.indexOf("COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE");
-  const resolveIndex = step7.search(/resolve the addressed review thread only after/i);
+  const resolveIndex = step7.indexOf("COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY");
   assert.ok(verifyIndex >= 0 && resolveIndex >= 0 && verifyIndex < resolveIndex, "verification checkpoint must appear before the resolve step");
+  assertRuleOwned("COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY", "skills/copilot-pr-followup/SKILL.md");
+  // Owned-text check — marker survival alone must not mask dropping the resolve-after-reply clause.
+  assert.match(
+    extractOwnedText(step7, "COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY"),
+    /only after the reply is attached successfully/i,
+  );
   assert.match(
     step7,
     /verify zero unresolved threads remain via `dev-loops gate capture-threads` before proceeding/i,

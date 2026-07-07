@@ -230,7 +230,7 @@ When unresolved feedback exists, use a narrow follow-up loop:
    - confirm the pushed current-head diff genuinely addresses the reviewer concern on the flagged lines or pattern; if the concern is only partially addressed, leave the thread open and explain what remains
    - refresh the API-backed thread snapshot via `dev-loops gate capture-threads` and use that refreshed data — including the unresolved thread count — for follow-up decisions rather than prose assumptions
    - if any verification check fails, do **not** resolve the thread; leave it open, add a short explanation when needed, and re-enter the fix/reply loop
-10. resolve the addressed review thread only after the reply is attached successfully, the verification checkpoint passes, and the concern is genuinely addressed
+10. <!-- rule: COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY --> `COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY`: resolve the addressed review thread only after the reply is attached successfully, the verification checkpoint passes, and the concern is genuinely addressed
     - do not stop at a local fix if GitHub-side reply/resolve is authorized
 11. after completing reply/resolve for a pass, verify zero unresolved threads remain via `dev-loops gate capture-threads` before proceeding
     - if the refreshed snapshot reports unresolved threads, re-enter the reply/resolve loop for the missed threads
