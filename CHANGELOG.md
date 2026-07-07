@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.8.0
+
+<!-- Release date is set at tag time; see the release runbook. This section is prepared ahead of the v0.8.0 tag. -->
+
+Everything merged since v0.7.1 — the v0.7.x contract-audit epic (#1104) plus follow-on release-gate fixes. **Versioning note:** most of these commits are ancestors of the `v0.7.2` tag and therefore already ship in the published `0.7.2` npm artifact, but `v0.7.2`'s release notes documented only the #1241 packaging hotfix (see the 0.7.2 section below). This section backfills that omitted changelog and adds the nine changes that genuinely postdate the `v0.7.2` tag (#1240, #1242, #1244, #1249, #1250, #1253, #1254, #1256, and #1236/#1252); it becomes the notes for the eventual `v0.8.0` tag.
+
+### Added
+
+- **Issue-less lightweight PR-first flow (#1210/#1215).** A PR with no backing issue can drive the lightweight path with a configurable composed Copilot round cap; such PRs auto-enqueue as board items so they are still tracked (#1218/#1226).
+- **State-machine conformance and invariant harness (#1148/#1189).** Built on a rule-ownership foundation (#1183). The PR lifecycle state machine is exported from `@dev-loops/core` as the single source for docs, the state atlas, and the conformance harness (#1193/#1216), and `public-dev-loop-routing` is wired into the L2/L3 conformance harness so all five machines are covered (#1233/#1239).
+- **Inline reviewer briefing prefix (#1220/#1229).** The reviewed content is carried inline, size-capped and hash-enforced, on top of invariant-prefix-first reviewer briefings with prefix-hash enforcement (#1207/#1214).
+- **First-class loop primitives (#1198/#1223).** `list-review-threads` and `wait-pr-checks`, plus a sanctioned `edit-issue.mjs` wrapper for AC-reflection body edits (#1253) and a refinement-artifact-at-enqueue requirement so no un-refined item enters Next Up (#1251/#1254).
+- **State-atlas fullscreen lightbox for diagrams (#1217).** Diagrams open in a fullscreen lightbox for readable inspection.
+
+### Fixed
+
+- **Package-escaping `@dev-loops/core` imports broke consumer installs (#1241).** Shipped as the v0.7.2 hotfix; full detail is in the 0.7.2 section below.
+- **Converge-then-gate enforced at `pre_approval` entry (#1190/#1219).** Retires the known gap where a gate could run before Copilot convergence.
+- **Fanout provenance fails closed on missing mandatory or foreign angles (#1196/#1225).** Briefing-prefix verification is also scoped by (gate, headSha) (#1249).
+- **Reviewer-loop submission-failure edges join the transition table (#1200/#1221).** Copilot summon literals are sanitized on write with a code-span-aware guard and an honest blocked status (#1213/#1222).
+- **Issue-less lightweight PR-first three-origin contracts reconciled (#1242).** Adds a gate-coordination `specSource` branch; a contradiction sweep covers gate-skip scoping, coverage-modality ownership, and advisory wording (#1244).
+- **run-claim coordination file anchored at the git common dir, not CWD (#1250).** The per-PR runner lease now resolves its coordination file from the shared git common dir, so a runner started from a different worktree/CWD attaches to the same lease instead of forking a second one.
+- **`queue --item` accepts the full node-ID alphabet across the projects scripts (#1227/#1230).** The `--item` node-ID parser now accepts the complete GitHub node-ID character set, so board items whose IDs use previously-rejected characters resolve consistently across the projects scripts.
+- **release.yml dispatches npm-publish.yml explicitly after creating the release (#1187/#1188).** Pages deploy is bumped to deploy-pages v5 (#1211/#1212) and the gate-hub flowchart renders left-to-right (#1208/#1209).
+- **docs-validator manifest gap and corpus→manifest completeness (#1238).** Epic AC1/AC2 zero-states restored — canonical-owner openers plus remaining phrase pins (#1240).
+
+### Changed
+
+- **Contract corpus condensation + single-owner rule IDs.** Rule ownership migrated to single-owner IDs across the gate, queue, loop, worktree, intake, and public-loop clusters, with residual normative phrase-pins retired to a zero-pin end state (#1149–#1159, #1191–#1206). Inline interpreters were banned from coordinator flows in favor of sanctioned paths by reference (#1224/#1228), a final corpus condensation sweep rewired rule IDs with zero semantic change (#1236/#1252), and RFC-2119 modality was harmonized on newly-tagged merge/confirmation clauses (#1256).
+
 ## 0.7.2 - 2026-07-06
 
 ### Fixed
