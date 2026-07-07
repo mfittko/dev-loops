@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { DEFAULT_TEST_PR_BODY, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   parseUpsertCheckpointVerdictCliArgs,
@@ -43,37 +43,6 @@ async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
   return { ...env, DEVLOOPS_RUN_ID: "" };
 }
-
-// These test PRs are not exercising the PR-body refinement check itself, only
-// gate-posting logic downstream of it; a minimal issue-less PR-body-as-spec
-// body (no linked issue) satisfies the check without an extra "gh issue view"
-// stub call, matching an ordinary sanctioned draft PR.
-const DEFAULT_TEST_PR_BODY = [
-  "## Objective",
-  "",
-  "Test fixture body.",
-  "",
-  "## In scope",
-  "",
-  "- the change under test",
-  "",
-  "## Explicit non-goals",
-  "",
-  "- n/a",
-  "",
-  "## Acceptance criteria",
-  "",
-  "- [ ] covered by the test",
-  "",
-  "## Definition of done",
-  "",
-  "- [ ] tests pass",
-  "",
-  "## Open questions/risks",
-  "",
-  "- none",
-  "",
-].join("\n");
 
 function buildGateCoordinationEntries({
   repo = "owner/repo",

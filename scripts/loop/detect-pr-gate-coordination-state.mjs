@@ -14,8 +14,9 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
-import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
+import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
@@ -297,11 +298,9 @@ async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = 
 }
 // Plan-file promotion PRs (P4, `buildPromotionPrBody`) carry no linked issue by
 // design; the PR body instead names the committed plan doc as the spec-of-record
-// verbatim. Matching that literal marker is how the refinement check tells a
-// promoted plan-file PR apart from an ordinary issue-less body. The captured path
-// is bounded to a single line and a `.md` suffix so a multi-line/unbounded body
-// cannot smuggle an oversized or cross-line "path".
-const PLAN_FILE_PROMOTION_DOC_PATH_PATTERN = /Spec-of-record: the committed plan doc `([^`\n]{1,200}?\.md)`/u;
+// verbatim (marker owned by plan-file-promote-contract.mjs). Matching that
+// literal marker is how the refinement check tells a promoted plan-file PR
+// apart from an ordinary issue-less body.
 
 // Resolve the refinement artifact for a draft PR with zero linked issues,
 // directly from its own body. The sanctioned three-origin model
@@ -312,6 +311,7 @@ const PLAN_FILE_PROMOTION_DOC_PATH_PATTERN = /Spec-of-record: the committed plan
 // handoff-envelope.mjs's CANONICAL_SPEC_SOURCE (phase_doc|pr_body): same field
 // name, different object, different value space — never conflate the two.
 async function resolveNoIssueRefinementArtifact(body) {
+  const { detectIssueRefinementArtifact, validatePrBodySpec } = await import("@dev-loops/core/loop/issue-refinement-artifact");
   const planDocMatch = PLAN_FILE_PROMOTION_DOC_PATH_PATTERN.exec(body);
   if (planDocMatch) {
     const planDocPath = planDocMatch[1].trim();
@@ -323,7 +323,6 @@ async function resolveNoIssueRefinementArtifact(body) {
     // right OR for a linked ISSUE body but not for a plan-file promotion PR body —
     // a plan-file claim must be backed by actual AC/DoD checklist items, not just
     // another doc mention next to the marker.
-    const { detectIssueRefinementArtifact, validatePrBodySpec } = await import("@dev-loops/core/loop/issue-refinement-artifact");
     // Plan-file promotion is issue-less by design (`buildPromotionPrBody`
     // neutralizes closing keywords): any closing reference the body carries —
     // including the cross-repo `owner/repo#N` form validatePrBodySpec also
@@ -336,7 +335,7 @@ async function resolveNoIssueRefinementArtifact(body) {
         status: "missing",
         linkedIssue: null,
         linkedIssues: [],
-        specSource: "plan_file",
+        specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.PLAN_FILE,
         planDocPath,
         reason: `PR body names the promoted plan doc \`${planDocPath}\` as the spec-of-record but also carries a GitHub closing reference (${closesIssues.map((n) => `#${n}`).join(", ")}); plan-file promotion is issue-less by design and must not carry a reference that would auto-close an issue it doesn't back.`,
         finding: "missing_refinement_artifact",
@@ -348,7 +347,7 @@ async function resolveNoIssueRefinementArtifact(body) {
         status: "present",
         linkedIssue: null,
         linkedIssues: [],
-        specSource: "plan_file",
+        specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.PLAN_FILE,
         planDocPath,
         acItems: artifact.acItems,
         dodItems: artifact.dodItems,
@@ -361,20 +360,19 @@ async function resolveNoIssueRefinementArtifact(body) {
       status: "missing",
       linkedIssue: null,
       linkedIssues: [],
-      specSource: "plan_file",
+      specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.PLAN_FILE,
       planDocPath,
       reason: `PR body names the promoted plan doc \`${planDocPath}\` as the spec-of-record but carries no Acceptance criteria / DoD checklist content (${artifact.reason}); a bare marker sentence cannot satisfy the refinement check.`,
       finding: "missing_refinement_artifact",
     };
   }
-  const { validatePrBodySpec } = await import("@dev-loops/core/loop/issue-refinement-artifact");
   const specResult = validatePrBodySpec({ body, issueLess: true });
   if (specResult.ok) {
     return {
       status: "present",
       linkedIssue: null,
       linkedIssues: [],
-      specSource: "pr_body",
+      specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY,
       acItems: specResult.acItems,
       dodItems: specResult.dodItems,
       sections: specResult.sections,
@@ -386,7 +384,7 @@ async function resolveNoIssueRefinementArtifact(body) {
     status: "missing",
     linkedIssue: null,
     linkedIssues: [],
-    specSource: "pr_body",
+    specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY,
     reason: `PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`,
     finding: "missing_refinement_artifact",
   };
@@ -439,7 +437,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       status: "present",
       linkedIssue: firstPresent.issue,
       linkedIssues,
-      specSource: "linked_issue",
+      specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
       refinedIssues,
       source: a.source,
       acItems: a.acItems,
@@ -467,7 +465,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
         status: "missing",
         linkedIssue: firstEvaluated.issue,
         linkedIssues,
-        specSource: "linked_issue",
+        specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
         refinedIssues,
         reason: `Failed to fetch body for linked issue(s) ${scopeLabel}; draft gate cannot verify a refinement artifact, treating as missing.`,
         finding: "missing_refinement_artifact",
@@ -491,7 +489,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     status: "missing",
     linkedIssue: firstFetched.issue,
     linkedIssues,
-    specSource: "linked_issue",
+    specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
     refinedIssues,
     source: first.source,
     acItems: first.acItems,

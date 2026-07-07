@@ -2,6 +2,37 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+// Shared fixture body: minimal issue-less PR-body-as-spec content (no linked
+// issue) that satisfies the refinement check, matching an ordinary sanctioned
+// draft PR. Tests exercising draft/ready or gate-posting logic downstream of
+// the refinement check reuse this instead of the check's own content itself.
+export const DEFAULT_TEST_PR_BODY = [
+  "## Objective",
+  "",
+  "Test fixture body.",
+  "",
+  "## In scope",
+  "",
+  "- the change under test",
+  "",
+  "## Explicit non-goals",
+  "",
+  "- n/a",
+  "",
+  "## Acceptance criteria",
+  "",
+  "- [ ] covered by the test",
+  "",
+  "## Definition of done",
+  "",
+  "- [ ] tests pass",
+  "",
+  "## Open questions/risks",
+  "",
+  "- none",
+  "",
+].join("\n");
+
 export function runNode(scriptPath, args = [], options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(options.execPath ?? process.execPath, [scriptPath, ...args], {

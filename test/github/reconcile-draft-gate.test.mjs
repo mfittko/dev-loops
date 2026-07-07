@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { DEFAULT_TEST_PR_BODY, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   parseReconcileDraftGateCliArgs,
@@ -29,37 +29,6 @@ async function writeGhStub(tempDir, entries) {
 async function readGhCallCount(tempDir) {
   return Number((await readFile(path.join(tempDir, "gh-counter.txt"), "utf8")).trim() || "0");
 }
-
-// These test PRs are not exercising the PR-body refinement check itself, only
-// draft/ready transition logic downstream of it; a minimal issue-less
-// PR-body-as-spec body (no linked issue) satisfies the check, matching an
-// ordinary sanctioned draft PR.
-const DEFAULT_TEST_PR_BODY = [
-  "## Objective",
-  "",
-  "Test fixture body.",
-  "",
-  "## In scope",
-  "",
-  "- the change under test",
-  "",
-  "## Explicit non-goals",
-  "",
-  "- n/a",
-  "",
-  "## Acceptance criteria",
-  "",
-  "- [ ] covered by the test",
-  "",
-  "## Definition of done",
-  "",
-  "- [ ] tests pass",
-  "",
-  "## Open questions/risks",
-  "",
-  "- none",
-  "",
-].join("\n");
 
 function draftGateComment({ verdict = "clean", headSha = "abc1234", findingsSummary = "no issues found", nextAction = "mark ready for review" } = {}) {
   return [

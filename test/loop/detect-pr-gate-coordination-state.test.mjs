@@ -8,7 +8,7 @@ import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson a
 
 import { detectPrGateCoordinationState, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
-import { buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
+import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
 
@@ -1416,7 +1416,7 @@ test("detect-pr-gate-coordination-state: spoofed plan-file marker (no AC/DoD) st
   try {
     // The marker sentence alone, with no AC/DoD checklist content — any body could
     // paste this to spoof the plan-file branch (root cause of the gate integrity gap).
-    const body = "Spec-of-record: the committed plan doc `docs/phases/phase-9.md` is the authority for this work.\n\nNo AC/DoD sections at all.\n";
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
     const env = await writeGhStub(tmp, [
       {
         stdout: JSON.stringify({
@@ -1461,7 +1461,7 @@ test("loadRefinementArtifact: plan-file marker + bare linked-refinement-doc ment
   // correct for a linked ISSUE body), but the plan-file branch here must not
   // trust it in place of real checklist content the marker sentence promises.
   const body =
-    "Spec-of-record: the committed plan doc `docs/phases/phase-9.md` is the authority for this work.\n\n" +
+    `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\n` +
     "See tmp/refinement/spoof.md for details.\n";
   const result = await loadRefinementArtifact({
     repo: "owner/repo",
@@ -1482,7 +1482,7 @@ test("loadRefinementArtifact: plan-file promotion body carrying a cross-repo clo
   // validatePrBodySpec also accepts — must still fail closed instead of being
   // treated as a valid plan-file promotion that could auto-close someone else's issue.
   const body =
-    "Spec-of-record: the committed plan doc `docs/phases/phase-9.md` is the authority for this work.\n\n" +
+    `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\n` +
     "Closes owner/repo#123\n\n" +
     "## Acceptance criteria\n- [ ] a\n\n## Definition of done\n- [ ] b\n";
   const result = await loadRefinementArtifact({

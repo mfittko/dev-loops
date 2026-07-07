@@ -34,6 +34,16 @@ export const REFINEMENT_ARTIFACT_STATUS = Object.freeze({
 
 export const REFINEMENT_ARTIFACT_FINDING = "missing_refinement_artifact";
 
+/**
+ * `refinementArtifact.specSource` values: which of the three sanctioned
+ * spec-of-record origins (artifact-authority-contract.md) backed the check.
+ */
+export const REFINEMENT_ARTIFACT_SPEC_SOURCE = Object.freeze({
+  LINKED_ISSUE: "linked_issue",
+  PR_BODY: "pr_body",
+  PLAN_FILE: "plan_file",
+});
+
 export const PR_CHECKPOINT_ACTION = Object.freeze({
   RUN_DRAFT_GATE: "run_draft_gate",
   MARK_READY_FOR_REVIEW: "mark_ready_for_review",
@@ -233,7 +243,7 @@ function normalizeRefinementArtifactStatus(value) {
 // spec-of-record and no linked issue was ever expected.
 function formatRefinementBlockedReason(linkedIssue, status, refinementArtifact) {
   const specSource = refinementArtifact?.specSource;
-  if ((specSource === "pr_body" || specSource === "plan_file") && typeof refinementArtifact?.reason === "string" && refinementArtifact.reason.length > 0) {
+  if ((specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY || specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PLAN_FILE) && typeof refinementArtifact?.reason === "string" && refinementArtifact.reason.length > 0) {
     return `The draft gate cannot complete: ${refinementArtifact.reason} finding=${REFINEMENT_ARTIFACT_FINDING}`;
   }
   if (linkedIssue !== null && Number.isInteger(linkedIssue)) {

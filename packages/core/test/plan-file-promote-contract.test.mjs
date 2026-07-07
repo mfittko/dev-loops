@@ -4,10 +4,12 @@ import test, { describe } from "node:test";
 import {
   PLAN_FILE_PROMOTE_ACTION,
   PLAN_FILE_PR_FRONT_MATTER_KEY,
+  PLAN_FILE_PROMOTION_DOC_PATH_PATTERN,
   parsePlanFrontMatter,
   readLinkedPrNumber,
   writeLinkedPrNumber,
   evaluatePromoteEligibility,
+  buildPlanFilePromotionMarker,
   buildPromotionPrBody,
 } from "../src/loop/plan-file-promote-contract.mjs";
 
@@ -168,5 +170,12 @@ describe("plan-file-promote-contract: PR body", () => {
     assert.match(body, /`Closes #123`/u);
     assert.match(body, /`fixes #4`/u);
     assert.match(body, /`Resolved #7`/u);
+  });
+
+  test("marker builder round-trips through the doc-path pattern (single owner)", () => {
+    const marker = buildPlanFilePromotionMarker("docs/x.md");
+    const match = PLAN_FILE_PROMOTION_DOC_PATH_PATTERN.exec(marker);
+    assert.ok(match, "PLAN_FILE_PROMOTION_DOC_PATH_PATTERN must match buildPlanFilePromotionMarker's output");
+    assert.equal(match[1], "docs/x.md");
   });
 });
