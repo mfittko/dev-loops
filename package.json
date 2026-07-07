@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "verify": "npm test && npm run test:dev-loop",
-    "test": "npm run test:assets && npm run test:extension && npm run test:scripts && npm run test:core && npm run test:docs",
+    "test": "npm run test:assets && npm run test:extension && npm run test:scripts && npm run test:core && npm run test:docs && npm run test:pack",
     "test:assets": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/dev-loop-init-phase-smoke.test.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
     "test:extension": "node --import tsx --test --test-reporter ./test/failure-summary-reporter.mjs test/extension-checks.test.mjs test/extension-post-merge-update.test.mjs test/extension-command-contract.test.mjs test/extension-package-contract.test.mjs test/extension-pi-adapter.test.mjs test/dev-loops-core.test.mjs test/dev-loops-cli.test.mjs",
     "test:scripts": "GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.fsync GIT_CONFIG_VALUE_0=none GIT_CONFIG_KEY_1=core.fsyncObjectFiles GIT_CONFIG_VALUE_1=false node --test --test-reporter ./test/failure-summary-reporter.mjs test/github/*.test.mjs test/loop/*.test.mjs test/docs/*.test.mjs test/projects/*.test.mjs test/pages/*.test.mjs",
@@ -35,6 +35,7 @@
     "test:playwright:deep-dive-article": "PW_UI_SLICE=deep-dive-article playwright test --project=deep-dive-article",
     "smoke:headless": "node scripts/claude/headless-info-smoke.mjs",
     "test:docs": "node scripts/docs/validate-links.mjs && node scripts/docs/validate-rule-ownership.mjs",
+    "test:pack": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/packaged-install-smoke.test.mjs",
     "repo-wiki": "node scripts/repo-wiki.mjs",
     "repo-wiki:bootstrap": "node scripts/repo-wiki.mjs scan --repo . && node scripts/repo-wiki.mjs plan --repo . && node scripts/repo-wiki.mjs compile --repo .",
     "repo-wiki:scan": "node scripts/repo-wiki.mjs scan --repo .",
@@ -71,7 +72,7 @@
     ]
   },
   "dependencies": {
-    "@dev-loops/core": "^0.7.1"
+    "@dev-loops/core": "^0.7.2"
   },
   "repository": {
     "type": "git",
@@ -81,7 +82,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "files": [
     "cli/",
     "lib/",
