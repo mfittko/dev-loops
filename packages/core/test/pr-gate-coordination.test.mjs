@@ -1797,6 +1797,82 @@ test("draft PR is not blocked when refinement artifact is present (#532)", () =>
   assert.equal(result.refinementArtifact?.status, "present");
 });
 
+test("draft PR is not blocked when refinement artifact is present via issue-less PR-body-as-spec", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1231,
+    currentHeadSha: "abc1234567",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    refinementArtifact: {
+      status: "present",
+      linkedIssue: null,
+      specSource: "pr_body",
+      reason: "Refinement artifact present via the PR body itself (issue-less lightweight PR-body-as-spec; validate-pr-body-spec --no-issue clean).",
+    },
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+});
+
+test("draft PR blocked reason names the PR-body validation failure, not a linked issue, when refinement artifact is issue-less", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1231,
+    currentHeadSha: "abc1234567",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    refinementArtifact: {
+      status: "missing",
+      linkedIssue: null,
+      specSource: "pr_body",
+      reason: "PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: missing_acceptance_criteria).",
+      finding: "missing_refinement_artifact",
+    },
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.match(result.reason, /missing_acceptance_criteria/);
+  assert.match(result.reason, /missing_refinement_artifact/);
+  assert.doesNotMatch(result.reason, /linked issue/i);
+});
+
+test("draft PR blocked reason names the plan-file validation failure, not a linked issue, when refinement artifact is plan-file-backed", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1231,
+    currentHeadSha: "abc1234567",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    refinementArtifact: {
+      status: "missing",
+      linkedIssue: null,
+      specSource: "plan_file",
+      reason: "PR body names the promoted plan doc `docs/phases/phase-9.md` as the spec-of-record but carries no Acceptance criteria / DoD checklist content; a bare marker sentence cannot satisfy the refinement check.",
+      finding: "missing_refinement_artifact",
+    },
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.match(result.reason, /docs\/phases\/phase-9\.md/);
+  assert.match(result.reason, /missing_refinement_artifact/);
+  assert.doesNotMatch(result.reason, /linked issue/i);
+});
+
 test("refinement block takes precedence over non-draft branches for draft PRs", () => {
   const result = evaluatePrGateCoordination({
     pr: 10,

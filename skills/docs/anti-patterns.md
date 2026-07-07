@@ -6,7 +6,7 @@ Canonical owner for anti-pattern guidance across all workflow families.
 
 1. **Skipping fan-out/fan-in for non-trivial changes**: Do not implement directly without refinement when scope exceeds light-mode thresholds.
 2. **Routing review-only work through local_implementation**: Review-only comparison, synthesis, or consolidation must use `refiner` agent, not `dev-loop` + `local_implementation`.
-3. **Thin placeholder PR descriptions**: Always include change summary, scope/context, acceptance criteria, definition of done, non-goals, and `Closes #N`.
+3. **Thin placeholder PR descriptions**: Always include change summary, scope/context, acceptance criteria, definition of done, non-goals, and `Closes #N` (tracker-backed; issue-less lightweight and plan-file promotion PRs instead follow [merge precondition 7](merge-preconditions.md#required-before-merge)).
 4. **Merging directly to main without PR**: Use PR-based remote loop when practical.
 5. **Duplicate worktree paths**: See `WORKTREE-DEDUPE` in [Worktree usage guidance](../../docs/worktree-guidance.md#coordination-and-collision-checks).
 6. **Main-checkout mutation**: See `WORKTREE-DEFAULT-USE` in [Worktree usage guidance](../../docs/worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work).

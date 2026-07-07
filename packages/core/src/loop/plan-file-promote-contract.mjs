@@ -44,6 +44,28 @@ export const PLAN_FILE_PROMOTE_ACTION = Object.freeze({
 export const PLAN_FILE_PR_FRONT_MATTER_KEY = "prNumber";
 
 /**
+ * Build the plan-file promotion marker sentence: the single source of truth
+ * for the PR-body text that names the committed plan doc as the spec-of-record.
+ * `buildPromotionPrBody` emits it and `PLAN_FILE_PROMOTION_DOC_PATH_PATTERN`
+ * (below) parses it back out — keep the two in lockstep.
+ *
+ * @param {string} docPath  repo-relative path of the committed plan doc
+ * @returns {string}
+ */
+export function buildPlanFilePromotionMarker(docPath) {
+  return `Spec-of-record: the committed plan doc \`${docPath}\` is the authority for this work.`;
+}
+
+/**
+ * Matches the marker sentence `buildPlanFilePromotionMarker` produces and
+ * captures the plan doc path. The captured path is bounded to a single line
+ * and a `.md` suffix so a multi-line/unbounded body cannot smuggle an
+ * oversized or cross-line "path".
+ */
+export const PLAN_FILE_PROMOTION_DOC_PATH_PATTERN =
+  /Spec-of-record: the committed plan doc `([^`\n]{1,200}?\.md)`/u;
+
+/**
  * Minimal additive front-matter support for plan files (an escalated extension
  * to P1's format): a leading `---\n...\n---\n` block of simple `key: value`
  * lines. Plans without a leading `---` are returned with an empty front-matter
@@ -219,7 +241,7 @@ export function buildPromotionPrBody({ planDocPath, acceptanceCriteria, definiti
   const safeAc = neutralizeIssueCloseKeywords(ac);
   const safeDod = neutralizeIssueCloseKeywords(dod);
   return [
-    `Spec-of-record: the committed plan doc \`${docPath}\` is the authority for this work.`,
+    buildPlanFilePromotionMarker(docPath),
     "This PR was opened by PR-FIRST promotion; no tracker issue exists.",
     "",
     "## Acceptance criteria",
