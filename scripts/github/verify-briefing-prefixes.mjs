@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { GATE_NAMES } from "./_gate-names.mjs";
 
 const USAGE = `Usage: verify-briefing-prefixes.mjs --head-sha <sha> [--help]
 Fan-in enforcement for GATE-EXEC-BRIEFING-PREFIX (docs/gate-review-sub-loop-contract.md):
@@ -29,12 +30,16 @@ Output (stdout, JSON):
   { "ok": false, "error": "...", "usage": "..." }
 ${JQ_OUTPUT_USAGE}
 Exit codes:
-  0  Verified: no sentinels found for this round (nothing to check), or every
-     sentinel records a hash and all hashes are identical (a single hashed
-     sentinel verifies — nothing to mismatch)
-  1  Fail closed: two or more sentinels record DIFFERENT prefix hashes, or ANY
-     sentinel for the round (even a lone one) records no prefix hash — a missing
-     hash is treated as a mismatch, never grandfathered
+  0  Verified: no sentinels found for this round (nothing to check); OR, with
+     on-disk per-gate briefing records present, every sentinel's hash matches a
+     record AND matches the gate its scope declares (two gates reviewed at one
+     head each match their own record, so a verified round can involve
+     different per-gate hashes); OR, with no records, all sentinels share one
+     identical hash
+  1  Fail closed: a sentinel hash matches no on-disk gate record, or matches a
+     DIFFERENT gate than its scope declares (wrong-gate briefing), or any
+     sentinel records no prefix hash — never grandfathered; or, with no
+     records, two or more sentinels record different hashes
   2  Usage or internal error, or invalid --jq filter
 
 Gate scoping: each reviewer sentinel's recorded prefix hash is verified against
@@ -166,21 +171,27 @@ async function readGateBriefingRecords(tmpRoot, headSha) {
 }
 
 /**
- * Gate a reviewer scope self-declares, using ONLY the gate vocabulary present in
- * the on-disk records (hyphenated to match the `--scope` form, since scopes
- * forbid underscores). Returns null for a bare/legacy scope with no recognized
- * gate prefix — those are matched by hash alone. No hardcoded gate list: the
- * vocabulary comes from the records themselves.
+ * Gate a reviewer scope self-declares, matched against the canonical gate
+ * vocabulary (hyphenated to the `--scope` form, since scopes forbid
+ * underscores). Uses the LONGEST matching prefix so a future gate whose name
+ * string-extends another is attributed correctly. Returns null for a bare/legacy
+ * scope with no recognized gate prefix — those are matched by hash alone.
+ * Exported for direct testing.
  * @param {string} scope
- * @param {Iterable<string>} knownGates
+ * @param {string[]} [gateNames]
  * @returns {string|null}
  */
-function declaredGateOf(scope, knownGates) {
-  for (const gate of knownGates) {
+export function declaredGateOf(scope, gateNames = GATE_NAMES) {
+  let best = null;
+  let bestLen = -1;
+  for (const gate of gateNames) {
     const prefix = gate.replace(/_/g, "-");
-    if (scope === prefix || scope.startsWith(`${prefix}-`)) return gate;
+    if ((scope === prefix || scope.startsWith(`${prefix}-`)) && prefix.length > bestLen) {
+      best = gate;
+      bestLen = prefix.length;
+    }
   }
-  return null;
+  return best;
 }
 
 /**
@@ -192,8 +203,10 @@ function declaredGateOf(scope, knownGates) {
  * must match one of those authoritative records; a hash matching none is a
  * contaminated/stale briefing and fails closed. This is what lets two gates
  * legitimately reviewed at ONE head both pass — each verifies against its own
- * gate's record — without a spurious cross-gate mismatch, while a genuinely
- * wrong hash still fails regardless of what scope string the reviewer used
+ * gate's record — without a spurious cross-gate mismatch. When a sentinel's
+ * scope self-declares a gate (against the canonical GATE_NAMES vocabulary),
+ * its matched record must belong to that SAME gate: a known hash that instead
+ * belongs to a different gate's record fails closed as a wrong-gate briefing
  * (the fix for the false fail-closed AND the fail-open the scope-prefix
  * approach would have introduced). When no records exist (offline/legacy) it
  * falls back to the conservative flat check: all sentinels must share one hash.
@@ -246,10 +259,9 @@ export function evaluateBriefingPrefixes(sentinels, gateRecords = null) {
   // Cross-gate check: when a sentinel's scope self-declares a gate, its matched
   // record must belong to THAT gate. A hash that matches a DIFFERENT gate's
   // record (a wrong-gate briefing) fails closed even though the hash is known.
-  const knownGates = new Set(records.values());
   const wrongGate = sentinels
     .filter((s) => {
-      const declared = declaredGateOf(s.scope, knownGates);
+      const declared = declaredGateOf(s.scope);
       return declared !== null && records.get(s.prefixHash) !== declared;
     })
     .map(({ scope, prefixHash }) => ({ scope, prefixHash }));

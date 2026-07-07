@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { evaluateBriefingPrefixes } from "../../scripts/github/verify-briefing-prefixes.mjs";
+import { declaredGateOf, evaluateBriefingPrefixes } from "../../scripts/github/verify-briefing-prefixes.mjs";
 
 const checkerPath = path.resolve("scripts/github/verify-briefing-prefixes.mjs");
 const contextGuardPath = path.resolve("scripts/github/verify-fresh-review-context.mjs");
@@ -132,6 +132,29 @@ test("evaluateBriefingPrefixes: a bare (ungated) scope matches by hash alone and
     { scope: "coverage", prefixHash: "hash-draft" },
   ], records);
   assert.equal(result.verified, true);
+});
+
+test("evaluateBriefingPrefixes: wrong-gate briefing fails closed even when the declared gate has no record this round (single-gate round)", () => {
+  const records = new Map([["hash-draft", "draft_gate"]]); // only draft has recorded this round
+  const result = evaluateBriefingPrefixes([
+    { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
+    { scope: "pre-approval-gate-mistaken", prefixHash: "hash-draft" }, // mis-scoped for an absent gate
+  ], records);
+  assert.equal(result.verified, false);
+  assert.ok(result.reason.includes("DIFFERENT gate"));
+  assert.deepEqual(result.mismatched.map((m) => m.scope), ["pre-approval-gate-mistaken"]);
+});
+
+test("declaredGateOf: matches the canonical gate vocabulary and returns null for bare scopes", () => {
+  assert.equal(declaredGateOf("draft-gate-coverage"), "draft_gate");
+  assert.equal(declaredGateOf("pre-approval-gate-yagni"), "pre_approval_gate");
+  assert.equal(declaredGateOf("coverage"), null);
+});
+
+test("declaredGateOf: uses the LONGEST matching prefix (prefix-extending gate names)", () => {
+  const vocab = ["draft_gate", "draft_gate_v2"];
+  assert.equal(declaredGateOf("draft-gate-v2-correctness", vocab), "draft_gate_v2");
+  assert.equal(declaredGateOf("draft-gate-coverage", vocab), "draft_gate");
 });
 
 test("evaluateBriefingPrefixes: no records -> flat fallback, two distinct hashes fail closed", () => {
@@ -279,6 +302,29 @@ test("verify-briefing-prefixes: a sentinel hash matching no on-disk gate record 
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.verified, false);
     assert.ok(output.reason.includes("matches no gate briefing-prefix record"));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-briefing-prefixes: identical-byte records under different gates attribute deterministically to the first gate (CLI)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
+    await mkdir(gateContextDir, { recursive: true });
+    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "IDENTICAL");
+    await writeFile(path.join(gateContextDir, `pre_approval_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "IDENTICAL");
+    const H = createHash("sha256").update("IDENTICAL").digest("hex");
+    await writeFile(
+      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-coverage-${FULL_TEST_SHA}.json`),
+      JSON.stringify({ scope: "coverage", prefixHash: H }),
+    );
+    const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.verified, true);
+    assert.equal(output.gates[0].gate, "draft_gate");
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
