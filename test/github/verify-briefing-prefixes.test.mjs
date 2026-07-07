@@ -71,7 +71,7 @@ test("evaluateBriefingPrefixes: different hashes fail closed (negative case)", (
 });
 
 test("evaluateBriefingPrefixes: two gates at one head, each matching its own record, both PASS (issue #1246 regression)", () => {
-  const records = new Map([["hash-draft", "draft_gate"], ["hash-preapproval", "pre_approval_gate"]]);
+  const records = new Map([["hash-draft", new Set(["draft_gate"])], ["hash-preapproval", new Set(["pre_approval_gate"])]]);
   const result = evaluateBriefingPrefixes([
     { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
     { scope: "draft-gate-correctness", prefixHash: "hash-draft" },
@@ -84,7 +84,7 @@ test("evaluateBriefingPrefixes: two gates at one head, each matching its own rec
 });
 
 test("evaluateBriefingPrefixes: a sentinel hash matching NO record fails closed (contaminated/stale briefing, not masked)", () => {
-  const records = new Map([["hash-draft", "draft_gate"]]);
+  const records = new Map([["hash-draft", new Set(["draft_gate"])]]);
   const result = evaluateBriefingPrefixes([
     { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
     { scope: "correctness", prefixHash: "hash-bad" }, // bare/stray scope must NOT let it self-verify
@@ -95,7 +95,7 @@ test("evaluateBriefingPrefixes: a sentinel hash matching NO record fails closed 
 });
 
 test("evaluateBriefingPrefixes: a missing hash still fails closed even with records present", () => {
-  const records = new Map([["hash-draft", "draft_gate"]]);
+  const records = new Map([["hash-draft", new Set(["draft_gate"])]]);
   const result = evaluateBriefingPrefixes([
     { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
     { scope: "draft-gate-correctness", prefixHash: null },
@@ -105,7 +105,7 @@ test("evaluateBriefingPrefixes: a missing hash still fails closed even with reco
 });
 
 test("evaluateBriefingPrefixes: single gate with a record emits prefixHash and a gates entry with reviewerCount", () => {
-  const records = new Map([["hash-draft", "draft_gate"]]);
+  const records = new Map([["hash-draft", new Set(["draft_gate"])]]);
   const result = evaluateBriefingPrefixes([
     { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
     { scope: "draft-gate-correctness", prefixHash: "hash-draft" },
@@ -116,7 +116,7 @@ test("evaluateBriefingPrefixes: single gate with a record emits prefixHash and a
 });
 
 test("evaluateBriefingPrefixes: a sentinel whose scope declares one gate but whose hash matches a DIFFERENT gate's record fails closed (wrong-gate briefing)", () => {
-  const records = new Map([["hash-draft", "draft_gate"], ["hash-preapproval", "pre_approval_gate"]]);
+  const records = new Map([["hash-draft", new Set(["draft_gate"])], ["hash-preapproval", new Set(["pre_approval_gate"])]]);
   const result = evaluateBriefingPrefixes([
     { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
     { scope: "draft-gate-correctness", prefixHash: "hash-preapproval" }, // wrong-gate: draft scope, pre-approval hash
@@ -127,7 +127,7 @@ test("evaluateBriefingPrefixes: a sentinel whose scope declares one gate but who
 });
 
 test("evaluateBriefingPrefixes: a bare (ungated) scope matches by hash alone and does not trigger the wrong-gate check", () => {
-  const records = new Map([["hash-draft", "draft_gate"]]);
+  const records = new Map([["hash-draft", new Set(["draft_gate"])]]);
   const result = evaluateBriefingPrefixes([
     { scope: "coverage", prefixHash: "hash-draft" },
   ], records);
@@ -135,7 +135,7 @@ test("evaluateBriefingPrefixes: a bare (ungated) scope matches by hash alone and
 });
 
 test("evaluateBriefingPrefixes: wrong-gate briefing fails closed even when the declared gate has no record this round (single-gate round)", () => {
-  const records = new Map([["hash-draft", "draft_gate"]]); // only draft has recorded this round
+  const records = new Map([["hash-draft", new Set(["draft_gate"])]]); // only draft has recorded this round
   const result = evaluateBriefingPrefixes([
     { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
     { scope: "pre-approval-gate-mistaken", prefixHash: "hash-draft" }, // mis-scoped for an absent gate
@@ -143,6 +143,22 @@ test("evaluateBriefingPrefixes: wrong-gate briefing fails closed even when the d
   assert.equal(result.verified, false);
   assert.ok(result.reason.includes("DIFFERENT gate"));
   assert.deepEqual(result.mismatched.map((m) => m.scope), ["pre-approval-gate-mistaken"]);
+});
+
+test("evaluateBriefingPrefixes: within-gate byte-identity fails closed when one gate has two distinct hashes (AC2)", () => {
+  const records = new Map([["h1", new Set(["draft_gate"])], ["h2", new Set(["draft_gate"])]]);
+  const result = evaluateBriefingPrefixes([
+    { scope: "draft-gate-a", prefixHash: "h1" },
+    { scope: "draft-gate-b", prefixHash: "h2" },
+  ], records);
+  assert.equal(result.verified, false);
+  assert.ok(result.reason.includes("within-gate") || result.reason.includes("DIFFERENT"));
+});
+
+test("evaluateBriefingPrefixes: a hash valid for multiple gates passes for a scope declaring one of them", () => {
+  const records = new Map([["hx", new Set(["draft_gate", "pre_approval_gate"])]]);
+  const ok = evaluateBriefingPrefixes([{ scope: "draft-gate-a", prefixHash: "hx" }], records);
+  assert.equal(ok.verified, true);
 });
 
 test("declaredGateOf: matches the canonical gate vocabulary and returns null for bare scopes", () => {
