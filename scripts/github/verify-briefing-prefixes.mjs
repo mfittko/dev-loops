@@ -38,8 +38,10 @@ Exit codes:
      identical hash
   1  Fail closed: a sentinel hash matches no on-disk gate record, or matches a
      DIFFERENT gate than its scope declares (wrong-gate briefing), or any
-     sentinel records no prefix hash — never grandfathered; or, with no
-     records, two or more sentinels record different hashes
+     sentinel records no prefix hash — never grandfathered; or two or more
+     sentinels attributed to the SAME gate recorded DIFFERENT prefix hashes
+     (within-gate briefings were not byte-identical); or, with no records,
+     two or more sentinels record different hashes
   2  Usage or internal error, or invalid --jq filter
 
 Gate scoping: each reviewer sentinel's recorded prefix hash is verified against
@@ -51,8 +53,11 @@ colliding into a spurious mismatch, and a hash matching no record fails closed.
 A sentinel whose scope self-declares a gate (e.g. "draft-gate-coverage") must
 also match THAT gate's record — a hash that matches a DIFFERENT gate's record
 is a wrong-gate briefing and fails closed even though the hash itself is known.
-When no records are present the check falls back to the conservative flat rule
-(all sentinels must share one hash).
+Beyond per-sentinel matching, all reviewers attributed to ONE gate must share
+ONE identical prefix hash — two DIFFERENT hashes for the same gate fails closed
+as a within-gate byte-identity violation, even when each hash individually
+matches a known record. When no records are present the check falls back to
+the conservative flat rule (all sentinels must share one hash).
 Never manually clear sentinels.`.trim();
 
 // Full 40-char SHA required: sentinel filenames embed the full `git rev-parse
