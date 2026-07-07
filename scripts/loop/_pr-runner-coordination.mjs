@@ -11,6 +11,7 @@ import {
 } from "./_steering-state-file.mjs";
 export const RUNNER_COORDINATION_SCHEMA_VERSION = 2;
 export const RUNNER_COORDINATION_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
+export const RUNNER_COORDINATION_HISTORY_LIMIT = 50; // ponytail: cap audit trail; heartbeats append per-round, keep the most recent 50 events
 export const RUNNER_OWNERSHIP_ERROR = Object.freeze({
   ACTIVE_RUN_EXISTS: "active_run_exists",
   OWNERSHIP_LOST: "ownership_lost",
@@ -52,7 +53,10 @@ async function loadRunnerStateFile(filePath) {
 }
 async function saveRunnerStateFile(filePath, state) {
   try {
-    return await saveSharedStateFile(filePath, state);
+    const capped = Array.isArray(state.history) && state.history.length > RUNNER_COORDINATION_HISTORY_LIMIT
+      ? { ...state, history: state.history.slice(-RUNNER_COORDINATION_HISTORY_LIMIT) }
+      : state;
+    return await saveSharedStateFile(filePath, capped);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to write runner coordination state file '${filePath}': ${message}`);
@@ -109,7 +113,7 @@ function resolveRepoCoordinationRoot(cwd) {
       root = path.dirname(path.resolve(canonicalCwd, commonDir));
     }
   } catch {
-    // not a git checkout / git unavailable — anchor at canonicalCwd (legacy behavior)
+    // not a git checkout / git unavailable — anchor at the canonical (realpath'd) cwd
   }
   coordinationRootCache.set(canonicalCwd, root);
   return root;

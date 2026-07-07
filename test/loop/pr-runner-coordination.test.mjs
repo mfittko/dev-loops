@@ -15,6 +15,7 @@ import {
   loadRunnerCoordinationState,
   releaseAsyncRunnerOwnership,
   releaseRunnerOwnership,
+  RUNNER_COORDINATION_HISTORY_LIMIT,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner, STALE_RUNNER_DEFAULT_MAX_AGE_MS } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
@@ -556,5 +557,40 @@ test("no false-stale split: worktree and repo root converge on one coordination 
   } finally {
     await rm(wtPath, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("history stays bounded across many heartbeats and keeps the newest entries", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-1",
+      cwd: tempDir,
+      now: "2026-06-05T08:00:00.000Z",
+    });
+
+    const heartbeatCount = 120;
+    for (let i = 0; i < heartbeatCount; i += 1) {
+      const now = new Date(Date.parse("2026-06-05T08:00:01.000Z") + i * 1000).toISOString();
+      const asserted = await assertRunnerOwnership({
+        repo: "owner/repo",
+        pr: 17,
+        runId: "run-1",
+        cwd: tempDir,
+        now,
+      });
+      assert.equal(asserted.ok, true);
+      assert.equal(asserted.status, "owner_confirmed");
+    }
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.ok(loaded.state.history.length <= RUNNER_COORDINATION_HISTORY_LIMIT);
+    const newest = loaded.state.history.at(-1);
+    assert.equal(newest.type, "heartbeat");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
   }
 });
