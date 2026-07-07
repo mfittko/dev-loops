@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -14,7 +15,28 @@ import {
   releaseAsyncRunnerOwnership,
   releaseRunnerOwnership,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { detectStaleRunner } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
+
+// Builds a throwaway git repo with a linked worktree so cross-CWD coordination
+// path resolution (git-common-dir anchoring) can be exercised for real.
+async function makeRepoWithWorktree() {
+  // realpath both dirs: macOS mkdtemp() returns /var/... which is a symlink to
+  // /private/var/...; git resolves symlinks internally, so leaving these
+  // unresolved makes the worktree and repo-root paths diverge for reasons
+  // unrelated to the coordination-root fix under test.
+  const repoRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-git-")));
+  const git = (args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" });
+  git(["init", "-q"]);
+  git(["config", "user.email", "test@example.com"]);
+  git(["config", "user.name", "Test User"]);
+  await writeFile(path.join(repoRoot, "README.md"), "init\n", "utf8");
+  git(["add", "README.md"]);
+  git(["commit", "-q", "-m", "init"]);
+  const wtPath = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-wt-")));
+  git(["worktree", "add", "-q", wtPath, "-b", "issue-1245-wt"]);
+  return { repoRoot, wtPath };
+}
 
 test("runner coordination claims empty PR ownership and refreshes same run", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
@@ -393,5 +415,78 @@ test("releaseAsyncRunnerOwnership is non-fatal (release_error) when the coordina
     assert.ok(typeof result.message === "string" && result.message.length > 0);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("cross-CWD claim visibility: worktree and repo root resolve the same coordination file", async () => {
+  const { repoRoot, wtPath } = await makeRepoWithWorktree();
+
+  try {
+    assert.equal(
+      defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, wtPath),
+      defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, repoRoot),
+    );
+
+    const claimedFromWorktree = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-wt", cwd: wtPath });
+    assert.equal(claimedFromWorktree.ok, true);
+    const confirmedFromRoot = await assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-wt", cwd: repoRoot });
+    assert.equal(confirmedFromRoot.ok, true);
+    assert.equal(confirmedFromRoot.status, "owner_confirmed");
+
+    const claimedFromRoot = await claimRunnerOwnership({ repo: "owner/repo", pr: 18, runId: "run-root", cwd: repoRoot });
+    assert.equal(claimedFromRoot.ok, true);
+    const confirmedFromWorktree = await assertRunnerOwnership({ repo: "owner/repo", pr: 18, runId: "run-root", cwd: wtPath });
+    assert.equal(confirmedFromWorktree.ok, true);
+    assert.equal(confirmedFromWorktree.status, "owner_confirmed");
+  } finally {
+    await rm(wtPath, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("detector from repo root sees a worktree runner's refresh (no false-stale)", async () => {
+  const { repoRoot, wtPath } = await makeRepoWithWorktree();
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-wt", cwd: wtPath, now: "2026-06-05T08:00:00.000Z" });
+    const refreshed = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-wt",
+      cwd: wtPath,
+      now: "2026-06-05T08:29:00.000Z",
+    });
+    assert.equal(refreshed.status, "refreshed");
+
+    const detected = await detectStaleRunner({
+      repo: "owner/repo",
+      pr: 17,
+      cwd: repoRoot,
+      now: Date.parse("2026-06-05T08:29:30.000Z"),
+      maxAgeMs: 5 * 60 * 1000,
+    });
+    assert.equal(detected.ok, true);
+    assert.equal(detected.status, "fresh_runner");
+    assert.equal(detected.staleRunner, null);
+  } finally {
+    await rm(wtPath, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("no false-stale split: worktree and repo root converge on one coordination state", async () => {
+  const { repoRoot, wtPath } = await makeRepoWithWorktree();
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-wt", cwd: wtPath, now: "2026-06-05T08:00:00.000Z" });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-wt", cwd: wtPath, now: "2026-06-05T08:15:00.000Z" });
+
+    const fromRoot = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: repoRoot });
+    const fromWorktree = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: wtPath });
+    assert.equal(fromRoot.state.activeRun.updatedAt, "2026-06-05T08:15:00.000Z");
+    assert.equal(fromRoot.state.activeRun.updatedAt, fromWorktree.state.activeRun.updatedAt);
+  } finally {
+    await rm(wtPath, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });

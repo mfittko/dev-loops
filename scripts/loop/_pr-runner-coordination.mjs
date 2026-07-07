@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
@@ -64,13 +65,43 @@ async function withRunnerStateFileLock(filePath, callback) {
     throw new Error(`Failed to acquire runner coordination state lock for '${filePath}': ${message}`);
   }
 }
+const coordinationRootCache = new Map();
+/**
+ * Resolve the single stable coordination root for a checkout, independent of CWD.
+ *
+ * `git rev-parse --git-common-dir` yields the shared git dir that is identical for
+ * a repo and all its linked worktrees, so its parent is the one main-checkout root
+ * that a worktree runner and a repo-root detector both anchor to — eliminating the
+ * split-copy false-stale stall where each read a different `.pi/runner-coordination`
+ * file. Falls back to `cwd` when git is unavailable or the dir is not a checkout
+ * (preserves legacy behavior for non-git temp dirs). Cached per cwd for the process.
+ */
+function resolveRepoCoordinationRoot(cwd) {
+  if (coordinationRootCache.has(cwd)) return coordinationRootCache.get(cwd);
+  let root = cwd;
+  try {
+    const commonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (commonDir) {
+      root = path.dirname(path.resolve(cwd, commonDir));
+    }
+  } catch {
+    // not a git checkout / git unavailable — anchor at cwd (legacy behavior)
+  }
+  coordinationRootCache.set(cwd, root);
+  return root;
+}
 export function defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd = process.cwd()) {
   const { owner, name } = parseRepoSlugParts(repo, {
     errorMessage: `Invalid repo slug for coordination target path: ${JSON.stringify(repo)}`,
     lowercase: true,
   });
   const normalizedPr = normalizePr(pr);
-  return path.join(cwd, ".pi", "runner-coordination", owner, name, `pr-${normalizedPr}.json`);
+  const root = resolveRepoCoordinationRoot(cwd);
+  return path.join(root, ".pi", "runner-coordination", owner, name, `pr-${normalizedPr}.json`);
 }
 export function createRunnerCoordinationState({ repo, pr, runId = null, now = new Date().toISOString() }) {
   const normalizedRepo = normalizeRepoSlug(repo);
