@@ -135,10 +135,13 @@ scripts legitimately call `gh`/GraphQL internally; that is the tooling. The rule
 targets the agent's own top-level shell calls, not a script's internals.
 
 **Write-op allowlist (verifier only):** `gh pr merge`, `gh pr ready`,
-`gh issue create`, `gh issue edit` have no internal wrapper today. The deterministic
-verifier records these as `allowedWriteOps` rather than violations so they are
-surfaced distinctly, not as breaches. Close the gap with a wrapper to remove an
-entry. None of these block anything.
+`gh issue create` have no internal wrapper today. `gh issue edit` now has one
+(`scripts/github/edit-issue.mjs`) and stays as a belt-and-suspenders entry — like
+`gh label create` (`scripts/github/create-label.mjs`) — so a bare invocation
+surfaced from the wrapper's own subprocess is not miscounted as a breach. The
+deterministic verifier records all of these as `allowedWriteOps` rather than
+violations so they are surfaced distinctly, not as breaches. Close the gap with a
+wrapper to remove or reframe a no-wrapper entry. None of these block anything.
 
 **Inline-interpreter check item:** the raw-call scan below mechanically catches
 `node -e`/`python3 -c`/heredoc calls as a `rawCallViolations` entry — the same
