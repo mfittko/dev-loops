@@ -16,7 +16,7 @@ import {
   releaseAsyncRunnerOwnership,
   releaseRunnerOwnership,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
-import { detectStaleRunner } from "../../scripts/loop/_stale-runner-detection.mjs";
+import { detectStaleRunner, STALE_RUNNER_DEFAULT_MAX_AGE_MS } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
 
 // Builds a throwaway git repo with a linked worktree so cross-CWD coordination
@@ -104,6 +104,52 @@ test("runner coordination fails closed for second claim and allows explicit take
     assert.equal(staleAssert.ok, false);
     assert.equal(staleAssert.error, "ownership_lost");
     assert.equal(staleAssert.activeRun.runId, "run-2");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("owner-confirmed assert refreshes updatedAt so a long gate cycle stays non-stale", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const t0 = Date.parse("2026-01-01T00:00:00.000Z");
+  const isoAt = (offsetMs) => new Date(t0 + offsetMs).toISOString();
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir, now: isoAt(0) });
+
+    let lastAssertedAt = isoAt(0);
+    for (const offsetMinutes of [20, 40, 60]) {
+      const at = isoAt(offsetMinutes * 60 * 1000);
+      const asserted = await assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir, now: at });
+      assert.equal(asserted.ok, true);
+      assert.equal(asserted.status, "owner_confirmed");
+      assert.equal(asserted.activeRun.updatedAt, at);
+      lastAssertedAt = at;
+    }
+
+    // 65 min after claim / 5 min after last assert: claimedAt is stale-old but
+    // the refreshed updatedAt keeps the runner fresh.
+    const freshCheck = await detectStaleRunner({
+      repo: "owner/repo",
+      pr: 17,
+      cwd: tempDir,
+      now: Date.parse(lastAssertedAt) + 5 * 60 * 1000,
+      maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
+    });
+    assert.equal(freshCheck.staleRunner, null);
+    assert.equal(freshCheck.status, "fresh_runner");
+
+    // Discrimination: with no further assert, 40 min after the last assert
+    // both claimedAt and updatedAt exceed maxAge, so it IS stale — proving
+    // the refresh (not some other mechanism) was what kept it alive above.
+    const staleCheck = await detectStaleRunner({
+      repo: "owner/repo",
+      pr: 17,
+      cwd: tempDir,
+      now: Date.parse(lastAssertedAt) + 40 * 60 * 1000,
+      maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
+    });
+    assert.notEqual(staleCheck.staleRunner, null);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
