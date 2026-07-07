@@ -61,7 +61,7 @@ Before fanning out reviewers, run a preamble pass that produces review handoff c
 in the PR's actual worktree/head — the same checkout the reviewers will run in — so the
 gitignored, worktree-local `tmp/gate-context` bundle it writes is present for them:
 
-- the context-builder runs in fresh context and emits a NEUTRAL artifact; that artifact (never the parent session's chat history or state) is what each downstream reviewer subagent is later seeded with. **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs --scope <angle> --context-path <path> --prefix-hash <sha256>` (or `--prefix-file <path>`) at startup and refuse to proceed on contamination or a missing gate-context artifact. Use `--scope <angle>` so each reviewer writes its own sentinel, `--context-path` to the artifact this phase writes below, and `--prefix-hash`/`--prefix-file` to record the invariant-briefing prefix hash enforced by `GATE-EXEC-BRIEFING-PREFIX`.
+- the context-builder runs in fresh context and emits a NEUTRAL artifact; that artifact (never the parent session's chat history or state) is what each downstream reviewer subagent is later seeded with. **Mandatory:** every gate-review subagent must run `scripts/github/verify-fresh-review-context.mjs --scope <gate>-<angle> --context-path <path> --prefix-hash <sha256>` (or `--prefix-file <path>`) at startup and refuse to proceed on contamination or a missing gate-context artifact. Use a gate-prefixed `--scope <gate>-<angle>` (e.g. `draft-gate-coverage`) so each reviewer writes its own sentinel and attributes to its gate (see [Sentinel lifecycle](#sentinel-lifecycle)), `--context-path` to the artifact this phase writes below, and `--prefix-hash`/`--prefix-file` to record the invariant-briefing prefix hash enforced by `GATE-EXEC-BRIEFING-PREFIX`.
 - **Worktree isolation is PROHIBITED for per-angle gate reviewers.** They are read-only
   (they never mutate files), so filesystem isolation buys nothing and actively breaks the
   "build once, seed many" contract: a fresh worktree is checked out from `main`, not the
@@ -183,11 +183,16 @@ sentinel for the round records no prefix hash at all — a missing hash means th
 invariant-prefix proof was never established for that reviewer and is treated the same as
 a mismatch, never grandfathered in — a single hashless sentinel (e.g. a one-angle Phase 5
 retry round) fails closed the same way. The check is deterministic and offline: it only
-reads sentinel files already on disk. Caveat: the check is keyed by head SHA only, not by
-gate — two gates reviewed at the SAME head share one sentinel namespace, so a `draft_gate`
-and `pre_approval_gate` pass at an identical head with legitimately different invariant
-blocks would flag as a mismatch. That direction is conservative (fail-closed, never
-fail-open); in practice `GATE-EXEC-REGATE-MANDATORY` advances the head between passes.
+reads sentinel and record files already on disk. Verification is **per-gate by record
+hash**: `write-gate-context.mjs` persists a per-gate briefing-prefix record
+(`<gate>-<headSha>.briefing-prefix.txt` under `tmp/gate-context/**`), and the fan-in builds
+a hash→gate(s) index from those records. Each sentinel's recorded hash must match one of
+those records, so two gates reviewed at the same head each verify against their own record
+instead of colliding into a spurious mismatch. A hash matching no record, or a hash
+belonging to a DIFFERENT gate than the sentinel's gate-prefixed scope declares, fails
+closed. Only when no on-disk records exist (offline/legacy) does it fall back to the flat
+rule that all of the round's sentinels share ONE identical hash. See
+`verify-briefing-prefixes.mjs --help` for the worked same-head two-gate example.
 
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Reviewers SHOULD run in parallel when practical; when parallel execution is impractical
@@ -205,10 +210,13 @@ review round**, keyed by the head SHA. This makes the lifecycle mechanical rathe
 manual chore:
 
 - The round key is the current head SHA (`git rev-parse HEAD`); reviewers keep invoking the
-  guard as `--scope <angle>` and get head-keyed isolation for free — no flag to pass. `git
-  rev-parse HEAD` yields the same full SHA on every invocation for a given head, so the key is
-  deterministic and the same-head guard cannot be defeated by an inconsistent spelling. The
-  sentinel filename is therefore `tmp/checkpoint-context-sentinel-<scope>-<headSha>.json` in a
+  guard as `--scope <gate>-<angle>` (a **gate-prefixed** scope, e.g. `draft-gate-coverage`)
+  and get head-keyed isolation for free — no flag to pass. The gate prefix attributes each
+  sentinel to its gate for the per-gate record-hash check above; the head key gives retry
+  isolation. `git rev-parse HEAD` yields the same full SHA on every invocation for a given
+  head, so the key is deterministic and the same-head guard cannot be defeated by an
+  inconsistent spelling. The sentinel filename is therefore
+  `tmp/checkpoint-context-sentinel-<scope>-<headSha>.json` in a
   git worktree. When git is unavailable (non-git worktree, no commits), the head component is
   omitted and the key falls back to the scope-only filename
   `tmp/checkpoint-context-sentinel-<scope>.json` (legacy behavior) — there is no `-<headSha>`

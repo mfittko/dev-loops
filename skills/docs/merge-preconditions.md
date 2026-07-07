@@ -39,6 +39,8 @@ doing manually; it is not a general conflict-resolution engine.
 ## Required before merge
 
 <!-- rule: MERGE-PRECOND-REQUIRED -->
+Before merge, ALL of the following MUST hold:
+
 1. ✅ Conflict-free with base (`mergeable: MERGEABLE`; not `CONFLICTING`/`DIRTY`/`BEHIND`/`UNKNOWN`)
 2. ✅ CI green on current head (or crediblyGreen via `--local-validation-head-sha`)
 3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](../../docs/gate-review-comment-contract.md))
@@ -80,9 +82,9 @@ A marker is allowed only while the PR is still in draft; it must be removed befo
 
 ## Merge authorization
 
-- Must be explicit for the active issue/PR scope
+- Merge authorization MUST be explicit for the active issue/PR scope
 - `"Merge authorized if gates green"` is valid explicit authorization
-- Implied approval from prior turns is not sufficient
+- Implied approval from prior turns MUST NOT be treated as sufficient
 
 ### `autonomy.humanMergeOnly` — fixed human-only merge (non-overridable)
 
