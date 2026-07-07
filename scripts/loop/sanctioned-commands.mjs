@@ -37,6 +37,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
   // Metadata edits.
   edits: Object.freeze({
     "pr-body-title-assignee-milestone": "scripts/github/edit-pr.mjs",
+    "issue-body-title-assignee-milestone": "scripts/github/edit-issue.mjs",
     "issue-comment": "scripts/github/comment-issue.mjs",
   }),
 

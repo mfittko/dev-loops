@@ -234,18 +234,19 @@ function extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb) {
 
 /**
  * The raw external-write verb forms that must be blocked when originating from a subagent:
- * ad-hoc GitHub issue/PR creation and comments run directly via `gh` (not the sanctioned node
- * wrappers). Each entry is `[subcmd, verb]`.
+ * ad-hoc GitHub issue/PR creation, comments, and edits run directly via `gh` (not the sanctioned
+ * node wrappers). Each entry is `[subcmd, verb]`.
  */
 const EXTERNAL_WRITE_VERB_FORMS = Object.freeze([
   ["issue", "create"],
   ["issue", "comment"],
+  ["issue", "edit"],
   ["pr", "comment"],
 ]);
 
 /**
- * Whether `command` contains a raw `gh issue create`, `gh issue comment`, or `gh pr comment`
- * invocation in ANY shell segment (ignoring --help/-h). PreToolUse gate use only — the gate
+ * Whether `command` contains a raw `gh issue create`, `gh issue comment`, `gh issue edit`, or
+ * `gh pr comment` invocation in ANY shell segment (ignoring --help/-h). PreToolUse gate use only — the gate
  * blocks these when they originate from a subagent context. Node-wrapper commands
  * (`node scripts/github/comment-issue.mjs …`) never match (first token is `node`, not `gh`).
  * @param {string} command @returns {boolean}
@@ -255,8 +256,8 @@ export function commandContainsRawExternalWrite(command) {
 }
 
 /**
- * Return `{ segment, explicitRepo }` for every raw external-write segment across all three verb
- * forms (`gh issue create` / `gh issue comment` / `gh pr comment`). PreToolUse gate use only —
+ * Return `{ segment, explicitRepo }` for every raw external-write segment across all four verb
+ * forms (`gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment`). PreToolUse gate use only —
  * lets the gate decide in-scope-ness per segment so a leading out-of-scope write can't shield a
  * later in-scope one. `explicitRepo` is the segment's `--repo`/`-R` value or null.
  * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
