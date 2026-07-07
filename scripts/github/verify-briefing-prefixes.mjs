@@ -155,8 +155,8 @@ async function readGateBriefingRecords(tmpRoot, headSha) {
   const records = new Map();
   const matches = entries
     .filter((e) => e.isFile() && e.name.endsWith(suffix) && e.name.length > suffix.length)
-    // readdir order is filesystem-dependent; sort by name so a same-hash
-    // collision's first-seen-wins Map entry is deterministic across runs.
+    // readdir order is filesystem-dependent; sort by name so the hash->Set<gate>
+    // index is built in a deterministic order across runs.
     .sort((a, b) => a.name.localeCompare(b.name));
   for (const e of matches) {
     const gate = e.name.slice(0, -suffix.length);
@@ -180,20 +180,24 @@ async function readGateBriefingRecords(tmpRoot, headSha) {
 /**
  * Gate a reviewer scope self-declares, matched against the canonical gate
  * vocabulary (hyphenated to the `--scope` form, since scopes forbid
- * underscores). Uses the LONGEST matching prefix so a future gate whose name
- * string-extends another is attributed correctly. Returns null for a bare/legacy
- * scope with no recognized gate prefix — those are matched by hash alone.
+ * underscores). Matching is case-insensitive (`--scope` permits mixed case;
+ * a mis-cased scope must still be attributed to its gate rather than falling
+ * through to the bare-scope path and bypassing the wrong-gate check). Uses
+ * the LONGEST matching prefix so a future gate whose name string-extends
+ * another is attributed correctly. Returns null for a bare/legacy scope with
+ * no recognized gate prefix — those are matched by hash alone.
  * Exported for direct testing.
  * @param {string} scope
  * @param {string[]} [gateNames]
  * @returns {string|null}
  */
 export function declaredGateOf(scope, gateNames = GATE_NAMES) {
+  const s = scope.toLowerCase();
   let best = null;
   let bestLen = -1;
   for (const gate of gateNames) {
     const prefix = gate.replace(/_/g, "-");
-    if ((scope === prefix || scope.startsWith(`${prefix}-`)) && prefix.length > bestLen) {
+    if ((s === prefix || s.startsWith(`${prefix}-`)) && prefix.length > bestLen) {
       best = gate;
       bestLen = prefix.length;
     }

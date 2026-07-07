@@ -30,6 +30,34 @@ function makeGit(tmpDir) {
   };
 }
 
+// mkdtemp + guaranteed cleanup, for CLI tests that only need a scratch cwd.
+async function withTmpDir(fn) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
+  try {
+    return await fn(tmpDir);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// Writes an on-disk per-gate briefing-prefix record (as write-gate-context.mjs
+// would) and returns its sha256 for use as a sentinel's recorded prefixHash.
+async function writeBriefingRecord(tmpDir, gate, sha, bytes) {
+  const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
+  await mkdir(gateContextDir, { recursive: true });
+  await writeFile(path.join(gateContextDir, `${gate}-${sha}.briefing-prefix.txt`), bytes);
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+// Writes a reviewer sentinel (as verify-fresh-review-context.mjs would).
+async function writeSentinel(tmpDir, scope, sha, prefixHash) {
+  await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+  await writeFile(
+    path.join(tmpDir, "tmp", `checkpoint-context-sentinel-${scope}-${sha}.json`),
+    JSON.stringify({ scope, prefixHash }),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Pure function unit tests (no filesystem/subprocess).
 // ---------------------------------------------------------------------------
@@ -173,6 +201,20 @@ test("declaredGateOf: uses the LONGEST matching prefix (prefix-extending gate na
   assert.equal(declaredGateOf("draft-gate-coverage", vocab), "draft_gate");
 });
 
+test("declaredGateOf: matches case-insensitively (mixed-case scope still declares its gate)", () => {
+  assert.equal(declaredGateOf("Pre-Approval-Gate-Correctness"), "pre_approval_gate");
+  assert.equal(declaredGateOf("DRAFT-GATE-coverage"), "draft_gate");
+});
+
+test("evaluateBriefingPrefixes: a mixed-case wrong-gate scope still fails closed (case-insensitive)", () => {
+  const records = new Map([["hash-draft", new Set(["draft_gate"])]]);
+  const result = evaluateBriefingPrefixes([
+    { scope: "Pre-Approval-Gate-x", prefixHash: "hash-draft" }, // declares pre_approval but hash is draft's
+  ], records);
+  assert.equal(result.verified, false);
+  assert.ok(result.reason.includes("DIFFERENT gate"));
+});
+
 test("evaluateBriefingPrefixes: no records -> flat fallback, two distinct hashes fail closed", () => {
   const result = evaluateBriefingPrefixes([
     { scope: "a", prefixHash: "h1" },
@@ -226,46 +268,30 @@ test("verify-briefing-prefixes rejects a SHORT head SHA (would glob zero sentine
 const FULL_TEST_SHA = "abc1234abc1234abc1234abc1234abc1234abc12";
 
 test("verify-briefing-prefixes exits 0 with reviewerCount 0 when no sentinels exist for the head SHA", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
-  try {
+  await withTmpDir(async (tmpDir) => {
     const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.verified, true);
     assert.equal(output.reviewerCount, 0);
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 });
 
 test("verify-briefing-prefixes treats a malformed (non-sha256) recorded hash as missing and fails closed", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
-  try {
-    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
-    await writeFile(
-      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-correctness-${FULL_TEST_SHA}.json`),
-      JSON.stringify({ scope: "correctness", prefixHash: "not-a-real-hash" }),
-    );
+  await withTmpDir(async (tmpDir) => {
+    await writeSentinel(tmpDir, "correctness", FULL_TEST_SHA, "not-a-real-hash");
     const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stdout + result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.verified, false);
     assert.deepEqual(output.missing, ["correctness"]);
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 });
 
 test("verify-briefing-prefixes: two gates at one head both pass via CLI, verified against on-disk records (issue #1246 regression)", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
-  try {
-    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
-    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
-    await mkdir(gateContextDir, { recursive: true });
-    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "DRAFT BRIEFING");
-    await writeFile(path.join(gateContextDir, `pre_approval_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "PREAPPROVAL BRIEFING");
-    const H1 = createHash("sha256").update("DRAFT BRIEFING").digest("hex");
-    const H2 = createHash("sha256").update("PREAPPROVAL BRIEFING").digest("hex");
+  await withTmpDir(async (tmpDir) => {
+    const H1 = await writeBriefingRecord(tmpDir, "draft_gate", FULL_TEST_SHA, "DRAFT BRIEFING");
+    const H2 = await writeBriefingRecord(tmpDir, "pre_approval_gate", FULL_TEST_SHA, "PREAPPROVAL BRIEFING");
     const sentinels = [
       ["draft-gate-coverage", H1],
       ["draft-gate-correctness", H1],
@@ -273,10 +299,7 @@ test("verify-briefing-prefixes: two gates at one head both pass via CLI, verifie
       ["pre-approval-gate-kiss", H2],
     ];
     for (const [scope, prefixHash] of sentinels) {
-      await writeFile(
-        path.join(tmpDir, "tmp", `checkpoint-context-sentinel-${scope}-${FULL_TEST_SHA}.json`),
-        JSON.stringify({ scope, prefixHash }),
-      );
+      await writeSentinel(tmpDir, scope, FULL_TEST_SHA, prefixHash);
     }
     const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -285,21 +308,13 @@ test("verify-briefing-prefixes: two gates at one head both pass via CLI, verifie
     assert.equal(output.reviewerCount, 4);
     const byGate = Object.fromEntries(output.gates.map((g) => [g.gate, g.prefixHash]));
     assert.deepEqual(byGate, { draft_gate: H1, pre_approval_gate: H2 });
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 });
 
 test("verify-briefing-prefixes: a sentinel hash matching no on-disk gate record fails closed via CLI", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
-  try {
-    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
-    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
-    await mkdir(gateContextDir, { recursive: true });
-    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "DRAFT BRIEFING");
-    await writeFile(path.join(gateContextDir, `pre_approval_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "PREAPPROVAL BRIEFING");
-    const H1 = createHash("sha256").update("DRAFT BRIEFING").digest("hex");
-    const H2 = createHash("sha256").update("PREAPPROVAL BRIEFING").digest("hex");
+  await withTmpDir(async (tmpDir) => {
+    const H1 = await writeBriefingRecord(tmpDir, "draft_gate", FULL_TEST_SHA, "DRAFT BRIEFING");
+    const H2 = await writeBriefingRecord(tmpDir, "pre_approval_gate", FULL_TEST_SHA, "PREAPPROVAL BRIEFING");
     const BOGUS = "c".repeat(64);
     const sentinels = [
       ["draft-gate-coverage", H1],
@@ -308,94 +323,56 @@ test("verify-briefing-prefixes: a sentinel hash matching no on-disk gate record 
       ["pre-approval-gate-kiss", H2],
     ];
     for (const [scope, prefixHash] of sentinels) {
-      await writeFile(
-        path.join(tmpDir, "tmp", `checkpoint-context-sentinel-${scope}-${FULL_TEST_SHA}.json`),
-        JSON.stringify({ scope, prefixHash }),
-      );
+      await writeSentinel(tmpDir, scope, FULL_TEST_SHA, prefixHash);
     }
     const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stdout + result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.verified, false);
     assert.ok(output.reason.includes("matches no gate briefing-prefix record"));
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 });
 
 test("verify-briefing-prefixes: a wrong-gate briefing (scope declares one gate, hash belongs to another) fails closed via CLI", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
-  try {
-    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
-    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
-    await mkdir(gateContextDir, { recursive: true });
-    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "DRAFT BRIEFING");
-    await writeFile(path.join(gateContextDir, `pre_approval_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "PREAPPROVAL BRIEFING");
-    const H_DRAFT = createHash("sha256").update("DRAFT BRIEFING").digest("hex");
-    const H_PRE = createHash("sha256").update("PREAPPROVAL BRIEFING").digest("hex");
-    await writeFile(
-      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-draft-gate-coverage-${FULL_TEST_SHA}.json`),
-      JSON.stringify({ scope: "draft-gate-coverage", prefixHash: H_DRAFT }),
-    );
-    await writeFile(
-      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-pre-approval-gate-mistaken-${FULL_TEST_SHA}.json`),
-      JSON.stringify({ scope: "pre-approval-gate-mistaken", prefixHash: H_DRAFT }), // wrong-gate: declares pre-approval, hash is draft's
-    );
+  await withTmpDir(async (tmpDir) => {
+    const H_DRAFT = await writeBriefingRecord(tmpDir, "draft_gate", FULL_TEST_SHA, "DRAFT BRIEFING");
+    await writeBriefingRecord(tmpDir, "pre_approval_gate", FULL_TEST_SHA, "PREAPPROVAL BRIEFING");
+    await writeSentinel(tmpDir, "draft-gate-coverage", FULL_TEST_SHA, H_DRAFT);
+    // wrong-gate: declares pre-approval, hash is draft's
+    await writeSentinel(tmpDir, "pre-approval-gate-mistaken", FULL_TEST_SHA, H_DRAFT);
     const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stdout + result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.verified, false);
     assert.ok(output.reason.includes("DIFFERENT gate"));
     assert.ok(output.mismatched.some((m) => m.scope === "pre-approval-gate-mistaken"));
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 });
 
 test("verify-briefing-prefixes: identical-byte records under different gates attribute deterministically to the first gate (CLI)", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
-  try {
-    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
-    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
-    await mkdir(gateContextDir, { recursive: true });
-    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "IDENTICAL");
-    await writeFile(path.join(gateContextDir, `pre_approval_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "IDENTICAL");
-    const H = createHash("sha256").update("IDENTICAL").digest("hex");
-    await writeFile(
-      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-coverage-${FULL_TEST_SHA}.json`),
-      JSON.stringify({ scope: "coverage", prefixHash: H }),
-    );
+  await withTmpDir(async (tmpDir) => {
+    await writeBriefingRecord(tmpDir, "draft_gate", FULL_TEST_SHA, "IDENTICAL");
+    const H = await writeBriefingRecord(tmpDir, "pre_approval_gate", FULL_TEST_SHA, "IDENTICAL");
+    await writeSentinel(tmpDir, "coverage", FULL_TEST_SHA, H);
     const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.verified, true);
     assert.equal(output.gates[0].gate, "draft_gate");
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 });
 
 test("verify-briefing-prefixes: a stray non-canonical-gate briefing record is ignored (fails closed)", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
-  try {
-    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
-    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
-    await mkdir(gateContextDir, { recursive: true });
-    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "DRAFT");
-    await writeFile(path.join(gateContextDir, `bogus_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "STRAY");
-    const strayHash = createHash("sha256").update("STRAY").digest("hex");
-    await writeFile(
-      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-coverage-${FULL_TEST_SHA}.json`),
-      JSON.stringify({ scope: "coverage", prefixHash: strayHash }),
-    );
+  await withTmpDir(async (tmpDir) => {
+    await writeBriefingRecord(tmpDir, "draft_gate", FULL_TEST_SHA, "DRAFT");
+    const strayHash = await writeBriefingRecord(tmpDir, "bogus_gate", FULL_TEST_SHA, "STRAY");
+    await writeSentinel(tmpDir, "coverage", FULL_TEST_SHA, strayHash);
     const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stdout + result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.verified, false);
     assert.ok(output.reason.includes("matches no gate briefing-prefix record"));
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 });
 
 // ---------------------------------------------------------------------------
