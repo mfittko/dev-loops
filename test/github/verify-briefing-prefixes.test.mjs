@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -69,39 +70,56 @@ test("evaluateBriefingPrefixes: different hashes fail closed (negative case)", (
   assert.equal(result.mismatched.length, 2);
 });
 
-test("evaluateBriefingPrefixes: two gates at ONE head each internally consistent both PASS (issue #1246 regression)", () => {
+test("evaluateBriefingPrefixes: two gates at one head, each matching its own record, both PASS (issue #1246 regression)", () => {
+  const records = new Map([["hash-draft", "draft_gate"], ["hash-preapproval", "pre_approval_gate"]]);
   const result = evaluateBriefingPrefixes([
     { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
     { scope: "draft-gate-correctness", prefixHash: "hash-draft" },
     { scope: "pre-approval-gate-yagni", prefixHash: "hash-preapproval" },
     { scope: "pre-approval-gate-kiss", prefixHash: "hash-preapproval" },
-  ]);
+  ], records);
   assert.equal(result.verified, true);
-  // Per-gate breakdown, each with its own recorded hash.
   const byGate = Object.fromEntries(result.gates.map((g) => [g.gate, g.prefixHash]));
-  assert.deepEqual(byGate, { "draft-gate": "hash-draft", "pre-approval-gate": "hash-preapproval" });
+  assert.deepEqual(byGate, { draft_gate: "hash-draft", pre_approval_gate: "hash-preapproval" });
 });
 
-test("evaluateBriefingPrefixes: a mismatch WITHIN one gate still fails closed (invariant preserved)", () => {
+test("evaluateBriefingPrefixes: a sentinel hash matching NO record fails closed (contaminated/stale briefing, not masked)", () => {
+  const records = new Map([["hash-draft", "draft_gate"]]);
   const result = evaluateBriefingPrefixes([
-    { scope: "draft-gate-coverage", prefixHash: "hash-1" },
-    { scope: "draft-gate-correctness", prefixHash: "hash-2" },
-    { scope: "pre-approval-gate-yagni", prefixHash: "hash-preapproval" },
-  ]);
+    { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
+    { scope: "correctness", prefixHash: "hash-bad" }, // bare/stray scope must NOT let it self-verify
+  ], records);
   assert.equal(result.verified, false);
-  assert.equal(result.gate, "draft-gate");
-  assert.ok(result.reason.includes("DIFFERENT"));
+  assert.ok(result.reason.includes("matches no gate briefing-prefix record"));
+  assert.deepEqual(result.mismatched.map((m) => m.prefixHash), ["hash-bad"]);
 });
 
-test("evaluateBriefingPrefixes: a missing hash WITHIN one gate still fails closed (not grandfathered)", () => {
+test("evaluateBriefingPrefixes: a missing hash still fails closed even with records present", () => {
+  const records = new Map([["hash-draft", "draft_gate"]]);
   const result = evaluateBriefingPrefixes([
     { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
     { scope: "draft-gate-correctness", prefixHash: null },
-    { scope: "pre-approval-gate-yagni", prefixHash: "hash-preapproval" },
+  ], records);
+  assert.equal(result.verified, false);
+  assert.deepEqual(result.missing, ["draft-gate-correctness"]);
+});
+
+test("evaluateBriefingPrefixes: no records -> flat fallback, two distinct hashes fail closed", () => {
+  const result = evaluateBriefingPrefixes([
+    { scope: "a", prefixHash: "h1" },
+    { scope: "b", prefixHash: "h2" },
   ]);
   assert.equal(result.verified, false);
-  assert.equal(result.gate, "draft-gate");
-  assert.deepEqual(result.missing, ["draft-gate-correctness"]);
+  assert.ok(result.reason.includes("DIFFERENT"));
+});
+
+test("evaluateBriefingPrefixes: no records -> flat fallback, identical hashes verify", () => {
+  const result = evaluateBriefingPrefixes([
+    { scope: "a", prefixHash: "same" },
+    { scope: "b", prefixHash: "same" },
+  ]);
+  assert.equal(result.verified, true);
+  assert.equal(result.prefixHash, "same");
 });
 
 test("evaluateBriefingPrefixes: a missing hash fails closed even when other hashes agree (fail-closed, not grandfathered)", () => {
@@ -169,12 +187,16 @@ test("verify-briefing-prefixes treats a malformed (non-sha256) recorded hash as 
   }
 });
 
-test("verify-briefing-prefixes: two gates at one head both pass via CLI (issue #1246 regression)", async () => {
+test("verify-briefing-prefixes: two gates at one head both pass via CLI, verified against on-disk records (issue #1246 regression)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
-    const H1 = "a".repeat(64);
-    const H2 = "b".repeat(64);
+    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
+    await mkdir(gateContextDir, { recursive: true });
+    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "DRAFT BRIEFING");
+    await writeFile(path.join(gateContextDir, `pre_approval_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "PREAPPROVAL BRIEFING");
+    const H1 = createHash("sha256").update("DRAFT BRIEFING").digest("hex");
+    const H2 = createHash("sha256").update("PREAPPROVAL BRIEFING").digest("hex");
     const sentinels = [
       ["draft-gate-coverage", H1],
       ["draft-gate-correctness", H1],
@@ -192,6 +214,41 @@ test("verify-briefing-prefixes: two gates at one head both pass via CLI (issue #
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.verified, true);
     assert.equal(output.reviewerCount, 4);
+    const byGate = Object.fromEntries(output.gates.map((g) => [g.gate, g.prefixHash]));
+    assert.deepEqual(byGate, { draft_gate: H1, pre_approval_gate: H2 });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-briefing-prefixes: a sentinel hash matching no on-disk gate record fails closed via CLI", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
+    await mkdir(gateContextDir, { recursive: true });
+    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "DRAFT BRIEFING");
+    await writeFile(path.join(gateContextDir, `pre_approval_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "PREAPPROVAL BRIEFING");
+    const H1 = createHash("sha256").update("DRAFT BRIEFING").digest("hex");
+    const H2 = createHash("sha256").update("PREAPPROVAL BRIEFING").digest("hex");
+    const BOGUS = "c".repeat(64);
+    const sentinels = [
+      ["draft-gate-coverage", H1],
+      ["draft-gate-correctness", BOGUS],
+      ["pre-approval-gate-yagni", H2],
+      ["pre-approval-gate-kiss", H2],
+    ];
+    for (const [scope, prefixHash] of sentinels) {
+      await writeFile(
+        path.join(tmpDir, "tmp", `checkpoint-context-sentinel-${scope}-${FULL_TEST_SHA}.json`),
+        JSON.stringify({ scope, prefixHash }),
+      );
+    }
+    const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.verified, false);
+    assert.ok(output.reason.includes("matches no gate briefing-prefix record"));
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }

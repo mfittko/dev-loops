@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readdir, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -17,6 +18,7 @@ Required:
 
 Output (stdout, JSON):
   { "ok": true, "verified": true, "headSha": "...", "reviewerCount": <n>, "prefixHash": "..." }
+  { "ok": true, "verified": true, "headSha": "...", "reviewerCount": <n>, "gates": [{ "gate": "draft_gate", "prefixHash": "...", "reviewerCount": <n> }, ...] }
   { "ok": true, "verified": true, "headSha": "...", "reviewerCount": 0, "reason": "no sentinels found for this round" }
   { "ok": true, "verified": false, "headSha": "...", "reviewerCount": <n>, "reason": "...", "missing": [...], "mismatched": [...] }
   On error (stderr, JSON):
@@ -31,14 +33,15 @@ Exit codes:
      hash is treated as a mismatch, never grandfathered
   2  Usage or internal error, or invalid --jq filter
 
-Gate scoping: sentinels are partitioned by gate (recovered from the reviewer
-scope's <gate>- prefix, e.g. draft-gate-<angle> / pre-approval-gate-<angle>) and
-each gate's reviewers are verified independently. Two gates reviewed at the SAME
-head (e.g. a small change clearing draft_gate and pre_approval_gate without an
-intervening push) therefore each verify against their own prefix record instead
-of colliding into a spurious mismatch. Within one gate the byte-identity check is
-unchanged. Bare-angle scopes with no recognized gate prefix form one "ungated"
-group (legacy behavior). Never manually clear sentinels.`.trim();
+Gate scoping: each reviewer sentinel's recorded prefix hash is verified against
+the on-disk per-gate briefing-prefix records (<gate>-<headSha>.briefing-prefix.txt
+under tmp/gate-context/, written by write-gate-context.mjs). Two gates reviewed
+at the SAME head (e.g. a small change clearing draft_gate and pre_approval_gate
+without an intervening push) each verify against their own record instead of
+colliding into a spurious mismatch, and a hash matching no record fails closed
+regardless of the reviewer's scope string. When no records are present the check
+falls back to the conservative flat rule (all sentinels must share one hash).
+Never manually clear sentinels.`.trim();
 
 // Full 40-char SHA required: sentinel filenames embed the full `git rev-parse
 // HEAD` value, so a short prefix would glob zero sentinels and read as a
@@ -109,101 +112,118 @@ async function readRoundSentinels(tmpRoot, headSha) {
   return results;
 }
 
-// Gate prefixes a reviewer scope may carry (hyphenated form of the gate names,
-// since `--scope` forbids underscores). write-gate-context.mjs renders the
-// reviewer instruction with a `<gate>-<angle>` scope so each reviewer's sentinel
-// self-identifies its gate. Ordered longest-first for unambiguous prefix match.
-const GATE_SCOPE_PREFIXES = ["pre-approval-gate", "draft-gate"];
+const BRIEFING_PREFIX_SUFFIX = ".briefing-prefix.txt";
 
-// Recover the gate a sentinel belongs to from its scope. A scope that carries no
-// recognized gate prefix is "ungated" (legacy bare-angle scope) and all such
-// sentinels share one implicit group — preserving pre-gate-scoping behavior.
-function gateOfScope(scope) {
-  for (const gate of GATE_SCOPE_PREFIXES) {
-    if (scope === gate || scope.startsWith(`${gate}-`)) return gate;
+/**
+ * Read the per-gate invariant-briefing records for this head from
+ * `<tmpRoot>/gate-context/**` (written by write-gate-context.mjs as
+ * `<gate>-<headSha>.briefing-prefix.txt`). Returns a Map from the record's
+ * sha256 (the exact bytes reviewers hash via `--prefix-file`) to its gate name.
+ * These records are the authoritative per-(gate, headSha) proof each reviewer
+ * sentinel is verified against — a sentinel hash that matches no record is a
+ * contaminated/stale briefing. Empty Map when none exist (offline/legacy),
+ * which routes evaluation to the conservative flat fallback.
+ * @param {string} tmpRoot
+ * @param {string} headSha — lowercase hex, already validated
+ * @returns {Promise<Map<string,string>>} sha256 -> gate
+ */
+async function readGateBriefingRecords(tmpRoot, headSha) {
+  const root = path.join(tmpRoot, "gate-context");
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true, recursive: true });
+  } catch (err) {
+    if (err.code === "ENOENT") return new Map();
+    throw err;
   }
-  return "";
+  const suffix = `-${headSha}${BRIEFING_PREFIX_SUFFIX}`;
+  const records = new Map();
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.endsWith(suffix)) continue;
+    const gate = e.name.slice(0, -suffix.length);
+    if (gate.length === 0) continue;
+    const dir = e.parentPath ?? e.path ?? root;
+    let bytes;
+    try {
+      bytes = await readFile(path.join(dir, e.name));
+    } catch {
+      continue; // unreadable record: skip; a sentinel relying on it fails closed as unknown
+    }
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    if (!records.has(hash)) records.set(hash, gate);
+  }
+  return records;
 }
 
 /**
- * Evaluate a SINGLE gate's (or the ungated legacy) reviewer sentinels for the
- * round: every sentinel must record a hash (no grandfathering) and all recorded
- * hashes must be identical (byte-identical seeded briefings).
+ * Pure comparison: decide verified/reason/missing/mismatched for the round.
+ * Exported for direct unit testing without touching the filesystem.
+ *
+ * When `gateRecords` (sha256 -> gate, from the on-disk `<gate>-<headSha>`
+ * briefing-prefix records) is non-empty, EVERY sentinel's recorded prefix hash
+ * must match one of those authoritative records; a hash matching none is a
+ * contaminated/stale briefing and fails closed. This is what lets two gates
+ * legitimately reviewed at ONE head both pass — each verifies against its own
+ * gate's record — without a spurious cross-gate mismatch, while a genuinely
+ * wrong hash still fails regardless of what scope string the reviewer used
+ * (the fix for the false fail-closed AND the fail-open the scope-prefix
+ * approach would have introduced). When no records exist (offline/legacy) it
+ * falls back to the conservative flat check: all sentinels must share one hash.
+ * A missing/hashless sentinel always fails closed (never grandfathered).
+ *
  * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
- * @param {string} [gateLabel] — prefixed onto the reason when > 1 gate shares the head
- * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}>, prefixHash?: string }}
+ * @param {Map<string,string>|null} [gateRecords] — sha256 -> gate
+ * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}>, prefixHash?: string, gates?: Array<{gate:string, prefixHash:string, reviewerCount:number}> }}
  */
-function evaluateGroup(sentinels, gateLabel = "") {
-  const where = gateLabel ? ` (gate "${gateLabel}")` : "";
-  // A hashless sentinel fails closed even when it is the ONLY sentinel (a
-  // one-angle Phase-5 retry round is a real case): "never grandfathered" means
-  // the invariant-prefix proof must exist for every reviewer, not just when a
-  // sibling exists to compare against. A single HASHED sentinel stays verified —
-  // with one recorded hash there is nothing to mismatch.
+export function evaluateBriefingPrefixes(sentinels, gateRecords = null) {
+  if (sentinels.length === 0) {
+    return { verified: true, reason: "no sentinels found for this round" };
+  }
   const missing = sentinels.filter((s) => s.prefixHash === null).map((s) => s.scope);
   if (missing.length > 0) {
     return {
       verified: false,
-      reason: `${missing.length} of ${sentinels.length} reviewer sentinel(s) for this round${where} have no recorded prefix hash — the invariant-briefing-prefix proof (GATE-EXEC-BRIEFING-PREFIX) was never established for them. Missing hashes are treated as a mismatch, not grandfathered in.`,
+      reason: `${missing.length} of ${sentinels.length} reviewer sentinel(s) for this round have no recorded prefix hash — the invariant-briefing-prefix proof (GATE-EXEC-BRIEFING-PREFIX) was never established for them. Missing hashes are treated as a mismatch, not grandfathered in.`,
       missing,
     };
   }
-  const distinct = new Map();
-  for (const { scope, prefixHash } of sentinels) {
-    if (!distinct.has(prefixHash)) distinct.set(prefixHash, []);
-    distinct.get(prefixHash).push(scope);
+  const records = gateRecords instanceof Map ? gateRecords : new Map();
+  if (records.size === 0) {
+    // Flat fallback (pre-record behavior, conservative fail-closed): with no
+    // authoritative records to attribute sentinels to gates, all sentinels must
+    // record ONE identical hash. Two distinct hashes fail closed.
+    const distinct = new Map();
+    for (const { scope, prefixHash } of sentinels) {
+      if (!distinct.has(prefixHash)) distinct.set(prefixHash, []);
+      distinct.get(prefixHash).push(scope);
+    }
+    if (distinct.size > 1) {
+      return {
+        verified: false,
+        reason: `Reviewer sentinels for this round recorded ${distinct.size} DIFFERENT invariant-briefing prefix hashes and no on-disk gate briefing-prefix records were found to attribute them per gate — the seeded briefings were not byte-identical (GATE-EXEC-BRIEFING-PREFIX).`,
+        mismatched: sentinels.map(({ scope, prefixHash }) => ({ scope, prefixHash })),
+      };
+    }
+    return { verified: true, prefixHash: sentinels[0].prefixHash };
   }
-  if (distinct.size > 1) {
-    const mismatched = sentinels.map(({ scope, prefixHash }) => ({ scope, prefixHash }));
+  // Record-matching: every sentinel hash must match a real (gate, headSha) record.
+  const unknown = sentinels.filter((s) => !records.has(s.prefixHash));
+  if (unknown.length > 0) {
     return {
       verified: false,
-      reason: `Reviewer sentinels for this round${where} recorded ${distinct.size} DIFFERENT invariant-briefing prefix hashes — the seeded briefings were not byte-identical (GATE-EXEC-BRIEFING-PREFIX).`,
-      mismatched,
+      reason: `${unknown.length} of ${sentinels.length} reviewer sentinel(s) recorded an invariant-briefing prefix hash that matches no gate briefing-prefix record for this head — a contaminated, stale, or hand-edited briefing (GATE-EXEC-BRIEFING-PREFIX). Never grandfathered.`,
+      mismatched: unknown.map(({ scope, prefixHash }) => ({ scope, prefixHash })),
     };
   }
-  return { verified: true, prefixHash: sentinels[0].prefixHash };
-}
-
-/**
- * Pure comparison: given the round's sentinels, decide verified/reason/missing/mismatched.
- * Exported for direct unit testing without touching the filesystem.
- *
- * Sentinels are first PARTITIONED BY GATE (recovered from the scope's `<gate>-`
- * prefix), then each gate's reviewers are evaluated independently. This is the
- * fix for the false fail-closed when two gates run at one head: a small change
- * that clears draft_gate and pre_approval_gate without an intervening push writes
- * both gates' sentinels under the SAME head SHA, and each gate legitimately has
- * its own (different) invariant-briefing hash. Comparing across gates flagged
- * that as a mismatch; comparing WITHIN each gate does not. The real invariant —
- * reviewers of ONE gate pass must share a byte-identical briefing — is preserved
- * per group. Ungated (legacy bare-angle) scopes form one group with the original
- * behavior.
- *
- * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
- * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}>, prefixHash?: string, gates?: Array<{gate:string, prefixHash:string}> }}
- */
-export function evaluateBriefingPrefixes(sentinels) {
-  if (sentinels.length === 0) {
-    return { verified: true, reason: "no sentinels found for this round" };
+  const byGate = new Map();
+  for (const { prefixHash } of sentinels) {
+    const gate = records.get(prefixHash);
+    if (!byGate.has(gate)) byGate.set(gate, { gate, prefixHash, reviewerCount: 0 });
+    byGate.get(gate).reviewerCount += 1;
   }
-  const groups = new Map();
-  for (const s of sentinels) {
-    const gate = gateOfScope(s.scope);
-    if (!groups.has(gate)) groups.set(gate, []);
-    groups.get(gate).push(s);
-  }
-  // Single group (one gate, or all-ungated legacy) keeps the exact original
-  // shape, including the top-level `prefixHash` on success.
-  if (groups.size === 1) {
-    return evaluateGroup([...groups.values()][0]);
-  }
-  // Multiple gates share this head: verified only when EVERY gate's own
-  // reviewers are internally consistent. Fail closed on the first bad gate.
-  const gates = [];
-  for (const [gate, group] of groups) {
-    const result = evaluateGroup(group, gate || "ungated");
-    if (!result.verified) return { ...result, gate: gate || "ungated" };
-    gates.push({ gate: gate || "ungated", prefixHash: result.prefixHash });
+  const gates = [...byGate.values()].sort((a, b) => a.gate.localeCompare(b.gate));
+  if (gates.length === 1) {
+    return { verified: true, prefixHash: gates[0].prefixHash, gates };
   }
   return { verified: true, gates };
 }
@@ -230,7 +250,8 @@ export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(p
   const silent = argv.includes("--silent") || argv.includes("-s");
 
   const sentinels = await readRoundSentinels(tmpRoot, headSha);
-  const verdict = evaluateBriefingPrefixes(sentinels);
+  const gateRecords = await readGateBriefingRecords(tmpRoot, headSha);
+  const verdict = evaluateBriefingPrefixes(sentinels, gateRecords);
   const payload = {
     ok: true,
     verified: verdict.verified,
@@ -240,6 +261,7 @@ export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(p
     ...(verdict.missing ? { missing: verdict.missing } : {}),
     ...(verdict.mismatched ? { mismatched: verdict.mismatched } : {}),
     ...(verdict.prefixHash ? { prefixHash: verdict.prefixHash } : {}),
+    ...(verdict.gates ? { gates: verdict.gates } : {}),
   };
   return emitResult(payload, { jq, silent, ok: verdict.verified });
 }
