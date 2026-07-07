@@ -137,13 +137,17 @@ test("extractRepoFlagsFromGhPrCreateSegments returns every create segment's --re
 test("commandContainsRawExternalWrite detects raw issue/pr create+comment in any segment", () => {
   assert.equal(commandContainsRawExternalWrite("gh issue create --title x --body y"), true);
   assert.equal(commandContainsRawExternalWrite("gh issue comment 5 --body hi"), true);
+  assert.equal(commandContainsRawExternalWrite("gh issue edit 5 --body-file x"), true);
   assert.equal(commandContainsRawExternalWrite("gh pr comment 5 --body hi"), true);
   assert.equal(commandContainsRawExternalWrite("git push && gh issue create --title x"), true);
+  assert.equal(commandContainsRawExternalWrite("echo ok && gh issue edit 5 --body-file x"), true);
   // --help is not a write
   assert.equal(commandContainsRawExternalWrite("gh issue create --help"), false);
   assert.equal(commandContainsRawExternalWrite("gh issue comment --help"), false);
+  assert.equal(commandContainsRawExternalWrite("gh issue edit --help"), false);
   // node wrappers never match — first token is `node`, not `gh`
   assert.equal(commandContainsRawExternalWrite("node scripts/github/comment-issue.mjs 5 --body hi"), false);
+  assert.equal(commandContainsRawExternalWrite("node scripts/github/edit-issue.mjs 5 --body-file x"), false);
   assert.equal(commandContainsRawExternalWrite("node scripts/github/upsert-checkpoint-verdict.mjs"), false);
   // pr create / issue view etc. are not external-write forms here
   assert.equal(commandContainsRawExternalWrite("gh pr create --fill"), false);

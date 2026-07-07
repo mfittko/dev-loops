@@ -25,7 +25,7 @@ Canonical owner for the acceptance-criteria verification procedure run during th
 
 4. **Verify each AC item** against the proposed changes on the current PR head.
 
-5. **Update the issue body once:** compute the fully-updated issue body by replacing each verified item's `- [ ]` with `- [x]`, write it to a temporary file, and perform a single `gh issue edit <issue-number> --body-file <tmp-file> --repo <owner/name>`. Do not issue one edit per item; prefer `--body-file` over inline `--body` to avoid shell quoting/escaping hazards.
+5. **Update the issue body once:** compute the fully-updated issue body by replacing each verified item's `- [ ]` with `- [x]`, write it to a temporary file, and perform a single `node scripts/github/edit-issue.mjs --repo <owner/name> --issue <issue-number> --body-file <tmp-file>`. Do not issue one edit per item; prefer `--body-file` over inline `--body` to avoid shell quoting/escaping hazards.
 
 6. **Tick the PR body once:** after the verification is clean, flip each verified item's `- [ ]` to `- [x]` in the PR body via a single `gh pr edit --body-file` update, so the merged PR shows checked AC/DoD. Run `node scripts/github/tick-verified-checkboxes.mjs --repo <owner/name> --pr <pr-number> --verified <exact label>...` (one edit; exact-label match; only items actually verified are ticked; unverified or deferred items stay `- [ ]`; fail closed). This runs automatically as part of the `pre_approval_gate`, not by memory.
 

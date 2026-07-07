@@ -1,4 +1,9 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(node scripts/github/edit-issue.mjs:*)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {

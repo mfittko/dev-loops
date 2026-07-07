@@ -239,6 +239,27 @@ test("decideBashGate denies raw gh issue/pr comment from a subagent on the targe
   );
 });
 
+test("decideBashGate denies raw gh issue edit from a subagent on the target repo", () => {
+  assert.equal(
+    decideBashGate({ command: "gh issue edit 5 --body-file x", repoSlug: TARGET, agentType: SUB }).decision,
+    "deny",
+  );
+});
+
+test("decideBashGate ALLOWS raw gh issue edit from the MAIN agent (agentType null)", () => {
+  assert.equal(
+    decideBashGate({ command: "gh issue edit 5 --body-file x", repoSlug: TARGET, agentType: null }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate allows subagent gh issue edit with an explicit non-target --repo", () => {
+  assert.equal(
+    decideBashGate({ command: "gh issue edit 5 --repo other/repo --body-file x", repoSlug: TARGET, agentType: SUB }).decision,
+    "allow",
+  );
+});
+
 test("decideBashGate allows subagent gh issue create with an explicit non-target --repo", () => {
   assert.equal(
     decideBashGate({ command: "gh issue create --repo other/repo --title x", repoSlug: TARGET, agentType: SUB }).decision,

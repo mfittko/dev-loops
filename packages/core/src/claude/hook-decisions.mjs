@@ -61,7 +61,7 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  *     clean current-head draft_gate + pre_approval_gate). The loop runs this check before merging;
  *     gating it here closes the hole where a hand-run `gh pr merge` skips the pre-approval gate
  *     entirely. Everything else passes through.
- *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked ONLY when the call
+ *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY when the call
  *     originates from a SUBAGENT context (`agentType` is a non-null string) and targets the repo.
  *     Sanctioned external writes flow through node wrappers (gate-verdict comments via
  *     `upsert-checkpoint-verdict.mjs`, review replies via `reply-resolve*.mjs`, board sync,
@@ -85,7 +85,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     return ALLOW;
   }
   // Subagent-scoped external-write guard: block ad-hoc `gh issue create`/`gh issue comment`/
-  // `gh pr comment` on the target repo from a subagent, so external writes flow through the
+  // `gh issue edit`/`gh pr comment` on the target repo from a subagent, so external writes flow through the
   // sanctioned node wrappers. The main-agent/operator path (agentType null) is unaffected (#1051).
   if (typeof agentType === "string" && commandContainsRawExternalWrite(command)) {
     const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
@@ -101,7 +101,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
       return {
         decision: "deny",
         reason:
-          "Ad-hoc GitHub issue/PR creation and comments from a subagent are blocked. Use the sanctioned " +
+          "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned " +
           "node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, " +
           "review-thread replies via scripts/github/reply-resolve*.mjs, board sync, or scripts/github/comment-issue.mjs. " +
           "Direct `gh issue create` is reserved for the main agent / operator.",
