@@ -61,7 +61,7 @@ When the local spec already lives in a tracker issue:
 - sync durable scope / acceptance / status changes back to the tracker issue rather than maintaining a duplicate local phase doc
 - keep `tmp/` as temporary local execution state only; it does not become a second durable spec surface
 - for tracker-backed sessions, the handoff path is always: push the working branch → open a PR → merge via GitHub
-- <!-- rule: LOCAL-PR-CREATE-CANONICAL --> for tracker-backed sessions, you MUST open PRs through the canonical `dev-loops pr create` path — always draft and always assigned — self-assigned by default (`--assignee @me` when none is given; honors an explicit `--assignee <login>` / `-a <login>`) — and MUST NOT open them via raw `gh pr create`. The PR body MUST contain `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge. When `.devloops` sets `workflow.requireDraftFirst` to true, use `dev-loops pr create --assignee @me ...`; the draft-first requirement itself is owned by [`OPS-DRAFT-FIRST-PR`](../docs/copilot-loop-operations.md).
+- <!-- rule: LOCAL-PR-CREATE-CANONICAL --> for tracker-backed sessions, you MUST open PRs through the canonical `dev-loops pr create` path — always draft and always assigned — self-assigned by default (`--assignee @me` when none is given; honors an explicit `--assignee <login>` / `-a <login>`) — and MUST NOT open them via raw `gh pr create`. The PR body MUST contain `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge. When `.devloops` sets `workflow.requireDraftFirst` to true, use `dev-loops pr create --assignee @me ...`; the always-draft creation mechanism is owned by [`OPS-DRAFT-FIRST-PR`](../docs/copilot-loop-operations.md) — `create-pr.mjs` is unconditionally draft-only regardless of the toggle, which separately governs whether the draft-gate boundary is enforced before ready.
 - <!-- rule: LOCAL-TRACKER-NO-DIRECT-MERGE --> `LOCAL-TRACKER-NO-DIRECT-MERGE`: for tracker-backed sessions, agents MUST NOT suggest a direct local-main merge and MUST NOT merge the working branch into local `main` at phase completion
 
 ## Primary execution rules
@@ -104,7 +104,7 @@ Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-interna
 
 - <!-- rule: LOCAL-PHASE-ONE-AT-A-TIME --> You MUST implement **one phase at a time** and MUST NOT refine later phases in detail before the current phase is complete.
 - Use the `refiner` agent for phase-refinement work when subagents are available; escalate RFC-worthy technical decisions to the parent session / human operator.
-- <!-- rule: LOCAL-TEST-FIRST-COVERAGE --> You MUST work **test-first** for all non-trivial logic and SHOULD maintain **90% coverage** thresholds (coverage is not enforced by the shipped verify config; treat it as the working target).
+- <!-- rule: LOCAL-TEST-FIRST-COVERAGE --> You MUST work **test-first** for all non-trivial logic; coverage thresholds are owned by [VALIDATE-COVERAGE-THRESHOLD](../docs/validation-policy.md).
 - Log detailed iteration artifacts under `tmp/` using the required structure below.
 - Spec-of-record split (phase-doc-backed vs. tracker-backed vs. lightweight): see [Tracker-backed local implementation](#tracker-backed-local-implementation) above.
 - When a phase changes durable product truth in ways `PLAN.md` should express (for example command surface, accepted product decisions, resolved open questions, or scope changes), update [Project Plan](../../PLAN.md) before closing the phase.

@@ -96,8 +96,8 @@ If the gate result is `needs_reconcile`, the caller MUST NOT proceed with the pr
 <!-- rule: RETRO-ADVISORY-NEVER-GATE -->
 The retrospective is **advisory**: it runs, records flagged raw-call / discipline
 observations honestly, and passes them back to the conductor (main agent) to
-**decide** what to do with them — but it MUST NOT block a merge or any lifecycle
-transition. The pre-merge retrospective gate (`evaluateRetrospectiveMergeApproval`
+**decide** what to do with them — but it MUST NOT block a merge or any PR-lifecycle
+transition of the current run. The pre-merge retrospective gate (`evaluateRetrospectiveMergeApproval`
 and the `requireRetrospectiveGate` / `requireRetrospectiveInternalTooling` config
 keys) has been **removed**. There is no `retrospective_gate_pending` / `blocked`
 disposition on account of the internal-tooling raw-call record.
