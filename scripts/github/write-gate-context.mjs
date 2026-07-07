@@ -39,6 +39,7 @@ import { resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
+import { GATE_NAMES } from "./_gate-names.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 /**
@@ -132,7 +133,7 @@ function parseError(message) {
 }
 
 function normalizeGate(value) {
-  const gates = new Set(["draft_gate", "pre_approval_gate"]);
+  const gates = new Set(GATE_NAMES);
   const normalized = String(value).trim().toLowerCase();
   return gates.has(normalized) ? normalized : null;
 }
@@ -375,8 +376,8 @@ export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" 
  * @returns {{ pr: number, gate: string, headSha: string }}
  */
 function validatePathSegments({ pr, gate, headSha }) {
-  if (gate !== "draft_gate" && gate !== "pre_approval_gate") {
-    throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected draft_gate or pre_approval_gate)`);
+  if (!GATE_NAMES.includes(gate)) {
+    throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected ${GATE_NAMES.join(" or ")})`);
   }
   // Require a CANONICAL positive integer: the trimmed string must be all digits
   // (`/^\d+$/`) and > 0. This mirrors the CLI's parsePrNumber rule so the path
@@ -522,7 +523,7 @@ export function renderBriefingPrefix({
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   lines.push(
-    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope <your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
+    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gate.replace(/_/g, "-")}-<your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
   lines.push("## PR body");
