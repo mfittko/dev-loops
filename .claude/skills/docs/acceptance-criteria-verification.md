@@ -5,7 +5,7 @@ Canonical owner for the acceptance-criteria verification procedure run during th
 ## Procedure
 
 <!-- rule: ACCEPT-CRITERIA-VERIFY-AND-REFLECT -->
-`ACCEPT-CRITERIA-VERIFY-AND-REFLECT`: Before posting the `pre_approval_gate` comment, the agent MUST verify every acceptance criteria checklist item in the issue linked to this PR, and MUST reflect the verified items back into both the linked issue body and the PR body (exception: under an issue-less spec source — lightweight `specSource: pr_body` or plan-file promotion `specSource: plan_file` — the step 5 issue-body mirroring is skipped, since the PR body, not the issue body, is the canonical spec surface; see the lightweight fork below):
+`ACCEPT-CRITERIA-VERIFY-AND-REFLECT`: Before posting the `pre_approval_gate` comment, the agent MUST verify every acceptance criteria checklist item in the issue linked to this PR, and MUST reflect the verified items back into both the linked issue body and the PR body (exception: under a PR-body-as-spec source — lightweight `specSource: pr_body` (tracker-backed or issue-less) or plan-file promotion `specSource: plan_file` — the step 5 issue-body mirroring is skipped, since the PR body, not the issue body, is the canonical spec surface; see the lightweight fork below):
 
 > **Lightweight (PR-body-as-spec) fork:** when the session is lightweight — the resolver output / handoff envelope carries `specSource: pr_body` (`canonicalSpecSource: pr_body`) — the fork splits on whether a backing issue exists.
 >
