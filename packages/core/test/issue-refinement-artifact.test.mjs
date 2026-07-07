@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   REFINEMENT_SOURCE,
+  decideEnqueueRefinementGate,
   detectIssueRefinementArtifact,
   detectLinkedRefinementDoc,
   extractChecklistItems,
@@ -189,4 +190,36 @@ test("summarizeRefinementGateCheck maps to blocked verdict when artifact missing
   assert.equal(summary.verdict, "blocked");
   assert.equal(summary.finding, "missing_refinement_artifact");
   assert.equal(summary.blocking, true);
+});
+
+test("decideEnqueueRefinementGate enqueues a refined issue into the pickup column", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ] AC1\n" });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
+  assert.deepEqual(decision, { action: "enqueue" });
+});
+
+test("decideEnqueueRefinementGate blocks an un-refined issue targeting pickup interactively", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
+  assert.equal(decision.action, "block");
+  assert.match(decision.reason, /loop-grill/);
+  assert.deepEqual(decision.missing, [
+    "Acceptance criteria section",
+    "Definition of done section",
+    "linked refinement doc",
+  ]);
+});
+
+test("decideEnqueueRefinementGate diverts an un-refined issue targeting pickup headlessly", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: true });
+  assert.equal(decision.action, "divert");
+  assert.match(decision.reason, /loop-grill/);
+  assert.ok(decision.missing.length > 0);
+});
+
+test("decideEnqueueRefinementGate enqueues an un-refined issue when the target isn't the pickup column", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: false, auto: false });
+  assert.deepEqual(decision, { action: "enqueue" });
 });
