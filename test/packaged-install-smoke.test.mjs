@@ -49,7 +49,7 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
     try {
       execFileSync("npm", ["install", "--loglevel=error", "--no-audit", "--no-fund", "--prefer-offline", rootTarball, coreTarball], { cwd: installDir });
     } catch (err) {
-      const detail = `${err.stderr?.toString() ?? ""}${err.message ?? ""}`;
+      const detail = `${err.stderr?.toString() ?? ""}${err.stdout?.toString() ?? ""}${err.message ?? ""}`;
       if (NETWORK_FAILURE_RE.test(detail)) {
         t.skip(`npm registry unreachable — skipping packaged-install smoke: ${detail.split("\n")[0]}`);
         return;
