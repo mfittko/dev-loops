@@ -26,6 +26,7 @@ Everything merged since v0.7.1 — the v0.7.x contract-audit epic (#1104) plus f
 - **Reviewer-loop submission-failure edges join the transition table (#1200/#1221)**; Copilot summon literals sanitized on write with a code-span-aware guard and an honest blocked status (#1213/#1222).
 - **Issue-less lightweight PR-first three-origin contracts reconciled** with a gate-coordination `specSource` branch (#1242); contradiction sweep across gate-skip scoping, coverage-modality ownership, and advisory wording (#1244).
 - **run-claim coordination file anchored at the git common dir, not CWD (#1250).**
+- **`queue --item` accepts the full node-ID alphabet across the projects scripts (#1227/#1230).**
 - **release.yml dispatches npm-publish.yml explicitly after creating the release (#1187/#1188)**; Pages deploy bumped to deploy-pages v5 (#1211/#1212) and the gate-hub flowchart renders left-to-right (#1208/#1209).
 - **docs-validator manifest gap + corpus→manifest completeness (#1238)**; epic AC1/AC2 zero-states restored — canonical-owner openers plus remaining phrase pins (#1240).
 
