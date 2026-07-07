@@ -25,8 +25,8 @@ Everything merged since v0.7.1 — the v0.7.x contract-audit epic (#1104) plus f
 - **Fanout provenance fails closed on missing mandatory or foreign angles (#1196/#1225).** Briefing-prefix verification is also scoped by (gate, headSha) (#1249).
 - **Reviewer-loop submission-failure edges join the transition table (#1200/#1221).** Copilot summon literals are sanitized on write with a code-span-aware guard and an honest blocked status (#1213/#1222).
 - **Issue-less lightweight PR-first three-origin contracts reconciled (#1242).** Adds a gate-coordination `specSource` branch; a contradiction sweep covers gate-skip scoping, coverage-modality ownership, and advisory wording (#1244).
-- **run-claim coordination file anchored at the git common dir, not CWD (#1250).**
-- **`queue --item` accepts the full node-ID alphabet across the projects scripts (#1227/#1230).**
+- **run-claim coordination file anchored at the git common dir, not CWD (#1250).** The per-PR runner lease now resolves its coordination file from the shared git common dir, so a runner started from a different worktree/CWD attaches to the same lease instead of forking a second one.
+- **`queue --item` accepts the full node-ID alphabet across the projects scripts (#1227/#1230).** The `--item` node-ID parser now accepts the complete GitHub node-ID character set, so board items whose IDs use previously-rejected characters resolve consistently across the projects scripts.
 - **release.yml dispatches npm-publish.yml explicitly after creating the release (#1187/#1188).** Pages deploy is bumped to deploy-pages v5 (#1211/#1212) and the gate-hub flowchart renders left-to-right (#1208/#1209).
 - **docs-validator manifest gap and corpus→manifest completeness (#1238).** Epic AC1/AC2 zero-states restored — canonical-owner openers plus remaining phrase pins (#1240).
 
