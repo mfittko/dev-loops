@@ -307,6 +307,35 @@ test("verify-briefing-prefixes: a sentinel hash matching no on-disk gate record 
   }
 });
 
+test("verify-briefing-prefixes: a wrong-gate briefing (scope declares one gate, hash belongs to another) fails closed via CLI", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const gateContextDir = path.join(tmpDir, "tmp", "gate-context", "mfittko-dev-loops", "pr-1");
+    await mkdir(gateContextDir, { recursive: true });
+    await writeFile(path.join(gateContextDir, `draft_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "DRAFT BRIEFING");
+    await writeFile(path.join(gateContextDir, `pre_approval_gate-${FULL_TEST_SHA}.briefing-prefix.txt`), "PREAPPROVAL BRIEFING");
+    const H_DRAFT = createHash("sha256").update("DRAFT BRIEFING").digest("hex");
+    const H_PRE = createHash("sha256").update("PREAPPROVAL BRIEFING").digest("hex");
+    await writeFile(
+      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-draft-gate-coverage-${FULL_TEST_SHA}.json`),
+      JSON.stringify({ scope: "draft-gate-coverage", prefixHash: H_DRAFT }),
+    );
+    await writeFile(
+      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-pre-approval-gate-mistaken-${FULL_TEST_SHA}.json`),
+      JSON.stringify({ scope: "pre-approval-gate-mistaken", prefixHash: H_DRAFT }), // wrong-gate: declares pre-approval, hash is draft's
+    );
+    const result = runChecker(["--head-sha", FULL_TEST_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.verified, false);
+    assert.ok(output.reason.includes("DIFFERENT gate"));
+    assert.ok(output.mismatched.some((m) => m.scope === "pre-approval-gate-mistaken"));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("verify-briefing-prefixes: identical-byte records under different gates attribute deterministically to the first gate (CLI)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-briefing-prefixes-"));
   try {
