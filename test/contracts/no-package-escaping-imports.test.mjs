@@ -11,8 +11,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-// Static import/export-from and dynamic import() relative specifiers.
-const RELATIVE_SPECIFIER_RE = /(?:from\s*|import\s*\(\s*)["'](\.\.?\/[^"']+)["']/g;
+// Static import/export-from, dynamic import(), and side-effect import relative specifiers.
+const RELATIVE_SPECIFIER_RE = /(?:from\s*|import\s*\(\s*|import\s+)["'](\.\.?\/[^"']+)["']/g;
 
 async function* walk(dirUrl) {
   for (const entry of await readdir(dirUrl, { withFileTypes: true })) {
