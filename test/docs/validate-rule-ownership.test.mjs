@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  detectDeadAllowlistEntries,
   detectDuplicateImperativeSentences,
   detectModalityConflicts,
   detectNearDuplicates,
@@ -17,10 +18,10 @@ import {
   validateRuleOwnership,
 } from "../../scripts/docs/validate-rule-ownership.mjs";
 
-async function fixture(files, requiredRules = []) {
+async function fixture(files, requiredRules = [], optOutRules = []) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-rule-ownership-"));
   await mkdir(path.join(dir, "skills", "docs"), { recursive: true });
-  await writeFile(path.join(dir, "skills", "docs", "required-rules.json"), JSON.stringify({ requiredRules }, null, 2), "utf8");
+  await writeFile(path.join(dir, "skills", "docs", "required-rules.json"), JSON.stringify({ requiredRules, optOutRules }, null, 2), "utf8");
   for (const [rel, content] of Object.entries(files)) {
     const full = path.join(dir, rel);
     await mkdir(path.dirname(full), { recursive: true });
@@ -79,6 +80,67 @@ test("validateRuleOwnership fails missing manifest rule", async () => {
     const result = await validateRuleOwnership(dir);
     assert.equal(result.ok, false);
     assert.equal(result.errors[0].kind, "required_rule_missing");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership fails unregistered_rule for a rule defined but absent from the manifest", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The loop MUST pass. |",
+  }, []);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "unregistered_rule" && e.id === "TEST-RULE-001"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership does not flag unregistered_rule once the rule is registered", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The loop MUST pass. |",
+  }, ["TEST-RULE-001"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.ok(!result.errors.some((e) => e.kind === "unregistered_rule"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership exempts a defined-but-unregistered rule listed in optOutRules", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The loop MUST pass. |",
+  }, [], ["TEST-RULE-001"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.ok(!result.errors.some((e) => e.kind === "unregistered_rule"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership gates conflicting_manifest_entry when an ID is both required and opted out", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The loop MUST pass. |",
+  }, ["TEST-RULE-001"], ["TEST-RULE-001"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "conflicting_manifest_entry" && e.id === "TEST-RULE-001"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership gates dead_opt_out_entry when an opt-out names an undefined rule", async () => {
+  const dir = await fixture({}, [], ["TEST-RULE-999"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "dead_opt_out_entry" && e.id === "TEST-RULE-999"));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -209,6 +271,43 @@ test("validateRuleOwnership gates on a duplicated imperative sentence", async ()
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("detectDeadAllowlistEntries flags an allowlisted sentence absent from every file", () => {
+  const allowlist = new Set(["You must never skip the required verification step here."]);
+  const dead = detectDeadAllowlistEntries([
+    { file: "skills/doc-a/SKILL.md", content: "Something unrelated entirely." },
+  ], allowlist);
+  assert.deepEqual(dead, ["You must never skip the required verification step here."]);
+});
+
+test("detectDeadAllowlistEntries flags an allowlisted sentence present in exactly one file", () => {
+  const sentence = "You must never skip the required verification step here.";
+  const allowlist = new Set([sentence]);
+  const dead = detectDeadAllowlistEntries([
+    { file: "skills/doc-a/SKILL.md", content: sentence },
+  ], allowlist);
+  assert.deepEqual(dead, [sentence]);
+});
+
+test("detectDeadAllowlistEntries flags an allowlisted sentence duplicated only across canonical mirror docs", () => {
+  const sentence = "You must never skip the required verification step here.";
+  const allowlist = new Set([sentence]);
+  const dead = detectDeadAllowlistEntries([
+    { file: "skills/docs/copilot-loop-operations.md", content: sentence },
+    { file: "skills/docs/public-dev-loop-contract.md", content: sentence },
+  ], allowlist);
+  assert.deepEqual(dead, [sentence]);
+});
+
+test("detectDeadAllowlistEntries does not flag a sentence duplicated across two or more non-mirror files", () => {
+  const sentence = "You must never skip the required verification step here.";
+  const allowlist = new Set([sentence]);
+  const dead = detectDeadAllowlistEntries([
+    { file: "skills/doc-a/SKILL.md", content: sentence },
+    { file: "skills/doc-b/SKILL.md", content: sentence },
+  ], allowlist);
+  assert.deepEqual(dead, []);
 });
 
 test("repository rule ownership fixture is valid", async () => {
