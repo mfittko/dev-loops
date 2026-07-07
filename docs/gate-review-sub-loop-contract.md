@@ -132,17 +132,15 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
 
 Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../agents/review.agent.md)), spawned once per resolved angle via the plain Agent tool. Reviewers are **independent and seeded with the identical neutral context bundle verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the loaded context of, the main agent or a sibling reviewer. Parallelism is capped at `gates.maxFanoutReviewers` (default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
 
-- starts in fresh context. **Mandatory:** run `scripts/github/verify-fresh-review-context.mjs --scope <angle> --context-path <path> --prefix-hash <sha256>` (or `--prefix-file <path>`) at startup (the same invocation Phase 1 mandates); refuse to proceed on contamination or a missing gate-context artifact. Use `--scope` so parallel reviewers in the same working directory do not trigger false contamination from each other's sentinels, `--context-path` (pointing at the Phase 1 artifact) so a reviewer in the wrong/isolated checkout fails closed, and `--prefix-hash`/`--prefix-file` to record the hash of THIS reviewer's invariant briefing block (`GATE-EXEC-BRIEFING-PREFIX`) for the fan-in's cross-reviewer comparison. The sentinel is keyed per review ROUND by the current head SHA (`git rev-parse HEAD`), so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle, and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
+- starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle, and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
 - is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when its single angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph
 - is scoped to exactly one review angle
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
-- runs in the PR's actual worktree/head — **never an isolated worktree** (see the
-  prohibition in Phase 1: isolation would both lose the seeded gate-context bundle and
-  risk silently reviewing a stale tree). `verify-fresh-review-context.mjs --context-path`
-  enforces this mechanically: it fails closed if the seeded artifact isn't present at the
-  reviewer's cwd.
+- runs in the PR's actual worktree/head — **never an isolated worktree** (the Phase 1
+  prohibition; `verify-fresh-review-context.mjs --context-path` enforces it mechanically —
+  fails closed if the seeded artifact isn't present at the reviewer's cwd).
 - produces a focused findings artifact with verdict (clean/findings_present) and file references
-- **completion is detected via the harness completion notification, or by the presence of the reviewer's findings artifact at its deterministic output path — never by reading the reviewer's transcript.** The orchestrator awaits fan-in on those artifact paths (or the completion notification) and joins via `consolidateFanin` (Phase 3); it must not tail/parse a reviewer's JSONL transcript, use `node -e`/`python3` to parse tool JSON, or `sleep`-poll a shell loop for completion (forbidden — see [anti-patterns](../skills/docs/anti-patterns.md)).
+- completion is detected via the harness completion notification, or the reviewer's findings artifact at its deterministic output path; the orchestrator awaits fan-in on those paths and joins via `consolidateFanin` (Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](../skills/docs/anti-patterns.md).
 
 #### Briefing composition: invariant prefix first
 
@@ -171,14 +169,10 @@ unframed. Over the cap the prefix falls back to pointer mode: it references
 diff pointer is unavailable (reviewers re-derive via `git diff`). Either way the mode is
 disclosed in both the artifact (`prefixMode: "inline"|"pointer"`) and the prefix text
 itself. This is purely a
-size/performance choice — reviewers spend many turns re-reading the same seeded content,
-so inlining it lets the FIRST turn's prompt-cache write serve every later turn cheaply —
-and is a zero-semantic change to the byte-identity requirement above: whichever mode ran,
-every reviewer of the same round still receives byte-identical prefix bytes, and
-`verify-fresh-review-context.mjs --prefix-file`/`verify-briefing-prefixes.mjs` hash and
-compare those bytes exactly as before, oblivious to which mode produced them. Sharing one
-warmed cache entry ACROSS the fan-out's parallel reviewers (rather than each reviewer's own
-multi-turn reuse) is a separate, harness-dependent optimization not covered by this rule.
+size/performance choice and a zero-semantic change to the byte-identity requirement above:
+whichever mode ran, every reviewer of the same round still receives byte-identical prefix
+bytes, and `verify-fresh-review-context.mjs --prefix-file`/`verify-briefing-prefixes.mjs`
+hash and compare those bytes exactly as before, oblivious to which mode produced them.
 
 **Enforcement.** Each reviewer passes `--prefix-hash <sha256>` (or `--prefix-file <path>`,
 hashed by the tool) to `verify-fresh-review-context.mjs`, which persists the hash on the
@@ -310,10 +304,9 @@ Each gate chain exits when one of these conditions is met:
 ## Copilot round-cap interplay
 
 The gate chain can complete cleanly at a head that was accepted via round-cap fallback.
-If significant post-convergence changes later land on a newer head (product/test logic,
-not doc/message/comment-only edits), that opens a new Copilot review cycle and requires
-another Copilot round before pre-approval proceeds. The prior cycle's cap does not carry
-forward to suppress that new-cycle re-request when regular rounds are already > 0.
+The post-convergence carve-out — significant post-convergence changes on a newer head open
+a new Copilot cycle that requires another round before pre-approval — is owned by
+`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md).
 
 ## Machine-parseable fields
 
