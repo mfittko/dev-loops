@@ -104,6 +104,36 @@ test("evaluateBriefingPrefixes: a missing hash still fails closed even with reco
   assert.deepEqual(result.missing, ["draft-gate-correctness"]);
 });
 
+test("evaluateBriefingPrefixes: single gate with a record emits prefixHash and a gates entry with reviewerCount", () => {
+  const records = new Map([["hash-draft", "draft_gate"]]);
+  const result = evaluateBriefingPrefixes([
+    { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
+    { scope: "draft-gate-correctness", prefixHash: "hash-draft" },
+  ], records);
+  assert.equal(result.verified, true);
+  assert.equal(result.prefixHash, "hash-draft");
+  assert.deepEqual(result.gates, [{ gate: "draft_gate", prefixHash: "hash-draft", reviewerCount: 2 }]);
+});
+
+test("evaluateBriefingPrefixes: a sentinel whose scope declares one gate but whose hash matches a DIFFERENT gate's record fails closed (wrong-gate briefing)", () => {
+  const records = new Map([["hash-draft", "draft_gate"], ["hash-preapproval", "pre_approval_gate"]]);
+  const result = evaluateBriefingPrefixes([
+    { scope: "draft-gate-coverage", prefixHash: "hash-draft" },
+    { scope: "draft-gate-correctness", prefixHash: "hash-preapproval" }, // wrong-gate: draft scope, pre-approval hash
+  ], records);
+  assert.equal(result.verified, false);
+  assert.ok(result.reason.includes("DIFFERENT gate"));
+  assert.deepEqual(result.mismatched.map((m) => m.prefixHash), ["hash-preapproval"]);
+});
+
+test("evaluateBriefingPrefixes: a bare (ungated) scope matches by hash alone and does not trigger the wrong-gate check", () => {
+  const records = new Map([["hash-draft", "draft_gate"]]);
+  const result = evaluateBriefingPrefixes([
+    { scope: "coverage", prefixHash: "hash-draft" },
+  ], records);
+  assert.equal(result.verified, true);
+});
+
 test("evaluateBriefingPrefixes: no records -> flat fallback, two distinct hashes fail closed", () => {
   const result = evaluateBriefingPrefixes([
     { scope: "a", prefixHash: "h1" },

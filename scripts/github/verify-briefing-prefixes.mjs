@@ -7,10 +7,13 @@ import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: verify-briefing-prefixes.mjs --head-sha <sha> [--help]
 Fan-in enforcement for GATE-EXEC-BRIEFING-PREFIX (docs/gate-review-sub-loop-contract.md):
-fails closed when this gate-review round's per-scope reviewer sentinels (written by
-verify-fresh-review-context.mjs --prefix-hash/--prefix-file) do not all record the SAME
-invariant-briefing prefix hash. Deterministic and offline: reads only the sentinel files
-already on disk under tmp/, keyed by the given head SHA.
+fails closed when a reviewer sentinel's (written by verify-fresh-review-context.mjs
+--prefix-hash/--prefix-file) recorded prefix hash matches no on-disk per-gate
+briefing-prefix record for this head, matches a DIFFERENT gate than the sentinel's
+scope declares, or is missing outright. When no per-gate records exist it falls
+back to requiring all of this round's sentinels to share ONE hash. Deterministic
+and offline: reads only the sentinel and record files already on disk under tmp/,
+keyed by the given head SHA.
 
 Required:
   --head-sha <sha>  The FULL 40-char reviewed head SHA (git rev-parse HEAD); sentinels are read from
@@ -18,7 +21,8 @@ Required:
 
 Output (stdout, JSON):
   { "ok": true, "verified": true, "headSha": "...", "reviewerCount": <n>, "prefixHash": "..." }
-  { "ok": true, "verified": true, "headSha": "...", "reviewerCount": <n>, "gates": [{ "gate": "draft_gate", "prefixHash": "...", "reviewerCount": <n> }, ...] }
+  { "ok": true, "verified": true, "headSha": "...", "reviewerCount": <n>, "prefixHash": "...", "gates": [{ "gate": "draft_gate", "prefixHash": "...", "reviewerCount": <n> }] }
+  { "ok": true, "verified": true, "headSha": "...", "reviewerCount": <n>, "gates": [{ "gate": "draft_gate", "prefixHash": "...", "reviewerCount": <n> }, { "gate": "pre_approval_gate", "prefixHash": "...", "reviewerCount": <n> }] }
   { "ok": true, "verified": true, "headSha": "...", "reviewerCount": 0, "reason": "no sentinels found for this round" }
   { "ok": true, "verified": false, "headSha": "...", "reviewerCount": <n>, "reason": "...", "missing": [...], "mismatched": [...] }
   On error (stderr, JSON):
@@ -38,9 +42,12 @@ the on-disk per-gate briefing-prefix records (<gate>-<headSha>.briefing-prefix.t
 under tmp/gate-context/, written by write-gate-context.mjs). Two gates reviewed
 at the SAME head (e.g. a small change clearing draft_gate and pre_approval_gate
 without an intervening push) each verify against their own record instead of
-colliding into a spurious mismatch, and a hash matching no record fails closed
-regardless of the reviewer's scope string. When no records are present the check
-falls back to the conservative flat rule (all sentinels must share one hash).
+colliding into a spurious mismatch, and a hash matching no record fails closed.
+A sentinel whose scope self-declares a gate (e.g. "draft-gate-coverage") must
+also match THAT gate's record — a hash that matches a DIFFERENT gate's record
+is a wrong-gate briefing and fails closed even though the hash itself is known.
+When no records are present the check falls back to the conservative flat rule
+(all sentinels must share one hash).
 Never manually clear sentinels.`.trim();
 
 // Full 40-char SHA required: sentinel filenames embed the full `git rev-parse
@@ -138,11 +145,14 @@ async function readGateBriefingRecords(tmpRoot, headSha) {
   }
   const suffix = `-${headSha}${BRIEFING_PREFIX_SUFFIX}`;
   const records = new Map();
-  for (const e of entries) {
-    if (!e.isFile() || !e.name.endsWith(suffix)) continue;
+  const matches = entries
+    .filter((e) => e.isFile() && e.name.endsWith(suffix) && e.name.length > suffix.length)
+    // readdir order is filesystem-dependent; sort by name so a same-hash
+    // collision's first-seen-wins Map entry is deterministic across runs.
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const e of matches) {
     const gate = e.name.slice(0, -suffix.length);
-    if (gate.length === 0) continue;
-    const dir = e.parentPath ?? e.path ?? root;
+    const dir = e.parentPath ?? root;
     let bytes;
     try {
       bytes = await readFile(path.join(dir, e.name));
@@ -153,6 +163,24 @@ async function readGateBriefingRecords(tmpRoot, headSha) {
     if (!records.has(hash)) records.set(hash, gate);
   }
   return records;
+}
+
+/**
+ * Gate a reviewer scope self-declares, using ONLY the gate vocabulary present in
+ * the on-disk records (hyphenated to match the `--scope` form, since scopes
+ * forbid underscores). Returns null for a bare/legacy scope with no recognized
+ * gate prefix — those are matched by hash alone. No hardcoded gate list: the
+ * vocabulary comes from the records themselves.
+ * @param {string} scope
+ * @param {Iterable<string>} knownGates
+ * @returns {string|null}
+ */
+function declaredGateOf(scope, knownGates) {
+  for (const gate of knownGates) {
+    const prefix = gate.replace(/_/g, "-");
+    if (scope === prefix || scope.startsWith(`${prefix}-`)) return gate;
+  }
+  return null;
 }
 
 /**
@@ -213,6 +241,23 @@ export function evaluateBriefingPrefixes(sentinels, gateRecords = null) {
       verified: false,
       reason: `${unknown.length} of ${sentinels.length} reviewer sentinel(s) recorded an invariant-briefing prefix hash that matches no gate briefing-prefix record for this head — a contaminated, stale, or hand-edited briefing (GATE-EXEC-BRIEFING-PREFIX). Never grandfathered.`,
       mismatched: unknown.map(({ scope, prefixHash }) => ({ scope, prefixHash })),
+    };
+  }
+  // Cross-gate check: when a sentinel's scope self-declares a gate, its matched
+  // record must belong to THAT gate. A hash that matches a DIFFERENT gate's
+  // record (a wrong-gate briefing) fails closed even though the hash is known.
+  const knownGates = new Set(records.values());
+  const wrongGate = sentinels
+    .filter((s) => {
+      const declared = declaredGateOf(s.scope, knownGates);
+      return declared !== null && records.get(s.prefixHash) !== declared;
+    })
+    .map(({ scope, prefixHash }) => ({ scope, prefixHash }));
+  if (wrongGate.length > 0) {
+    return {
+      verified: false,
+      reason: `${wrongGate.length} of ${sentinels.length} reviewer sentinel(s) recorded a prefix hash belonging to a DIFFERENT gate than their scope declares — a wrong-gate briefing (GATE-EXEC-BRIEFING-PREFIX).`,
+      mismatched: wrongGate,
     };
   }
   const byGate = new Map();
