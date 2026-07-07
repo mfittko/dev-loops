@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
@@ -9,6 +11,7 @@ import {
 } from "./_steering-state-file.mjs";
 export const RUNNER_COORDINATION_SCHEMA_VERSION = 2;
 export const RUNNER_COORDINATION_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
+export const RUNNER_COORDINATION_HISTORY_LIMIT = 50; // cap audit trail; heartbeats append per-round, keep the most recent 50 events
 export const RUNNER_OWNERSHIP_ERROR = Object.freeze({
   ACTIVE_RUN_EXISTS: "active_run_exists",
   OWNERSHIP_LOST: "ownership_lost",
@@ -50,7 +53,10 @@ async function loadRunnerStateFile(filePath) {
 }
 async function saveRunnerStateFile(filePath, state) {
   try {
-    return await saveSharedStateFile(filePath, state);
+    const capped = Array.isArray(state.history) && state.history.length > RUNNER_COORDINATION_HISTORY_LIMIT
+      ? { ...state, history: state.history.slice(-RUNNER_COORDINATION_HISTORY_LIMIT) }
+      : state;
+    return await saveSharedStateFile(filePath, capped);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to write runner coordination state file '${filePath}': ${message}`);
@@ -64,13 +70,62 @@ async function withRunnerStateFileLock(filePath, callback) {
     throw new Error(`Failed to acquire runner coordination state lock for '${filePath}': ${message}`);
   }
 }
+const coordinationRootCache = new Map();
+/**
+ * Resolve the single stable coordination root for a checkout, independent of CWD.
+ *
+ * `git rev-parse --git-common-dir` yields the shared git dir that is identical for
+ * a repo and all its linked worktrees, so its parent is the one main-checkout root
+ * that a worktree runner and a repo-root detector both anchor to — eliminating the
+ * split-copy false-stale stall where each read a different `.pi/runner-coordination`
+ * file. Falls back to the canonicalized (realpath'd) `cwd` when git is
+ * unavailable or the dir is not a checkout, so symlinked and realpath'd
+ * spellings of the same non-git dir still converge on one coordination path.
+ *
+ * `cwd` is realpath'd once at entry: git returns a relative `--git-common-dir` from
+ * a main checkout but an already-realpath'd absolute one from a linked worktree, so
+ * resolving against a symlinked cwd (e.g. macOS /tmp -> /private/tmp) would make the
+ * two sides compute different roots for the same physical repo. Canonicalizing first
+ * makes both sides converge, and doubles as the cache key so symlink-variant cwd
+ * spellings share one cache entry. Cached per canonical cwd for the process.
+ */
+function resolveRepoCoordinationRoot(cwd) {
+  let canonicalCwd = cwd;
+  try {
+    canonicalCwd = fs.realpathSync(cwd);
+  } catch (err) {
+    // realpathSync on an existing checkout dir virtually never fails;
+    // warn (don't throw) so the rare transient failure — which can desync the
+    // coordination path across worktrees — is diagnosable instead of silent.
+    console.warn(
+      `[runner-coordination] realpathSync(${cwd}) failed; using raw cwd, coordination path may diverge across worktrees: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (coordinationRootCache.has(canonicalCwd)) return coordinationRootCache.get(canonicalCwd);
+  let root = canonicalCwd;
+  try {
+    const commonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: canonicalCwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (commonDir) {
+      root = path.dirname(path.resolve(canonicalCwd, commonDir));
+    }
+  } catch {
+    // not a git checkout / git unavailable — anchor at the canonical (realpath'd) cwd
+  }
+  coordinationRootCache.set(canonicalCwd, root);
+  return root;
+}
 export function defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd = process.cwd()) {
   const { owner, name } = parseRepoSlugParts(repo, {
     errorMessage: `Invalid repo slug for coordination target path: ${JSON.stringify(repo)}`,
     lowercase: true,
   });
   const normalizedPr = normalizePr(pr);
-  return path.join(cwd, ".pi", "runner-coordination", owner, name, `pr-${normalizedPr}.json`);
+  const root = resolveRepoCoordinationRoot(cwd);
+  return path.join(root, ".pi", "runner-coordination", owner, name, `pr-${normalizedPr}.json`);
 }
 export function createRunnerCoordinationState({ repo, pr, runId = null, now = new Date().toISOString() }) {
   const normalizedRepo = normalizeRepoSlug(repo);
@@ -324,6 +379,18 @@ export async function claimRunnerOwnership({
     };
   });
 }
+/**
+ * Verify the caller still owns the PR's runner claim.
+ *
+ * A successful owner-confirmed assert (the active owner's runId matches the
+ * caller's) refreshes `activeRun.updatedAt` — it acts as a heartbeat. Every
+ * other outcome (no record, no active run, ownership lost, missing run id)
+ * is a pure lock-free read with no write. Long-running loops must assert (or
+ * claim) at least once within the stale-max-age window
+ * (`STALE_RUNNER_DEFAULT_MAX_AGE_MS`, 30 minutes by default, overridable via
+ * `DEVLOOPS_STALE_RUNNER_MAX_AGE_MS`; see `_stale-runner-detection.mjs`) to
+ * avoid being seen as stale during a long multi-round gate cycle.
+ */
 export async function assertRunnerOwnership({
   repo,
   pr,
@@ -331,6 +398,7 @@ export async function assertRunnerOwnership({
   cwd = process.cwd(),
   filePath = null,
   requireExisting = false,
+  now = new Date().toISOString(),
 } = {}) {
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
@@ -397,17 +465,48 @@ export async function assertRunnerOwnership({
     });
   }
   if (state.activeRun.runId === normalizedRunId) {
-    return {
-      ok: true,
-      status: "owner_confirmed",
-      repo: normalizedRepo,
-      pr: normalizedPr,
-      runId: normalizedRunId,
-      activeRun: state.activeRun,
-      previousRun: state.previousRun,
-      exitSignals: state.exitSignals,
-      filePath: resolvedPath,
-    };
+    return withRunnerStateFileLock(resolvedPath, async () => {
+      const lockedRaw = await loadRunnerStateFile(resolvedPath);
+      const lockedState = lockedRaw === null
+        ? null
+        : normalizeRunnerCoordinationState(lockedRaw, { repo: normalizedRepo, pr: normalizedPr });
+      if (lockedState?.activeRun?.runId !== normalizedRunId) {
+        // Ownership changed hands between the lockless read above and acquiring
+        // the lock (a concurrent takeover) — don't write; report the new owner.
+        return buildConflict({
+          error: RUNNER_OWNERSHIP_ERROR.OWNERSHIP_LOST,
+          repo: normalizedRepo,
+          pr: normalizedPr,
+          runId: normalizedRunId,
+          activeRun: lockedState?.activeRun ?? null,
+          filePath: resolvedPath,
+          exitSignals: lockedState?.exitSignals ?? [],
+          message: lockedState?.activeRun?.runId
+            ? `PR ${normalizedRepo}#${normalizedPr} is now owned by run ${lockedState.activeRun.runId}; run ${normalizedRunId} must stop.`
+            : `PR ${normalizedRepo}#${normalizedPr} no longer has an active runner ownership record; run ${normalizedRunId} must stop.`,
+        });
+      }
+      const nextState = {
+        ...lockedState,
+        activeRun: {
+          ...lockedState.activeRun,
+          updatedAt: now,
+        },
+        history: [...lockedState.history, { type: "heartbeat", runId: normalizedRunId, at: now }],
+      };
+      await saveRunnerStateFile(resolvedPath, nextState);
+      return {
+        ok: true,
+        status: "owner_confirmed",
+        repo: normalizedRepo,
+        pr: normalizedPr,
+        runId: normalizedRunId,
+        activeRun: nextState.activeRun,
+        previousRun: nextState.previousRun,
+        exitSignals: nextState.exitSignals,
+        filePath: resolvedPath,
+      };
+    });
   }
   return buildConflict({
     error: RUNNER_OWNERSHIP_ERROR.OWNERSHIP_LOST,
