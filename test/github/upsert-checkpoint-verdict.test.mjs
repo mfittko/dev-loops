@@ -264,6 +264,53 @@ test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", as
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+test("upsertCheckpointVerdict refuses draft_gate for a tracker-backed draft PR whose linked issue has no AC/DoD (poster agrees with detector)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-tracker-refinement-missing-"));
+  try {
+    const { env: logEnvRaw } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "50", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: JSON.stringify({
+          number: 50,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234",
+          mergeStateStatus: "CLEAN",
+          body: "Closes #900\n\nTracker-backed PR; see linked issue for spec.",
+          closingIssuesReferences: [{ number: 900 }],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/50/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=50"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "50", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/50/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/50/reviews?per_page=100"], stdout: "[]\n" },
+      // No Acceptance criteria / DoD section — the linked issue fails the refinement check.
+      { assertArgs: ["issue", "view", "900", "--repo", "owner/repo", "--json", "body"], stdout: JSON.stringify({ body: "## Problem\n\nProse only, no Acceptance criteria or DoD section at all." }) + "\n" },
+      { assertArgs: ["pr", "view", "50", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
+    ], { matchMode: "claims" });
+    const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
+
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 50,
+        gate: "draft_gate",
+        headSha: "abc1234",
+        verdict: "clean",
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+        findingsSummary: "no issues found",
+        nextAction: "mark ready for review",
+      }, { env, repoRoot: tempDir }),
+      /missing_refinement_artifact/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("parseUpsertCheckpointVerdictCliArgs rejects --force with blank --force-reason as removed flag", () => {
   assert.throws(
     () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "merge", "--force", "--force-reason", "\n"]),

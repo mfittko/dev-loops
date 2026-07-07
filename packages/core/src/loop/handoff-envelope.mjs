@@ -280,6 +280,9 @@ function deriveRequiredReads(bundle, resolverOutput) {
  * (scripts/github/resolve-tracker-local-spec.mjs), which the envelope does not
  * model (deriveSpecSource coerces it to null).
  */
+// Distinct from refinementArtifact.specSource (linked_issue|pr_body|plan_file,
+// scripts/loop/detect-pr-gate-coordination-state.mjs): same field name, different
+// object, different value space — intentionally separate enums.
 export const CANONICAL_SPEC_SOURCE = Object.freeze({
   PHASE_DOC: "phase_doc",
   PR_BODY: "pr_body",

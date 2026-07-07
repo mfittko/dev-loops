@@ -9,6 +9,8 @@ Other repo docs may summarize or link this contract, but they should not redefin
 ## Three-origin model
 
 <!-- rule: ARTIFACT-TWO-TIER-EXCLUSIVE -->
+<!-- The rule ID predates the three-origin wording below (it was written when the
+     model was two-tier); retained as-is for ID stability, not renamed. -->
 dev-loops supports three mutually exclusive artifact authority origins. Every work item MUST originate from exactly one authoritative artifact: a GitHub issue, a persisted markdown plan file, or — on the sanctioned lightweight path — the PR description itself as the spec-of-record (no committed plan artifact). Work MUST NOT originate from a PR (other than the sanctioned lightweight PR-body-as-spec path) or a direct local change unless explicitly requested.
 
 The shipped extension default selects local-planning; see [Shipped default posture](#shipped-default-posture) below. The mode names that follow describe the origins; "default" in their headings refers to the local-first code-level default in `BUILT_IN_DEFAULTS`.

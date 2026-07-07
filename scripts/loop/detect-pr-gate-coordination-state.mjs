@@ -67,6 +67,13 @@ Output (stdout, JSON):
       "headSha": null,
       "verdict": null
     },
+    "refinementArtifact": {
+      "status": "present",
+      "specSource": "linked_issue",
+      "planDocPath": null,
+      "reason": "...",
+      "finding": null
+    },
     "allowedNextActions": ["resolve_merge_conflicts"],
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],
     "nextAction": "resolve_merge_conflicts",
@@ -290,25 +297,50 @@ async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = 
 // Plan-file promotion PRs (P4, `buildPromotionPrBody`) carry no linked issue by
 // design; the PR body instead names the committed plan doc as the spec-of-record
 // verbatim. Matching that literal marker is how the refinement check tells a
-// promoted plan-file PR apart from an ordinary issue-less body.
-const PLAN_FILE_PROMOTION_DOC_PATH_PATTERN = /Spec-of-record: the committed plan doc `([^`]+)`/u;
+// promoted plan-file PR apart from an ordinary issue-less body. The captured path
+// is bounded to a single line and a `.md` suffix so a multi-line/unbounded body
+// cannot smuggle an oversized or cross-line "path".
+const PLAN_FILE_PROMOTION_DOC_PATH_PATTERN = /Spec-of-record: the committed plan doc `([^`\n]{1,200}?\.md)`/u;
 
 // Resolve the refinement artifact for a draft PR with zero linked issues,
 // directly from its own body. The sanctioned three-origin model
 // (artifact-authority-contract.md) backs a draft PR with a linked issue, a
 // promoted plan file, or the PR body itself as the spec-of-record; only the
 // first fetches an issue body, so this never needs a network call.
+// `specSource` here (linked_issue|pr_body|plan_file) is a distinct enum from
+// handoff-envelope.mjs's CANONICAL_SPEC_SOURCE (phase_doc|pr_body): same field
+// name, different object, different value space — never conflate the two.
 async function resolveNoIssueRefinementArtifact(body) {
   const planDocMatch = PLAN_FILE_PROMOTION_DOC_PATH_PATTERN.exec(body);
   if (planDocMatch) {
+    const planDocPath = planDocMatch[1].trim();
+    // The marker sentence alone is spoofable (any body can paste it): require the
+    // body to still carry real AC/DoD checklist content, the same invariant
+    // `buildPromotionPrBody` actually embeds, before trusting the plan-file claim.
+    const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+    const artifact = detectIssueRefinementArtifact({ body });
+    if (artifact.hasACs === true) {
+      return {
+        status: "present",
+        linkedIssue: null,
+        linkedIssues: [],
+        specSource: "plan_file",
+        planDocPath,
+        acItems: artifact.acItems,
+        dodItems: artifact.dodItems,
+        sections: artifact.sections,
+        reason: `Refinement artifact present via the promoted plan doc \`${planDocPath}\` the PR body carries as the spec-of-record (plan-file promotion; no linked issue required).`,
+        finding: null,
+      };
+    }
     return {
-      status: "present",
+      status: "missing",
       linkedIssue: null,
       linkedIssues: [],
       specSource: "plan_file",
-      planDocPath: planDocMatch[1],
-      reason: `Refinement artifact present via the promoted plan doc \`${planDocMatch[1]}\` the PR body carries as the spec-of-record (plan-file promotion; no linked issue required).`,
-      finding: null,
+      planDocPath,
+      reason: `PR body names the promoted plan doc \`${planDocPath}\` as the spec-of-record but carries no Acceptance criteria / DoD checklist content (${artifact.reason}); a bare marker sentence cannot satisfy the refinement check.`,
+      finding: "missing_refinement_artifact",
     };
   }
   const { validatePrBodySpec } = await import("@dev-loops/core/loop/issue-refinement-artifact");

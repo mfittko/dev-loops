@@ -1403,6 +1403,52 @@ test("detect-pr-gate-coordination-state: promoted plan-file draft PR reaches RUN
     assert.equal(result.refinementArtifact?.specSource, "plan_file");
     assert.equal(result.refinementArtifact?.planDocPath, "docs/phases/phase-9.md");
     assert.equal(result.refinementArtifact?.linkedIssue, null);
+    assert.deepEqual(result.refinementArtifact?.acItems, ["a"]);
+    assert.deepEqual(result.refinementArtifact?.dodItems, ["b"]);
+    assert(result.refinementArtifact?.sections.includes("Acceptance criteria"));
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state: spoofed plan-file marker (no AC/DoD) stays BLOCKED (fail closed)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    // The marker sentence alone, with no AC/DoD checklist content — any body could
+    // paste this to spoof the plan-file branch (root cause of the gate integrity gap).
+    const body = "Spec-of-record: the committed plan doc `docs/phases/phase-9.md` is the authority for this work.\n\nNo AC/DoD sections at all.\n";
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+    assert.equal(result.refinementArtifact?.status, "missing");
+    assert.equal(result.refinementArtifact?.specSource, "plan_file");
+    assert.equal(result.refinementArtifact?.finding, "missing_refinement_artifact");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
