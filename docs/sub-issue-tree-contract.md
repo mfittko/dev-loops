@@ -1,5 +1,7 @@
 # Sub-Issue Tree Contract
 
+Canonical owner for the epic/umbrella sub-issue decomposition pattern in `dev-loops`.
+
 This document defines the deterministic pattern for epic/umbrella issue decomposition using
 GitHub sub-issues in `dev-loops`.
 

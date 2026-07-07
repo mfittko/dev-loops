@@ -1,6 +1,6 @@
 # Artifact authority contract
 
-This document is the canonical authority for the artifact-selection model: whether a work item originates from a GitHub issue (tracker-first), a persisted markdown plan file (local-planning), or the sanctioned lightweight PR-body-as-spec path.
+Canonical owner for the artifact-selection model: whether a work item originates from a GitHub issue (tracker-first), a persisted markdown plan file (local-planning), or the sanctioned lightweight PR-body-as-spec path.
 
 This canonical owner lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree. In installed layouts, read the same contract via [Artifact Authority Contract](../docs/artifact-authority-contract.md) from the installed skill directory.
 

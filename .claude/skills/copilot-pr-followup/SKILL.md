@@ -9,7 +9,7 @@ user-invocable: false
 
 # Copilot PR Follow-up
 
-This skill is the canonical internal `copilot_pr_followup` route behind the public `dev-loop` façade.
+Canonical owner for the internal `copilot_pr_followup` route behind the public `dev-loop` façade.
 
 It is also the canonical internal owner of the shared post-PR mechanics used by this repo:
 PR discovery and interpretation, async watch behavior, fix / reply-resolve / re-request flow,
@@ -225,12 +225,12 @@ When unresolved feedback exists, use a narrow follow-up loop:
    - when the intent is GitHub linkability, keep commit SHAs and issue/PR refs as plain text (for example 3ee82fc and owner/repo#70) and do not wrap them in backticks
    - keep backticks for actual code/path/CLI literals only
    - if either helper was newly added or recently changed, smoke-check it against one real thread before assuming the rest of the loop can rely on it
-9. before resolving an addressed review thread, run a post-fix verification checkpoint
+9. <!-- rule: COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE --> `COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE`: before resolving an addressed review thread, run a post-fix verification checkpoint
    - confirm the GitHub reply actually exists on the intended thread/comment, not only in local notes or helper stdout
    - confirm the pushed current-head diff genuinely addresses the reviewer concern on the flagged lines or pattern; if the concern is only partially addressed, leave the thread open and explain what remains
    - refresh the API-backed thread snapshot via `dev-loops gate capture-threads` and use that refreshed data — including the unresolved thread count — for follow-up decisions rather than prose assumptions
    - if any verification check fails, do **not** resolve the thread; leave it open, add a short explanation when needed, and re-enter the fix/reply loop
-10. resolve the addressed review thread only after the reply is attached successfully, the verification checkpoint passes, and the concern is genuinely addressed
+10. <!-- rule: COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY --> `COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY`: resolve the addressed review thread only after the reply is attached successfully, the verification checkpoint passes, and the concern is genuinely addressed
     - do not stop at a local fix if GitHub-side reply/resolve is authorized
 11. after completing reply/resolve for a pass, verify zero unresolved threads remain via `dev-loops gate capture-threads` before proceeding
     - if the refreshed snapshot reports unresolved threads, re-enter the reply/resolve loop for the missed threads
@@ -246,7 +246,7 @@ When unresolved feedback exists, use a narrow follow-up loop:
     - if the round cap is reached before the PR is thread-clean or before CI is green/credibly green, reply-resolve any remaining intentionally deferred threads with a short `deferred to follow-up` note, then stop and report that the Copilot round limit was reached
     - **Signal-gated re-request suppression:** the `detect-copilot-loop-state.mjs` state machine classifies review-thread comments by signal level (High/Mid/Low). High-signal (bugs, security, contract violations) always re-requests; Low-signal (cosmetic nits) never re-requests. When low-signal detection is enabled and thresholds are met, the machine returns a low-signal-converged terminal state routing to `pre_approval_gate` without further re-requests. See [Copilot Loop Operations](../docs/copilot-loop-operations.md) for full signal-level semantics.
     - if that local validation is still known red, continue remediation instead of re-requesting Copilot
-    - after a fix push advances the PR head SHA, re-run `detect-copilot-loop-state.mjs` for the new head and apply the [Copilot CI Status Contract](../docs/copilot-ci-status-contract.md). Previous-head CI is stale; only current-head results unblock CI-dependent steps. if GitHub CI/checks for the updated head are known red for a fixable issue, continue remediation instead of re-requesting Copilot. only once the updated head is green or credibly green, explicitly re-request Copilot review for the new head. Always use `request-copilot-review.mjs` — never `gh api POST repos/.../requested_reviewers` directly.
+    - after a fix push advances the PR head SHA, re-run `detect-copilot-loop-state.mjs` for the new head and apply the [Copilot CI Status Contract](../docs/copilot-ci-status-contract.md). Previous-head CI is stale; only current-head results unblock CI-dependent steps. if GitHub CI/checks for the updated head are known red for a fixable issue, continue remediation instead of re-requesting Copilot. <!-- rule: COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE --> `COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE`: only once the updated head is green or credibly green, explicitly re-request Copilot review for the new head. Always use `request-copilot-review.mjs` — never `gh api POST repos/.../requested_reviewers` directly.
     - only enter a wait/watch loop if the request result is confirmed as `requested` or `already-requested`
     - for `requested` / `already-requested`, immediately re-baseline with `detect-copilot-loop-state.mjs`; if the returned state is `waiting_for_copilot_review`, use `dev-loops loop watch-cycle` or stop/resume later, and if the returned state is `waiting_for_ci`, use `dev-loops loop watch-ci` (provider-agnostic CI wait; `gh run watch` is an Actions-only fallback) or stop/resume later after that single detector refresh
     - if the request result is `unavailable`, report that limitation and stop unless the user explicitly wants passive waiting anyway

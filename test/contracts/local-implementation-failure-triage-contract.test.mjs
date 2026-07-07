@@ -47,6 +47,12 @@ test("local-implementation skill owns the narrow failure-triage order by rule ID
 test("anti-patterns doc owns the general tooling-internals guidance", async () => {
   const content = await readRepo("skills/docs/anti-patterns.md");
 
+  // These fragments intentionally reconstruct one anti-patterns.md bullet
+  // (the tooling-internals/duplicate-broad-search prohibition) that
+  // LOCAL-FAILURE-TRIAGE-ORDER (skills/local-implementation/SKILL.md) points
+  // to by reference rather than restating; anti-patterns.md owns this prose
+  // and has no rule-ID marker of its own, so behavioral-coverage fragments
+  // stand in for a rule-ID assertion here.
   assertMatchesAll(content, [
     /Spelunking tooling internals instead of using the public surface/i,
     /Do not read installed package internals/i,

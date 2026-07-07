@@ -1,5 +1,7 @@
 # Reviewer Loop State Graph
 
+Canonical owner for the reviewer-side PR loop state machine.
+
 This document defines the deterministic reviewer-side PR loop state machine.
 
 ## Overview

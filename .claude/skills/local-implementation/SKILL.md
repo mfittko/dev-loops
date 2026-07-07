@@ -9,7 +9,7 @@ user-invocable: false
 
 # Local Implementation
 
-This skill is the canonical internal `local_implementation` route behind the public `dev-loop` façade.
+Canonical owner for the internal `local_implementation` route behind the public `dev-loop` façade.
 
 Use it only after the public dispatcher has already resolved `selectedStrategy: local_implementation`. This skill owns the local phase procedure and artifact discipline for that route; it does not redefine the shipped runtime semantics of helper CLIs, shared loop logic, or extension commands.
 

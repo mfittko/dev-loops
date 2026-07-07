@@ -1,5 +1,7 @@
 # Implementation workflow
 
+Canonical owner for the local-vs-GitHub-first implementation workflow layering in this repository.
+
 This repository supports both a local phased workflow and a GitHub-first remote workflow.
 
 ## Repo-level workflow preference
