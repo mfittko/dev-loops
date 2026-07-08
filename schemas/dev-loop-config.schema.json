@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mfittko/dev-loops/schemas/dev-loop-config.schema.json",
   "title": "dev-loops config",
-  "description": "Schema for .pi/dev-loop/defaults.yaml, settings.yaml, or overrides.yaml.",
+  "description": "Schema for dev-loops config across all layers: the shipped defaults in packages/core/src/config/extension-defaults.yaml, the repo-local .pi/dev-loop/defaults.* override layer, and consumer .devloops (legacy .pi/dev-loop/settings.* and overrides.* still validate against it).",
   "type": "object",
   "additionalProperties": false,
   "required": [

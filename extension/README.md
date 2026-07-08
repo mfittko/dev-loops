@@ -101,7 +101,7 @@ The messaging distinguishes between local loop readiness and remote GitHub/Copil
 
 ## Configuration
 
-The dev-loop workflow is driven by a YAML config at `.pi/dev-loop/defaults.yaml` (shipped with the package) and an optional consumer settings file at `.devloops` at repo root (the loader also accepts `.devloops.yaml`, `.devloops.yml`, and `.devloops.json`; legacy `.pi/dev-loop/settings.*` and `overrides.*` still load as fallbacks with a deprecation warning).
+The dev-loop workflow is driven by the shipped defaults in `packages/core/src/config/extension-defaults.yaml`, an optional repo-local `.pi/dev-loop/defaults.*` layer that merges on top of them, and an optional consumer settings file at `.devloops` at repo root (the loader also accepts `.devloops.yaml`, `.devloops.yml`, and `.devloops.json`; legacy `.pi/dev-loop/settings.*` and `overrides.*` still load as fallbacks with a deprecation warning).
 
 ### How consumers customize config
 
@@ -191,8 +191,9 @@ workflow:
 ### Config precedence
 
 1. Built-in defaults (`packages/core/src/config/config.mjs` `BUILT_IN_DEFAULTS`)
-2. Shipped defaults (`.pi/dev-loop/defaults.yaml` — committed in source repo)
-3. Consumer settings (`.devloops` at repo root — preferred; `.devloops.yaml`/`.devloops.yml`/`.devloops.json` also load; legacy `.pi/dev-loop/settings.*` and `overrides.*` still load as fallbacks with deprecation warning)
+2. Shipped defaults (`packages/core/src/config/extension-defaults.yaml`)
+3. Repo-local override layer (`.pi/dev-loop/defaults.*` — merges on top of the shipped defaults when present)
+4. Consumer settings (`.devloops` at repo root — preferred and authoritative when present; `.devloops.yaml`/`.devloops.yml`/`.devloops.json` also load; legacy `.pi/dev-loop/settings.*` and `overrides.*` still load as fallbacks with deprecation warning)
 
 ### Adding custom review angles
 
