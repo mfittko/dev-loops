@@ -10,6 +10,9 @@ import { runHandoff } from "./copilot-pr-handoff.mjs";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { DEFAULT_POLL_INTERVAL_MS } from "@dev-loops/core/loop/policy-constants";
 import { detectCopilotSessionActivity } from "./detect-copilot-session-activity.mjs";
+import { ensureAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
+import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
 import { parseArgs } from "node:util";
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
@@ -205,6 +208,33 @@ function buildWatchCycleContractTrace({
     },
   };
 }
+// A blocking watch can run for the full external-healthy-wait timeout (30 min for
+// Copilot/CI), which equals the runner-coordination stale window. Without a
+// heartbeat the claim ages to stale across a single watch and the next step is
+// refused. Refresh the lease on entry, on a periodic interval below
+// the stale window, and once more on return so the resuming runner has a fresh claim.
+async function runWatchHoldingLease(watchFactory, { repo, pr, env, cwd, ensureOwnershipImpl }) {
+  const heartbeat = async () => {
+    try {
+      // claimIfMissing:true self-heals a missing record but never stomps a live
+      // competitor (assertRunnerOwnership refuses to write on OWNERSHIP_LOST), so
+      // fail-closed competitor semantics are preserved.
+      await ensureOwnershipImpl({ repo, pr, env, cwd, claimIfMissing: true, requireExisting: false });
+    } catch {
+      // best-effort: a heartbeat failure must never affect the watch
+    }
+  };
+  const intervalMs = Math.max(1, Math.floor(resolveStaleRunnerMaxAgeMs({}, env) / 2));
+  await heartbeat();
+  const timer = setInterval(() => { void heartbeat(); }, intervalMs);
+  if (typeof timer.unref === "function") timer.unref();
+  try {
+    return await watchFactory();
+  } finally {
+    clearInterval(timer);
+    await heartbeat();
+  }
+}
 export function parseWatchCycleCliArgs(argv) {
   const options = {
     help: false,
@@ -278,9 +308,11 @@ export async function runWatchCycle(
     detectCopilotSessionActivityImpl = detectCopilotSessionActivity,
     fetchPrHeadBranchImpl = fetchPrHeadBranch,
     watchWorkflowRunImpl = watchWorkflowRun,
+    ensureOwnershipImpl = ensureAsyncRunnerOwnership,
     detectSessionActivity = false,
   } = {},
 ) {
+  const leaseCwd = resolveRepoRoot(process.cwd());
   const handoff = await runHandoffImpl(options, { env, ghCommand });
   const result = {
     ok: true,
@@ -370,13 +402,16 @@ export async function runWatchCycle(
       session.activity === "active"
       && Number.isInteger(session.runId)
     ) {
-      const workflowWatchResult = await watchWorkflowRunImpl(
-        {
-          repo: options.repo,
-          runId: session.runId,
-          timeoutMs: persistentWatchTimeoutMs,
-        },
-        { env, ghCommand },
+      const workflowWatchResult = await runWatchHoldingLease(
+        () => watchWorkflowRunImpl(
+          {
+            repo: options.repo,
+            runId: session.runId,
+            timeoutMs: persistentWatchTimeoutMs,
+          },
+          { env, ghCommand },
+        ),
+        { repo: options.repo, pr: options.pr, env, cwd: leaseCwd, ensureOwnershipImpl },
       );
       workflowRunWatch = {
         attempted: true,

@@ -14,6 +14,8 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_REVIEW_WAIT_TIMEOUT_MS,
 } from "@dev-loops/core/loop/policy-constants";
+import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 
 /** Maximum interval between heartbeat outputs during watch delays.
  *  Must be shorter than pi-subagents default needsAttentionAfterMs (60s). */
@@ -341,8 +343,10 @@ export async function watchCiStatus(
     ghCommand = "gh",
     delayImpl = delay,
     now = Date.now,
+    ensureOwnershipImpl = ensureAsyncRunnerOwnership,
   } = {},
 ) {
+  const leaseCwd = resolveRepoRoot(process.cwd());
   const { headSha: baselineSha, prVisibleCheckNames } = await fetchPrHeadSha(
     { repo: options.repo, pr: options.pr },
     { env, ghCommand },
@@ -382,6 +386,20 @@ export async function watchCiStatus(
               maxPolls: attemptBudget,
             }) + "\n",
           );
+          // The blocking CI wait can span the full watch budget, which equals the
+          // runner-coordination stale window; refresh the lease alongside each
+          // heartbeat so the claim stays fresh for every caller of this engine.
+          // No-ops without DEVLOOPS_RUN_ID; best-effort, never affects the watch.
+          try {
+            await ensureOwnershipImpl({
+              repo: options.repo,
+              pr: options.pr,
+              env,
+              cwd: leaseCwd,
+              claimIfMissing: true,
+              requireExisting: false,
+            });
+          } catch { /* best-effort: never affect the watch */ }
         }
       }
     }

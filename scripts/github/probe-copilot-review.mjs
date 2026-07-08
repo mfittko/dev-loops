@@ -9,6 +9,8 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_REVIEW_WAIT_TIMEOUT_MS,
 } from "@dev-loops/core/loop/policy-constants";
+import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 
 /** Maximum interval between heartbeat outputs during watch delays.
  *  Must be shorter than pi-subagents default needsAttentionAfterMs (60s). */
@@ -275,14 +277,18 @@ export async function watchCopilotReview(
   {
     env = process.env,
     ghCommand = "gh",
+    delayImpl = delay,
+    now = Date.now,
+    ensureOwnershipImpl = ensureAsyncRunnerOwnership,
   } = {},
 ) {
+  const leaseCwd = resolveRepoRoot(process.cwd());
   const baseline = parseCopilotActivity(await fetchGithubCopilotActivityPayload(
     { repo: options.repo, pr: options.pr },
     { env, ghCommand },
   ));
   const attemptBudget = buildAttemptBudget(options.timeoutMs, options.pollIntervalMs);
-  const watchStartedAtMs = Date.now();
+  const watchStartedAtMs = now();
   for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
     if (!(options.timeoutMs === 0 && attempt === 1)) {
       const pollDelayMs = buildPollDelayMs(
@@ -290,15 +296,16 @@ export async function watchCopilotReview(
         options.timeoutMs,
         options.pollIntervalMs,
         attempt,
+        now(),
       );
       if (pollDelayMs > 0) {
         let remainingMs = pollDelayMs;
         while (remainingMs > 0) {
           const chunkMs = Math.min(WATCH_HEARTBEAT_MS, remainingMs);
-          await delay(chunkMs);
+          await delayImpl(chunkMs);
           remainingMs -= chunkMs;
           if (remainingMs > 0) {
-            const nowMs = Date.now();
+            const nowMs = now();
             process.stderr.write(
               JSON.stringify({
                 ok: true,
@@ -309,6 +316,20 @@ export async function watchCopilotReview(
                 maxPolls: attemptBudget,
               }) + "\n",
             );
+            // The blocking review wait can span the full watch budget, which
+            // equals the runner-coordination stale window; refresh the lease
+            // alongside each heartbeat so the claim stays fresh for every caller
+            // of this engine. No-ops without DEVLOOPS_RUN_ID; best-effort.
+            try {
+              await ensureOwnershipImpl({
+                repo: options.repo,
+                pr: options.pr,
+                env,
+                cwd: leaseCwd,
+                claimIfMissing: true,
+                requireExisting: false,
+              });
+            } catch { /* best-effort: never affect the watch */ }
           }
         }
       }
