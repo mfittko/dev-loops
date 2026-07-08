@@ -46,6 +46,7 @@ It does **not** define:
 - inspection, viewer, or steering surfaces (from #57/#58/#59)
 - family-local state machines (copilot-loop-state.mjs, reviewer-loop-state.mjs)
 - backend discovery, remote polling, or transport coordination
+- board synchronization and queue-column state transitions for tracked items — the conductor's continuous board-sync obligation is owned by [QUEUE-BOARD-SYNC-CONTINUOUS](projects-queue-contract.md#conductor-board-synchronization-responsibility) in the projects queue contract <!-- rule-ref: QUEUE-BOARD-SYNC-CONTINUOUS -->
 
 ## Implementation
 

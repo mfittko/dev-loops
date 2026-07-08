@@ -298,6 +298,20 @@ The queue driver returns a `boardSync` array on each entry result. Each element 
 
 The inner `result.ok` / `result.item` shape is owned by the underlying `move-queue-item.mjs` script. When the board is not configured or the sync fails in fail-open mode, `skipped` is `true` and a `reason` explains why.
 
+### Conductor board synchronization responsibility
+
+<!-- rule: QUEUE-BOARD-SYNC-CONTINUOUS -->
+`QUEUE-BOARD-SYNC-CONTINUOUS`: When a queue board is configured, the conductor **MUST** keep the board synchronized with actual issue/PR state continuously, reconciling at every lifecycle transition instead of waiting for a human to notice drift. This responsibility is normative for any conductor working the queue, including headless and cross-repository runs. Each transition has a required board effect:
+
+| Transition | Required board effect |
+|---|---|
+| File / enqueue an item for the queue | Place it on a real column via `add-queue-item.mjs` — `--next-up` when it is queued to work, `--column Backlog` when it is tracked but not yet prioritized. A filed or enqueued item **MUST NOT** be left off-board. |
+| Dispatch a runner on an item | Immediately set the item to `In Progress` via `move-queue-item.mjs --to-column`, then re-read the item to confirm the move landed rather than assuming the runner did it. An in-flight item **MUST NOT** stay outside `In Progress`. |
+| Merge or close the item | Ensure the item is in `Done`. |
+| Reprioritize or block the item | Update its column so the board reflects the new state. |
+| Periodic reconcile | Proactively enumerate board items with `list-queue-items.mjs`, compare each against the underlying issue/PR state, and correct any mismatch without being asked. |
+
+The conductor **MUST** perform every board read and column mutation through the canonical projects scripts (`add-queue-item.mjs`, `move-queue-item.mjs`, `list-queue-items.mjs`); it **MUST NOT** hand-roll `gh api graphql` calls to synchronize the board. This rule governs the conductor's operational obligation to act; the column vocabulary it targets is owned by [`QUEUE-COLUMN-CANONICAL`](#conventional-columns), and the bootstrap-only structural-mutation boundary by [`QUEUE-BOOTSTRAP-ONLY-MUTATOR`](#idempotent-bootstrap-exception).
 
 ## Queue pickup ordering
 
