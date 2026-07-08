@@ -157,7 +157,6 @@ test("createInspectRunViewerServer supports selecting another PR from query para
 test("createInspectRunViewerServer serves the Mermaid browser asset without loading a snapshot", async () => {
   let loadCount = 0;
   const adapter = {
-    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       loadCount += 1;
       return makeSnapshot();
@@ -190,7 +189,6 @@ test("createInspectRunViewerServer keeps Mermaid asset failures generic and path
   let loadCount = 0;
   const loggedErrors = [];
   const adapter = {
-    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       loadCount += 1;
       return makeSnapshot();
@@ -232,7 +230,6 @@ test("createInspectRunViewerServer serves authoritative snapshot JSON on /snapsh
   let loadCount = 0;
   const snapshot = makeSnapshot({ sourceMode: "partial", trust: "degraded" });
   const adapter = {
-    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       loadCount += 1;
       return snapshot;
@@ -401,7 +398,6 @@ test("createInspectRunViewerServer keeps explicit query targets even when they a
 test("createInspectRunViewerServer resolves /snapshot.json target from query params", async () => {
   const seenTargets = [];
   const adapter = {
-    loadHandoffEnvelope: async () => null,
     async loadSnapshot(target) {
       seenTargets.push(target);
       return makeSnapshot({ target, runId: `pr-${target.pr}` });
@@ -432,7 +428,6 @@ test("createInspectRunViewerServer resolves /snapshot.json target from query par
 test("createInspectRunViewerServer treats missing JSON snapshots as machine-readable failures", async () => {
   let loadCount = 0;
   const adapter = {
-    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       loadCount += 1;
       return undefined;
@@ -509,7 +504,6 @@ test("createInspectRunViewerServer keeps JSON failures machine-readable and HTML
 test("createInspectRunViewerServer keeps favicon, unsupported paths, and unsupported methods load-free", async () => {
   let loadCount = 0;
   const adapter = {
-    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       loadCount += 1;
       return makeSnapshot();
@@ -569,7 +563,6 @@ test("createInspectRunViewerServer keeps favicon, unsupported paths, and unsuppo
 test("createInspectRunViewerServer treats malformed repo slug query params as bad requests", async () => {
   let loadCount = 0;
   const adapter = {
-    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       loadCount += 1;
       throw new Error("should not load snapshot for malformed targets");
@@ -729,7 +722,6 @@ test("createInspectRunViewerServer constrains repo-scoped inbox discovery to the
 
 test("createInspectRunViewerServer returns JSON for malformed /snapshot.json repo/pr query params", async () => {
   const adapter = {
-    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       throw new Error("should not load snapshot for malformed targets");
     },
@@ -760,7 +752,6 @@ test("createInspectRunViewerServer returns JSON for malformed /snapshot.json rep
 
 test("createInspectRunViewerServer treats malformed repo/pr query params as bad requests", async () => {
   const adapter = {
-    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       throw new Error("should not load snapshot for malformed targets");
     },
