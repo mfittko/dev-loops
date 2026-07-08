@@ -4,9 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-## 0.8.0
-
-<!-- Release date is set at tag time; see the release runbook. This section is prepared ahead of the v0.8.0 tag. -->
+## 0.8.0 - 2026-07-08
 
 Everything merged since v0.7.1 — the v0.7.x contract-audit epic (#1104) plus follow-on release-gate fixes. **Versioning note:** most of these commits are ancestors of the `v0.7.2` tag and therefore already ship in the published `0.7.2` npm artifact, but `v0.7.2`'s release notes documented only the #1241 packaging hotfix (see the 0.7.2 section below). This section backfills that omitted changelog and adds the nine changes that genuinely postdate the `v0.7.2` tag (#1240, #1242, #1244, #1249, #1250, #1253, #1254, #1256, and #1236/#1252); it becomes the notes for the eventual `v0.8.0` tag.
 
