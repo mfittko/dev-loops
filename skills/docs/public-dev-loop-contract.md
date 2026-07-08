@@ -26,6 +26,7 @@ Day-one user-intent forms:
 - continue the current dev loop
 - auto dev loop (durable auto ownership over the detected routed loop)
 - auto dev loop on issue `<n>`
+- review PR `<n>` in a UI loop
 - what state is the dev loop in?
 
 ## Issue-based shorthand auto trigger contract
@@ -251,7 +252,7 @@ The public router currently maps to these deterministic internal strategies:
 | `reviewer_fixer` | reviewer/fixer passes on the current PR | none |
 | `wait_watch` | waiting/watch states | `dev-loop` |
 | `final_approval` | approval-ready gate, or merge-ready with explicit merge authorization | none (canonical procedure lives in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) + [Copilot Loop Operations](./copilot-loop-operations.md) Human approval checkpoint; [Final Approval](../final-approval/SKILL.md) is a thin redirect) |
-| `ui_review` | explicit UI-review "prove it in the running app" pass on the current PR | `dev-loop` (sole entrypoint is the dedicated `loop-review-ui` command; see [UI Review](../ui-review/SKILL.md)) |
+| `ui_review` | explicit UI-review "prove it in the running app" pass on the current PR | `dev-loop` (surfaced entrypoint is the dedicated `loop-review-ui` command; the parameterized `--intent review_pr_ui` form also routes here; see [UI Review](../ui-review/SKILL.md)) |
 
 `waiting_for_merge_authorization` is part of the gate contract below as a stop gate rather than an internal strategy.
 
@@ -495,6 +496,7 @@ The following parameter/state combinations fail closed to `needs_reconcile` inst
 | "run dev loop on PR 88 and stay on it" | `dev-loop --intent continue_on_pr --target pr:88 --watch` |
 | "prefer the local path for issue 42" | `dev-loop --intent start_on_issue --target issue:42 --target-preference prefer_local` |
 | "just inspect current state" | `dev-loop --intent inspect_state` |
+| "review PR 88 in a UI loop" | `dev-loop --intent review_pr_ui --target pr:88` |
 
 These are parameterized uses of `dev-loop`, not new workflow-facing entrypoints.
 
@@ -516,3 +518,4 @@ These are parameterized uses of `dev-loop`, not new workflow-facing entrypoints.
 | start issue `86` locally, then continue the loop | local phase slice for issue `86` -> `local_implementation`, then resume via public `dev-loop` against the updated state |
 | continue the current dev loop while waiting | same target + `status=waiting` -> `wait_watch` |
 | what state is the dev loop in? | inspect the canonical state and report the routed internal strategy without switching public entrypoints |
+| review PR `88` in a UI loop | PR target + explicit UI-review request (`review_pr_ui` intent) -> `ui_review` internal strategy (routed behind `dev-loop`) |
