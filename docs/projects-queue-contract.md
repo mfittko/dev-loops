@@ -399,11 +399,11 @@ ordering fail closed — they do not treat the missing board as equivalent to "n
 The `queue.projectNumber` key provides direct project lookup by number, bypassing title-based
 discovery. When both `projectNumber` and `boardTitle` are set, `projectNumber` takes precedence.
 
-### Settings precedence
+### Settings source
 
-1. `packages/core/src/config/extension-defaults.yaml` — shipped defaults (does not set `boardTitle`)
-2. `.pi/dev-loop/defaults.*` — repo-local override layer (does not set `boardTitle`)
-3. `.devloops` — operator overrides (may set `boardTitle`)
+Queue board settings (`boardTitle` / `projectNumber`) are read only from `.devloops` at the
+repo root. The shipped defaults (`packages/core/src/config/extension-defaults.yaml`) and the
+repo-local `.pi/dev-loop/defaults.*` override layer deliberately do not set them.
 
 Project number and URL are discoverable at runtime via the GraphQL API — no explicit config
 entry is required.
