@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-## 0.8.0
+## 0.8.0 - 2026-07-08
 
 <!-- Release date is set at tag time; see the release runbook. This section is prepared ahead of the v0.8.0 tag. -->
 
