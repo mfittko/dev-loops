@@ -8,7 +8,7 @@
 // It lives in scripts/loop/ (not packages/core) because significance is derived
 // from a `gh api .../compare` diff — gh I/O that does not belong in core.
 import { extractReviewCommitSha, isCopilotLogin, parseJsonText } from "../_core-helpers.mjs";
-import { runChild } from "../_cli-primitives.mjs";
+import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 
 export function getLatestSubmittedCopilotReviewHeadSha(reviews) {
   const copilotSubmitted = (Array.isArray(reviews) ? reviews : [])
@@ -149,7 +149,7 @@ export function isCommentOnlyFileChange(file) {
 
 export async function detectPostConvergenceSignificantChange(
   { repo, pr, currentHeadSha, reviews, changedFiles, roundCapReached, regularCopilotRounds },
-  { env = process.env, ghCommand = "gh" } = {},
+  { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
 ) {
   if (!roundCapReached || !regularCopilotRounds) {
     return false;
