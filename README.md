@@ -192,6 +192,7 @@ Upgrading from before the rename to `dev-loops`? The package name, repo slug, an
 ## Further reading
 
 - [Docs Index](./docs/index.md) — active docs and canonical-owner pointers
+- [README Audit Rubric](./docs/readme-audit-rubric.md) — semantic properties this README is audited against (on-demand LLM judge)
 - [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md) — public routing contract
 - [Extension Documentation](./extension/README.md) — README-driven extension spec
 - [Scripts Documentation](./scripts/README.md) — deterministic script contracts
