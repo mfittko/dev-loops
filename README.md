@@ -116,7 +116,7 @@ Pi-harness only:
 
 ## Configuration
 
-Defaults ship in `packages/core/src/config/extension-defaults.yaml`. A repo-local `.pi/dev-loop/defaults.*` layer merges on top of them when present, then consumer repos override everything in a `.devloops` file at the repo root (`.devloops.yaml` / `.yml` / `.json` are also accepted); `.devloops` is authoritative when present. The legacy `.pi/dev-loop/settings.*` and `overrides.*` files still load with a deprecation warning.
+Defaults ship in `packages/core/src/config/extension-defaults.yaml`. A repo-local `.pi/dev-loop/defaults.*` layer merges on top of them when present, then consumer repos override everything in a `.devloops` file at the repo root (`.devloops.yaml` / `.yml` / `.json` are also accepted); `.devloops` is authoritative when present. The legacy `.pi/dev-loop/settings.*` and `overrides.*` files load only as a fallback when no `.devloops` is present; when `.devloops` exists they are ignored (a deprecation warning still fires if they are present).
 
 ```bash
 npx dev-loops@<version> gates   # print what reviewers will check
@@ -130,7 +130,7 @@ Key surfaces:
 - **Autonomy** — which gates require operator confirmation
 - **Workflow defaults** — retrospective enforcement, draft-first posture, dev-mode policy
 
-Full details: [Extension Documentation](./extension/README.md) and `packages/core/src/config/extension-defaults.yaml`.
+Full details: the shipped defaults in `packages/core/src/config/extension-defaults.yaml` and the loader in `packages/core/src/config/config.mjs`.
 
 ## Docker
 
