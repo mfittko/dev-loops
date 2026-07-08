@@ -2,6 +2,74 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+// In-process replacement for the PATH-installed gh stub (buildGhStubScript /
+// writeGhStub). Returns `{ runChild, calls }` where `runChild(command, args, env,
+// stdinText)` replays the SAME sequential semantics the PATH stub implements, but
+// without spawning a node subprocess per gh call. Inject it via a script's
+// `{ env, ghCommand, runChild }` context so the CLI logic runs in-process while
+// every gh call is answered from `entries` in order. Assertion failures return the
+// SAME non-zero exit codes the PATH stub exits with, so the script's own error path
+// fires identically. Non-gh commands (e.g. git) resolve to a hermetic empty success
+// by default, mirroring the git stub tests seed on the same PATH dir.
+export function makeGhMock(entries = [], {
+  command = "gh",
+  repeatLastOnOverflow = false,
+  defaultStdout = "{}\n",
+} = {}) {
+  const calls = [];
+  let counter = 0;
+  const runChild = async (cmd, args = [], _env, stdinText = "") => {
+    calls.push({ command: cmd, args: [...args], stdinText: stdinText ?? "" });
+    if (cmd !== command) {
+      // The PATH stub only shadowed `gh`; other commands (git) ran against a
+      // separately-seeded stub whose default is empty stdout / exit 0. Mirror that
+      // hermetic default rather than shelling out to the real working tree.
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    const current = counter;
+    if (current >= entries.length && !repeatLastOnOverflow) {
+      return { code: 97, stdout: "", stderr: `unexpected extra gh call #${current + 1}: ${args.join(" ")}\n` };
+    }
+    const index = entries.length === 0 ? -1 : Math.min(current, entries.length - 1);
+    const entry = index >= 0 ? (entries[index] ?? { stdout: defaultStdout }) : { stdout: defaultStdout };
+    counter = current + 1;
+    if (entry.assertArgs) {
+      for (const expected of entry.assertArgs) {
+        if (!args.includes(expected)) {
+          return { code: 98, stdout: "", stderr: `missing expected gh arg: ${expected}${args.length > 0 ? `\nactual: ${args.join(" ")}` : ""}\n` };
+        }
+      }
+    }
+    if (entry.assertStdinIncludes) {
+      for (const expected of entry.assertStdinIncludes) {
+        if (!String(stdinText).includes(expected)) {
+          return { code: 96, stdout: "", stderr: `missing expected stdin text: ${expected}\n` };
+        }
+      }
+    }
+    if (entry.assertArgContains) {
+      for (const expected of entry.assertArgContains) {
+        if (!args.some((a) => a.includes(expected))) {
+          return { code: 94, stdout: "", stderr: `missing expected arg substring: ${expected}\nactual: ${args.join(" ")}\n` };
+        }
+      }
+    }
+    if (entry.assertArgNotContains) {
+      for (const forbidden of entry.assertArgNotContains) {
+        if (args.some((a) => a.includes(forbidden))) {
+          return { code: 93, stdout: "", stderr: `unexpected arg substring: ${forbidden}\n` };
+        }
+      }
+    }
+    return {
+      code: entry.exitCode ?? 0,
+      stdout: entry.stdout ?? "",
+      stderr: entry.stderr ?? "",
+    };
+  };
+  return { runChild, calls };
+}
+
 // Shared fixture body: minimal issue-less PR-body-as-spec content (no linked
 // issue) that satisfies the refinement check, matching an ordinary sanctioned
 // draft PR. Tests exercising draft/ready or gate-posting logic downstream of
