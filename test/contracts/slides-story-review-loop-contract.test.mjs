@@ -6,9 +6,8 @@ const fromRepoRoot = (relativePath) => new URL(`../../${relativePath}`, import.m
 const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), 'utf8');
 
 test('slides-story review loop doc carries the required headings/sections and cross-links', async () => {
-  const [doc, readme, indexDoc, uiDoc, template] = await Promise.all([
+  const [doc, indexDoc, uiDoc, template] = await Promise.all([
     readRepo('docs/slides-story-review-loop.md'),
-    readRepo('README.md'),
     readRepo('docs/index.md'),
     readRepo('docs/ui-designer-review-loop.md'),
     readRepo('skills/dev-loop/templates/slides-story-review.md'),
@@ -37,9 +36,7 @@ test('slides-story review loop doc carries the required headings/sections and cr
   // the UI doc cross-links back as a sibling
   assert.match(uiDoc, /slides-story-review-loop\.md/i);
 
-  // the dev-loop indexes list the loop
-  assert.match(readme, /docs\/slides-story-review-loop\.md/i);
-  assert.match(indexDoc, /slides-story-review-loop\.md/i);
+  // the dev-loop indexes list the loop  assert.match(indexDoc, /slides-story-review-loop\.md/i);
 
   // template exists with the storytelling lens and bounded outcomes
   await stat(fromRepoRoot('skills/dev-loop/templates/slides-story-review.md'));

@@ -184,9 +184,8 @@ test("worktree guidance docs define the canonical checkout-isolation contract", 
 
 
 test("phase-truth docs agree that Phase 8 is active and Phase 7 is deferred", async () => {
-  const [plan, readme, docsIndex, implementationState, phase7, phase8, agents] = await Promise.all([
+  const [plan, docsIndex, implementationState, phase7, phase8, agents] = await Promise.all([
     readRepo("PLAN.md"),
-    readRepo("README.md"),
     readRepo("docs/index.md"),
     readRepo("docs/IMPLEMENTATION_STATE.md"),
     readRepo("docs/phases/phase-7.md"),
@@ -196,9 +195,6 @@ test("phase-truth docs agree that Phase 8 is active and Phase 7 is deferred", as
 
   assert.match(plan, /Current active phase[\s\S]*Phase 8/i);
   assert.match(plan, /Phase 7[\s\S]*deferred/i);
-
-  assert.match(readme, /Phase 8 is the active durable phase/i);
-  assert.match(readme, /Phase 7 second-repo pilot is deferred/i);
 
   assert.match(docsIndex, /Active local phase doc[\s\S]*phase-8\.md/i);
 

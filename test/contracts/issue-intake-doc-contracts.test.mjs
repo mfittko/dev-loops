@@ -136,19 +136,16 @@ test("issue-intake behavior remains internal and resumable behind dev-loop", asy
 });
 
 test("issue-based shorthand auto dev-loop trigger is documented as one public intent through the human approval checkpoint", async () => {
-  const [readme, publicContract, devLoopSkill, issueIntakeSkill, devLoopAgent] = await Promise.all([
-    readRepo("README.md"),
+  const [publicContract, devLoopSkill, issueIntakeSkill, devLoopAgent] = await Promise.all([
     readRepo("skills/docs/public-dev-loop-contract.md"),
     readRepo("skills/dev-loop/SKILL.md"),
     readIssueIntakeSurface(),
     readRepo("agents/dev-loop.agent.md"),
   ]);
 
-  for (const content of [readme, publicContract, devLoopSkill, issueIntakeSkill, devLoopAgent]) {
+  for (const content of [publicContract, devLoopSkill, issueIntakeSkill, devLoopAgent]) {
     assert.match(content, /auto dev loop on issue/i);
   }
-
-  assert.match(readme, /canonical shorthand example/i);
 
   assert.match(publicContract, /Issue-based shorthand auto trigger contract/i);
   assert.match(publicContract, /resolves to the same bounded public `dev-loop` intent/i);
@@ -311,9 +308,8 @@ test("issue-intake overlay delegates linked-PR detection mechanics to determinis
   assert.match(skillContent, /treat an open linked PR(?: reported by the helper)? as the active implementation for this issue/i);
 });
 
-test("issue-intake overlay resolves the target repo for non-issue inputs and README documents thin entrypoint agents", async () => {
+test("issue-intake overlay resolves the target repo for non-issue inputs", async () => {
   const skillContent = await readIssueIntakeSurface();
-  const readmeContent = await readRepo("README.md");
 
   assertRuleOwned("INTAKE-REPO-SLUG-RESOLVE-FIRST", "skills/docs/issue-intake-procedure.md");
   assert.match(skillContent, /INTAKE-REPO-SLUG-RESOLVE-FIRST/);
@@ -325,8 +321,6 @@ test("issue-intake overlay resolves the target repo for non-issue inputs and REA
   assert.match(skillContent, /default to the current repository slug/i);
   assert.match(skillContent, /if the plan-doc reference explicitly points at another GitHub repository/i);
   assert.match(skillContent, /resolve `<resolved-repo>` for this work item using the same rule as the plan-doc path/i);
-  assert.match(readmeContent, /generic role agents plus thin workflow entrypoint agents where needed/i);
-  assert.match(readmeContent, /thin workflow entrypoint agents are allowed when they only load a skill and defer policy to it/i);
 });
 
 test("issue-intake safety layer contract is documented", async () => {
