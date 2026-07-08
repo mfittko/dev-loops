@@ -12,6 +12,8 @@ function readRepo(relativePath) {
 
 // ponytail: process-lifetime memo — test process is short-lived and the repo
 // tree doesn't change mid-run, so a single walk is safe to reuse everywhere.
+// Add cache invalidation if a caller mutates the scanned tree mid-run or reuses
+// this across a long-lived/watch process instead of a one-shot test run.
 let ruleDefinitionsCache = null;
 
 function collectRuleDefinitions() {

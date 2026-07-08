@@ -153,6 +153,9 @@ function normalizeHeadSha(value) {
 // with our own "<base>...HEAD" triple-dot construction). Everything else —
 // including HEAD@{upstream}, main@{1}, tag-peel v1.0.0^{commit}, HEAD~3 — is
 // accepted.
+// Revisit toward an explicit allowlist if `base` ever reaches a shell (or any
+// call without execFileSync's no-shell argv guarantee), or if a malformed ref
+// shape is found slipping past these checks into `git diff`.
 function normalizeBaseRef(value) {
   const trimmed = String(value).trim();
   if (trimmed.length === 0 || trimmed.startsWith("-") || trimmed.includes("..")) return null;
