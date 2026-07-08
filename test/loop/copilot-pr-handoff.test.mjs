@@ -69,7 +69,12 @@ const runNode = async (args = [], options = {}) => {
   const repoRoot = options.cwd ?? process.cwd();
   const stderrChunks = [];
   const originalWrite = process.stderr.write.bind(process.stderr);
-  process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+  process.stderr.write = (chunk, encoding, cb) => {
+    stderrChunks.push(String(chunk));
+    const done = typeof encoding === "function" ? encoding : cb;
+    if (typeof done === "function") done();
+    return true;
+  };
   const originalPath = process.env.PATH;
   process.env.PATH = [gitStubDir, originalPath ?? ""].filter(Boolean).join(path.delimiter);
   try {

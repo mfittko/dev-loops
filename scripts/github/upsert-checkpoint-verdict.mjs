@@ -950,7 +950,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
 }
 
 export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
-  const gh = { env, ghCommand, runChild };
+  const gh = { env, ghCommand, repoRoot, runChild };
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even
   // though the old run is dead, forcing manual file deletion.

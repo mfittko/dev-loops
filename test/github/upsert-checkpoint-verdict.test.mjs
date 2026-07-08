@@ -99,7 +99,12 @@ const runNode = async (args = [], options = {}) => {
   // the assembled stderr matches what the CLI subprocess would have emitted.
   const stderrChunks = [];
   const originalWrite = process.stderr.write.bind(process.stderr);
-  process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+  process.stderr.write = (chunk, encoding, cb) => {
+    stderrChunks.push(String(chunk));
+    const done = typeof encoding === "function" ? encoding : cb;
+    if (typeof done === "function") done();
+    return true;
+  };
   try {
     const result = await upsertCheckpointVerdict(options_, { env, ghCommand: "gh", repoRoot, runChild });
     process.stderr.write = originalWrite;
