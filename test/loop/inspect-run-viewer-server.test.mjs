@@ -8,6 +8,7 @@ import { makeSnapshot, requestOnce } from "./inspect-run-viewer-test-helpers.mjs
 test("createInspectRunViewerServer serves browser html from adapter snapshot without inline full snapshot dump", async () => {
   let loadCount = 0;
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       loadCount += 1;
       return makeSnapshot({ sourceMode: "partial", trust: "degraded" });
@@ -43,6 +44,7 @@ test("createInspectRunViewerServer serves browser html from adapter snapshot wit
 test("createInspectRunViewerServer does not eager-load non-selected sidebar snapshots", async () => {
   const seenTargets = [];
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot(target) {
       seenTargets.push(`${target.repo}#${target.pr}`);
       return makeSnapshot({ target, runId: `pr-${target.pr}` });
@@ -81,6 +83,7 @@ test("createInspectRunViewerServer does not eager-load non-selected sidebar snap
 
 test("createInspectRunViewerServer skips malformed assigned inbox entries instead of blanking the list", async () => {
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot(target) {
       return makeSnapshot({ target, runId: `pr-${target.pr}` });
     },
@@ -114,6 +117,7 @@ test("createInspectRunViewerServer skips malformed assigned inbox entries instea
 test("createInspectRunViewerServer supports selecting another PR from query params", async () => {
   const seenTargets = [];
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot(target) {
       seenTargets.push(target);
       return makeSnapshot({
@@ -255,6 +259,7 @@ test("createInspectRunViewerServer serves authoritative snapshot JSON on /snapsh
 
 test("createInspectRunViewerServer preserves cached authoritative inbox signals after another PR is selected", async () => {
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot(target) {
       if (target.pr === 55) {
         return makeSnapshot({
@@ -311,6 +316,7 @@ test("createInspectRunViewerServer preserves cached authoritative inbox signals 
 test("createInspectRunViewerServer honors an explicit inbox page even when a selected PR exists", async () => {
   const seenTargets = [];
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot(target) {
       seenTargets.push(target);
       return makeSnapshot({ target, runId: `pr-${target.pr}` });
@@ -349,6 +355,7 @@ test("createInspectRunViewerServer honors an explicit inbox page even when a sel
 test("createInspectRunViewerServer keeps explicit query targets even when they are not in the current inbox page", async () => {
   const seenTargets = [];
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot(target) {
       seenTargets.push(target);
       return makeSnapshot({ target, runId: `pr-${target.pr}` });
@@ -455,6 +462,7 @@ test("createInspectRunViewerServer treats missing JSON snapshots as machine-read
 test("createInspectRunViewerServer keeps JSON failures machine-readable and HTML failures browser-friendly", async () => {
   let loadCount = 0;
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       loadCount += 1;
       throw new Error("inspection snapshot unavailable");
@@ -591,6 +599,7 @@ test("createInspectRunViewerServer treats malformed repo slug query params as ba
 test("createInspectRunViewerServer reuses the all-repos inbox query for the default unscoped view", async () => {
   const listCalls = [];
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot(target) {
       return makeSnapshot({ target, runId: `pr-${target.pr}` });
     },
@@ -635,6 +644,7 @@ test("createInspectRunViewerServer reuses the all-repos inbox query for the defa
 
 test("createInspectRunViewerServer normalizes unsupported assigned inbox signals before rendering", async () => {
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async listAssignedPullRequests() {
       return [
         { target: { repo: "owner/repo", pr: 55 }, title: "Primary PR", updatedAt: "2026-05-21T00:00:00Z" },
@@ -667,6 +677,7 @@ test("createInspectRunViewerServer normalizes unsupported assigned inbox signals
 test("createInspectRunViewerServer constrains repo-scoped inbox discovery to the fixed repo", async () => {
   const listCalls = [];
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot(target) {
       return makeSnapshot({ target, runId: `pr-${target.pr}` });
     },
@@ -767,6 +778,7 @@ test("createInspectRunViewerServer treats malformed repo/pr query params as bad 
 test("createInspectRunViewerServer guards malformed request URLs and undefined snapshots", async () => {
   let loadCount = 0;
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
       loadCount += 1;
       return undefined;
