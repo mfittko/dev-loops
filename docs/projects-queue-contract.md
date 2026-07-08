@@ -301,15 +301,15 @@ The inner `result.ok` / `result.item` shape is owned by the underlying `move-que
 ### Conductor board synchronization responsibility
 
 <!-- rule: QUEUE-BOARD-SYNC-CONTINUOUS -->
-`QUEUE-BOARD-SYNC-CONTINUOUS`: When a queue board is configured, the conductor **MUST** keep the board synchronized with actual issue/PR state continuously, reconciling at every lifecycle transition instead of waiting for a human to notice drift. This responsibility is normative for any conductor working the queue, including headless and cross-repository runs. Each transition has a required board effect:
+When a queue board is configured, the conductor **MUST** keep the board synchronized with actual issue/PR state continuously, reconciling at every lifecycle transition instead of waiting for a human to notice drift. This responsibility is normative for any conductor working the queue, including headless and cross-repository runs. Each transition has a required board effect:
 
 | Transition | Required board effect |
 |---|---|
-| File / enqueue an item for the queue | Place it on a real column via `add-queue-item.mjs` — `--next-up` when it is queued to work, `--column Backlog` when it is tracked but not yet prioritized. A filed or enqueued item **MUST NOT** be left off-board. |
-| Dispatch a runner on an item | Immediately set the item to `In Progress` via `move-queue-item.mjs --to-column`, then re-read the item to confirm the move landed rather than assuming the runner did it. An in-flight item **MUST NOT** stay outside `In Progress`. |
-| Merge or close the item | Ensure the item is in `Done`. |
-| Reprioritize or block the item | Update its column so the board reflects the new state. |
-| Periodic reconcile | Proactively enumerate board items with `list-queue-items.mjs`, compare each against the underlying issue/PR state, and correct any mismatch without being asked. |
+| File / enqueue an item for the queue | The item **MUST** be placed on a real column via `add-queue-item.mjs` — `--next-up` when it is queued to work, `--column Backlog` when it is tracked but not yet prioritized — and **MUST NOT** be left off-board. |
+| Dispatch a runner on an item | The conductor **MUST** immediately set the item to `In Progress` via `move-queue-item.mjs --to-column` and **MUST** re-read the item to confirm the move landed rather than assuming the runner did it; an in-flight item **MUST NOT** stay outside `In Progress`. |
+| Merge or close the item | The item **MUST** be in `Done`. |
+| Reprioritize or block the item | The item's column **MUST** be updated so the board reflects the new state. |
+| Periodic reconcile | The conductor **MUST** proactively enumerate board items with `list-queue-items.mjs`, compare each against the underlying issue/PR state, and correct any mismatch without being asked. |
 
 The conductor **MUST** perform every board read and column mutation through the canonical projects scripts (`add-queue-item.mjs`, `move-queue-item.mjs`, `list-queue-items.mjs`); it **MUST NOT** hand-roll `gh api graphql` calls to synchronize the board. This rule governs the conductor's operational obligation to act; the column vocabulary it targets is owned by [`QUEUE-COLUMN-CANONICAL`](#conventional-columns), and the bootstrap-only structural-mutation boundary by [`QUEUE-BOOTSTRAP-ONLY-MUTATOR`](#idempotent-bootstrap-exception).
 
@@ -432,8 +432,12 @@ This contract explicitly does **not** define:
   queue helpers only read ordering and set Status; they do not react to Status changes.
 - **Local persistence replacement** — Board state is an optional scheduling input. This
   contract introduces no new local queue file; it complements existing queue mode persistence.
-- **Bi-directional sync** — Tooling reads board ordering at dispatch time and writes Status
-  on transitions. It does not continuously sync local state to board state or vice versa.
+- **Bi-directional sync** — the queue *tooling* provides no continuous background daemon that
+  mirrors local state to board state or the reverse; it reads board ordering at dispatch time
+  and writes Status on transitions. The conductor's discrete per-transition board-sync duty
+  ([`QUEUE-BOARD-SYNC-CONTINUOUS`](#conductor-board-synchronization-responsibility)) is an
+  operator obligation carried out through the queue scripts, not an automated
+  bidirectional-sync mechanism.
 - **Framework/library abstraction** — All helpers are thin wrappers around `gh api graphql`.
   No additional GraphQL client or abstraction layer is introduced.
 
