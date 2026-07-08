@@ -378,6 +378,8 @@ function extractClosingIssueNumbers(body) {
   // backtick-run-delimited span (equal-length runs pair, so ``a `b` c`` works).
   // ponytail: not full CommonMark span matching; an unbalanced stray backtick
   // over-strips toward fail-closed, which is the safe direction for this gate.
+  // Revisit with a real CommonMark span parser only if valid closing refs in
+  // backtick-heavy bodies start being over-stripped into false negatives.
   const text = unfenced.join("\n").replace(/(`+)[\s\S]*?\1/gu, " ");
   const seen = new Set();
   const numbers = [];
