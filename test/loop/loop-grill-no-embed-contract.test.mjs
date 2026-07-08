@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const skill = readFileSync(fileURLToPath(new URL("../../skills/loop-grill/SKILL.md", import.meta.url)), "utf8");
+
+test("write-back synthesizes into the canonical sections", () => {
+  for (const heading of ["## Acceptance criteria", "## Definition of done", "## Non-goals"]) {
+    assert.ok(skill.includes(heading), `SKILL must name synthesis target ${heading}`);
+  }
+});
+
+test("raw Q&A goes only to the ephemeral gitignored artifact", () => {
+  assert.ok(skill.includes("tmp/issues/issue-<n>/grill/"), "SKILL must route raw Q&A to tmp artifact path");
+});
+
+test("no positive body-embed of raw Q&A findings", () => {
+  // Only explicit negatives or the strict "replace <X> with <Y>" idiom count — a bare "replaces the section" does NOT.
+  const negation = /do not|don't|never|no longer|\bremoved?\b|\bstrip\b|instead of|replace[^.\n]*\bwith\b/i;
+  for (const line of skill.split("\n")) {
+    if (!line.includes("## Grill findings")) continue;
+    // Any surviving mention must be a removal/negation, not a positive write instruction.
+    assert.match(line, negation, `'## Grill findings' mention must be negative context: ${line}`);
+  }
+});
+
+test("the single is-it-refined source is referenced", () => {
+  assert.ok(skill.includes("detectIssueRefinementArtifact"), "SKILL must reference the single refinement source");
+});
