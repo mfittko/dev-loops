@@ -47,7 +47,7 @@ test("the plugin exposes exactly the expected agents + skills (locks the surface
     if (existsSync(path.join(repoRoot, ".claude", "skills", d.name, "SKILL.md"))) skills.push(d.name);
   }
   skills.sort();
-  assert.deepEqual(skills, ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation", "loop-grill"]);
+  assert.deepEqual(skills, ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation", "loop-grill", "ui-review"]);
 });
 
 test("the publish files allowlist ships the plugin (not the project settings.json) and preserves Pi packaging", async () => {

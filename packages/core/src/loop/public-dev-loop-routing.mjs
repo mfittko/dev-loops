@@ -461,7 +461,7 @@ function toRoutableCanonicalState(canonicalState) {
   };
 }
 
-function selectGateForState(canonicalState) {
+function selectGateForState(canonicalState, { uiReviewRequested = false } = {}) {
   if (canonicalState.status === DEV_LOOP_STATUS.BLOCKED || canonicalState.authorization === DEV_LOOP_AUTHORIZATION.NOT_AUTHORIZED) {
     return DEV_LOOP_GATE.STOP_BLOCKED_OR_NOT_AUTHORIZED;
   }
@@ -497,6 +497,15 @@ function selectGateForState(canonicalState) {
 
   if (canonicalState.target.kind === DEV_LOOP_TARGET_KIND.ISSUE) {
     return DEV_LOOP_GATE.ISSUE_INTAKE;
+  }
+
+  // An explicit UI-review request intercepts a PR target ahead of the
+  // ownership-derived PR gates: the running-app review is requested regardless
+  // of who owns the PR. It stays after the authoritative lifecycle stop/terminal/
+  // approval/waiting gates so it can never bypass them. Absent the signal this
+  // branch is inert, so existing routes stay byte-identical.
+  if (uiReviewRequested && canonicalState.target.kind === DEV_LOOP_TARGET_KIND.PR) {
+    return DEV_LOOP_GATE.UI_REVIEW;
   }
 
   if (canonicalState.target.kind === DEV_LOOP_TARGET_KIND.PR && canonicalState.ownership === DEV_LOOP_ACTOR.EXTERNAL_HUMAN) {
@@ -581,10 +590,11 @@ function routeForState(
     issueAssignmentState = null,
     gateReviewEvidence = null,
     targetPreference = null,
+    uiReviewRequested = false,
   } = {},
 ) {
   const routableCanonicalState = toRoutableCanonicalState(canonicalState);
-  const selectedGate = selectGateForState(routableCanonicalState);
+  const selectedGate = selectGateForState(routableCanonicalState, { uiReviewRequested });
   if (
     selectedGate === DEV_LOOP_GATE.FINAL_APPROVAL
     && routableCanonicalState.target.kind === DEV_LOOP_TARGET_KIND.PR
@@ -760,6 +770,18 @@ function routeForState(
       canonicalState: routableCanonicalState,
       nextAction: "Run the Copilot PR follow-up strategy for the current PR; treat it as the canonical artifact for the issue and do not open a second PR.",
       reason: "Copilot-owned PR states route to the Copilot PR follow-up strategy; an already-open linked PR must stay canonical until reconciled.",
+    });
+  }
+
+  if (selectedGate === DEV_LOOP_GATE.UI_REVIEW) {
+    return buildResult({
+      selectedGate,
+      routeKind: DEV_LOOP_ROUTE_KIND.ROUTE,
+      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW,
+      executionMode,
+      canonicalState: routableCanonicalState,
+      nextAction: "Run the UI-review route for the current PR: prove the change in the running app from an isolated worktree. Do not write product code; keep any outward review pending/draft; acknowledge destructive migrations before running them.",
+      reason: "An explicit UI-review request on a PR target routes to the ui_review strategy — the running-app review sibling of the reviewer/fixer route.",
     });
   }
 
@@ -1171,6 +1193,7 @@ export function resolveAuthoritativeStartupResumeBundle(input = {}) {
     issueAssignmentState,
     gateReviewEvidence,
     targetPreference,
+    uiReviewRequested: intent === DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI,
   });
   if (routed.routeKind === DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE) {
     return buildStartupResumeBundleReconcile({
@@ -1699,6 +1722,23 @@ export function evaluatePublicDevLoopRouting(input = {}) {
 
     return finalizeRoutingResult(applyWatchValidation(
       routeForState(explicitState, { ...routingOptions, executionMode: effectiveMode }),
+      watchRequested,
+    ));
+  }
+
+  if (intent === DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI) {
+    if (!explicitTarget || explicitTarget.kind !== DEV_LOOP_TARGET_KIND.PR) {
+      return buildInputReconcile("`review_pr_ui` requires a PR target.", null, effectiveMode);
+    }
+    if (!explicitState || explicitState.target.kind !== DEV_LOOP_TARGET_KIND.PR) {
+      return buildInputReconcile("`review_pr_ui` requires a valid canonical PR state.", explicitState, effectiveMode);
+    }
+    if (explicitState.target.pr !== explicitTarget.pr) {
+      return buildInputReconcile("`review_pr_ui` target conflicts with the canonical current PR state.", explicitState, effectiveMode);
+    }
+
+    return finalizeRoutingResult(applyWatchValidation(
+      routeForState(explicitState, { ...routingOptions, executionMode: effectiveMode, uiReviewRequested: true }),
       watchRequested,
     ));
   }

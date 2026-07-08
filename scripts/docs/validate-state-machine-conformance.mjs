@@ -1087,6 +1087,7 @@ const PUBLIC_DEV_LOOP_GATE_TO_FIXTURE = new Map([
   [DEV_LOOP_GATE.EXTERNAL_PR_FOLLOWUP, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 91 }, ownership: DEV_LOOP_ACTOR.EXTERNAL_HUMAN, nextActor: DEV_LOOP_ACTOR.REVIEWER }), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
   [DEV_LOOP_GATE.REVIEWER_FIXER, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ ownership: DEV_LOOP_ACTOR.REVIEWER, nextActor: DEV_LOOP_ACTOR.REVIEWER }), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
   [DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({}), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.UI_REVIEW, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI, target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 }, currentState: publicDevLoopPrState({}), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
   [DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_ON_PR, target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 } })],
 ]);
 
