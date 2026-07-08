@@ -157,28 +157,6 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*if:\s*needs\.changes\.outputs\.inspect_run_viewer\s*==\s*'true'/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*npm run test:playwright:viewer/i);
-  // Verify runs as a parallel matrix (one leg per suite) gated by an
-  // aggregation job named `verify` so the required-status-check name is
-  // preserved. Assert every suite is a matrix leg and the gate fails closed.
-  assert.match(ciWorkflow, /^\s{2}verify-suite:\s*$/m);
-  assert.match(ciWorkflow, /verify-suite:[\s\S]*fail-fast:\s*false/i);
-  assert.match(ciWorkflow, /verify-suite:[\s\S]*npm run \$\{\{\s*matrix\.suite\s*\}\}/i);
-  for (const suite of [
-    "test:assets",
-    "test:extension",
-    "test:scripts",
-    "test:core",
-    "test:docs",
-    "test:pack",
-    "test:dev-loop",
-  ]) {
-    assert.match(
-      ciWorkflow,
-      new RegExp(`-\\s*${suite.replace(":", "\\:")}\\s*$`, "m"),
-      `verify-suite matrix must include ${suite}`,
-    );
-  }
-  assert.match(ciWorkflow, /verify:[\s\S]*needs:\s*\[verify-suite\][\s\S]*needs\.verify-suite\.result[\s\S]*success/i);
 
   // All THREE smoke jobs must route through the shared composite action, so a
   // future edit can't silently reintroduce the duplication in any of them
@@ -204,4 +182,44 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(playwrightWebkitAction, /path:\s*\$\{\{\s*env\.PLAYWRIGHT_BROWSERS_PATH\s*\}\}/i);
   assert.match(playwrightWebkitAction, /PLAYWRIGHT_BROWSERS_PATH=\$\{\{\s*github\.workspace\s*\}\}\/\.cache\/ms-playwright/i);
   assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('package-lock\.json'\)\s*\}\}/i);
+});
+
+test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregation job", async () => {
+  const ciWorkflow = await readRepo(".github/workflows/ci.yml");
+
+  // verify runs as a parallel matrix (one leg per suite) gated by an
+  // aggregation job named `verify` so the required-status-check name is
+  // preserved. Assert every suite is a matrix leg and the gate fails closed.
+  assert.match(ciWorkflow, /^\s{2}verify-suite:\s*$/m);
+  assert.match(ciWorkflow, /verify-suite:[\s\S]*fail-fast:\s*false/i);
+  assert.match(ciWorkflow, /verify-suite:[\s\S]*npm run \$\{\{\s*matrix\.suite\s*\}\}/i);
+
+  // Scope leg-membership to the verify-suite job's matrix list (up to the next
+  // job header) so a suite name appearing elsewhere can't satisfy the check.
+  const verifySuiteSection = ciWorkflow.slice(
+    ciWorkflow.search(/^\s{2}verify-suite:\s*$/m),
+    ciWorkflow.search(/^\s{2}verify:\s*$/m),
+  );
+  for (const suite of [
+    "test:assets",
+    "test:extension",
+    "test:scripts",
+    "test:core",
+    "test:docs",
+    "test:pack",
+    "test:dev-loop",
+  ]) {
+    assert.match(
+      verifySuiteSection,
+      new RegExp(`^\\s*-\\s*${suite}\\s*$`, "m"),
+      `verify-suite matrix must include ${suite}`,
+    );
+  }
+
+  // Fail-closed aggregation: the gate must run on `if: always()` (else a failed
+  // leg SKIPS the gate under the default `if: success()`), depend on the whole
+  // matrix, and `exit 1` when any leg is non-success.
+  assert.match(ciWorkflow, /verify:[\s\S]*needs:\s*\[verify-suite\][\s\S]*needs\.verify-suite\.result[\s\S]*success/i);
+  assert.match(ciWorkflow, /verify:[\s\S]*if:\s*always\(\)/i);
+  assert.match(ciWorkflow, /verify:[\s\S]*exit 1/i);
 });
