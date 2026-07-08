@@ -115,12 +115,8 @@ test("CLI --help text carries no stale pi-dev-loops identity reference", () => {
   assert.doesNotMatch(res.stdout, STALE_IDENTITY_RE, "CLI --help must reference dev-loops, not pi-dev-loops");
 });
 
-test("README references installing dev-loops from npm and stays consistent with the published major", async () => {
+test("README dev-loops version pins stay consistent with the published major", async () => {
   const readme = await readRepo("README.md");
-
-  // Accept both the global and non-global install form.
-  assert.match(readme, /npm install (-g )?dev-loops/, "README should reference `npm install dev-loops`");
-  assert.match(readme, /npx dev-loops/, "README should reference `npx dev-loops`");
 
   // Derive the published identity/major from package.json so the guard does not rot on the
   // next bump (do NOT hard-code a major here).

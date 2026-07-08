@@ -52,6 +52,7 @@ Start here for repository documentation.
 - [Outer Loop State Graph](./outer-loop-state-graph.md) → [Conductor Routing Contract](conductor-routing-contract.md) (symlink)
 - [Tracker-First Story-to-PR Contract](./tracker-story-pr-contract.md) → [Tracker Story PR Contract](tracker-story-pr-contract.md) (pointer)
 - [Copilot CI Status Contract](../skills/docs/copilot-ci-status-contract.md) → [Copilot CI Status Contract](../skills/docs/copilot-ci-status-contract.md) (canonical)
+- [README Audit Rubric](./readme-audit-rubric.md) — single owner of README.md's intended semantic properties (on-demand LLM-judge audit)
 
 ## See also
 

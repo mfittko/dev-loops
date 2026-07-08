@@ -92,19 +92,8 @@ test("workflow docs keep helper/runtime authority code-owned and dev-loop scope 
   assert.match(localImplementationSkill, /it does not redefine the shipped runtime semantics of helper CLIs, shared loop logic, or extension commands/i);
 });
 
-test("README stays a landing page and lets docs/index own deeper doc navigation", async () => {
-  const readme = await readRepo("README.md");
-
-  assert.doesNotMatch(readme, /^## Current status$/im, "README should not become a second owner for the live execution snapshot");
-  assert.match(readme, /docs\/index\.md/i, "README should point readers to the docs index");
-  assert.doesNotMatch(readme, /docs\/IMPLEMENTATION_STATE\.md/i, "README should not duplicate docs/index deep links for the implementation snapshot");
-  assert.doesNotMatch(readme, /docs\/IMPLEMENTATION_WORKFLOW\.md/i, "README should not duplicate docs/index deep links for workflow docs");
-  assert.match(readme, /shared Pi workflow infrastructure/i, "README should describe the repo as shared Pi workflow infrastructure");
-});
-
 test("repo docs define dev-loop as the public façade and keep internal routed logic behind it", async () => {
-  const [readme, plan, agents, workflowDoc, publicContract, extensionReadme, devLoopSkill, copilotFollowupSkill] = await Promise.all([
-    readRepo("README.md"),
+  const [plan, agents, workflowDoc, publicContract, extensionReadme, devLoopSkill, copilotFollowupSkill] = await Promise.all([
     readRepo("PLAN.md"),
     readRepo("AGENTS.md"),
     readRepo("docs/IMPLEMENTATION_WORKFLOW.md"),
@@ -125,7 +114,6 @@ test("repo docs define dev-loop as the public façade and keep internal routed l
   assert.match(publicContract, /Surfaced-UX deprecation readiness bar/i);
 
   for (const [label, content] of [
-    ["README.md", readme],
     ["PLAN.md", plan],
     ["AGENTS.md", agents],
     ["docs/IMPLEMENTATION_WORKFLOW.md", workflowDoc],
@@ -135,9 +123,6 @@ test("repo docs define dev-loop as the public façade and keep internal routed l
     assert.match(content, /internal|canonical/i, `${label} should preserve internal/canonical framing`);
   }
 
-  assert.match(readme, /single public façade/i, "README should lead with dev-loop as the public façade");
-  assert.doesNotMatch(readme, /`copilot-dev-loop` as the/i, "README should not present internal seams as workflow-surface choices");
-  assert.doesNotMatch(readme, /`copilot-autopilot` as the/i, "README should not present internal seams as workflow-surface choices");
   assert.match(extensionReadme, /single public workflow entrypoint/i, "extension README should lead with the public entrypoint");
   assert.doesNotMatch(extensionReadme, /\/skill:copilot-dev-loop|\/skill:copilot-autopilot/i, "extension README should not surface internal seam names as readiness choices");
 

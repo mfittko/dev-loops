@@ -139,10 +139,9 @@ test("local-implementation skill documents the auto-scoped rendered-artifact UI 
 
 
 test("CI gates the Playwright WebKit smoke behind inspect-run viewer change detection and uses Node24-ready first-party actions", async () => {
-  const [ciWorkflow, playwrightWebkitAction, readme] = await Promise.all([
+  const [ciWorkflow, playwrightWebkitAction] = await Promise.all([
     readRepo(".github/workflows/ci.yml"),
     readRepo(".github/actions/playwright-webkit/action.yml"),
-    readRepo("README.md"),
   ]);
 
   assert.match(ciWorkflow, /^\s{2}changes:\s*$/m);
@@ -184,8 +183,4 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(playwrightWebkitAction, /path:\s*\$\{\{\s*env\.PLAYWRIGHT_BROWSERS_PATH\s*\}\}/i);
   assert.match(playwrightWebkitAction, /PLAYWRIGHT_BROWSERS_PATH=\$\{\{\s*github\.workspace\s*\}\}\/\.cache\/ms-playwright/i);
   assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('package-lock\.json'\)\s*\}\}/i);
-
-  assert.match(readme, /workspace-local Playwright WebKit/i);
-  assert.match(readme, /small changed-files gate plus parallel `verify` and conditional `viewer-smoke` jobs/i);
-  assert.match(readme, /run only when files in the bounded inspect-run viewer surface or its smoke-path dependencies change/i);
 });
