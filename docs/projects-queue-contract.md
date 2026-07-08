@@ -402,8 +402,9 @@ discovery. When both `projectNumber` and `boardTitle` are set, `projectNumber` t
 ### Settings source
 
 Queue board settings (`boardTitle` / `projectNumber`) are read only from `.devloops` at the
-repo root. The shipped defaults (`packages/core/src/config/extension-defaults.yaml`) and the
-repo-local `.pi/dev-loop/defaults.*` override layer deliberately do not set them.
+repo root. The queue tooling does not consult the shipped defaults
+(`packages/core/src/config/extension-defaults.yaml`) or the repo-local
+`.pi/dev-loop/defaults.*` override layer for them — both deliberately omit these keys.
 
 Project number and URL are discoverable at runtime via the GraphQL API — no explicit config
 entry is required.
