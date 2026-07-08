@@ -354,10 +354,7 @@ export async function runWatchCycle(
       pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
       timeoutMs: ciTimeoutMs,
     };
-    const ciWatch = await runWatchHoldingLease(
-      () => watchCiStatusImpl(ciWatchArgs, { env, ghCommand }),
-      { repo: options.repo, pr: options.pr, env, cwd: leaseCwd, ensureOwnershipImpl },
-    );
+    const ciWatch = await watchCiStatusImpl(ciWatchArgs, { env, ghCommand });
     result.ciWatchArgs = ciWatchArgs;
     result.ciWatch = ciWatch;
     result.watchStatus = ciWatch.status;
@@ -428,10 +425,7 @@ export async function runWatchCycle(
     ...handoff.watchArgs,
     timeoutMs: persistentWatchTimeoutMs,
   };
-  const watch = await runWatchHoldingLease(
-    () => watchCopilotReviewImpl(watchOptions, { env, ghCommand }),
-    { repo: options.repo, pr: options.pr, env, cwd: leaseCwd, ensureOwnershipImpl },
-  );
+  const watch = await watchCopilotReviewImpl(watchOptions, { env, ghCommand });
   result.watchArgs = watchOptions;
   result.watchStatus = watch.status;
   result.watch = watch;

@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 
 import { runWatchCycle } from "../../scripts/loop/run-watch-cycle.mjs";
 
+// The CI and Copilot waits are heartbeated inside their shared engines
+// (probe-ci-status / probe-copilot-review), so run-watch-cycle no longer wraps
+// them. The `gh run watch` workflow-run watch blocks as a single child with no
+// poll loop / no shared engine, so it is still wrapped here with the
+// interval-heartbeat lease holder. These cases guard that remaining wrap.
+
 function copilotWatchHandoff() {
   return {
     ok: true,
@@ -22,43 +28,55 @@ function copilotWatchHandoff() {
   };
 }
 
-test("runWatchCycle heartbeats the runner-coordination lease around a Copilot watch", async () => {
+const idleCopilotWatch = (options) => ({
+  ok: true,
+  status: "idle",
+  repo: options.repo,
+  pr: options.pr,
+  attempts: 1,
+  newComments: [],
+  newReviews: [],
+  newIssueComments: [],
+});
+
+// Deps that drive session-activity detection to an active run so the
+// workflow-run watch (the wrapped call) is exercised.
+function sessionActiveDeps(overrides = {}) {
+  return {
+    detectSessionActivity: true,
+    runHandoffImpl: async () => copilotWatchHandoff(),
+    fetchPrHeadBranchImpl: async () => "feature-branch",
+    detectCopilotSessionActivityImpl: async () => ({ activity: "active", runId: 4242 }),
+    watchCopilotReviewImpl: async (options) => idleCopilotWatch(options),
+    ...overrides,
+  };
+}
+
+test("runWatchCycle heartbeats the runner-coordination lease around the workflow-run watch", async () => {
   let ownershipCalls = 0;
 
   const result = await runWatchCycle(
     { repo: "owner/repo", pr: 17 },
-    {
-      runHandoffImpl: async () => copilotWatchHandoff(),
-      watchCopilotReviewImpl: async (options) =>
+    sessionActiveDeps({
+      watchWorkflowRunImpl: async () =>
         new Promise((resolve) => {
-          setTimeout(() => {
-            resolve({
-              ok: true,
-              status: "idle",
-              repo: options.repo,
-              pr: options.pr,
-              attempts: 1,
-              newComments: [],
-              newReviews: [],
-              newIssueComments: [],
-            });
-          }, 0);
+          setTimeout(() => resolve({ status: "completed" }), 0);
         }),
       ensureOwnershipImpl: async () => {
         ownershipCalls += 1;
         return { ok: true, status: "owner_confirmed" };
       },
-    },
+    }),
   );
 
-  // On-entry and on-return heartbeats both fired around the blocking watch.
+  // On-entry and on-return heartbeats both fired around the blocking workflow watch.
   assert.ok(ownershipCalls >= 2, `expected >= 2 heartbeats, got ${ownershipCalls}`);
   assert.equal(result.ok, true);
   assert.equal(result.watchStatus, "idle");
 });
 
 test(
-  "runWatchCycle fires the periodic mid-watch heartbeat while the Copilot watch is in-flight",
+  "runWatchCycle fires the periodic mid-watch heartbeat while the workflow-run watch is in-flight",
   { timeout: 5000 },
   async (t) => {
     // Deterministic clock: the mid-watch interval is the load-bearing mechanism
@@ -76,32 +94,33 @@ test(
     });
 
     // setImmediate is NOT mocked, so this yields a real macrotask boundary that
-    // drains all pending microtasks (handoff + heartbeat awaits) between ticks.
+    // drains all pending microtasks between ticks.
     const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
 
-    // Kick off the cycle WITHOUT awaiting: the watch stays in-flight so we can
-    // advance the clock while runWatchHoldingLease is blocked on watchFactory().
+    // Kick off the cycle WITHOUT awaiting: the workflow watch stays in-flight so
+    // we can advance the clock while runWatchHoldingLease is blocked on it.
     const cyclePromise = runWatchCycle(
       { repo: "owner/repo", pr: 17 },
-      {
+      sessionActiveDeps({
         env,
-        runHandoffImpl: async () => copilotWatchHandoff(),
-        watchCopilotReviewImpl: async () => watchPending,
+        watchWorkflowRunImpl: async () => watchPending,
         ensureOwnershipImpl: async () => {
           ownershipCalls += 1;
           return { ok: true, status: "owner_confirmed" };
         },
-      },
+      }),
     );
 
-    // Let the async chain register setInterval and run the on-entry heartbeat.
+    // Let the async chain (handoff + head branch + session detection) run and
+    // register setInterval + the on-entry heartbeat.
+    await flushMicrotasks();
     await flushMicrotasks();
     const afterEntry = ownershipCalls;
     assert.equal(afterEntry, 1, `expected exactly the on-entry heartbeat, got ${afterEntry}`);
 
-    // Advance well past several 10ms intervals. The watch is still pending, so
-    // the on-return heartbeat has NOT fired yet: every call beyond the on-entry
-    // one is interval-driven.
+    // Advance well past several 10ms intervals. The workflow watch is still
+    // pending, so the on-return heartbeat has NOT fired yet: every call beyond
+    // the on-entry one is interval-driven.
     t.mock.timers.tick(50);
     await flushMicrotasks();
     t.mock.timers.tick(50);
@@ -109,8 +128,7 @@ test(
 
     const duringWatch = ownershipCalls;
     const periodicCalls = duringWatch - afterEntry;
-    // Fails if the setInterval heartbeat is removed (entry+return heartbeats
-    // alone leave duringWatch === 1 while the watch is still pending).
+    // Fails if the setInterval heartbeat is removed.
     assert.ok(
       periodicCalls >= 1,
       `expected >= 1 periodic interval heartbeat, got ${periodicCalls}`,
@@ -120,17 +138,8 @@ test(
       `expected >= 3 heartbeats during the in-flight watch, got ${duringWatch}`,
     );
 
-    // Now let the watch complete and the cycle finish cleanly.
-    resolveWatch({
-      ok: true,
-      status: "idle",
-      repo: "owner/repo",
-      pr: 17,
-      attempts: 1,
-      newComments: [],
-      newReviews: [],
-      newIssueComments: [],
-    });
+    // Now let the workflow watch complete and the cycle finish cleanly.
+    resolveWatch({ status: "completed" });
     const result = await cyclePromise;
 
     assert.equal(result.ok, true);
@@ -138,30 +147,18 @@ test(
   },
 );
 
-test("runWatchCycle treats a heartbeat failure as non-fatal", async () => {
+test("runWatchCycle treats a workflow-watch heartbeat failure as non-fatal", async () => {
   const result = await runWatchCycle(
     { repo: "owner/repo", pr: 17 },
-    {
-      runHandoffImpl: async () => copilotWatchHandoff(),
-      watchCopilotReviewImpl: async (options) =>
+    sessionActiveDeps({
+      watchWorkflowRunImpl: async () =>
         new Promise((resolve) => {
-          setTimeout(() => {
-            resolve({
-              ok: true,
-              status: "idle",
-              repo: options.repo,
-              pr: options.pr,
-              attempts: 1,
-              newComments: [],
-              newReviews: [],
-              newIssueComments: [],
-            });
-          }, 0);
+          setTimeout(() => resolve({ status: "completed" }), 0);
         }),
       ensureOwnershipImpl: async () => {
         throw new Error("heartbeat boom");
       },
-    },
+    }),
   );
 
   assert.equal(result.ok, true);
