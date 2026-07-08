@@ -11,7 +11,7 @@ import {
 } from "../_core-helpers.mjs";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
@@ -148,7 +148,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
   }
   return options;
 }
-async function runGhJson(args, { env, ghCommand }) {
+async function runGhJson(args, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(ghCommand, args, env);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
@@ -534,7 +534,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   }
   return { required: true, requireProvenance, rejectForeignAngles, lightMode, hasFullLabel, gates };
 }
-export async function detectCheckpointEvidence(options, { env = process.env, ghCommand = "gh", cwd = process.cwd() } = {}) {
+export async function detectCheckpointEvidence(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd() } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
@@ -558,8 +558,8 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
     error.staleRunner = staleRunnerDetection;
     throw error;
   }
-  const prPayload = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], { env, ghCommand });
-  const commentsPayload = normalizeIssueCommentsPayload(await runGhJson(["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`], { env, ghCommand }));
+  const prPayload = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], { env, ghCommand, runChild });
+  const commentsPayload = normalizeIssueCommentsPayload(await runGhJson(["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`], { env, ghCommand, runChild }));
   const currentHeadSha = typeof prPayload?.headRefOid === "string" && prPayload.headRefOid.trim().length > 0
     ? prPayload.headRefOid.trim()
     : null;
@@ -571,7 +571,7 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   // as a PR review rather than an issue comment (root cause 3 from issue #692).
   let prReviews = [];
   try {
-    const reviewsRaw = await runGhJson(["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`], { env, ghCommand });
+    const reviewsRaw = await runGhJson(["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`], { env, ghCommand, runChild });
     prReviews = normalizePrReviewsPayload(reviewsRaw);
   } catch {
     // Graceful fallback: PR reviews fetch failure is non-fatal.
@@ -601,7 +601,7 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   );
   if (config != null && resolveRequireFanoutEvidence(config) && resolveLightMode(config) != null && anyInlineVerdict) {
     try {
-      const lightFacts = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefOid,labels"], { env, ghCommand });
+      const lightFacts = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefOid,labels"], { env, ghCommand, runChild });
       baseRef = typeof lightFacts?.baseRefOid === "string" && lightFacts.baseRefOid.trim().length > 0
         ? lightFacts.baseRefOid.trim()
         : null;

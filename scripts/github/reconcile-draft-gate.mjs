@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
@@ -105,7 +105,7 @@ const PR_ID_QUERY = [
   "  }",
   "}",
 ].join("\n");
-async function resolvePrNodeId({ repo, pr }, { env, ghCommand }) {
+async function resolvePrNodeId({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
   const [owner, name] = repo.split("/");
   const result = await runChild(ghCommand, [
     "api", "graphql",
@@ -128,8 +128,8 @@ async function resolvePrNodeId({ repo, pr }, { env, ghCommand }) {
   }
   return { id: prData.id, isDraft: prData.isDraft };
 }
-export async function convertPrToDraft({ repo, pr }, { env, ghCommand }) {
-  const resolvedPr = await resolvePrNodeId({ repo, pr }, { env, ghCommand });
+export async function convertPrToDraft({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
+  const resolvedPr = await resolvePrNodeId({ repo, pr }, { env, ghCommand, runChild });
   if (resolvedPr.isDraft === true) {
     return {
       ...resolvedPr,
@@ -158,7 +158,7 @@ export async function convertPrToDraft({ repo, pr }, { env, ghCommand }) {
     alreadyDraft: false,
   };
 }
-export async function markPrReady({ repo, pr }, { env, ghCommand }) {
+export async function markPrReady({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(ghCommand, [
     "pr", "ready", String(pr),
     "--repo", repo,
@@ -201,7 +201,7 @@ function summarizeBlockingChecks(blockingChecks) {
     .map((check) => `${check.name || "unnamed-check"}=${check.bucket}`)
     .join(", ");
 }
-async function checkCiStatus({ repo, pr, headSha }, { env, ghCommand }) {
+async function checkCiStatus({ repo, pr, headSha }, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(ghCommand, [
     "pr", "checks", String(pr),
     "--repo", repo,
@@ -244,12 +244,12 @@ async function checkCiStatus({ repo, pr, headSha }, { env, ghCommand }) {
       : `Blocking CI/check state on head ${headSha.slice(0, 7)}: ${summarizeBlockingChecks(blockingChecks)}.`,
   };
 }
-export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
+export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const initialEvidence = await detectCheckpointEvidence(
     { repo: options.repo, pr: options.pr },
-    { env, ghCommand }
+    { env, ghCommand, runChild }
   );
   const headSha = initialEvidence.currentHeadSha;
   if (!headSha) {
@@ -271,7 +271,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
   if (draftGateConfig.requireCi) {
     const ciStatus = await checkCiStatus(
       { repo: options.repo, pr: options.pr, headSha },
-      { env, ghCommand }
+      { env, ghCommand, runChild }
     );
     if (ciStatus.status !== "success") {
       throw new Error(
@@ -280,7 +280,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       );
     }
   }
-  const draftConversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+  const draftConversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   let gateResult;
   try {
     gateResult = await upsertCheckpointVerdict({
@@ -294,17 +294,17 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
         ? "Reconciled non-draft PR — draft gate auto-reconciled (CI green)."
         : "Reconciled non-draft PR — draft gate auto-reconciled (CI optional by config).",
       nextAction: "Mark ready for review (auto-reconciled).",
-    }, { env, ghCommand, repoRoot });
+    }, { env, ghCommand, repoRoot, runChild });
   } catch (error) {
     if (draftConversion.alreadyDraft !== true) {
       try {
-        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
       } catch {
       }
     }
     throw error;
   }
-  await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+  await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   return {
     ok: true,
     action: "reconciled",

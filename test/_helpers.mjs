@@ -21,10 +21,15 @@ export function makeGhMock(entries = [], {
   const runChild = async (cmd, args = [], _env, stdinText = "") => {
     calls.push({ command: cmd, args: [...args], stdinText: stdinText ?? "" });
     if (cmd !== command) {
-      // The PATH stub only shadowed `gh`; other commands (git) ran against a
-      // separately-seeded stub whose default is empty stdout / exit 0. Mirror that
-      // hermetic default rather than shelling out to the real working tree.
-      return { code: 0, stdout: "", stderr: "" };
+      // Safety guard: the mock answers the stubbed command (gh) from `entries`
+      // and hermetically resolves `git` to an empty success (the porcelain
+      // status/no-conflicts default) so no real working tree is inspected. Any
+      // OTHER command reaching runChild is unexpected — throw loudly so a stray
+      // subprocess spawn can never pass silently.
+      if (cmd === "git") {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      throw new Error(`makeGhMock: unexpected command through runChild: ${cmd} ${args.join(" ")}`);
     }
     const current = counter;
     if (current >= entries.length && !repeatLastOnOverflow) {
