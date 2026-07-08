@@ -72,8 +72,19 @@ jobs:
             echo 'articles=false' >> "$GITHUB_OUTPUT"
           fi
 
-  verify:
+  verify-suite:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - test:assets
+          - test:extension
+          - test:scripts
+          - test:core
+          - test:docs
+          - test:pack
+          - test:dev-loop
 
     steps:
       - name: Check out repository
@@ -87,8 +98,17 @@ jobs:
       - name: Install workspace dependencies
         run: npm ci
 
-      - name: Run canonical verify suite
-        run: npm run verify
+      - name: Run ${{ matrix.suite }}
+        run: npm run ${{ matrix.suite }}
+
+  verify:
+    needs: [verify-suite]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require all verify-suite legs to pass
+        run: '[ "${{ needs.verify-suite.result }}" = "success" ] || exit 1'
 
   viewer-smoke:
     needs:

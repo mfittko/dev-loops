@@ -157,7 +157,28 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*if:\s*needs\.changes\.outputs\.inspect_run_viewer\s*==\s*'true'/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*npm run test:playwright:viewer/i);
-  assert.match(ciWorkflow, /verify:[\s\S]*npm run verify/i);
+  // Verify runs as a parallel matrix (one leg per suite) gated by an
+  // aggregation job named `verify` so the required-status-check name is
+  // preserved. Assert every suite is a matrix leg and the gate fails closed.
+  assert.match(ciWorkflow, /^\s{2}verify-suite:\s*$/m);
+  assert.match(ciWorkflow, /verify-suite:[\s\S]*fail-fast:\s*false/i);
+  assert.match(ciWorkflow, /verify-suite:[\s\S]*npm run \$\{\{\s*matrix\.suite\s*\}\}/i);
+  for (const suite of [
+    "test:assets",
+    "test:extension",
+    "test:scripts",
+    "test:core",
+    "test:docs",
+    "test:pack",
+    "test:dev-loop",
+  ]) {
+    assert.match(
+      ciWorkflow,
+      new RegExp(`-\\s*${suite.replace(":", "\\:")}\\s*$`, "m"),
+      `verify-suite matrix must include ${suite}`,
+    );
+  }
+  assert.match(ciWorkflow, /verify:[\s\S]*needs:\s*\[verify-suite\][\s\S]*needs\.verify-suite\.result[\s\S]*success/i);
 
   // All THREE smoke jobs must route through the shared composite action, so a
   // future edit can't silently reintroduce the duplication in any of them
