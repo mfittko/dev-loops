@@ -9,8 +9,10 @@ import path from "node:path";
 // `{ env, ghCommand, runChild }` context so the CLI logic runs in-process while
 // every gh call is answered from `entries` in order. Assertion failures return the
 // SAME non-zero exit codes the PATH stub exits with, so the script's own error path
-// fires identically. Non-gh commands (e.g. git) resolve to a hermetic empty success
-// by default, mirroring the git stub tests seed on the same PATH dir.
+// fires identically (a gh call past the end of `entries`, without
+// repeatLastOnOverflow, returns exit code 97). Only `git` among non-gh commands
+// resolves to a hermetic empty success — shadowing the incidental read-only metadata
+// reads — while every other non-git/non-gh command throws loudly.
 export function makeGhMock(entries = [], {
   command = "gh",
   repeatLastOnOverflow = false,
