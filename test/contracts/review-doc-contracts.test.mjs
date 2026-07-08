@@ -196,9 +196,15 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
 
   // Scope leg-membership to the verify-suite job's matrix list (up to the next
   // job header) so a suite name appearing elsewhere can't satisfy the check.
+  const verifySuiteHeaderIndex = ciWorkflow.search(/^\s{2}verify-suite:\s*$/m);
+  const nextSuiteJobRelative = ciWorkflow
+    .slice(verifySuiteHeaderIndex + 1)
+    .search(/^\s{2}\S/m);
   const verifySuiteSection = ciWorkflow.slice(
-    ciWorkflow.search(/^\s{2}verify-suite:\s*$/m),
-    ciWorkflow.search(/^\s{2}verify:\s*$/m),
+    verifySuiteHeaderIndex,
+    nextSuiteJobRelative === -1
+      ? ciWorkflow.length
+      : verifySuiteHeaderIndex + 1 + nextSuiteJobRelative,
   );
   for (const suite of [
     "test:assets",
