@@ -401,8 +401,9 @@ discovery. When both `projectNumber` and `boardTitle` are set, `projectNumber` t
 
 ### Settings precedence
 
-1. `.pi/dev-loop/defaults.yaml` — shipped defaults (does not set `boardTitle`)
-2. `.devloops` — operator overrides (may set `boardTitle`)
+1. `packages/core/src/config/extension-defaults.yaml` — shipped defaults (does not set `boardTitle`)
+2. `.pi/dev-loop/defaults.*` — repo-local override layer (does not set `boardTitle`)
+3. `.devloops` — operator overrides (may set `boardTitle`)
 
 Project number and URL are discoverable at runtime via the GraphQL API — no explicit config
 entry is required.
