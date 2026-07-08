@@ -143,9 +143,11 @@ register(INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH, "default", {
 
 // ui_review — running-app review sibling of reviewer/fixer. Scaffold slice:
 // self-validation only, no drive/report/provision/boot logic. The criteria
-// mirror the stop rules so the dispatched agent self-checks the review
-// boundaries (no product-code writes, worktree isolation, outward review stays
-// pending/draft, destructive migrations acknowledged before running).
+// capture the route-specific review boundaries (no product-code writes,
+// worktree isolation, outward review stays pending/draft, destructive
+// migrations acknowledged before running) so the dispatched agent self-checks
+// them; the generic finalization stop rules (e.g. merge) are layered on
+// separately and are not restated here.
 register(INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW, "default", {
   criteria: [
     { id: "no-product-code-writes", must: "No product code is written; the UI-review route only observes and reports on the running app.", severity: "required" },
