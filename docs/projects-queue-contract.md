@@ -306,7 +306,7 @@ When a queue board is configured, the conductor **MUST** keep the board synchron
 | Trigger | Required board effect |
 |---|---|
 | File / enqueue an item for the queue | The item **MUST** be placed on a real column via `add-queue-item.mjs` — `--next-up` when it is queued to work, `--column Backlog` when it is tracked but not yet prioritized — and **MUST NOT** be left off-board. |
-| Dispatch a runner on an item | The conductor **MUST** immediately set the item to `In Progress` via `move-queue-item.mjs --to-column` and **MUST** re-read the item to confirm the move landed rather than assuming the runner did it; an in-flight item **MUST NOT** stay outside `In Progress`. |
+| Dispatch a runner on an item | The conductor **MUST** immediately set the item to `In Progress` via `move-queue-item.mjs --to-column "In Progress"` and **MUST** re-read the item to confirm the move landed rather than assuming the runner did it; an in-flight item **MUST NOT** stay outside `In Progress`. |
 | Merge or close the item | The item **MUST** be in `Done`. |
 | Reprioritize or block the item | The item's column **MUST** be updated so the board reflects the new state. |
 | Periodic reconcile | The conductor **MUST** proactively enumerate board items with `list-queue-items.mjs`, compare each against the underlying issue/PR state, and correct any mismatch without being asked. |
