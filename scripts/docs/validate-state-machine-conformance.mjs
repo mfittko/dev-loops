@@ -63,6 +63,7 @@ import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from 
 import { DISPOSITION, interpretLoopState, STATE, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateConductorRouting, getAllowedOuterTransitions, OUTER_STATE, OUTER_TERMINAL_STATES } from "@dev-loops/core/loop/conductor-routing";
 import { interpretReviewerLoopState, REVIEWER_STATE, REVIEWER_TRANSITIONS } from "@dev-loops/core/loop/reviewer-loop-state";
+import { interpretRefinementGrillState, GRILL_STATE, GRILL_TRANSITIONS } from "@dev-loops/core/loop/refinement-grill-state";
 import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TERMINAL_STATES, PR_LIFECYCLE_TRANSITIONS } from "@dev-loops/core/loop/pr-lifecycle";
 import { DEV_LOOP_GATE, DEV_LOOP_ROUTE_KIND, PUBLIC_DEV_LOOP_GATE_CONTRACT, DEV_LOOP_PUBLIC_INTENT, DEV_LOOP_TARGET_KIND, DEV_LOOP_ACTOR, DEV_LOOP_STATUS, DEV_LOOP_AUTHORIZATION, DEV_LOOP_TARGET_PREFERENCE, INTERNAL_DEV_LOOP_STRATEGY, evaluatePublicDevLoopRouting } from "@dev-loops/core/loop/public-dev-loop-routing";
 
@@ -939,7 +940,83 @@ const REVIEWER_LOOP_STATE_MACHINE = {
 registerMachine(REVIEWER_LOOP_STATE_MACHINE);
 
 // ---------------------------------------------------------------------------
-// Fifth machine (issue #1233): public-dev-loop-routing.
+// Fifth machine (issue #1267): refinement-grill-state.
+//
+// Doc side: docs/refinement-grill-state-graph.md's "## Required transitions" bullets, with
+// one abstract row expanded via REFINEMENT_GRILL_ABSTRACT_ROWS below (the fail-closed
+// load/parse failure edge fires from every non-terminal state into
+// blocked_needs_user_decision). The interpreter checks loadFailed first (fail closed), then
+// the unresolvedGapCount handoff (honest handoff outranks synthesis), then the
+// iterate-to-clean branches.
+//
+// Code side: packages/core/src/loop/refinement-grill-state.mjs exports GRILL_STATE,
+// GRILL_TRANSITIONS, and interpretRefinementGrillState. Checked the same two ways as
+// copilot-loop-state / reviewer-loop-state above: structurally (the edge exists in the real
+// GRILL_TRANSITIONS table) and behaviorally (a fixture reaching `to` lands on `to`).
+// ---------------------------------------------------------------------------
+
+const REFINEMENT_GRILL_ABSTRACT_ROWS = new Map([
+  ["any non-terminal grill state->`blocked_needs_user_decision`", [
+    [GRILL_STATE.LOAD_TARGET, GRILL_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [GRILL_STATE.DETECT_GAPS, GRILL_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [GRILL_STATE.AWAIT_ANSWERS, GRILL_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [GRILL_STATE.SYNTHESIZE, GRILL_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [GRILL_STATE.RE_GRILL, GRILL_STATE.BLOCKED_NEEDS_USER_DECISION],
+  ]],
+]);
+
+const REFINEMENT_GRILL_DOC_TRANSITIONS = parseRequiredTransitions(
+  readFileSync(path.join(REPO_ROOT, "docs", "refinement-grill-state-graph.md"), "utf8"),
+  { abstractRows: REFINEMENT_GRILL_ABSTRACT_ROWS },
+);
+
+bindDocToCodeTable("refinement-grill-state", REFINEMENT_GRILL_DOC_TRANSITIONS, tableEdges(GRILL_TRANSITIONS));
+
+const REFINEMENT_GRILL_TO_FIXTURE = new Map([
+  [GRILL_STATE.DETECT_GAPS, () => ({ loaded: true, detectRan: false })],
+  [GRILL_STATE.AWAIT_ANSWERS, () => ({ loaded: true, detectRan: true, openGapCount: 2 })],
+  [GRILL_STATE.SYNTHESIZE, () => ({ loaded: true, detectRan: true, answersReady: true })],
+  [GRILL_STATE.RE_GRILL, () => ({ loaded: true, synthesized: true, reGrillRan: false })],
+  [GRILL_STATE.GRILL_CLEAN, () => ({ loaded: true, detectRan: true, openGapCount: 0 })],
+  [GRILL_STATE.NEEDS_HUMAN_HANDOFF, () => ({ loaded: true, detectRan: true, unresolvedGapCount: 1 })],
+  [GRILL_STATE.BLOCKED_NEEDS_USER_DECISION, () => ({ loadFailed: true })],
+]);
+
+const REFINEMENT_GRILL_TRANSITION_CHECKS = new Map();
+for (const [from, to] of realEdges(REFINEMENT_GRILL_DOC_TRANSITIONS)) {
+  const buildFixture = REFINEMENT_GRILL_TO_FIXTURE.get(to);
+  if (!buildFixture) throw new Error(`refinement-grill-state: no fixture registered for reachable state "${to}"`);
+  REFINEMENT_GRILL_TRANSITION_CHECKS.set(`${from}->${to}`, {
+    status: "verified",
+    verify: () => {
+      const f = buildFixture();
+      const i = interpretRefinementGrillState(f);
+      return {
+        ok: i.state === to && (GRILL_TRANSITIONS[from] || []).includes(to),
+        detail: i,
+        result: { state: i.state, loadFailed: Boolean(f.loadFailed), hasUnresolved: (f.unresolvedGapCount || 0) > 0 },
+      };
+    },
+  });
+}
+
+const REFINEMENT_GRILL_STATE_MACHINE = {
+  name: "refinement-grill-state",
+  states: Object.values(GRILL_STATE),
+  terminalStates: tableTerminalStates(GRILL_TRANSITIONS),
+  transitions: tableEdges(GRILL_TRANSITIONS),
+  docTransitions: REFINEMENT_GRILL_DOC_TRANSITIONS,
+  transitionChecks: REFINEMENT_GRILL_TRANSITION_CHECKS,
+  safetyRules: [
+    { name: "grill-load-failure-fails-closed", check: (o) => !o.loadFailed || o.state === GRILL_STATE.BLOCKED_NEEDS_USER_DECISION },
+    { name: "grill-unresolved-gap-hands-off", check: (o) => !o.hasUnresolved || o.state === GRILL_STATE.NEEDS_HUMAN_HANDOFF },
+  ],
+};
+
+registerMachine(REFINEMENT_GRILL_STATE_MACHINE);
+
+// ---------------------------------------------------------------------------
+// Sixth machine (issue #1233): public-dev-loop-routing.
 //
 // Doc side: skills/docs/public-dev-loop-contract.md's "## Required transitions" bullets,
 // parsed at load time. Like conductor-routing, the gate graph is stateless per cycle, so each

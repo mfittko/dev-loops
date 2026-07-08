@@ -41,6 +41,7 @@
     "./loop/pr-lifecycle": "./src/loop/pr-lifecycle.mjs",
     "./loop/pr-title-markers": "./src/loop/pr-title-markers.mjs",
     "./loop/public-dev-loop-routing": "./src/loop/public-dev-loop-routing.mjs",
+    "./loop/refinement-grill-state": "./src/loop/refinement-grill-state.mjs",
     "./loop/queue-board-ordering": "./src/loop/queue-board-ordering.mjs",
     "./loop/queue-board-sync": "./src/loop/queue-board-sync.mjs",
     "./loop/queue-driver": "./src/loop/queue-driver.mjs",

@@ -187,7 +187,7 @@ test("pr-gate-coordination reference machine: completeness, liveness, and confor
 test("every registered machine passes its full conformance report", () => {
   const machines = getRegisteredMachines();
   const names = machines.map((m) => m.name);
-  for (const required of ["pr-gate-coordination", "conductor-routing", "copilot-loop-state", "reviewer-loop-state", "public-dev-loop-routing"]) {
+  for (const required of ["pr-gate-coordination", "conductor-routing", "copilot-loop-state", "reviewer-loop-state", "refinement-grill-state", "public-dev-loop-routing"]) {
     assert.ok(names.includes(required), `machine "${required}" must be registered (got: ${names.join(", ")})`);
   }
   for (const machine of machines) {

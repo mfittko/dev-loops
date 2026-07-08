@@ -13,6 +13,7 @@
 // (NAV_CSS references --heading/--kicker/--accent-soft, all declared here).
 import { STATE, TRANSITIONS } from '../../packages/core/src/loop/copilot-loop-state.mjs';
 import { REVIEWER_STATE, REVIEWER_TRANSITIONS } from '../../packages/core/src/loop/reviewer-loop-state.mjs';
+import { GRILL_STATE, GRILL_TRANSITIONS } from '../../packages/core/src/loop/refinement-grill-state.mjs';
 import { OUTER_STATE, OUTER_TRANSITIONS } from '../../packages/core/src/loop/conductor-routing.mjs';
 import { PUBLIC_DEV_LOOP_GATE_CONTRACT } from '../../packages/core/src/loop/public-dev-loop-routing-contract.mjs';
 import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from '../../packages/core/src/loop/pr-lifecycle.mjs';
@@ -99,6 +100,10 @@ const copilotDiagram = renderStateDiagram(
 const reviewerDiagram = renderStateDiagram(
   edgesFromTransitions(Object.values(REVIEWER_STATE), REVIEWER_TRANSITIONS),
   Object.values(REVIEWER_STATE),
+);
+const refinementGrillDiagram = renderStateDiagram(
+  edgesFromTransitions(Object.values(GRILL_STATE), GRILL_TRANSITIONS),
+  Object.values(GRILL_STATE),
 );
 const outerDiagram = renderStateDiagram(
   edgesFromTransitions(Object.values(OUTER_STATE), OUTER_TRANSITIONS),
@@ -213,6 +218,16 @@ const SECTIONS = [
       'If the reviewed head goes stale, <code>review_invalidated</code> discards the pending draft and re-enters at <code>review_requested</code> so the review is always produced for the current head.',
     ],
     diagram: reviewerDiagram,
+  },
+  {
+    id: 'refinement-grill',
+    title: 'Refinement / grill sub-loop',
+    source: 'packages/core/src/loop/refinement-grill-state.mjs — GRILL_STATE + GRILL_TRANSITIONS',
+    prose: [
+      'Before a slice enters the loop, the refinement grill runs as a closed, deterministic sub-loop over the issue, PR body, or plan file. It loads the target, detects spec gaps, and iterates detect-gaps to answer to synthesize to re-grill until it reaches a fixed point. The iteration lives entirely in the transition graph; the LLM answer and synthesis enter only as a bounded input consumed at the await_answers state, never as hidden orchestration in a coordinator script.',
+      'Write-back synthesizes only sharpened Acceptance criteria, Definition of done, and Non-goals into the body — the raw Q&A transcript never lands in the artifact. An uncitable gap stops honestly at needs_human_handoff naming the question rather than fabricating an answer to force convergence, and any load or parse failure fails closed to blocked_needs_user_decision.',
+    ],
+    diagram: refinementGrillDiagram,
   },
   {
     id: 'release-pipeline',
