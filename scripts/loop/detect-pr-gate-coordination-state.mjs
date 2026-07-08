@@ -10,7 +10,7 @@ import {
   resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
@@ -176,7 +176,7 @@ export function parseGitStatusConflictFiles(text) {
   }
   return conflictFiles;
 }
-async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["api", `repos/${repo}/pulls/${pr}/requested_reviewers`],
@@ -188,7 +188,7 @@ async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghComm
   }
   return parseRequestedReviewersPayload(result.stdout);
 }
-async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -211,18 +211,19 @@ export async function fetchPrFactsWithSettledMergeable(
   {
     env = process.env,
     ghCommand = "gh",
+    runChild = defaultRunChild,
     maxPolls = 3,
     pollDelayMs = 1500,
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
     fetch = fetchPrFacts,
   } = {},
 ) {
-  let prData = await fetch(options, { env, ghCommand });
+  let prData = await fetch(options, { env, ghCommand, runChild });
   let polls = 0;
   while (String(prData?.mergeable || "").toUpperCase() === "UNKNOWN" && polls < maxPolls) {
     polls += 1;
     await sleep(pollDelayMs);
-    prData = await fetch(options, { env, ghCommand });
+    prData = await fetch(options, { env, ghCommand, runChild });
   }
   return prData;
 }
@@ -280,7 +281,7 @@ export function resolveLinkedIssuesFromPr(prData) {
   return dedupe(matches.map((m) => Number((/(\d+)/.exec(m) || [])[1])));
 }
 
-async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = "gh" } = {}) {
+async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["issue", "view", String(issue), "--repo", repo, "--json", "body"],
@@ -390,7 +391,7 @@ async function resolveNoIssueRefinementArtifact(body) {
   };
 }
 
-export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged }, { env = process.env, ghCommand = "gh" } = {}) {
+export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const linkedIssues = resolveLinkedIssuesFromPr(prData);
   if (linkedIssues.length === 0) {
     if (prDraft) {
@@ -418,7 +419,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
   // is refined if AT LEAST ONE linked issue carries a refinement artifact.
   const evaluated = [];
   for (const issue of linkedIssues) {
-    const body = await fetchIssueBody({ repo, issue }, { env, ghCommand });
+    const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
     if (body === null) {
       evaluated.push({ issue, artifact: null });
       continue;
@@ -503,7 +504,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     _onlyEnforcedWhenDraft: prDraft === true,
   };
 }
-async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git" } = {}) {
+async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", runChild = defaultRunChild } = {}) {
   let result;
   try {
     result = await runChild(
@@ -617,7 +618,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   };
 }
 
-async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["api", `repos/${repo}/issues/${pr}/timeline`, "--paginate", "--jq",

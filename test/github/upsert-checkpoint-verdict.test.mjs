@@ -3,10 +3,11 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test from "node:test";
-import { DEFAULT_TEST_PR_BODY, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import test, { after, before } from "node:test";
+import { DEFAULT_TEST_PR_BODY, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
+  buildInlineExecutionWarning,
   parseUpsertCheckpointVerdictCliArgs,
   renderGateReviewCommentBody,
   summarizeCheckpointVerdictText,
@@ -15,6 +16,28 @@ import {
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
 const scriptPath = path.resolve("scripts/github/upsert-checkpoint-verdict.mjs");
+
+// Hermetic in-process runtime: the cascade (repo-root/ledger/coordination
+// resolution) shells read-only `git` metadata reads via execFileSync, which
+// bypass the injected runChild. Shadow `git` on PATH with a no-op stub so NO
+// real git binary runs during the in-process tests; every read gracefully falls
+// back (empty stdout → toplevel resolves to cwd, no worktrees, no coordination
+// record). gh calls and the porcelain conflict-status read route through
+// makeGhMock's runChild instead (a real subprocess is impossible there).
+let gitStubDir = null;
+let originalPath = null;
+before(async () => {
+  gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gitstub-"));
+  const gitStubPath = path.join(gitStubDir, "git");
+  await writeFile(gitStubPath, "#!/bin/sh\nexit 0\n", "utf8");
+  await chmod(gitStubPath, 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = [gitStubDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);
+});
+after(async () => {
+  if (originalPath !== null) process.env.PATH = originalPath;
+  if (gitStubDir) await rm(gitStubDir, { recursive: true, force: true });
+});
 
 // Inline mode is the default execution mode and now requires a non-empty
 // --inline-reason (see FIX B). For tests that do not explicitly exercise the
@@ -30,18 +53,83 @@ const augmentInlineReason = (args) => {
   return [...args, "--inline-reason", DEFAULT_TEST_INLINE_REASON];
 };
 
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, augmentInlineReason(args), {
-  ...options,
-  env: {
-    ...process.env,
-    ...(options.env ?? {}),
-    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-  },
-});
+// Marker key: the local writeGhStub returns an env carrying its gh `entries` so
+// runNode can replay them in-process (no gh/CLI subprocess) via makeGhMock.
+const GH_MOCK_ENTRIES = Symbol.for("dev-loops.ghMockEntries");
 
-async function writeGhStub(tempDir, entries) {
-  const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
-  return { ...env, DEVLOOPS_RUN_ID: "" };
+// Run the CLI in-process when gh entries are stashed on the env (the common
+// gate-coordination tests), mirroring main()'s output contract so the existing
+// { code, stdout, stderr } assertions keep working unchanged: on success stdout
+// is the emitResult JSON line and stderr carries any warnings the entry fn wrote
+// PLUS the inline-execution warning main() appends; on a thrown error, exit 1
+// with the same { ok:false, error } stderr envelope. Falls back to a real CLI
+// spawn when no entries are stashed (parse-error / --force smokes with no env,
+// and the claims/log-mode boundary tests that build env via writeGhStubHelper).
+const runNode = async (args = [], options = {}) => {
+  const augmented = augmentInlineReason(args);
+  const entries = options.env?.[GH_MOCK_ENTRIES];
+  if (!entries) {
+    return runNodeHelper(scriptPath, augmented, {
+      ...options,
+      env: {
+        ...process.env,
+        ...(options.env ?? {}),
+        DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
+      },
+    });
+  }
+  const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+  // gh-only invocation count, for tests that asserted the PATH stub's counter
+  // file (git conflict-status reads also route through runChild and are excluded).
+  const ghCallCount = () => calls.filter((c) => c.command === "gh").length;
+  let options_;
+  try {
+    options_ = parseUpsertCheckpointVerdictCliArgs(augmented);
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`, ghCallCount };
+  }
+  const env = { ...process.env, ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" };
+  delete env[GH_MOCK_ENTRIES];
+  // Mirror the subprocess cwd: tests that stage a per-test .devloops pass
+  // { cwd: tempDir }, so config (gate angle contract, rejectForeignAngles) must
+  // resolve from there rather than the worktree root. Defaults to process.cwd()
+  // (the worktree) — identical to the former subprocess default.
+  const repoRoot = options.cwd ?? process.cwd();
+  // Capture stderr the entry fn writes directly (e.g. foreign-angle warnings) so
+  // the assembled stderr matches what the CLI subprocess would have emitted.
+  const stderrChunks = [];
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, encoding, cb) => {
+    stderrChunks.push(String(chunk));
+    const done = typeof encoding === "function" ? encoding : cb;
+    if (typeof done === "function") done();
+    return true;
+  };
+  try {
+    const result = await upsertCheckpointVerdict(options_, { env, ghCommand: "gh", repoRoot, runChild });
+    process.stderr.write = originalWrite;
+    const inlineWarning = buildInlineExecutionWarning(options_.executionMode, options_.inlineReason);
+    if (inlineWarning && !options_.silent) {
+      stderrChunks.push(`${inlineWarning}\n`);
+    }
+    return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: stderrChunks.join(""), ghCallCount };
+  } catch (error) {
+    process.stderr.write = originalWrite;
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `${stderrChunks.join("")}${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`,
+      ghCallCount,
+    };
+  }
+};
+
+// In-process gh stub: stash the entries on the returned env under GH_MOCK_ENTRIES
+// so runNode replays them via makeGhMock. No PATH gh-stub files are written —
+// the CLI logic runs in-process and every gh call is answered from `entries`
+// (repeatLastOnOverflow mirrors the former PATH stub's sequential semantics).
+async function writeGhStub(_tempDir, entries) {
+  return { DEVLOOPS_RUN_ID: "", [GH_MOCK_ENTRIES]: entries };
 }
 
 function buildGateCoordinationEntries({
@@ -205,13 +293,13 @@ test("parseUpsertCheckpointVerdictCliArgs rejects --force-reason without --force
 test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-programmatic-"));
   try {
-    const env = await writeGhStub(tempDir, [
+    const { runChild } = makeGhMock([
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
       },
-    ]);
+    ], { repeatLastOnOverflow: true });
     const result = await upsertCheckpointVerdict({
       repo: "owner/repo",
       pr: 17,
@@ -223,7 +311,7 @@ test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", as
       nextAction: "next",
       force: true,
       forceReason: "test",
-    }, { env, ghCommand: "gh" });
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild });
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
     // force metadata no longer included
@@ -1093,7 +1181,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
     // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
-    assert.equal(Number((await readFile(env.GH_COUNTER_PATH, "utf8")).trim()), 8);
+    assert.equal(result.ghCallCount(), 8);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1604,7 +1692,7 @@ test("upsert-checkpoint-verdict expands an abbreviated current-head SHA before m
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
     });
     // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
-    assert.equal(Number((await readFile(env.GH_COUNTER_PATH, "utf8")).trim()), 8);
+    assert.equal(result.ghCallCount(), 8);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -11,7 +11,7 @@ import {
   summarizeCopilotReviews,
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
@@ -176,7 +176,7 @@ function parseReviewsPayload(text, { draftGateResetAtMs = null } = {}) {
     completedCopilotReviewRounds: reviewSummary.completedCopilotReviewRounds,
   };
 }
-async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["api", `repos/${repo}/pulls/${pr}/requested_reviewers`],
@@ -188,7 +188,7 @@ async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghComm
   }
   return parseRequestedReviewersPayload(result.stdout);
 }
-async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
@@ -213,7 +213,7 @@ async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghComman
 // detector uses for the latest clean draft_gate marker), not the full checkpoint-
 // evidence pipeline, to keep the added surface minimal. Best-effort: a fetch failure
 // falls back to the raw count, so the cap is never silently disabled.
-async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh" } = {}, before) {
+async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, before) {
   try {
     const currentHeadSha = typeof before?.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
       ? before.prData.headRefOid.trim()
@@ -386,7 +386,7 @@ function classifyRequestFailure(detail) {
   }
   return undefined;
 }
-async function requestCopilotReview({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+async function requestCopilotReview({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["pr", "edit", String(pr), "--repo", repo, "--add-reviewer", "@copilot"],
@@ -398,7 +398,7 @@ async function requestCopilotReview({ repo, pr }, { env = process.env, ghCommand
     if (classified === "unavailable") {
       let existing;
       try {
-        existing = await fetchCopilotReviewIds({ repo, pr }, { env, ghCommand });
+        existing = await fetchCopilotReviewIds({ repo, pr }, { env, ghCommand, runChild });
       } catch {
         // Best-effort: if gh pr view fails transiently (rate limit, network, auth),
         // return unavailable rather than throwing — the 422 failure is already stable.
@@ -439,7 +439,7 @@ async function requestCopilotReview({ repo, pr }, { env = process.env, ghCommand
     reviewer: "Copilot",
   };
 }
-export async function checkForCopilotComments({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+export async function checkForCopilotComments({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["api", `repos/${repo}/issues/${pr}/comments`, "--paginate", "--jq", ".[]"],
@@ -477,8 +477,9 @@ export async function checkForCopilotComments({ repo, pr }, { env = process.env,
     violationCommentIds,
   };
 }
-export async function performCopilotReviewRequest(options, { env = process.env, ghCommand = "gh" } = {}) {
-  const before = await fetchCopilotReviewState(options, { env, ghCommand });
+export async function performCopilotReviewRequest(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  const runtime = { env, ghCommand, runChild };
+  const before = await fetchCopilotReviewState(options, runtime);
   if (before.prData?.isDraft) {
     return {
       ok: true,
@@ -490,7 +491,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
     };
   }
   if (!env.GH_SEQUENCE_PATH) {
-    const copilotCommentCheck = await checkForCopilotComments(options, { env, ghCommand });
+    const copilotCommentCheck = await checkForCopilotComments(options, runtime);
     if (copilotCommentCheck.blocked) {
       return {
         ok: true,
@@ -555,7 +556,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
   if (completedRounds >= maxRounds
       && !before.requested
       && !before.hasPendingReviewOnCurrentHead) {
-    completedRounds = await resolveDraftGateAdjustedRounds(options, { env, ghCommand }, before);
+    completedRounds = await resolveDraftGateAdjustedRounds(options, runtime, before);
   }
   if (completedRounds >= maxRounds
       && !before.requested
@@ -563,7 +564,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
     if (!options.forceRerequestReview) {
       const roundCapAutoRerequest = await detectRoundCapAutoRerequestEligibility(
         options,
-        { env, ghCommand },
+        runtime,
         before,
         refinementConfig,
       );
@@ -615,7 +616,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
   }
   const sameHeadCleanConverged = await detectSameHeadCleanConvergence(
     options,
-    { env, ghCommand },
+    runtime,
     before,
   );
   if (sameHeadCleanConverged) {
@@ -638,9 +639,9 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
       reviewer: "Copilot",
     });
   }
-  const requestResult = await requestCopilotReview(options, { env, ghCommand });
+  const requestResult = await requestCopilotReview(options, runtime);
   if (requestResult.status === "unavailable") {
-    const after = await fetchCopilotReviewState(options, { env, ghCommand });
+    const after = await fetchCopilotReviewState(options, runtime);
     if (after.requested || after.hasPendingReviewOnCurrentHead || after.hasSubmittedReviewOnCurrentHead) {
       return withConfigWarning({
         ok: true,
@@ -657,7 +658,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
   if (requestResult.status === "already-requested") {
     return withConfigWarning(requestResult);
   }
-  const after = await fetchCopilotReviewState(options, { env, ghCommand });
+  const after = await fetchCopilotReviewState(options, runtime);
   const reviewCountIncreased = after.copilotReviewIds.length > before.copilotReviewIds.length;
   const reviewNowObservablyInProgress = after.requested || after.hasPendingReviewOnCurrentHead || reviewCountIncreased;
   if (!reviewNowObservablyInProgress) {

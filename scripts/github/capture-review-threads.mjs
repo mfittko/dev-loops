@@ -9,7 +9,7 @@ import {
   readInput,
 } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 export const REVIEW_THREADS_QUERY = [
@@ -118,7 +118,7 @@ export function parseCaptureCliArgs(argv) {
 }
 export async function fetchGithubReviewThreadsPayload(
   { repo, pr },
-  { env = process.env, ghCommand = "gh" } = {},
+  { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
 ) {
   const { owner, name } = parseRepoSlug(repo);
   const result = await runChild(

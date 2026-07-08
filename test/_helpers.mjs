@@ -2,6 +2,81 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+// In-process replacement for the PATH-installed gh stub (buildGhStubScript /
+// writeGhStub). Returns `{ runChild, calls }` where `runChild(command, args, env,
+// stdinText)` replays the SAME sequential semantics the PATH stub implements, but
+// without spawning a node subprocess per gh call. Inject it via a script's
+// `{ env, ghCommand, runChild }` context so the CLI logic runs in-process while
+// every gh call is answered from `entries` in order. Assertion failures return the
+// SAME non-zero exit codes the PATH stub exits with, so the script's own error path
+// fires identically (a gh call past the end of `entries`, without
+// repeatLastOnOverflow, returns exit code 97). Only `git` among non-gh commands
+// resolves to a hermetic empty success — shadowing the incidental read-only metadata
+// reads — while every other non-git/non-gh command throws loudly.
+export function makeGhMock(entries = [], {
+  command = "gh",
+  repeatLastOnOverflow = false,
+  defaultStdout = "{}\n",
+} = {}) {
+  const calls = [];
+  let counter = 0;
+  const runChild = async (cmd, args = [], _env, stdinText = "") => {
+    calls.push({ command: cmd, args: [...args], stdinText: stdinText ?? "" });
+    if (cmd !== command) {
+      // Safety guard: the mock answers the stubbed command (gh) from `entries`
+      // and hermetically resolves `git` to an empty success (the porcelain
+      // status/no-conflicts default) so no real working tree is inspected. Any
+      // OTHER command reaching runChild is unexpected — throw loudly so a stray
+      // subprocess spawn can never pass silently.
+      if (cmd === "git") {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      throw new Error(`makeGhMock: unexpected command through runChild: ${cmd} ${args.join(" ")}`);
+    }
+    const current = counter;
+    if (current >= entries.length && !repeatLastOnOverflow) {
+      return { code: 97, stdout: "", stderr: `unexpected extra gh call #${current + 1}: ${args.join(" ")}\n` };
+    }
+    const index = entries.length === 0 ? -1 : Math.min(current, entries.length - 1);
+    const entry = index >= 0 ? (entries[index] ?? { stdout: defaultStdout }) : { stdout: defaultStdout };
+    counter = current + 1;
+    if (entry.assertArgs) {
+      for (const expected of entry.assertArgs) {
+        if (!args.includes(expected)) {
+          return { code: 98, stdout: "", stderr: `missing expected gh arg: ${expected}${args.length > 0 ? `\nactual: ${args.join(" ")}` : ""}\n` };
+        }
+      }
+    }
+    if (entry.assertStdinIncludes) {
+      for (const expected of entry.assertStdinIncludes) {
+        if (!String(stdinText).includes(expected)) {
+          return { code: 96, stdout: "", stderr: `missing expected stdin text: ${expected}\n` };
+        }
+      }
+    }
+    if (entry.assertArgContains) {
+      for (const expected of entry.assertArgContains) {
+        if (!args.some((a) => a.includes(expected))) {
+          return { code: 94, stdout: "", stderr: `missing expected arg substring: ${expected}\nactual: ${args.join(" ")}\n` };
+        }
+      }
+    }
+    if (entry.assertArgNotContains) {
+      for (const forbidden of entry.assertArgNotContains) {
+        if (args.some((a) => a.includes(forbidden))) {
+          return { code: 93, stdout: "", stderr: `unexpected arg substring: ${forbidden}\n` };
+        }
+      }
+    }
+    return {
+      code: entry.exitCode ?? 0,
+      stdout: entry.stdout ?? "",
+      stderr: entry.stderr ?? "",
+    };
+  };
+  return { runChild, calls };
+}
+
 // Shared fixture body: minimal issue-less PR-body-as-spec content (no linked
 // issue) that satisfies the refinement check, matching an ordinary sanctioned
 // draft PR. Tests exercising draft/ready or gate-posting logic downstream of

@@ -4,32 +4,99 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import test, { after, before } from "node:test";
+import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
-import { parseHandoffCliArgs } from "../../scripts/loop/copilot-pr-handoff.mjs";
+import { formatCliError } from "../../scripts/_core-helpers.mjs";
+import { parseHandoffCliArgs, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
 import { STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "../../packages/core/src/loop/timeout-policy.mjs";
 
 const scriptPath = path.resolve("scripts/loop/copilot-pr-handoff.mjs");
 
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
-  ...options,
-  env: {
-    ...process.env,
-    ...(options.env ?? {}),
-    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-  },
+// No-op `git` stub used ONLY while the in-process runHandoff executes, so the
+// coordination git-common-dir read (execFileSync, which bypasses the injected
+// runChild) resolves to a hermetic no-op instead of a real git binary. Scoped
+// per in-process call — NOT installed globally — because some tests do a real
+// `git init` and rely on real git; a global shadow would break those.
+let gitStubDir = null;
+before(async () => {
+  gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-gitstub-"));
+  const gitStubPath = path.join(gitStubDir, "git");
+  await writeFile(gitStubPath, "#!/bin/sh\nexit 0\n", "utf8");
+  await chmod(gitStubPath, 0o755);
+});
+after(async () => {
+  if (gitStubDir) await rm(gitStubDir, { recursive: true, force: true });
 });
 
-/**
- * Write a gh stub that responds to a sequence of calls.
- * Each entry: { assertArgs?, stdout?, stderr?, exitCode? }
- */
-async function writeGhStub(tempDir, entries) {
-  const { env } = await writeGhStubHelper(tempDir, entries);
-  return { ...env, DEVLOOPS_RUN_ID: "" };
+// Marker key: the local writeGhStub stashes its gh `entries` on the returned env
+// so runNode replays them in-process (no gh/CLI subprocess) via makeGhMock.
+const GH_MOCK_ENTRIES = Symbol.for("dev-loops.ghMockEntries");
+
+// Run the CLI in-process when gh entries are stashed on the env, mirroring
+// runCli()'s output contract so the existing { code, stdout, stderr } assertions
+// keep working: stdout is the emitResult JSON line, exit code follows result.ok,
+// stderr carries anything the entry fn wrote. Falls back to a real CLI spawn when
+// no entries are stashed (parse-error / removed-flag smokes with no env, custom
+// inline-stub tests, and the claims/log-mode boundary tests that build env via
+// writeGhStubHelper). The git stub is scoped around the runHandoff call only.
+const runNode = async (args = [], options = {}) => {
+  const entries = options.env?.[GH_MOCK_ENTRIES];
+  if (!entries) {
+    return runNodeHelper(scriptPath, args, {
+      ...options,
+      env: {
+        ...process.env,
+        ...(options.env ?? {}),
+        DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
+      },
+    });
+  }
+  const { runChild } = makeGhMock(entries);
+  let parsed;
+  try {
+    parsed = parseHandoffCliArgs(args);
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `${formatCliError(error)}\n` };
+  }
+  if (parsed.help) {
+    return { code: 0, stdout: "", stderr: "" };
+  }
+  const env = { ...process.env, ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" };
+  delete env[GH_MOCK_ENTRIES];
+  const repoRoot = options.cwd ?? process.cwd();
+  const stderrChunks = [];
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, encoding, cb) => {
+    stderrChunks.push(String(chunk));
+    const done = typeof encoding === "function" ? encoding : cb;
+    if (typeof done === "function") done();
+    return true;
+  };
+  const originalPath = process.env.PATH;
+  process.env.PATH = [gitStubDir, originalPath ?? ""].filter(Boolean).join(path.delimiter);
+  try {
+    const result = await runHandoff(parsed, { env, ghCommand: "gh", runChild, repoRoot });
+    return { code: result?.ok === false ? 1 : 0, stdout: `${JSON.stringify(result)}\n`, stderr: stderrChunks.join("") };
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `${stderrChunks.join("")}${formatCliError(error)}\n` };
+  } finally {
+    process.stderr.write = originalWrite;
+    process.env.PATH = originalPath;
+  }
+};
+
+// In-process gh stub: stash entries on the returned env under GH_MOCK_ENTRIES so
+// runNode replays them via makeGhMock. No PATH gh-stub files are written — the
+// CLI logic runs in-process and every gh call is answered from `entries`.
+// GH_SEQUENCE_PATH is set to a sentinel (never read as a file in-process) so the
+// stub-mode guards the cascade keys off it (e.g. performCopilotReviewRequest's
+// `if (!env.GH_SEQUENCE_PATH)` skip of the real-world copilot-comment check) fire
+// exactly as they did under the former PATH gh-stub.
+async function writeGhStub(_tempDir, entries) {
+  return { DEVLOOPS_RUN_ID: "", GH_SEQUENCE_PATH: "in-process-mock", [GH_MOCK_ENTRIES]: entries };
 }
 
 const EMPTY_THREADS = JSON.stringify({

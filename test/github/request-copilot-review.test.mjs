@@ -4,11 +4,25 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewRequest } from "../../scripts/github/request-copilot-review.mjs";
 
 const scriptPath = path.resolve("scripts/github/request-copilot-review.mjs");
 
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+
+// In-process run: replay the same gh entries via makeGhMock and call the exported
+// entry fn directly, so the CLI logic runs without a node subprocess per gh call.
+// GH_SEQUENCE_PATH is set by default to preserve the production skip of the
+// copilot-comment check (the CLI treats it as the "under stub harness" signal);
+// pass `env: {}` to exercise that check end to end. Config is loaded from the
+// worktree cwd, matching the no-cwd spawn tests.
+async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" } } = {}) {
+  const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+  const options = parseRequestCliArgs(args);
+  const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild });
+  return { result, calls };
+}
 
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
@@ -30,10 +44,7 @@ async function writeGhStubWithCommentCheck(tempDir, entries) {
 }
 
 test("request-copilot-review requests Copilot deterministically and verifies via requested_reviewers", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-review-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -56,27 +67,17 @@ test("request-copilot-review requests Copilot deterministically and verifies via
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review recognizes Copilot under the requested reviewer login returned by GitHub", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-login-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n',
@@ -87,27 +88,17 @@ test("request-copilot-review recognizes Copilot under the requested reviewer log
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "already-requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review reports already-requested without mutating PR state again", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-already-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
@@ -118,27 +109,17 @@ test("request-copilot-review reports already-requested without mutating PR state
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "already-requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review suppresses same-head clean re-request by default", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-suppressed-same-head-clean-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -153,11 +134,7 @@ test("request-copilot-review suppresses same-head clean re-request by default", 
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "suppressed_same_head_clean",
       repo: "owner/repo",
@@ -166,19 +143,13 @@ test("request-copilot-review suppresses same-head clean re-request by default", 
       sameHeadCleanConverged: true,
       detail: "Current head already has a clean submitted Copilot review; same-head clean-convergence suppression is always enforced.",
     });
-    // 3 gh calls: preflight requested_reviewers + expanded PR view, then only review threads for clean-convergence proof.
-    assert.equal(Number((await readFile(env.GH_COUNTER_PATH, "utf8")).trim()), 3);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  // 3 gh calls: preflight requested_reviewers + expanded PR view, then only review threads for clean-convergence proof.
+  assert.equal(calls.length, 3);
 });
 
 
 test("request-copilot-review treats pending review as already-requested even when a submitted current-head review exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-pending-with-submitted-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -189,28 +160,18 @@ test("request-copilot-review treats pending review as already-requested even whe
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "already-requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-    assert.equal(Number((await readFile(env.GH_COUNTER_PATH, "utf8")).trim()), 2);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(calls.length, 2);
 });
 
 test("request-copilot-review treats a pending Copilot review as already-requested before mutating", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-pending-before-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -221,28 +182,18 @@ test("request-copilot-review treats a pending Copilot review as already-requeste
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "already-requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review accepts --force-rerequest-review as a valid flag", async () => {
   // With cap not reached (0 reviews, default cap 5): flag is a no-op; normal flow applies.
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-force-noop-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -265,21 +216,11 @@ test("request-copilot-review accepts --force-rerequest-review as a valid flag", 
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.equal(JSON.parse(result.stdout).status, "requested");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(result.status, "requested");
 });
 
 test("request-copilot-review accepts an immediate Copilot review as proof the request succeeded", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-immediate-review-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -302,27 +243,17 @@ test("request-copilot-review accepts an immediate Copilot review as proof the re
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review normalizes known unrequestable/unavailable failures", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-unavailable-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -353,11 +284,7 @@ test("request-copilot-review normalizes known unrequestable/unavailable failures
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "unavailable",
       repo: "owner/repo",
@@ -365,16 +292,10 @@ test("request-copilot-review normalizes known unrequestable/unavailable failures
       reviewer: "Copilot",
       detail: "gh: Reviews may only be requested from collaborators.",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review returns already-requested when 422 but Copilot is in requested_reviewers", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-422-in-progress-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       // before: Copilot not in requested_reviewers yet
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -406,27 +327,17 @@ test("request-copilot-review returns already-requested when 422 but Copilot is i
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "already-requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review returns already-requested when 422 but Copilot has a pending review", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-422-pending-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       // before: Copilot not in requested_reviewers
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -449,27 +360,17 @@ test("request-copilot-review returns already-requested when 422 but Copilot has 
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "already-requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review does not treat a stale pending Copilot review as already-requested before mutating", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-stale-pending-before-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -492,27 +393,17 @@ test("request-copilot-review does not treat a stale pending Copilot review as al
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review ignores a stale pending Copilot review after 422 and stays unavailable", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-stale-pending-422-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -541,11 +432,7 @@ test("request-copilot-review ignores a stale pending Copilot review after 422 an
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "unavailable",
       repo: "owner/repo",
@@ -553,9 +440,6 @@ test("request-copilot-review ignores a stale pending Copilot review after 422 an
       reviewer: "Copilot",
       detail: "gh: Reviews may only be requested from collaborators.",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review wraps invalid gh JSON deterministically", async () => {
@@ -644,94 +528,63 @@ test("request-copilot-review --help prints usage and exits 0", async () => {
 });
 
 test("checkForCopilotComments blocks when @copilot comment found from non-Copilot author", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-blocked-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { runChild } = makeGhMock([
       {
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
         stdout: JSON.stringify({ id: 1001, body: "@copilot Please re-review this PR", user: { login: "human-dev" } }) + "\n",
       },
-    ]);
+    ], { repeatLastOnOverflow: true });
 
-    const { checkForCopilotComments } = await import("../../scripts/github/request-copilot-review.mjs");
-    const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { env });
+  const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { runChild });
 
-    assert.equal(result.blocked, true);
-    assert.deepEqual(result.violationCommentIds, [1001]);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(result.blocked, true);
+  assert.deepEqual(result.violationCommentIds, [1001]);
 });
 
 test("checkForCopilotComments passes when no @copilot comments found", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-noblock-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { runChild } = makeGhMock([
       {
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
         stdout: JSON.stringify({ id: 1001, body: "LGTM!", user: { login: "human-dev" } }) + "\n",
       },
-    ]);
+    ], { repeatLastOnOverflow: true });
 
-    const { checkForCopilotComments } = await import("../../scripts/github/request-copilot-review.mjs");
-    const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { env });
+  const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { runChild });
 
-    assert.equal(result.blocked, false);
-    assert.deepEqual(result.violationCommentIds, []);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(result.blocked, false);
+  assert.deepEqual(result.violationCommentIds, []);
 });
 
 test("checkForCopilotComments ignores @copilot in Copilot-authored comments", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-copilot-author-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { runChild } = makeGhMock([
       {
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
         stdout: JSON.stringify({ id: 2001, body: "I see you mentioned @copilot in your message", user: { login: "copilot-pull-request-reviewer[bot]" } }) + "\n",
       },
-    ]);
+    ], { repeatLastOnOverflow: true });
 
-    const { checkForCopilotComments } = await import("../../scripts/github/request-copilot-review.mjs");
-    const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { env });
+  const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { runChild });
 
-    assert.equal(result.blocked, false);
-    assert.deepEqual(result.violationCommentIds, []);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(result.blocked, false);
+  assert.deepEqual(result.violationCommentIds, []);
 });
 
 test("checkForCopilotComments reports all violation comments when multiple found", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-multiviolation-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { runChild } = makeGhMock([
       {
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
         stdout: [JSON.stringify({ id: 3001, body: "@copilot review please", user: { login: "dev-a" } }), JSON.stringify({ id: 3002, body: "/copilot re-review", user: { login: "dev-b" } })].join("\n") + "\n",
       },
-    ]);
+    ], { repeatLastOnOverflow: true });
 
-    const { checkForCopilotComments } = await import("../../scripts/github/request-copilot-review.mjs");
-    const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { env });
+  const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { runChild });
 
-    assert.equal(result.blocked, true);
-    assert.deepEqual(result.violationCommentIds, [3001, 3002]);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(result.blocked, true);
+  assert.deepEqual(result.violationCommentIds, [3001, 3002]);
 });
 
 test("checkForCopilotComments exempts a summon literal quoted inside an inline code span", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-codespan-exempt-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { runChild } = makeGhMock([
       {
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
         stdout: JSON.stringify({
@@ -740,23 +593,16 @@ test("checkForCopilotComments exempts a summon literal quoted inside an inline c
           user: { login: "human-dev" },
         }) + "\n",
       },
-    ]);
+    ], { repeatLastOnOverflow: true });
 
-    const { checkForCopilotComments } = await import("../../scripts/github/request-copilot-review.mjs");
-    const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { env });
+  const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { runChild });
 
-    assert.equal(result.blocked, false);
-    assert.deepEqual(result.violationCommentIds, []);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(result.blocked, false);
+  assert.deepEqual(result.violationCommentIds, []);
 });
 
 test("checkForCopilotComments exempts a summon literal quoted inside a fenced code block", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-fence-exempt-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { runChild } = makeGhMock([
       {
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
         stdout: JSON.stringify({
@@ -765,16 +611,12 @@ test("checkForCopilotComments exempts a summon literal quoted inside a fenced co
           user: { login: "human-dev" },
         }) + "\n",
       },
-    ]);
+    ], { repeatLastOnOverflow: true });
 
-    const { checkForCopilotComments } = await import("../../scripts/github/request-copilot-review.mjs");
-    const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { env });
+  const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { runChild });
 
-    assert.equal(result.blocked, false);
-    assert.deepEqual(result.violationCommentIds, []);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(result.blocked, false);
+  assert.deepEqual(result.violationCommentIds, []);
 });
 
 test("request-copilot-review --silent exits 0 only when status is requested", async () => {
@@ -983,20 +825,11 @@ const BLOCKED_REGRESSION_GH_ENTRIES = [
 ];
 
 test("request-copilot-review self-deadlock regression: blocked_by_copilot_comment reports ok:true but is not a placed request", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-blocked-regression-"));
-
-  try {
-    const env = await writeGhStubWithCommentCheck(tempDir, BLOCKED_REGRESSION_GH_ENTRIES);
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-    assert.equal(result.code, 0);
-    const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.status, "blocked_by_copilot_comment");
-    assert.equal(parsed.ok, true);
-    assert.deepEqual(parsed.violationCommentIds, [5001]);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  // env: {} (no GH_SEQUENCE_PATH) so the copilot-comment check runs end to end.
+  const { result: parsed } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], BLOCKED_REGRESSION_GH_ENTRIES, { env: {} });
+  assert.equal(parsed.status, "blocked_by_copilot_comment");
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.violationCommentIds, [5001]);
 });
 
 test("request-copilot-review self-deadlock regression: --silent exits non-zero for blocked_by_copilot_comment", async () => {
@@ -1018,10 +851,7 @@ test("request-copilot-review self-deadlock regression: --silent exits non-zero f
 });
 
 test("request-copilot-review blocks request when PR is in draft state", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-draft-block-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -1032,11 +862,7 @@ test("request-copilot-review blocks request when PR is in draft state", async ()
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "suppressed_draft",
       repo: "owner/repo",
@@ -1044,16 +870,10 @@ test("request-copilot-review blocks request when PR is in draft state", async ()
       reviewer: "Copilot",
       detail: "PR is in draft state; review requests are blocked until the PR is marked ready for review.",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review does not block request when PR is not draft", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-draft-ok-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -1076,21 +896,11 @@ test("request-copilot-review does not block request when PR is not draft", async
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.equal(JSON.parse(result.stdout).status, "requested");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(result.status, "requested");
 });
 
 test("request-copilot-review draft check takes precedence over round cap", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-draft-roundcap-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result: parsed } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -1101,22 +911,11 @@ test("request-copilot-review draft check takes precedence over round cap", async
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.status, "suppressed_draft");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(parsed.status, "suppressed_draft");
 });
 
 test("request-copilot-review returns round_cap_reached when cap is exhausted without force flag", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-roundcap-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -1131,11 +930,7 @@ test("request-copilot-review returns round_cap_reached when cap is exhausted wit
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "round_cap_reached",
       repo: "owner/repo",
@@ -1145,9 +940,6 @@ test("request-copilot-review returns round_cap_reached when cap is exhausted wit
       maxRounds: 2,
       detail: "Round cap of 2 reached with 5 completed rounds. No further re-requests will be made.",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review --lightweight enforces the composed cap: light PR at 1 completed round returns round_cap_reached (#1210)", async () => {
@@ -1378,10 +1170,7 @@ test("request-copilot-review respects low-signal refinement config before auto r
 });
 
 test("request-copilot-review does NOT auto re-request at round cap when new commits land after resolved comments (no illegal over-cap re-request)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-roundcap-no-auto-rerequest-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result: output } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -1396,26 +1185,15 @@ test("request-copilot-review does NOT auto re-request at round cap when new comm
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    // At the cap, a head advance no longer re-opens an automatic Copilot re-request.
-    // The round cap is respected; the pre_approval_gate reviews the current head.
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.status, "round_cap_reached");
-    assert.equal(output.reviewer, "Copilot");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  // At the cap, a head advance no longer re-opens an automatic Copilot re-request.
+  // The round cap is respected; the pre_approval_gate reviews the current head.
+  assert.equal(output.ok, true);
+  assert.equal(output.status, "round_cap_reached");
+  assert.equal(output.reviewer, "Copilot");
 });
 
 test("request-copilot-review --force-rerequest-review allows re-request when cap reached and new commits exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-force-newcommits-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -1445,27 +1223,17 @@ test("request-copilot-review --force-rerequest-review allows re-request when cap
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "requested",
       repo: "owner/repo",
       pr: 17,
       reviewer: "Copilot",
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
 
 test("request-copilot-review --force-rerequest-review refuses when cap reached and no new commits", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-force-nochange-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
         stdout: '{"users":[],"teams":[]}\n',
@@ -1483,11 +1251,7 @@ test("request-copilot-review --force-rerequest-review refuses when cap reached a
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    assert.deepEqual(JSON.parse(result.stdout), {
+  assert.deepEqual(result, {
       ok: true,
       status: "no_changes_since_last_review",
       repo: "owner/repo",
@@ -1497,7 +1261,4 @@ test("request-copilot-review --force-rerequest-review refuses when cap reached a
       completedRounds: 5,
       maxRounds: 2,
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });

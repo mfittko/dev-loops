@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, normalizeTimestamp, parseJsonText } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
@@ -227,7 +227,7 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
  * loop should pause for operator review.
  * Returns { paused: true, humanComments: [...] } when human comments need attention.
  */
-export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env = process.env, ghCommand = "gh" } = {}) {
+export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   try {
     const result = await runChild(
       ghCommand,
@@ -312,7 +312,7 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
 // (#1103, #1126): the current head, the Copilot reviews (to find the last
 // reviewed head), and the PR's changed files. Fetched only when the interpreter
 // already resolved ROUND_CAP_CLEAN_FALLBACK, so this extra call is off the hot path.
-async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,reviews,files"],
@@ -328,12 +328,16 @@ async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghComman
   }
 }
 
-export async function runHandoff(options, { env = process.env, ghCommand = "gh" } = {}) {
+export async function runHandoff(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot } = {}) {
+  // Single resolved repo root for config + runner-coordination reads/writes.
+  // Defaults to the checkout's git toplevel (production); an injected repoRoot
+  // keeps the whole cascade hermetic when driven in-process.
+  const resolvedRepoRoot = repoRoot ?? resolveRepoRoot(process.cwd());
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
     env,
-    cwd: resolveRepoRoot(process.cwd()),
+    cwd: resolvedRepoRoot,
     claimIfMissing: true,
   });
   if (!runnerOwnership.ok) {
@@ -363,9 +367,9 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
   }
   let snapshot = await autoDetectSnapshot(
     { repo: options.repo, pr: options.pr },
-    { env, ghCommand },
+    { env, ghCommand, runChild },
   );
-  const config = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
+  const config = await loadDevLoopConfig({ repoRoot: resolvedRepoRoot });
   if (config.errors?.length > 0) {
     console.error("[copilot-pr-handoff] config warnings:", JSON.stringify(config.errors));
   }
@@ -389,7 +393,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
   if (resolveRunId(env)) {
     humanCommentCheck = await detectRecentHumanComments(
       { repo: options.repo, pr: options.pr, claimedAtMs: runnerOwnership?.activeRun?.claimedAt ? new Date(runnerOwnership.activeRun.claimedAt).getTime() : undefined },
-      { env, ghCommand },
+      { env, ghCommand, runChild },
     );
   }
   const TERMINAL_STATES = new Set([STATE.NO_PR, STATE.DONE, STATE.BLOCKED_NEEDS_USER_DECISION]);
@@ -399,7 +403,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
       repo: options.repo,
       pr: options.pr,
       env,
-      cwd: resolveRepoRoot(process.cwd()),
+      cwd: resolvedRepoRoot,
     });
     return {
       ok: true,
@@ -467,7 +471,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
       interpretation.state === STATE.READY_TO_REREQUEST_REVIEW)
   ) {
     try {
-      const internalCheck = await detectPrInternalOnly(options, { env, ghCommand });
+      const internalCheck = await detectPrInternalOnly(options, { env, ghCommand, runChild });
       if (internalCheck.ok && internalCheck.internalOnly) {
         internalOnlySkipCopilot = true;
         interpretation = {
@@ -526,7 +530,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
   if (!internalOnlySkipCopilot
       && options.watchStatus === undefined
       && interpretation.state === STATE.ROUND_CAP_CLEAN_FALLBACK) {
-    const reopenFacts = await fetchReopenCycleFacts(options, { env, ghCommand });
+    const reopenFacts = await fetchReopenCycleFacts(options, { env, ghCommand, runChild });
     const significant = await detectPostConvergenceSignificantChange(
       {
         repo: options.repo,
@@ -537,7 +541,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
         roundCapReached: true,
         regularCopilotRounds: (snapshot.copilotReviewRoundCount ?? 0) > 0,
       },
-      { env, ghCommand },
+      { env, ghCommand, runChild },
     );
     if (significant) {
       reopenedCapCycle = true;
@@ -573,7 +577,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
         // backstop must never permit rounds the interpreter already forbids.
         lightweight: options.lightweight,
       },
-      { env, ghCommand },
+      { env, ghCommand, runChild },
     );
     reviewRequestStatus = requestResult.status;
     snapshot = applyConfirmedReviewRequest(snapshot, reviewRequestStatus);
@@ -659,7 +663,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh" 
       repo: options.repo,
       pr: options.pr,
       env,
-      cwd: resolveRepoRoot(process.cwd()),
+      cwd: resolvedRepoRoot,
     });
     if (runnerRelease.status !== "skipped_no_async_run_id") {
       result.runnerRelease = runnerRelease;

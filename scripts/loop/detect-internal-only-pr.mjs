@@ -3,7 +3,7 @@ import { statSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -184,7 +184,7 @@ export function parseCliArgs(argv) {
   return options;
 }
 
-async function fetchPrFiles({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+async function fetchPrFiles({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["pr", "view", String(pr), "--repo", repo, "--json", "files", "--jq", ".files[].path"],
@@ -198,7 +198,7 @@ async function fetchPrFiles({ repo, pr }, { env = process.env, ghCommand = "gh" 
   return paths;
 }
 
-async function fetchPrLabels({ repo, pr }, { env = process.env, ghCommand = "gh" } = {}) {
+async function fetchPrLabels({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["pr", "view", String(pr), "--repo", repo, "--json", "labels", "--jq", ".labels[].name"],
@@ -219,10 +219,10 @@ async function fetchPrLabels({ repo, pr }, { env = process.env, ghCommand = "gh"
  * - If ANY changed file doesn't match any pattern → internalOnly=false
  * - No blacklist needed — a non-matching file is consumer-facing by definition.
  */
-export async function detectInternalOnly(options, { env = process.env, ghCommand = "gh" } = {}) {
+export async function detectInternalOnly(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const patterns = loadInternalPathPatterns(options.config);
   const matchers = buildPatternMatchers(patterns);
-  const files = await fetchPrFiles(options, { env, ghCommand });
+  const files = await fetchPrFiles(options, { env, ghCommand, runChild });
 
   if (files.length === 0) {
     return {
@@ -250,7 +250,7 @@ export async function detectInternalOnly(options, { env = process.env, ghCommand
 
   // Check for explicit internal_only label if requested (confirmation only)
   if (options.labelCheck) {
-    const labels = await fetchPrLabels(options, { env, ghCommand });
+    const labels = await fetchPrLabels(options, { env, ghCommand, runChild });
     if (labels.includes("internal_only")) {
       // Label confirms — path check already passed
     }

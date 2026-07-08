@@ -5,7 +5,7 @@ import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleCon
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { truncateText } from "@dev-loops/core/bash-exit-one";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
@@ -839,7 +839,7 @@ function detectStaleGateCommentWarning({ strict, headSha, gate }) {
   }
   return `A gate comment for \`${gate}\` already exists on a different head SHA \`${strict.headSha}\` (comment ${strict.commentId}). The old comment is stale for the current head.`;
 }
-async function runGhJson(args, { env, ghCommand }) {
+async function runGhJson(args, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(ghCommand, args, env);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
@@ -857,18 +857,18 @@ function parseCommentMutationResponse(payload) {
   }
   return { commentId, commentUrl };
 }
-async function createComment({ repo, pr, body }, { env, ghCommand }) {
-  const payload = await runGhJson(["api", "repos/" + repo + "/issues/" + pr + "/comments", "-f", `body=${body}`], { env, ghCommand });
+async function createComment({ repo, pr, body }, { env, ghCommand, runChild = defaultRunChild }) {
+  const payload = await runGhJson(["api", "repos/" + repo + "/issues/" + pr + "/comments", "-f", `body=${body}`], { env, ghCommand, runChild });
   return parseCommentMutationResponse(payload);
 }
-async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
-  const payload = await runGhJson(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`], { env, ghCommand });
+async function updateComment({ repo, commentId, body }, { env, ghCommand, runChild = defaultRunChild }) {
+  const payload = await runGhJson(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`], { env, ghCommand, runChild });
   return parseCommentMutationResponse(payload);
 }
 
-async function verifyComment({ repo, commentId }, { env, ghCommand }) {
+async function verifyComment({ repo, commentId }, { env, ghCommand, runChild = defaultRunChild }) {
   try {
-    const payload = await runGhJson(["api", `repos/${repo}/issues/comments/${commentId}`], { env, ghCommand });
+    const payload = await runGhJson(["api", `repos/${repo}/issues/comments/${commentId}`], { env, ghCommand, runChild });
     return payload?.id != null;
   } catch {
     return false;
@@ -895,13 +895,13 @@ async function verifyComment({ repo, commentId }, { env, ghCommand }) {
 // markPrReady mutations are individually idempotent, so concurrent cooperating
 // runners cause at most a transient draft flicker (not a stuck draft) — only a hard
 // crash mid-transition can leave the PR drafted until a subsequent run.
-async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot }) {
+async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild = defaultRunChild }) {
   const { convertPrToDraft, markPrReady } = await import("./reconcile-draft-gate.mjs");
   process.stderr.write(
     `[draft_gate] ${options.repo}#${options.pr} is ready but needs clean draft_gate evidence; ` +
     `temporarily converting to draft to post the verdict, then restoring ready.\n`,
   );
-  const conversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+  const conversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   let result;
   try {
     // The PR is now a draft, so RUN_DRAFT_GATE is the legal action. Re-enter with
@@ -912,12 +912,12 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
     // with a clear error instead of recursing indefinitely (exit 13). (#1020)
     result = await upsertCheckpointVerdict(
       { ...options, _draftTransitionInProgress: true },
-      { env, ghCommand, repoRoot },
+      { env, ghCommand, repoRoot, runChild },
     );
   } catch (error) {
     if (conversion.alreadyDraft !== true) {
       try {
-        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
         process.stderr.write(`[draft_gate] restored ${options.repo}#${options.pr} to ready after a failed verdict post.\n`);
       } catch (restoreError) {
         // Best-effort restore; surface the original error but log the restore failure
@@ -932,7 +932,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
   }
   if (conversion.alreadyDraft !== true) {
     try {
-      await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+      await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
     } catch (restoreError) {
       // The verdict WAS posted successfully; only the ready-restore failed. Make that
       // explicit so the caller does not re-post the gate (the comment already exists)
@@ -949,7 +949,8 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
   return { ...result, draftTransition: true };
 }
 
-export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
+export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
+  const gh = { env, ghCommand, repoRoot, runChild };
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even
   // though the old run is dead, forcing manual file deletion.
@@ -968,7 +969,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Thread the light-dispatch signal (#1210) so the context interpreter and the
   // maxCopilotRounds resolution below both use the composed lightweight cap —
   // the two must never disagree at the cap boundary (#1126).
-  const coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true }, { env, ghCommand });
+  const coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true }, gh);
   const evidence = coordinationContext.gateEvidence;
   const canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
   const { config } = await loadDevLoopConfig({ repoRoot });
@@ -982,7 +983,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // without requiring an external Copilot review cycle.
   let reviewMode = null;
   try {
-    const internalResult = await detectInternalOnly({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+    const internalResult = await detectInternalOnly({ repo: options.repo, pr: options.pr }, gh);
     if (internalResult?.ok && internalResult.internalOnly) {
       reviewMode = "internal_only";
     }
@@ -1090,7 +1091,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && !coordination.draftGateAlreadySatisfied
     && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
   ) {
-    return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot });
+    return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild });
   }
   // Fail closed on a lagged draft-state read: we are re-entering FROM
   // postDraftGateViaDraftTransition (which just converted the PR to draft) yet the
@@ -1297,15 +1298,15 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     };
   }
   if (existing) {
-    const updated = await updateComment({ repo: options.repo, commentId: existing.commentId, body: desiredBody }, { env, ghCommand });
+    const updated = await updateComment({ repo: options.repo, commentId: existing.commentId, body: desiredBody }, gh);
     // Post-update verification: verify the updated comment is visible via direct API fetch by comment ID.
     // A run id is set (production context) — DEVLOOPS_RUN_ID.
     let updateVerificationWarning = null;
     if (envRunId) {
-      let verified = await verifyComment({ repo: options.repo, commentId: updated.commentId }, { env, ghCommand });
+      let verified = await verifyComment({ repo: options.repo, commentId: updated.commentId }, gh);
       if (!verified) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
-        verified = await verifyComment({ repo: options.repo, commentId: updated.commentId }, { env, ghCommand });
+        verified = await verifyComment({ repo: options.repo, commentId: updated.commentId }, gh);
       }
       updateVerificationWarning = !verified
         ? `Post-update verification failed: comment ${updated.commentId} not retrievable after retry.`
@@ -1328,7 +1329,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(updateVerificationWarning ? { verificationWarning: updateVerificationWarning } : {}),
     };
   }
-  const created = await createComment({ repo: options.repo, pr: options.pr, body: desiredBody }, { env, ghCommand });
+  const created = await createComment({ repo: options.repo, pr: options.pr, body: desiredBody }, gh);
   // Post-creation verification: verify the comment is retrievable before returning.
   // GitHub API can have brief eventual-consistency windows where a just-posted
   // comment is not yet returned by paginated list endpoints. A direct fetch
@@ -1338,11 +1339,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let verified = true;
   let verificationWarning = null;
   if (envRunId) {
-    verified = await verifyComment({ repo: options.repo, commentId: created.commentId }, { env, ghCommand });
+    verified = await verifyComment({ repo: options.repo, commentId: created.commentId }, gh);
     if (!verified) {
       // Brief wait then retry — eventual consistency should resolve within ~2s.
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      verified = await verifyComment({ repo: options.repo, commentId: created.commentId }, { env, ghCommand });
+      verified = await verifyComment({ repo: options.repo, commentId: created.commentId }, gh);
     }
     verificationWarning = !verified
       ? `Post-creation verification failed: comment ${created.commentId} not retrievable after retry. The comment was created (API confirmed) but may not appear in list endpoints immediately.`
