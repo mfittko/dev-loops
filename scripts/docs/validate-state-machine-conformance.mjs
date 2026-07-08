@@ -1009,7 +1009,7 @@ const REFINEMENT_GRILL_STATE_MACHINE = {
   transitionChecks: REFINEMENT_GRILL_TRANSITION_CHECKS,
   safetyRules: [
     { name: "grill-load-failure-fails-closed", check: (o) => !o.loadFailed || o.state === GRILL_STATE.BLOCKED_NEEDS_USER_DECISION },
-    { name: "grill-unresolved-gap-hands-off", check: (o) => !o.hasUnresolved || o.state === GRILL_STATE.NEEDS_HUMAN_HANDOFF },
+    { name: "grill-unresolved-gap-hands-off", check: (o) => !o.hasUnresolved || o.loadFailed || o.state === GRILL_STATE.NEEDS_HUMAN_HANDOFF },
   ],
 };
 

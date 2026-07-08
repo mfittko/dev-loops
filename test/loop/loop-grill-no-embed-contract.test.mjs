@@ -3,8 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-const skill = readFileSync(new URL("skills/loop-grill/SKILL.md", `file://${repoRoot}`), "utf8");
+const skill = readFileSync(fileURLToPath(new URL("../../skills/loop-grill/SKILL.md", import.meta.url)), "utf8");
 
 test("write-back synthesizes into the canonical sections", () => {
   for (const heading of ["## Acceptance criteria", "## Definition of done", "## Non-goals"]) {
@@ -17,7 +16,8 @@ test("raw Q&A goes only to the ephemeral gitignored artifact", () => {
 });
 
 test("no positive body-embed of raw Q&A findings", () => {
-  const negation = /do not|don't|never|no longer|replac|remove/i;
+  // Only explicit negatives or the "replace <X> with <Y>" idiom count — not a bare "replace-section" mention.
+  const negation = /do not|don't|never|no longer|remove|instead of|replaces the|replace[^.\n]*\bwith\b/i;
   for (const line of skill.split("\n")) {
     if (!line.includes("## Grill findings")) continue;
     // Any surviving mention must be a removal/negation, not a positive write instruction.
