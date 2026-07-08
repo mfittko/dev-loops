@@ -36,22 +36,22 @@ See the canonical shorthand mapping in the [Public Dev Loop Contract](./skills/d
 
 `dev-loop` (natural language) is the catch-all router — reach for the named commands below only when you want a direct, unrouted entrypoint. The syntax differs by harness:
 
-- **Claude Code** exposes each as a plugin slash command: `/dev-loops:loop-start`, `/dev-loops:loop-auto`, …
+- **Claude Code** exposes each as a plugin slash command: `/loop-start`, `/loop-auto`, …
 - **Pi** exposes the core entrypoints as subcommands of one command: `/dev-loops start`, `/dev-loops auto`, …
 
 | Command | Claude Code | Pi | Does |
 |---|---|---|---|
-| start | `/dev-loops:loop-start <issue>` | `/dev-loops start <issue>` | Start a dev loop on an issue |
-| auto | `/dev-loops:loop-auto <issue>` | `/dev-loops auto <issue>` | Run autonomously to the human-approval checkpoint |
-| continue | `/dev-loops:loop-continue [issue\|pr]` | `/dev-loops continue [issue\|pr]` | Continue; bare resumes the in-progress board item |
-| start-spike | `/dev-loops:loop-start-spike <question>` | `/dev-loops start-spike <question>` | Time-boxed spike (or `--file <path>`) |
-| info | `/dev-loops:loop-info <issue\|pr>` | `/dev-loops info <issue\|pr>` | Read-only state summary |
-| status | `/dev-loops:loop-status` | `/dev-loops status` | Readiness check (gh auth, git repo, subagent) |
-| enqueue | `/dev-loops:loop-enqueue <issue\|pr\|text>` | — | Queue an issue/PR, or capture an idea as a grilled issue |
-| grill | `/dev-loops:loop-grill <issue\|plan> [--auto]` | — | Socratic Q&A grill of an issue or plan before the loop |
-| queue-status | `/dev-loops:loop-queue-status` | — | Show the queue board grouped by column |
+| start | `/loop-start <issue>` | `/dev-loops start <issue>` | Start a dev loop on an issue |
+| auto | `/loop-auto <issue>` | `/dev-loops auto <issue>` | Run autonomously to the human-approval checkpoint |
+| continue | `/loop-continue [issue\|pr]` | `/dev-loops continue [issue\|pr]` | Continue; bare resumes the in-progress board item |
+| start-spike | `/loop-start-spike <question>` | `/dev-loops start-spike <question>` | Time-boxed spike (or `--file <path>`) |
+| info | `/loop-info <issue\|pr>` | `/dev-loops info <issue\|pr>` | Read-only state summary |
+| status | `/loop-status` | `/dev-loops status` | Readiness check (gh auth, git repo, subagent) |
+| enqueue | `/loop-enqueue <issue\|pr\|text>` | — | Queue an issue/PR, or capture an idea as a grilled issue |
+| grill | `/loop-grill <issue\|plan> [--auto]` | — | Socratic Q&A grill of an issue or plan before the loop |
+| queue-status | `/loop-queue-status` | — | Show the queue board grouped by column |
 
-Beyond the per-issue loop entrypoints, the Pi `/dev-loops` command and the `dev-loops` CLI also expose standalone utilities: `help`, `status`, `doctor`, `gates` (`status` is the same readiness check as `loop-status` above). `hide` is a Pi-extension-only command. Everything above is also available as a skill/agent — inside Pi, hand work to the `dev-loop` skill rather than calling internal routed skills (`local-implementation`, `copilot-pr-followup`, `final-approval`) directly.
+Beyond the per-issue loop entrypoints, the Pi `/dev-loops` command and the `dev-loops` CLI also expose standalone utilities: `help`, `status`, `doctor`, `gates` (`status` is the same readiness check as `loop-status` above). `hide` works only inside Pi — the `dev-loops hide` CLI subcommand is recognized but intentionally exits non-zero (session-local Pi UI behavior). Everything above is also available as a skill/agent — inside Pi, hand work to the `dev-loop` skill rather than calling internal routed skills (`local-implementation`, `copilot-pr-followup`, `final-approval`) directly.
 
 ## Install
 
