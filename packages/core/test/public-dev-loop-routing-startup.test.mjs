@@ -113,6 +113,60 @@ test("the ui-review intent routes a PR target to the ui_review strategy", () => 
   assert.equal(bundle.activeArtifact.pr, 1234);
 });
 
+test("review_pr_ui without a PR target fails closed", () => {
+  const result = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI,
+    target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 },
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
+      ownership: DEV_LOOP_ACTOR.COPILOT,
+      nextActor: DEV_LOOP_ACTOR.USER,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+  });
+
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.NONE);
+  assert.match(result.reason, /requires a PR target/);
+});
+
+test("review_pr_ui with a non-PR canonical state fails closed", () => {
+  const result = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 },
+      ownership: DEV_LOOP_ACTOR.COPILOT,
+      nextActor: DEV_LOOP_ACTOR.USER,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+  });
+
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.NONE);
+  assert.match(result.reason, /requires a valid canonical PR state/);
+});
+
+test("review_pr_ui with a conflicting canonical PR state fails closed", () => {
+  const result = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 99 },
+      ownership: DEV_LOOP_ACTOR.COPILOT,
+      nextActor: DEV_LOOP_ACTOR.USER,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+  });
+
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.NONE);
+  assert.match(result.reason, /target conflicts/);
+});
+
 test("absent the ui-review intent, a copilot PR target still routes to copilot follow-up", () => {
   const prState = {
     target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 1234 },

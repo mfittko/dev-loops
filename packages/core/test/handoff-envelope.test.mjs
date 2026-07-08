@@ -1358,6 +1358,26 @@ test("invariant: every strategy with default stop rules has an acceptance templa
   }
 });
 
+test("invariant: ui_review locks its review-boundary stopRules and acceptance criteria ids", () => {
+  const stopRules = STRATEGY_DEFAULT_STOP_RULES[INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW];
+  for (const boundary of [
+    "no-product-code-writes",
+    "worktree-only",
+    "outward-review-pending",
+    "ack-destructive-migrations",
+  ]) {
+    assert.ok(stopRules.includes(boundary), `ui_review stopRules must contain "${boundary}"`);
+  }
+
+  const template = ACCEPTANCE_TEMPLATES.get(
+    acceptanceKey(INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW, "default"),
+  );
+  assert.deepEqual(
+    template.criteria.map((c) => c.id),
+    ["no-product-code-writes", "worktree-only", "outward-review-pending", "ack-destructive-migrations"],
+  );
+});
+
 
 // ===========================================================================
 // Advisory retrospective findings (issue #1077, Reading B)

@@ -251,7 +251,7 @@ The public router currently maps to these deterministic internal strategies:
 | `reviewer_fixer` | reviewer/fixer passes on the current PR | none |
 | `wait_watch` | waiting/watch states | `dev-loop` |
 | `final_approval` | approval-ready gate, or merge-ready with explicit merge authorization | none (canonical procedure lives in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) + [Copilot Loop Operations](./copilot-loop-operations.md) Human approval checkpoint; [Final Approval](../final-approval/SKILL.md) is a thin redirect) |
-| `ui_review` | explicit UI-review "prove it in the running app" pass on the current PR | none (internal-only via `dev-loop` routing; see [UI Review](../ui-review/SKILL.md)) |
+| `ui_review` | explicit UI-review "prove it in the running app" pass on the current PR | `dev-loop` (sole entrypoint is the dedicated `loop-review-ui` command; see [UI Review](../ui-review/SKILL.md)) |
 
 `waiting_for_merge_authorization` is part of the gate contract below as a stop gate rather than an internal strategy.
 
@@ -335,10 +335,11 @@ First-match-wins routing posture:
 6. local branch / local phase -> `local_implementation`
 7. issue target with `linkedPr` -> route as the linked PR with the same ownership/actor state
 8. issue target without `linkedPr` -> `issue_intake`
-9. PR owned by external human -> `external_pr_followup`
-10. PR owned by reviewer or next actor reviewer -> `reviewer_fixer`
-11. PR owned by Copilot -> `copilot_pr_followup`
-12. anything else -> fail closed to `needs_reconcile`
+9. explicit UI-review request (`review_pr_ui` intent) on a PR target -> `ui_review`
+10. PR owned by external human -> `external_pr_followup`
+11. PR owned by reviewer or next actor reviewer -> `reviewer_fixer`
+12. PR owned by Copilot -> `copilot_pr_followup`
+13. anything else -> fail closed to `needs_reconcile`
 
 ## Required transitions
 
