@@ -184,6 +184,30 @@ test("buildResolveDevLoopStartupResult maps local implementation to the local ro
   assert.equal(result.canonicalStateSummary.routeKind, "route");
 });
 
+test("buildResolveDevLoopStartupResult maps the ui-review intent to the ui-review route pack without throwing on the new key", () => {
+  const result = buildResolveDevLoopStartupResult({
+    intent: "review_pr_ui",
+    currentState: {
+      target: { kind: "pr", pr: 1234 },
+      ownership: "copilot",
+      nextActor: "user",
+      status: "active",
+      authorization: "authorized",
+    },
+    artifactState: "open",
+    loopState: "pr_ui_review_start",
+  }, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" }, cwd: os.tmpdir() });
+
+  assert.equal(result.bundleKind, "resolved");
+  assert.equal(result.selectedStrategy, "ui_review");
+  assert.deepEqual(result.requiredReads, [
+    "skills/docs/public-dev-loop-contract.md",
+    "skills/ui-review/SKILL.md",
+  ]);
+  assert.equal(result.canonicalStateSummary.target.kind, "pr");
+  assert.equal(result.canonicalStateSummary.requiresAsyncDispatch, false);
+});
+
 test("buildResolveDevLoopStartupResult maps linked Copilot follow-up to the PR follow-up route pack", () => {
   const result = buildResolveDevLoopStartupResult({
     currentState: {

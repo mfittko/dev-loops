@@ -128,6 +128,10 @@ const STRATEGY_REQUIRED_READS = {
     "skills/docs/copilot-loop-operations.md",
     "skills/final-approval/SKILL.md",
   ],
+  ui_review: [
+    SHARED_PUBLIC_CONTRACT,
+    "skills/ui-review/SKILL.md",
+  ],
   none: [SHARED_PUBLIC_CONTRACT],
 };
 const STRATEGY_ASYNC_DISPATCH = {
@@ -138,6 +142,7 @@ const STRATEGY_ASYNC_DISPATCH = {
   reviewer_fixer: true,
   wait_watch: true,
   final_approval: false,
+  ui_review: false,
   none: false,
 };
 const parseError = buildParseError(USAGE);

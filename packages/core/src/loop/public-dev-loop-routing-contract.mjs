@@ -23,6 +23,7 @@ export const DEV_LOOP_PUBLIC_INTENT = Object.freeze({
   CONTINUE_CURRENT: "continue_current",
   AUTO_CONTINUE_CURRENT: "auto_continue_current",
   INSPECT_STATE: "inspect_state",
+  REVIEW_PR_UI: "review_pr_ui",
 });
 
 export const DEV_LOOP_TARGET_KIND = Object.freeze({
@@ -76,6 +77,7 @@ export const DEV_LOOP_GATE = Object.freeze({
   EXTERNAL_PR_FOLLOWUP: "external_pr_followup",
   REVIEWER_FIXER: "reviewer_fixer",
   COPILOT_PR_FOLLOWUP: "copilot_pr_followup",
+  UI_REVIEW: "ui_review",
   FAIL_CLOSED_RECONCILE: "fail_closed_reconcile",
 });
 
@@ -87,6 +89,7 @@ export const INTERNAL_DEV_LOOP_STRATEGY = Object.freeze({
   REVIEWER_FIXER: "reviewer_fixer",
   WAIT_WATCH: "wait_watch",
   FINAL_APPROVAL: "final_approval",
+  UI_REVIEW: "ui_review",
   NONE: null,
 });
 
@@ -266,6 +269,12 @@ export const PUBLIC_DEV_LOOP_GATE_CONTRACT = Object.freeze([
     routeKind: DEV_LOOP_ROUTE_KIND.ROUTE,
     selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP,
     summary: "Copilot-owned PR state routes to Copilot PR follow-up; an already-linked open PR stays the canonical artifact for that issue until reconciled",
+  }),
+  Object.freeze({
+    gate: DEV_LOOP_GATE.UI_REVIEW,
+    routeKind: DEV_LOOP_ROUTE_KIND.ROUTE,
+    selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW,
+    summary: "an explicit UI-review request on a PR target routes to the ui_review running-app review strategy",
   }),
   Object.freeze({
     gate: DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE,

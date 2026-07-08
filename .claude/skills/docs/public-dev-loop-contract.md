@@ -251,6 +251,7 @@ The public router currently maps to these deterministic internal strategies:
 | `reviewer_fixer` | reviewer/fixer passes on the current PR | none |
 | `wait_watch` | waiting/watch states | `dev-loop` |
 | `final_approval` | approval-ready gate, or merge-ready with explicit merge authorization | none (canonical procedure lives in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) + [Copilot Loop Operations](./copilot-loop-operations.md) Human approval checkpoint; [Final Approval](../final-approval/SKILL.md) is a thin redirect) |
+| `ui_review` | explicit UI-review "prove it in the running app" pass on the current PR | none (internal-only via `dev-loop` routing; see [UI Review](../ui-review/SKILL.md)) |
 
 `waiting_for_merge_authorization` is part of the gate contract below as a stop gate rather than an internal strategy.
 
@@ -313,6 +314,7 @@ The shared machine-checkable gate contract is exported from `packages/core/src/l
 | `external_pr_followup` | `route` | `external_pr_followup` | external-human PR ownership routes to external PR follow-up |
 | `reviewer_fixer` | `route` | `reviewer_fixer` | reviewer-owned or reviewer-next PR state routes to reviewer/fixer |
 | `copilot_pr_followup` | `route` | `copilot_pr_followup` | Copilot-owned PR state routes to Copilot PR follow-up |
+| `ui_review` | `route` | `ui_review` | an explicit UI-review request on a PR target routes to the ui_review running-app review strategy |
 | `fail_closed_reconcile` | `needs_reconcile` | none | ambiguous, conflicting, or unsupported canonical state fails closed to reconcile |
 
 For issue targets, authoritative issue↔PR linkage resolution remains part of state resolution before claiming there is no open linked PR:
@@ -352,6 +354,7 @@ gate can be followed, on the next cycle, by any of the gates.
 - `external_pr_followup` -> any dev-loop gate
 - `reviewer_fixer` -> any dev-loop gate
 - `copilot_pr_followup` -> any dev-loop gate
+- `ui_review` -> any dev-loop gate
 
 Terminal gates (`stop_blocked_or_not_authorized`, `stop_done_terminal`,
 `waiting_for_merge_authorization`, `fail_closed_reconcile`) have no outgoing transitions —

@@ -82,6 +82,53 @@ test("authoritative startup/resume bundle resolves routed state with authoritati
   );
 });
 
+test("the ui-review intent routes a PR target to the ui_review strategy", () => {
+  const prState = {
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 1234 },
+    ownership: DEV_LOOP_ACTOR.COPILOT,
+    nextActor: DEV_LOOP_ACTOR.USER,
+    status: DEV_LOOP_STATUS.ACTIVE,
+    authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+  };
+
+  const routed = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 1234 },
+    currentState: prState,
+  });
+  assert.equal(routed.selectedGate, DEV_LOOP_GATE.UI_REVIEW);
+  assert.equal(routed.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
+  assert.equal(routed.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW);
+
+  const bundle = resolveAuthoritativeStartupResumeBundle({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI,
+    currentState: prState,
+    artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
+    loopState: "pr_ui_review_start",
+  });
+  assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.RESOLVED);
+  assert.equal(bundle.selectedGate, DEV_LOOP_GATE.UI_REVIEW);
+  assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW);
+  assert.equal(bundle.activeArtifact.kind, DEV_LOOP_TARGET_KIND.PR);
+  assert.equal(bundle.activeArtifact.pr, 1234);
+});
+
+test("absent the ui-review intent, a copilot PR target still routes to copilot follow-up", () => {
+  const prState = {
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 1234 },
+    ownership: DEV_LOOP_ACTOR.COPILOT,
+    nextActor: DEV_LOOP_ACTOR.USER,
+    status: DEV_LOOP_STATUS.ACTIVE,
+    authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+  };
+  const routed = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT,
+    currentState: prState,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
+  });
+  assert.equal(routed.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+});
+
 test("authoritative startup/resume bundle fails closed when issue linkage is missing", () => {
   const bundle = resolveAuthoritativeStartupResumeBundle({
     currentState: {

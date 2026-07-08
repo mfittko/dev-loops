@@ -44,6 +44,13 @@ const STRATEGY_DEFAULT_STOP_RULES = Object.freeze({
   [INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH]: ["merge"],
   [INTERNAL_DEV_LOOP_STRATEGY.FINAL_APPROVAL]: ["merge"],
   [INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION]: [],
+  [INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW]: [
+    "no-product-code-writes",
+    "worktree-only",
+    "outward-review-pending",
+    "ack-destructive-migrations",
+    "merge",
+  ],
 });
 
 // ---------------------------------------------------------------------------
@@ -132,6 +139,24 @@ register(INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH, "default", {
   maxFinalizationTurns: 4,
   needsAttentionAfterMs: WATCH_NEEDS_ATTENTION_MS,
   activeNoticeAfterMs: WATCH_ACTIVE_NOTICE_MS,
+});
+
+// ui_review — running-app review sibling of reviewer/fixer. Scaffold slice:
+// self-validation only, no drive/report/provision/boot logic. The criteria
+// mirror the stop rules so the dispatched agent self-checks the review
+// boundaries (no product-code writes, worktree isolation, outward review stays
+// pending/draft, destructive migrations acknowledged before running).
+register(INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW, "default", {
+  criteria: [
+    { id: "no-product-code-writes", must: "No product code is written; the UI-review route only observes and reports on the running app.", severity: "required" },
+    { id: "worktree-only", must: "All work stays inside the isolated worktree; nothing is written outside it.", severity: "required" },
+    { id: "outward-review-pending", must: "Any outward review stays pending/draft; no approval or merge is emitted from the UI-review route.", severity: "required" },
+    { id: "ack-destructive-migrations", must: "Destructive migrations are explicitly acknowledged before they are run.", severity: "required" },
+  ],
+  evidence: ["commands-run", "validation-output"],
+  maxFinalizationTurns: 4,
+  needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_MS,
+  activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
 });
 
 // Remaining strategies get a generic acceptance template
