@@ -221,7 +221,7 @@ Current Phase 3+ contract:
 - this phase does not require a separate compiled build or `dist/` pipeline
 
 Root verification and test commands are intentionally explicit:
-- `npm run verify` is the canonical root verification path (`npm test` + `npm run test:dev-loop`)
+- `npm run verify` is the canonical root verification path; it runs every suite in parallel via `run-p` as a single aggregated command, and any suite failing fails verify
 - `npm test` runs the current root test suite (`test:assets`, `test:extension`, `test:scripts`, `test:core`, and `test:docs`)
 - `npm run test:extension`
 - `npm run test:extension` currently expands to one `node --import tsx --test ...` invocation in `package.json`; prefer the script entrypoint over copying the file list into downstream docs or runbooks

@@ -183,7 +183,7 @@ docker run -it --rm -e GH_TOKEN="$GH_TOKEN" -v "$HOME/.pi:/home/node/.pi" -v /tm
 npm run verify   # canonical root verification (tests + dev-loop tests)
 ```
 
-CI splits into a small changed-files gate plus parallel `verify` and conditional `viewer-smoke` jobs. `npm ci` + `npm run verify` run on every change; the Playwright/WebKit viewer smoke runs only when the bounded viewer surface or its smoke-path dependencies change.
+CI splits into a small changed-files gate plus a parallel `verify-suite` matrix (one leg per `test:*` suite) gated by a fail-closed `verify` job, and a conditional `viewer-smoke` job. On every change, `npm ci` runs and the verify suites run as parallel matrix legs; the Playwright/WebKit viewer smoke runs only when the bounded viewer surface or its smoke-path dependencies change.
 
 ### Migrating from an earlier release
 
