@@ -114,6 +114,8 @@ Synthesize the answers into the body as sharpened `## Acceptance criteria`, `## 
 
 The body carries ONLY the synthesized sharpened sections. Do NOT write a `## Grill findings` section and do NOT embed the raw Q&A table in the body (`GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`).
 
+If a body migrated from older embed behavior still carries a `## Grill findings` section, **remove** it as part of write-back — strip from that heading through the next `##`-level heading (exclusive) or end of file, using the same replace-section boundary logic. This is a removal-only migration, never a re-introduction of the embed.
+
 Write the raw Q&A transcript ONLY to the gitignored, ephemeral, session-scoped artifact `tmp/issues/issue-<n>/grill/<timestamp>.md` (`tmp/` is already gitignored; never committed). For PR-body and plan-file surfaces, use the same tmp path shape scoped by surface (issues: `tmp/issues/issue-<n>/grill/`; a parallel `tmp/...` path for PR/plan).
 
 **Tracker-first write-back:** update the GitHub issue body using:

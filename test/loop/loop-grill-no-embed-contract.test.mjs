@@ -16,8 +16,8 @@ test("raw Q&A goes only to the ephemeral gitignored artifact", () => {
 });
 
 test("no positive body-embed of raw Q&A findings", () => {
-  // Only explicit negatives or the "replace <X> with <Y>" idiom count — not a bare "replace-section" mention.
-  const negation = /do not|don't|never|no longer|remove|instead of|replaces the|replace[^.\n]*\bwith\b/i;
+  // Only explicit negatives or the strict "replace <X> with <Y>" idiom count — a bare "replaces the section" does NOT.
+  const negation = /do not|don't|never|no longer|\bremoved?\b|\bstrip\b|instead of|replace[^.\n]*\bwith\b/i;
   for (const line of skill.split("\n")) {
     if (!line.includes("## Grill findings")) continue;
     // Any surviving mention must be a removal/negation, not a positive write instruction.
