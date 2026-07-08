@@ -13,16 +13,14 @@ test("normalizeGrillSnapshot throws on a non-object", () => {
 });
 
 test("normalizeGrillSnapshot applies deterministic defaults and clamps counts", () => {
-  const s = normalizeGrillSnapshot({ surface: "bogus", mode: "bogus", openGapCount: -5, unresolvedGapCount: -1 });
+  const s = normalizeGrillSnapshot({ surface: "bogus", openGapCount: -5, unresolvedGapCount: -1 });
   assert.equal(s.surface, "issue");
-  assert.equal(s.mode, "auto");
   assert.equal(s.openGapCount, 0);
   assert.equal(s.unresolvedGapCount, 0);
   assert.equal(s.targetRef, null);
 
-  const kept = normalizeGrillSnapshot({ surface: "pr", mode: "interactive", targetRef: " #7 ", openGapCount: 2.9 });
+  const kept = normalizeGrillSnapshot({ surface: "pr", targetRef: " #7 ", openGapCount: 2.9 });
   assert.equal(kept.surface, "pr");
-  assert.equal(kept.mode, "interactive");
   assert.equal(kept.targetRef, "#7");
   assert.equal(kept.openGapCount, 2);
 });

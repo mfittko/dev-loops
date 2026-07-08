@@ -59,7 +59,7 @@ Terminal states with no outgoing transitions: `grill_clean`, `needs_human_handof
 
 `normalizeGrillSnapshot` canonicalizes this schema:
 
-- target/mode: `surface` (`issue`|`pr`|`plan`), `targetRef`, `mode` (`auto`|`interactive`)
+- target: `surface` (`issue`|`pr`|`plan`), `targetRef`
 - load state: `loaded`, `loadFailed`
 - detection: `detectRan`, `openGapCount` (answerable gaps still awaiting an answer), `unresolvedGapCount` (uncitable gaps that must hand off)
 - bounded answer input: `answersReady`, `synthesized`

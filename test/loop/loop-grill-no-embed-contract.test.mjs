@@ -22,10 +22,6 @@ test("no positive body-embed of raw Q&A findings", () => {
     if (!line.includes("## Grill findings")) continue;
     // Any surviving mention must be a removal/negation, not a positive write instruction.
     assert.match(line, negation, `'## Grill findings' mention must be negative context: ${line}`);
-    if (/(write|append|add)[^.\n]{0,40}## Grill findings/i.test(line)) {
-      // A write/append/add phrasing is only allowed when explicitly negated on the same line.
-      assert.match(line, negation, `positive-embed instruction not negated: ${line}`);
-    }
   }
 });
 

@@ -78,7 +78,6 @@ const GRILL_NEXT_ACTIONS = Object.freeze({
 });
 
 const VALID_SURFACES = new Set(["issue", "pr", "plan"]);
-const VALID_MODES = new Set(["auto", "interactive"]);
 
 function normalizeCount(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -104,7 +103,6 @@ export function normalizeGrillSnapshot(raw) {
   return {
     surface: VALID_SURFACES.has(raw.surface) ? raw.surface : "issue",
     targetRef: normalizeStringOrNull(raw.targetRef),
-    mode: VALID_MODES.has(raw.mode) ? raw.mode : "auto",
 
     loaded: Boolean(raw.loaded),
     loadFailed: Boolean(raw.loadFailed),
