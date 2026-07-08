@@ -218,8 +218,18 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
 
   // Fail-closed aggregation: the gate must run on `if: always()` (else a failed
   // leg SKIPS the gate under the default `if: success()`), depend on the whole
-  // matrix, and `exit 1` when any leg is non-success.
-  assert.match(ciWorkflow, /verify:[\s\S]*needs:\s*\[verify-suite\][\s\S]*needs\.verify-suite\.result[\s\S]*success/i);
-  assert.match(ciWorkflow, /verify:[\s\S]*if:\s*always\(\)/i);
-  assert.match(ciWorkflow, /verify:[\s\S]*exit 1/i);
+  // matrix, and `exit 1` when any leg is non-success. Scope to the verify job's
+  // own section (header to the next top-level job header) so a future job added
+  // below `verify` carrying either token can't silently satisfy the check.
+  const verifyHeaderIndex = ciWorkflow.search(/^\s{2}verify:\s*$/m);
+  const nextJobRelative = ciWorkflow
+    .slice(verifyHeaderIndex + 1)
+    .search(/^\s{2}\S/m);
+  const verifySection = ciWorkflow.slice(
+    verifyHeaderIndex,
+    nextJobRelative === -1 ? ciWorkflow.length : verifyHeaderIndex + 1 + nextJobRelative,
+  );
+  assert.match(verifySection, /needs:\s*\[verify-suite\][\s\S]*needs\.verify-suite\.result[\s\S]*success/i);
+  assert.match(verifySection, /if:\s*always\(\)/i);
+  assert.match(verifySection, /exit 1/i);
 });
