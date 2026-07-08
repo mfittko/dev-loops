@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   buildParseError,
   formatCliError,
@@ -140,7 +140,7 @@ export function parseDetectCliArgs(argv) {
   }
   return options;
 }
-async function fetchPrView({ repo, pr }, { env, ghCommand }) {
+async function fetchPrView({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(
     ghCommand,
     ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
@@ -161,7 +161,7 @@ async function fetchPrView({ repo, pr }, { env, ghCommand }) {
   }
   return payload;
 }
-async function fetchCopilotRequested({ repo, pr }, { env, ghCommand }) {
+async function fetchCopilotRequested({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(
     ghCommand,
     ["api", `repos/${repo}/pulls/${pr}/requested_reviewers`],
@@ -180,7 +180,7 @@ async function fetchCopilotRequested({ repo, pr }, { env, ghCommand }) {
   const users = Array.isArray(payload?.users) ? payload.users : [];
   return users.some((user) => isCopilotLogin(user?.login));
 }
-async function fetchLatestCopilotReviewRequestAt({ repo, pr }, { env, ghCommand }) {
+async function fetchLatestCopilotReviewRequestAt({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(
     ghCommand,
     ["api", `repos/${repo}/issues/${pr}/timeline`, "--paginate", "--jq",
@@ -212,7 +212,7 @@ function extractPrVisibleCheckNames(statusCheckRollup) {
     .filter((name) => typeof name === "string" && name.length > 0);
 }
 
-async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }, { env, ghCommand }) {
+async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }, { env, ghCommand, runChild = defaultRunChild }) {
   const [checkRunsResult, statusesResult] = await Promise.all([
     runChild(
       ghCommand,
@@ -328,8 +328,8 @@ function hasSubmittedCopilotReviewOffCurrentHead(reviewSummary, currentHeadSha) 
 }
 
 
-export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs }, { env = process.env, ghCommand = "gh" } = {}) {
-  const prData = await fetchPrView({ repo, pr }, { env, ghCommand });
+export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  const prData = await fetchPrView({ repo, pr }, { env, ghCommand, runChild });
   if (prData === null) {
     return normalizeSnapshot({ prExists: false });
   }
@@ -355,13 +355,13 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   } else if (reviewSummary.hasPendingReviewOnCurrentHead) {
     copilotReviewRequestStatus = "requested";
   } else {
-    const copilotRequested = await fetchCopilotRequested({ repo, pr }, { env, ghCommand });
+    const copilotRequested = await fetchCopilotRequested({ repo, pr }, { env, ghCommand, runChild });
     if (!copilotRequested) {
       copilotReviewRequestStatus = "none";
     } else if (!reviewSummary.hasSubmittedReviewOnCurrentHead) {
       copilotReviewRequestStatus = "requested";
     } else {
-      const latestRequestAt = await fetchLatestCopilotReviewRequestAt({ repo, pr }, { env, ghCommand });
+      const latestRequestAt = await fetchLatestCopilotReviewRequestAt({ repo, pr }, { env, ghCommand, runChild });
       const latestReviewAt = reviewSummary.latestSubmittedReviewOnCurrentHeadAt;
       if (latestRequestAt !== null && latestReviewAt !== null && latestRequestAt > latestReviewAt) {
         copilotReviewRequestStatus = "requested";
@@ -376,7 +376,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   let actionableThreadCount = 0;
   let lastCopilotRoundMaxSignal = null;
   try {
-    const threadsPayload = await fetchGithubReviewThreadsPayload({ repo, pr }, { env, ghCommand });
+    const threadsPayload = await fetchGithubReviewThreadsPayload({ repo, pr }, { env, ghCommand, runChild });
     const parsed = parseReviewThreads(threadsPayload);
     unresolvedThreadCount = parsed.summary.unresolvedThreads;
     actionableThreadCount = parsed.summary.actionableThreads;
@@ -400,7 +400,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   let failureDetails = [];
   let excludedFailureDetails = [];
   if (shouldRefreshCurrentHeadCi) {
-    const refreshed = await fetchCurrentHeadCiEvidence({ repo, headSha: prHeadSha, prVisibleCheckNames }, { env, ghCommand });
+    const refreshed = await fetchCurrentHeadCiEvidence({ repo, headSha: prHeadSha, prVisibleCheckNames }, { env, ghCommand, runChild });
     currentHeadCiStatus = refreshed?.status ?? "none";
     failureDetails = refreshed?.failureDetails ?? [];
     excludedFailureDetails = refreshed?.excludedFailureDetails ?? [];
