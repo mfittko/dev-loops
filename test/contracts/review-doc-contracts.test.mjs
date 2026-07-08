@@ -197,6 +197,7 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
   // Scope leg-membership to the verify-suite job's matrix list (up to the next
   // job header) so a suite name appearing elsewhere can't satisfy the check.
   const verifySuiteHeaderIndex = ciWorkflow.search(/^\s{2}verify-suite:\s*$/m);
+  assert.ok(verifySuiteHeaderIndex !== -1, "ci.yml must define a verify-suite: job");
   const nextSuiteJobRelative = ciWorkflow
     .slice(verifySuiteHeaderIndex + 1)
     .search(/^\s{2}\S/m);
@@ -228,6 +229,7 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
   // own section (header to the next top-level job header) so a future job added
   // below `verify` carrying either token can't silently satisfy the check.
   const verifyHeaderIndex = ciWorkflow.search(/^\s{2}verify:\s*$/m);
+  assert.ok(verifyHeaderIndex !== -1, "ci.yml must define a verify: aggregation job");
   const nextJobRelative = ciWorkflow
     .slice(verifyHeaderIndex + 1)
     .search(/^\s{2}\S/m);
