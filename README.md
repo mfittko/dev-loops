@@ -51,7 +51,7 @@ See the canonical shorthand mapping in the [Public Dev Loop Contract](./skills/d
 | grill | `/dev-loops:loop-grill <issue\|plan> [--auto]` | — | Socratic Q&A grill of an issue or plan before the loop |
 | queue-status | `/dev-loops:loop-queue-status` | — | Show the queue board grouped by column |
 
-Beyond the dev-loop entrypoints, both the Pi `/dev-loops` command and the `dev-loops` CLI expose top-level utilities: `help`, `status`, `doctor`, `gates`, `hide`. Everything above is also available as a skill/agent — inside Pi, hand work to the `dev-loop` skill rather than calling internal routed skills (`local-implementation`, `copilot-pr-followup`, `final-approval`) directly.
+Beyond the per-issue loop entrypoints, the Pi `/dev-loops` command and the `dev-loops` CLI also expose standalone utilities: `help`, `status`, `doctor`, `gates` (`status` is the same readiness check as `loop-status` above). `hide` is a Pi-extension-only command. Everything above is also available as a skill/agent — inside Pi, hand work to the `dev-loop` skill rather than calling internal routed skills (`local-implementation`, `copilot-pr-followup`, `final-approval`) directly.
 
 ## Install
 

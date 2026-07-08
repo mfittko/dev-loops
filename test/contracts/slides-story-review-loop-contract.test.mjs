@@ -36,7 +36,8 @@ test('slides-story review loop doc carries the required headings/sections and cr
   // the UI doc cross-links back as a sibling
   assert.match(uiDoc, /slides-story-review-loop\.md/i);
 
-  // the dev-loop indexes list the loop  assert.match(indexDoc, /slides-story-review-loop\.md/i);
+  // the dev-loop indexes list the loop
+  assert.match(indexDoc, /slides-story-review-loop\.md/i);
 
   // template exists with the storytelling lens and bounded outcomes
   await stat(fromRepoRoot('skills/dev-loop/templates/slides-story-review.md'));
