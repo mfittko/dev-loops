@@ -92,6 +92,18 @@ test("swallowed non-2xx: the response listener AND the server-log tail both capt
   assert.ok(kinds.includes("server-log-exception"), "server-log tail must record the swallowed 500");
 });
 
+test("classifyFailures: a requestFailure becomes request-failed and a pageError becomes page-error", () => {
+  const failures = classifyFailures({
+    requestFailures: [{ url: "http://x/img", failure: "net::ERR" }],
+    pageErrors: [{ message: "TypeError: boom" }],
+  });
+  const byKind = Object.fromEntries(failures.map((f) => [f.kind, f]));
+  assert.equal(byKind["request-failed"].severity, "must-fix");
+  assert.match(byKind["request-failed"].message, /request failed at http:\/\/x\/img: net::ERR/);
+  assert.equal(byKind["page-error"].severity, "must-fix");
+  assert.match(byKind["page-error"].message, /uncaught page error: TypeError: boom/);
+});
+
 test("attachPageListeners: captures requestfailed and pageerror", () => {
   const page = fakePage();
   const { getCapturedEvents } = attachPageListeners(page);
@@ -144,9 +156,10 @@ test("selectFlows: caps the selection at maxFlows and logs the overflow reason",
 });
 
 test("resolveCaps: clamps to ceilings and pins retries to 0", () => {
-  const caps = resolveCaps({ maxScreenshots: 9999, maxFlows: 1, retries: 5 });
+  const caps = resolveCaps({ maxScreenshots: 9999, maxFlows: 1, maxStepsPerFlow: 9999, retries: 5 });
   assert.equal(caps.maxScreenshots, DEFAULT_DRIVE_CAPS.maxScreenshots); // clamped down
   assert.equal(caps.maxFlows, 1); // project may tighten
+  assert.equal(caps.maxStepsPerFlow, DEFAULT_DRIVE_CAPS.maxStepsPerFlow); // clamped down
   assert.equal(caps.retries, 0); // no-retry is fixed policy
 });
 
@@ -198,6 +211,19 @@ test("driveUiReview: enforces maxScreenshots and logs screens skipped", async ()
   assert.equal(r.steps.length, 2, "only up to the cap are captured");
   assert.equal(r.screensSkipped, 3);
   assert.ok(logs.some((m) => /screens skipped: 3/.test(m)));
+});
+
+test("driveUiReview: caps a flow at maxStepsPerFlow and logs the truncation", async () => {
+  const steps = Array.from({ length: 5 }, (_, i) => ({ name: `s${i}`, action: "goto" }));
+  const logs = [];
+  let calls = 0;
+  const r = await driveUiReview(
+    { appUrl: "http://app", login: {}, flows: [{ name: "f", steps }], caps: { maxStepsPerFlow: 2 } },
+    baseSeams({ runStep: async ({ step }) => (calls += 1, { ok: true, screenshotPath: `/o/${step.name}.png` }), log: (m) => logs.push(m) }),
+  );
+  assert.equal(calls, 2, "only the capped number of steps run");
+  assert.equal(r.steps.length, 2);
+  assert.ok(logs.some((m) => /maxStepsPerFlow cap \(2\)/.test(m)), "the step truncation is logged");
 });
 
 test("driveUiReview: collates a swallowed non-2xx from the injected listener + log tail", async () => {

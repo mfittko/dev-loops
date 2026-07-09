@@ -236,7 +236,11 @@ export async function driveUiReview(
   let screenshots = 0;
   let screensSkipped = 0;
   for (const flow of selected) {
-    const flowSteps = Array.isArray(flow.steps) ? flow.steps.slice(0, resolvedCaps.maxStepsPerFlow) : [];
+    const declaredSteps = Array.isArray(flow.steps) ? flow.steps : [];
+    const flowSteps = declaredSteps.slice(0, resolvedCaps.maxStepsPerFlow);
+    if (declaredSteps.length > flowSteps.length) {
+      record(`steps skipped: ${flow.name} truncated to ${flowSteps.length} step(s) at the maxStepsPerFlow cap (${resolvedCaps.maxStepsPerFlow})`);
+    }
     for (let i = 0; i < flowSteps.length; i += 1) {
       const step = flowSteps[i];
       if (screenshots >= resolvedCaps.maxScreenshots) {

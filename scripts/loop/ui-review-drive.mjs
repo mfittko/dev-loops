@@ -40,7 +40,10 @@ Optional:
   -h, --help           Show this help.
 Output (stdout, JSON):
   { "ok": bool, "stopped": bool, "stopReason": string|null,
-    "steps": [...], "captures": [...], "failures": [...], "caps": {...}, "logs": [...] }
+    "steps": [...], "captures": [...], "failures": [...], "caps": {...},
+    "appUrl": string|null, "logs": [...] }
+  On the walk (non-stopped) path the envelope also carries "screensSkipped": number
+  (steps dropped past the maxScreenshots cap).
 
 ${JQ_OUTPUT_USAGE}`.trim();
 
@@ -257,6 +260,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       steps: [],
       captures: [],
       failures: [{ kind: "drive-recipe-missing", severity: "must-fix", message: "declare uiReview.login (loginUrl + submitSelector + successSelector) in .devloops" }],
+      caps: {},
+      appUrl: options.appUrl ?? null,
       logs: [],
     };
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });

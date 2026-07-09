@@ -430,6 +430,17 @@ describe("schema validation", () => {
     }).success);
   });
 
+  test("S35b: a selector-based step action requires a selector; goto does not", () => {
+    assert.ok(DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "click", selector: "#save" }] }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "click" }] }] },
+    }).success);
+  });
+
   test("S36: uiReview.serverLogExceptionPattern rejects a malformed regex", () => {
     assert.ok(!DevLoopConfigSchema.safeParse({
       version: 1,

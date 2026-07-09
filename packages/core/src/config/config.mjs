@@ -270,11 +270,9 @@ const UiReviewLoginConfig = z.strictObject({
 });
 
 /** A config-declared interstitial (cookie consent etc.) dismissed ONCE per
- * browser context. `optional` (default true): a missing interstitial is not a
- * failure — it simply was not shown this run. */
+ * browser context. */
 const UiReviewInterstitialConfig = z.strictObject({
   selector: z.string().trim().min(1),
-  optional: z.boolean().default(true),
 });
 
 /** One driven step. The action set is deliberately small and maps 1:1 to a
@@ -287,6 +285,12 @@ const UiReviewFlowStepConfig = z.strictObject({
   path: z.string().trim().min(1).optional(),
   value: z.string().optional(),
   event: z.string().trim().min(1).optional(),
+}).superRefine((step, ctx) => {
+  // Every action but `goto` targets an element, so a missing selector is a
+  // config error, not a runtime step-failure. (`goto` uses `path`/url.)
+  if (step.action !== "goto" && (step.selector == null || step.selector.trim().length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["selector"], message: `step action "${step.action}" requires a selector` });
+  }
 });
 
 /** An allowlisted changed flow. `pathPatterns` are plain substrings matched
@@ -1636,7 +1640,7 @@ export function resolveUiReviewDriveRecipe(config) {
       successSelector: login.successSelector.trim(),
     },
     interstitials: Array.isArray(ui.interstitials)
-      ? ui.interstitials.map((i) => ({ selector: i.selector, optional: i.optional !== false }))
+      ? ui.interstitials.map((i) => ({ selector: i.selector }))
       : [],
     flows: Array.isArray(ui.flows) ? ui.flows : [],
     caps: ui.caps ?? {},

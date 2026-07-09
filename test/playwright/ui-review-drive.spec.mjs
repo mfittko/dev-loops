@@ -66,7 +66,7 @@ test("webkit drive harness captures a swallowed non-2xx via the response listene
       {
         appUrl: url,
         login: { loginUrl: `${url}/login`, submitSelector: "#login", successSelector: "#dashboard" },
-        interstitials: [{ selector: "#accept-cookies", optional: true }],
+        interstitials: [{ selector: "#accept-cookies" }],
         flows: [
           {
             name: "decks",
