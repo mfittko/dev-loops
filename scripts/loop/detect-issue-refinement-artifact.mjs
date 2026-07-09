@@ -95,8 +95,11 @@ export function parseDetectIssueRefinementArtifactCliArgs(argv) {
   }
   return options;
 }
-async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = "gh" } = {}) {
-  const result = await runChild(
+export async function fetchIssueBody(
+  { repo, issue },
+  { env = process.env, ghCommand = "gh", runChild: childRunner = runChild } = {},
+) {
+  const result = await childRunner(
     ghCommand,
     ["issue", "view", String(issue), "--repo", repo, "--json", "body"],
     env,

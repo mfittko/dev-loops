@@ -29,6 +29,15 @@ export const REFINEMENT_SOURCE = Object.freeze({
 
 const REFINEMENT_ARTIFACT_FINDING = "missing_refinement_artifact";
 
+// The three artifact sources, any ONE of which satisfies the refinement gate.
+// Single source of truth for the "missing" vocabulary reported when none is
+// present — consumed by the enqueue gate and the parked-unrefined discovery.
+export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
+  "Acceptance criteria section",
+  "Definition of done section",
+  "linked refinement doc",
+]);
+
 /**
  * Canonical list of section headings that satisfy the refinement check.
  * Matching is case-insensitive and tolerates trailing/leading whitespace.
@@ -524,11 +533,7 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
   if (!targetIsPickup || artifact.finding === null) {
     return { action: "enqueue" };
   }
-  const missing = [
-    "Acceptance criteria section",
-    "Definition of done section",
-    "linked refinement doc",
-  ];
+  const missing = [...REFINEMENT_ARTIFACT_SOURCES];
   const reason =
     `Issue has no refinement artifact (none of: ${missing.join(", ")}). ` +
     "Add at least ONE of them — an Acceptance criteria section, a Definition of done section, or a linked refinement doc " +
