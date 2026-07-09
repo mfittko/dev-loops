@@ -122,9 +122,15 @@ test("tickVerifiedCheckboxes: duplicate identical labels flip every line but rep
 
 // --- CLI parse ---
 
-test("parseTickVerifiedCliArgs: requires --repo and --pr", () => {
-  assert.throws(() => parseTickVerifiedCliArgs(["--verified", "Alpha"]), /requires both --repo/);
-  assert.throws(() => parseTickVerifiedCliArgs(["--repo", "o/n", "--verified", "Alpha"]), /requires both --repo/);
+test("parseTickVerifiedCliArgs: requires --repo and at least one of --pr/--issue", () => {
+  assert.throws(() => parseTickVerifiedCliArgs(["--verified", "Alpha"]), /requires --repo/);
+  assert.throws(() => parseTickVerifiedCliArgs(["--repo", "o/n", "--verified", "Alpha"]), /at least one of --pr/);
+});
+
+test("parseTickVerifiedCliArgs: accepts --issue alone (no --pr)", () => {
+  const out = parseTickVerifiedCliArgs(["--repo", "o/n", "--issue", "42", "--verified", "Alpha"]);
+  assert.equal(out.issue, 42);
+  assert.equal(out.pr, undefined);
 });
 
 test("parseTickVerifiedCliArgs: requires at least one --verified", () => {
@@ -177,6 +183,50 @@ test("runCli: fetches body then issues one gh pr edit with the flipped body", as
   assert.notEqual(bodyFileIdx, -1);
   assert.equal(editedBody, "- [x] Alpha\n- [ ] Beta\n");
   assert.match(stdout.get(), /"edited":true/);
+});
+
+test("runCli: --issue ticks the linked issue body via gh issue edit", async () => {
+  const { run, calls } = stubGh([
+    bodyJson("- [ ] Alpha\n- [ ] Beta\n"), // gh issue view --json body
+    { stdout: "" },                          // gh issue edit
+  ]);
+  let editedBody;
+  const runCapturing = async (cmd, args, env) => {
+    if (args[0] === "issue" && args[1] === "edit") {
+      const idx = args.indexOf("--body-file");
+      if (idx !== -1) editedBody = readFileSync(args[idx + 1], "utf8");
+    }
+    return run(cmd, args, env);
+  };
+  const stdout = captureStream();
+  const code = await runCli(["--repo", "o/n", "--issue", "42", "--verified", "Alpha"], { run: runCapturing, stdout });
+  assert.equal(code, 0);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], ["issue", "view", "42", "--repo", "o/n", "--json", "body"]);
+  assert.equal(calls[1][0], "issue");
+  assert.equal(calls[1][1], "edit");
+  assert.equal(editedBody, "- [x] Alpha\n- [ ] Beta\n");
+  assert.match(stdout.get(), /"issue":42/);
+  assert.match(stdout.get(), /"issueEdited":true/);
+});
+
+test("runCli: --pr and --issue together sync both bodies in one call", async () => {
+  const { run, calls } = stubGh([
+    bodyJson("- [ ] Alpha\n"),   // gh pr view
+    { stdout: "url\n" },          // gh pr edit
+    bodyJson("- [ ] Alpha\n"),   // gh issue view
+    { stdout: "" },               // gh issue edit
+  ]);
+  const stdout = captureStream();
+  const code = await runCli(["--repo", "o/n", "--pr", "17", "--issue", "42", "--verified", "Alpha"], { run, stdout });
+  assert.equal(code, 0);
+  assert.equal(calls.length, 4);
+  assert.equal(calls[0][0], "pr");
+  assert.equal(calls[2][0], "issue");
+  assert.match(stdout.get(), /"pr":17/);
+  assert.match(stdout.get(), /"edited":true/);
+  assert.match(stdout.get(), /"issue":42/);
+  assert.match(stdout.get(), /"issueEdited":true/);
 });
 
 test("runCli: removes the temp dir after a successful flip flow", async () => {

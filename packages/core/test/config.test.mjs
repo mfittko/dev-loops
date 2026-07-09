@@ -2438,7 +2438,10 @@ describe("shipped defaults docs and deep angle wiring", () => {
       assert.match(result.config.personas["pr-description"].prompt, /Closes #N/i);
       assert.match(result.config.personas["pr-description"].prompt, /operator-intended close target/i);
       assert.match(result.config.personas["pr-description"].prompt, /Scope and context section/i);
-      assert.match(result.config.personas["pr-description"].prompt, /File-by-file changes section/i);
+      // The File-by-file requirement was removed: GitHub's Files-changed tab already
+      // lists touched files, and mandating the section churned gate findings every fix
+      // round. The angle must neither require it nor be worded to flag its absence.
+      assert.doesNotMatch(result.config.personas["pr-description"].prompt, /File-by-file/i);
       assert.match(result.config.personas["pr-description"].prompt, /Definition of done section/i);
       assert.match(result.config.personas["pr-description"].prompt, /Non-goals section/i);
       assert.ok(draftAngles.includes("pr-description"), "pr-description must be in draft gate angles after settings opt-in");

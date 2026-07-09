@@ -396,7 +396,6 @@ personas:
       The PR body is the implementation contract — it must have:
       - A Summary section explaining what changed and why
       - A Scope and context section defining the boundary of the change
-      - A File-by-file changes section listing every touched file and what changed in it
       - An Acceptance criteria section with the linked issue acceptance criteria
       - A Definition of done section
       - A Non-goals section
