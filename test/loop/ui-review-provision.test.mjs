@@ -205,6 +205,38 @@ uiReview:
   assert.equal(booted, false); // never boots outside the worktree
 });
 
+test("in-worktree cwd: migrate/boot seams receive the guard-validated absolute cwd (no second derivation)", async () => {
+  // A recipe cwd inside the worktree must flow to migrate + boot as the exact
+  // absolute path the orchestrator resolved and validated — the seams must not
+  // re-join it. This ties the guarded path to the executed path.
+  const root = makeFixture(`version: 1
+uiReview:
+  run:
+    command: "true"
+    readyUrl: "http://127.0.0.1:65535/health"
+    cwd: "app/web"
+    migrate:
+      statusCommand: "true"
+      applyCommand: "true"
+`);
+  const expectedCwd = path.resolve(root, "app/web");
+  const seenCwd = {};
+  const { seams } = baseSeams(root, {
+    inspectMigrations: async ({ runCwd }) => { seenCwd.inspect = runCwd; return { pending: ["001"], destructive: [], detail: "1 pending" }; },
+    applyMigrations: async ({ runCwd }) => { seenCwd.apply = runCwd; return { ok: true, applied: 1, detail: "applied" }; },
+    bootApp: async ({ runCwd }) => { seenCwd.boot = runCwd; return { pid: 1, detail: "spawned" }; },
+    probe: async () => true,
+  });
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 30 }, seams);
+
+  assert.equal(result.ok, true);
+  assert.equal(seenCwd.inspect, expectedCwd);
+  assert.equal(seenCwd.apply, expectedCwd);
+  assert.equal(seenCwd.boot, expectedCwd);
+  assert.equal(path.isAbsolute(seenCwd.boot), true);
+});
+
 test("no run recipe -> fail-closed stop before boot", async () => {
   const root = makeFixture("version: 1\n"); // no uiReview.run
   const { seams } = baseSeams(root);
@@ -353,7 +385,7 @@ test("inspectMigrations: a failing statusCommand fails closed with a non-empty d
   tempRoots.push(worktree);
   const recipe = { migrate: { statusCommand: "exit 1", applyCommand: "true", destructivePattern: "drop" } };
 
-  const result = await inspectMigrations({ worktreePath: worktree, recipe });
+  const result = await inspectMigrations({ recipe, runCwd: worktree });
 
   assert.ok(result.destructive.length > 0);
   assert.match(result.destructive[0], /migration status failed/);
@@ -373,7 +405,7 @@ test("inspectMigrations: DEFAULT destructive pattern flags a real DROP TABLE lin
     },
   };
 
-  const result = await inspectMigrations({ worktreePath: worktree, recipe });
+  const result = await inspectMigrations({ recipe, runCwd: worktree });
 
   assert.deepEqual(result.pending, ["DROP TABLE users"]);
   assert.deepEqual(result.destructive, ["DROP TABLE users"]);

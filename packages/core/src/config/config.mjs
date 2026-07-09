@@ -181,8 +181,17 @@ const WorktreeConfig = z.strictObject({
 /**
  * Dev-DB migration sub-recipe for the ui-review run recipe. `statusCommand`
  * lists pending migrations (one per line); `applyCommand` applies them.
- * `destructivePattern` is an optional regex (default in resolveUiReviewRunRecipe)
- * matched against the status output to fail closed on destructive migrations.
+ *
+ * Destructive detection is EXPLICIT and status-format-dependent: the
+ * `destructivePattern` regex is matched (case-insensitive, per line) against the
+ * STATUS OUTPUT — not against the migration files. The shipped default
+ * (DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN) assumes SQL-bearing status output
+ * (DROP/TRUNCATE/DELETE FROM ...); against a status command that emits migration
+ * identifiers or filenames instead, it matches nothing and the destructive guard
+ * is inert. A project whose status output is NOT SQL therefore MUST set a
+ * `destructivePattern` that matches its own status format (e.g. a `destructive`/
+ * `down` marker), or make `statusCommand` emit the destructive SQL/marker — the
+ * default cannot detect what its status output never prints.
  */
 const UiReviewMigrateConfig = z.strictObject({
   statusCommand: z.string().trim().min(1),
@@ -1451,8 +1460,13 @@ export function resolveWorktreeConfig(config) {
 
 /**
  * Default destructive-migration signal: SQL statements that drop or wipe data.
- * Matched (case-insensitive) against the migration status output. A project may
- * override via `uiReview.run.migrate.destructivePattern`.
+ * Matched (case-insensitive, per line) against the migration STATUS OUTPUT. This
+ * default only detects destructive intent when the status output is itself
+ * SQL-bearing; against status output that lists migration identifiers/filenames
+ * it matches nothing and the guard is inert (no false positives, but also no
+ * protection). Such a project MUST override via
+ * `uiReview.run.migrate.destructivePattern` to match its own status format (or
+ * emit the destructive SQL/marker from `statusCommand`).
  */
 export const DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN =
   "\\b(DROP\\s+(TABLE|COLUMN|DATABASE|SCHEMA)|TRUNCATE|DELETE\\s+FROM|ALTER\\s+TABLE\\s+.*\\bDROP\\b)";
@@ -1462,8 +1476,10 @@ export const DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN =
  *
  * Returns null when no `uiReview.run.command` is declared — the provision+boot
  * stage treats that as a stated stop reason (no app is ever guessed). Numeric
- * probe bounds fall back to sane defaults so a partial file-level config (whose
- * schema defaults are dropped by `.partial()`) still resolves fully.
+ * probe bounds fall back to sane defaults defensively: zod `.partial()` is
+ * shallow (it does not drop nested numeric defaults), so a schema-validated
+ * config already carries them — the fallback covers programmatically-built
+ * config objects that bypass schema defaulting, not the `.partial()` path.
  *
  * @param {DevLoopConfig} config
  * @returns {null | { command: string, readyUrl: string, readyTimeoutMs: number,

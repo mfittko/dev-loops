@@ -40,12 +40,14 @@ const MUST_FIX = "must-fix";
  * @param {(a:{repoRoot:string,worktreePath:string})=>Promise<{changed:boolean,detail:string}>} seams.detectDepDelta
  * @param {(a:{worktreePath:string})=>Promise<{ok:boolean,detail:string}>} seams.installDeps
  * @param {(worktreePath:string)=>Promise<object|null>} seams.resolveRunRecipe
- * @param {(a:{worktreePath:string,recipe:object})=>Promise<{pending:string[],destructive:string[],detail:string}>} seams.inspectMigrations
- * @param {(a:{worktreePath:string,recipe:object})=>Promise<{ok:boolean,applied:number,detail:string}>} seams.applyMigrations
- * @param {(a:{worktreePath:string,recipe:object})=>Promise<{pid:number|null,detail:string}>} seams.bootApp
+ * @param {(a:{worktreePath:string,recipe:object,runCwd:string})=>Promise<{pending:string[],destructive:string[],detail:string}>} seams.inspectMigrations — MUST run in `runCwd` (the guard-validated absolute cwd), never re-derive it
+ * @param {(a:{worktreePath:string,recipe:object,runCwd:string})=>Promise<{ok:boolean,applied:number,detail:string}>} seams.applyMigrations — MUST run in `runCwd`
+ * @param {(a:{worktreePath:string,recipe:object,runCwd:string})=>Promise<{pid:number|null,detail:string}>} seams.bootApp — MUST run in `runCwd`
  * @param {(url:string)=>Promise<boolean>} seams.probe
- * @param {(ms:number)=>Promise<false>} [seams.probeTimeout] - Per-attempt cap:
- *   resolves false once `ms` elapses, so a hung probe can't outlive the budget.
+ * @param {(ms:number)=>Promise<false> & {clear?:()=>void}} [seams.probeTimeout] -
+ *   Per-attempt cap: resolves false once `ms` elapses, so a hung probe can't
+ *   outlive the budget. May expose `clear()`; the poll calls it after each race
+ *   resolves so a pending timer is cancelled rather than left to fire.
  * @param {(ms:number)=>Promise<void>} [seams.delay]
  * @param {()=>number} [seams.now]
  * @param {(msg:string)=>void} [seams.log]
@@ -63,11 +65,19 @@ export async function provisionAndBoot(
     applyMigrations,
     bootApp,
     probe,
-    probeTimeout = (ms) =>
-      new Promise((resolve) => {
-        const t = setTimeout(() => resolve(false), ms);
-        t.unref?.(); // never hold the process open on the success path
-      }),
+    probeTimeout = (ms) => {
+      let t;
+      const p = /** @type {Promise<false> & {clear?:()=>void}} */ (
+        new Promise((resolve) => {
+          t = setTimeout(() => resolve(false), ms);
+        })
+      );
+      // Self-clearing: the poll calls clear() after the race resolves, so a
+      // still-pending timer is cancelled outright (never left to fire, never
+      // holds the process open) — bounding any injected probe seam.
+      p.clear = () => clearTimeout(t);
+      return p;
+    },
     delay = (ms) => new Promise((r) => setTimeout(r, ms)),
     now = () => Date.now(),
     log = () => {},
@@ -131,9 +141,14 @@ export async function provisionAndBoot(
     );
   }
 
-  // 4b. The run recipe's cwd is worktree-relative; a recipe that escapes the
-  //     worktree (e.g. cwd "../..") would run migrate/boot in another checkout.
-  //     Fail closed unless the resolved cwd stays inside the provisioned tree.
+  // 4b. Resolve + validate the run recipe's cwd ONCE, here — the single source
+  //     of cwd truth. The recipe's cwd is worktree-relative; a recipe that
+  //     escapes the worktree (e.g. cwd "../..") would run migrate/boot in
+  //     another checkout, so fail closed unless the resolved cwd stays inside
+  //     the provisioned tree. The validated ABSOLUTE path (`runCwd`) is what the
+  //     migrate/boot seams execute in — they consume it verbatim and never
+  //     re-derive it, so the guarded path and the executed path cannot drift.
+  let runCwd = worktreePath;
   if (recipe.cwd) {
     const resolvedCwd = path.resolve(worktreePath, recipe.cwd);
     const insideWorktree = resolvedCwd === worktreePath || resolvedCwd.startsWith(worktreePath + path.sep);
@@ -144,13 +159,14 @@ export async function provisionAndBoot(
         { worktreePath, depInstall },
       );
     }
+    runCwd = resolvedCwd;
   }
 
   // 5. Dev-DB migrations. A destructive/blocked migration fails closed to a
   //    finding requiring explicit ack; nothing is applied until acknowledged.
   let migrations = { pending: 0, applied: 0, destructive: [], detail: "no migrate recipe" };
   if (recipe.migrate) {
-    const mig = await inspectMigrations({ worktreePath, recipe });
+    const mig = await inspectMigrations({ worktreePath, recipe, runCwd });
     record(`migration status: ${mig.pending.length} pending, ${mig.destructive.length} destructive (${mig.detail})`);
     if (mig.destructive.length > 0 && !ackDestructiveMigration) {
       return stop(
@@ -169,7 +185,7 @@ export async function provisionAndBoot(
       if (mig.destructive.length > 0) {
         record(`destructive migration(s) acknowledged; applying ${mig.pending.length} pending migration(s)`);
       }
-      const applied = await applyMigrations({ worktreePath, recipe });
+      const applied = await applyMigrations({ worktreePath, recipe, runCwd });
       if (!applied.ok) {
         return stop(
           "migration apply failed",
@@ -188,7 +204,7 @@ export async function provisionAndBoot(
   }
 
   // 6. Boot the app, then poll the readiness probe against an explicit deadline.
-  const boot = await bootApp({ worktreePath, recipe });
+  const boot = await bootApp({ worktreePath, recipe, runCwd });
   record(`app booting (pid ${boot.pid ?? "n/a"}): ${boot.detail}`);
 
   const timeoutMs = recipe.readyTimeoutMs;
@@ -206,11 +222,13 @@ export async function provisionAndBoot(
     // a slow/hung probe can't exceed the deadline or block forever — a per-attempt
     // timeout is just "not ready yet", keeping boot-timeout deterministic.
     let probeOk = false;
+    const timeout = probeTimeout(Math.max(0, deadline - now()));
     try {
-      const remaining = Math.max(0, deadline - now());
-      probeOk = await Promise.race([Promise.resolve(probe(recipe.readyUrl)), probeTimeout(remaining)]);
+      probeOk = await Promise.race([Promise.resolve(probe(recipe.readyUrl)), timeout]);
     } catch {
       probeOk = false;
+    } finally {
+      timeout.clear?.(); // cancel the pending per-attempt timer once the race is decided
     }
     if (probeOk) {
       ready = true;

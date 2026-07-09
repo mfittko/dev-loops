@@ -175,17 +175,17 @@ function resolveRunRecipe(worktreePath) {
   return loadDevLoopConfig({ repoRoot: worktreePath }).then(({ config }) => resolveUiReviewRunRecipe(config));
 }
 
-function migrateCwd(worktreePath, recipe) {
-  return recipe.cwd ? path.join(worktreePath, recipe.cwd) : worktreePath;
-}
-
 /**
  * List pending migrations from the status command output (one per non-blank
  * line) and flag destructive ones by regex. A status command that itself fails
  * is treated as a migration-safety block (fail closed via a synthetic finding).
+ *
+ * Runs in `runCwd` — the absolute cwd the orchestrator already resolved and
+ * validated against the worktree boundary. This seam never re-derives the cwd,
+ * so the executed path is exactly the guarded one.
  */
-export function inspectMigrations({ worktreePath, recipe }) {
-  const cwd = migrateCwd(worktreePath, recipe);
+export function inspectMigrations({ recipe, runCwd }) {
+  const cwd = runCwd;
   let out;
   try {
     out = runShell(recipe.migrate.statusCommand, cwd);
@@ -200,8 +200,8 @@ export function inspectMigrations({ worktreePath, recipe }) {
   return Promise.resolve({ pending, destructive, detail: `${pending.length} line(s) from status` });
 }
 
-function applyMigrations({ worktreePath, recipe }) {
-  const cwd = migrateCwd(worktreePath, recipe);
+function applyMigrations({ recipe, runCwd }) {
+  const cwd = runCwd;
   try {
     runShell(recipe.migrate.applyCommand, cwd);
     return Promise.resolve({ ok: true, applied: 1, detail: "apply command ran" });
@@ -212,8 +212,8 @@ function applyMigrations({ worktreePath, recipe }) {
 }
 
 /** Spawn the boot command detached so the app stays up after this CLI exits. */
-function bootApp({ worktreePath, recipe }) {
-  const cwd = recipe.cwd ? path.join(worktreePath, recipe.cwd) : worktreePath;
+function bootApp({ recipe, runCwd }) {
+  const cwd = runCwd;
   const child = spawn(recipe.command, { cwd, shell: true, detached: true, stdio: "ignore" });
   child.unref();
   return Promise.resolve({ pid: child.pid ?? null, detail: `spawned: ${recipe.command}` });
