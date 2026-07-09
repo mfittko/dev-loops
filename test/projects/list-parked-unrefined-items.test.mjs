@@ -103,8 +103,8 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
 
   it("fail path: an issue still un-refined after a grill attempt stays surfaced with a recorded reason (orchestrator keeps it parked, does not force Next Up)", async () => {
     // Grill ran but produced no usable artifact -> body is unchanged (still no
-    // AC/DoD/linked doc). The helper must keep reporting it so the orchestrator
-    // re-parks it (re-enqueue --auto diverts to park) rather than promoting it.
+    // AC/DoD/linked doc). The helper must keep reporting it (with a reason) so the
+    // orchestrator leaves it parked in place rather than promoting it to pickup.
     const r = await run(boardRunChild({
       columns: { Backlog: [{ issueNumber: 42, title: "Grill produced nothing" }] },
       bodies: { 42: UNREFINED_BODY },
