@@ -213,7 +213,18 @@ const UiReviewMigrateConfig = z.strictObject({
  */
 const UiReviewRunConfig = z.strictObject({
   command: z.string().trim().min(1),
-  readyUrl: z.string().trim().url(),
+  readyUrl: z
+    .string()
+    .trim()
+    .url()
+    .refine((u) => {
+      try {
+        const p = new URL(u).protocol;
+        return p === "http:" || p === "https:";
+      } catch {
+        return false;
+      }
+    }, "readyUrl must be an http(s) URL"),
   readyTimeoutMs: z.number().int().min(1).max(600000).default(60000),
   readyIntervalMs: z.number().int().min(1).max(60000).default(1000),
   cwd: z.string().trim().min(1).optional(),

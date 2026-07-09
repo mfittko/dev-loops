@@ -138,6 +138,22 @@ test("boot-timeout stop: probe never succeeds -> stop with a stated reason", asy
   assert.ok(logs.some((l) => /boot timeout/.test(l)));
 });
 
+test("throwing probe fails closed to boot-timeout (does not propagate)", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  const { seams } = baseSeams(root, {
+    probe: async () => {
+      throw new Error("probe blew up");
+    },
+  });
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 8 }, seams);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped, true);
+  assert.match(result.stopReason, /readiness probe timed out after 5000ms/);
+  assert.ok(result.findings.some((f) => f.kind === "boot-timeout"));
+});
+
 test("no run recipe -> fail-closed stop before boot", async () => {
   const root = makeFixture("version: 1\n"); // no uiReview.run
   const { seams } = baseSeams(root);

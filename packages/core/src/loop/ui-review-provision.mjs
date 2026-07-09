@@ -176,7 +176,15 @@ export async function provisionAndBoot(
   // deadline. The injected clock/delay make the timeout deterministic in tests.
   while (now() <= deadline) {
     attempts += 1;
-    if (await probe(recipe.readyUrl)) {
+    // Fail closed: a probe that throws/rejects counts as "not ready yet" so the
+    // deadline path produces the clean boot-timeout stop instead of crashing.
+    let probeOk = false;
+    try {
+      probeOk = await probe(recipe.readyUrl);
+    } catch {
+      probeOk = false;
+    }
+    if (probeOk) {
       ready = true;
       break;
     }

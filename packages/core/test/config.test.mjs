@@ -332,6 +332,22 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
+  test("S28b: uiReview.run.readyUrl rejects a non-http(s) URL", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { run: { command: "npm start", readyUrl: "ftp://example.com/health" } },
+    });
+    assert.ok(!result.success);
+  });
+
+  test("S28c: uiReview.run.readyUrl accepts https", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { run: { command: "npm start", readyUrl: "https://example.com/health" } },
+    });
+    assert.ok(result.success);
+  });
+
   test("S29: uiReview.run.migrate.destructivePattern rejects a malformed regex", () => {
     const result = DevLoopConfigSchema.safeParse({
       version: 1,
