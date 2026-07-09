@@ -156,7 +156,7 @@ After all immediate children of the root have been reconciled:
 
 <!-- rule: EPIC-REFINEMENT-SCOPE-BOUNDARY -->
 This procedure MUST stay refinement-only: no implementation, no PRs, no Copilot assignment.
-Apply changes directly with `scripts/github/edit-issue.mjs` — never create new issues or PRs. Hierarchy MUST
+Apply changes directly with `node scripts/github/edit-issue.mjs` — never create new issues or PRs. Hierarchy MUST
 stay in the GitHub sub-issues API, not prose parent/child links or a duplicated child-list
 checklist in parent bodies.
 
