@@ -50,8 +50,15 @@ See the canonical shorthand mapping in the [Public Dev Loop Contract](./skills/d
 | enqueue | `/loop-enqueue <issue\|pr\|text>` | — | Queue an issue/PR, or capture an idea as a grilled issue |
 | grill | `/loop-grill <issue\|plan> [--auto]` | — | Socratic Q&A grill of an issue or plan before the loop |
 | queue-status | `/loop-queue-status` | — | Show the queue board grouped by column |
+| review-ui | `/loop-review-ui <pr>` | — | Review a PR in a running-app UI loop |
 
 Beyond the per-issue loop entrypoints, the Pi `/dev-loops` command and the `dev-loops` CLI also expose standalone utilities: `help`, `status`, `doctor`, `gates` (`status` is the same readiness check as `loop-status` above). `hide` works only inside Pi — the `dev-loops hide` CLI subcommand is recognized but intentionally exits non-zero (session-local Pi UI behavior). Everything above is also available as a skill/agent — inside Pi, hand work to the `dev-loop` skill rather than calling internal routed skills (`local-implementation`, `copilot-pr-followup`, `final-approval`) directly.
+
+### `/loop-review-ui`
+
+`/loop-review-ui <pr>` reviews a PR by **proving the change in the running app** from an isolated worktree, rather than reading the diff alone. It runs the loop `resolve → provision/boot → auth+drive → diagnose → report → teardown`: it provisions a worktree for the PR head and boots the app, authenticates and drives the changed UI flows (capturing a screenshot + state per step), maps captured failures back to the diff, posts a head-pinned **pending** PR review plus a self-contained screenshot artifact, then tears down — always emitting a side-effect ledger.
+
+**When to use it vs. the standard `review` angle:** reach for `/loop-review-ui` when a change is only really provable by exercising it in a browser — a rendered flow, a create/edit/upload interaction, or a swallowed server error the UI hides behind a success state. It is the running-app sibling of, not a replacement for, the diff-reading `review` angle or the Copilot gate; those still run for logic, structure, and correctness. It requires a per-project run/auth recipe in `.devloops` and is Claude Code–only (the report artifact is hosted via Claude Artifacts; off-Claude hosting fails closed). See the [UI-Review Run/Auth Recipe Contract](./docs/ui-review-recipe-contract.md) to wire a consuming repo.
 
 ## Install
 
@@ -199,4 +206,5 @@ Upgrading from before the rename to `dev-loops`? The package name, repo slug, an
 - [UI Smoke Harness](./docs/ui-smoke-harness.md) — reusable local Playwright/WebKit smoke baseline
 - [UI Artifact Contract](./docs/ui-artifact-contract.md) — screenshot/state artifact contract and CI-promotion rules
 - [UI Designer Review Loop](./docs/ui-designer-review-loop.md) — designer + vision (`uiReviewMode: vision`) review loop
+- [UI-Review Run/Auth Recipe Contract](./docs/ui-review-recipe-contract.md) — per-project run/login/flow recipe for `/loop-review-ui`
 - [Slides Story Review Loop](./docs/slides-story-review-loop.md) — bounded slides content & storytelling reviewer
