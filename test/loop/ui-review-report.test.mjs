@@ -126,6 +126,42 @@ test("buildReviewInput: untrusted app text is copilot-summon-sanitized in both i
   assert.equal(containsBareCopilotSummon(payload.body), false);
 });
 
+test("buildReviewInput: anchorable finding with a malformed anchor falls back to the body, never dropped", () => {
+  // Flagged anchorable but the anchor is incomplete (empty path / null line):
+  // buildDraftReviewPayload would filter the inline comment, so it MUST route to
+  // the review body instead of being lost.
+  const findings = [{
+    severity: "must-fix",
+    kind: "server-log-exception",
+    message: "boom",
+    exception: { type: "NoMethodError", message: "undefined method `x'" },
+    anchor: { path: "", line: null, side: "RIGHT" },
+    anchorable: true,
+    nonAnchorableReason: "anchor incomplete",
+  }];
+  const reviewInput = buildReviewInput({ findings, headSha: HEAD_SHA });
+  const payload = buildDraftReviewPayload(reviewInput);
+
+  // Not inlined (no valid anchor) ...
+  assert.equal(payload.comments.length, 0);
+  // ... but kept in the review body, so the finding is never dropped.
+  assert.match(payload.body, /NoMethodError/);
+});
+
+test("buildReviewInput: artifactBodyLine hostedUrl is copilot-summon-sanitized in the body", () => {
+  const summonUrl = "https://example.test/@copilot/report.html";
+  assert.equal(containsBareCopilotSummon(summonUrl), true);
+
+  const reviewInput = buildReviewInput({
+    findings: [],
+    headSha: HEAD_SHA,
+    hosting: { hosting: "claude-artifact" },
+    hostedUrl: summonUrl,
+  });
+  // The artifact summary line is sanitized: no bare summon reaches the body.
+  assert.equal(containsBareCopilotSummon(reviewInput.summaryFindings[0].message), false);
+});
+
 test("severityToEvent: confirmed 500 stays PENDING unless submit is authorized", () => {
   const unauthorized = severityToEvent({ findings: FINDINGS, submitAuthorized: false });
   assert.equal(unauthorized.event, null);

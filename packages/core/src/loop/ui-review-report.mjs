@@ -139,6 +139,21 @@ function artifactBodyLine({ hosting, hostedUrl }) {
   return `Screenshot artifact is unhosted this stage${reason}${followup}. Findings are included below.`;
 }
 
+/** A finding is inlineable ONLY with a complete anchor buildDraftReviewPayload
+ * will keep: non-empty path, finite line, side RIGHT. A finding flagged
+ * anchorable but carrying a malformed/incomplete anchor falls back to the body
+ * (summaryFindings) instead of being dropped by the payload's null-anchor filter. */
+function hasValidAnchor(finding) {
+  const a = finding?.anchor;
+  return Boolean(
+    finding?.anchorable &&
+    a &&
+    typeof a.path === "string" && a.path.length > 0 &&
+    typeof a.line === "number" && Number.isFinite(a.line) &&
+    a.side === "RIGHT"
+  );
+}
+
 /** Body line for a non-anchorable finding: it is kept, never dropped. */
 function nonAnchorableBodyMessage(finding) {
   const reason = finding?.nonAnchorableReason ? ` — not inlined: ${finding.nonAnchorableReason}` : "";
@@ -155,8 +170,8 @@ function nonAnchorableBodyMessage(finding) {
  */
 export function buildReviewInput({ findings = [], headSha = null, hosting = null, hostedUrl = null } = {}) {
   const list = Array.isArray(findings) ? findings : [];
-  const anchorable = list.filter((f) => f?.anchorable && f?.anchor);
-  const nonAnchorable = list.filter((f) => !(f?.anchorable && f?.anchor));
+  const anchorable = list.filter(hasValidAnchor);
+  const nonAnchorable = list.filter((f) => !hasValidAnchor(f));
 
   // Untrusted target-app text (exception type/message, log lines, nonAnchorableReason)
   // flows into these bodies. Sanitize copilot-summon tokens before they enter the
@@ -169,7 +184,7 @@ export function buildReviewInput({ findings = [], headSha = null, hosting = null
   }));
 
   const summaryFindings = [
-    { message: artifactBodyLine({ hosting, hostedUrl }), severity: "note" },
+    { message: sanitizeCopilotSummonTokens(artifactBodyLine({ hosting, hostedUrl })), severity: "note" },
     ...nonAnchorable.map((f) => ({ message: sanitizeCopilotSummonTokens(nonAnchorableBodyMessage(f)), severity: f.severity ?? "note" })),
   ];
 
