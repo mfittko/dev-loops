@@ -168,7 +168,7 @@ AC/DoD matrix, and an explicit scope boundary in the format
 <!-- rule: EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE -->
 `EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE`: The procedure MUST write the refined body to
 `tmp/issues/<number>/refinement/` first and MUST show the diff and get confirmation before
-each `edit-issue.mjs` mutation, unless running unattended with explicit authorization.
+each `node scripts/github/edit-issue.mjs` mutation, unless running unattended with explicit authorization.
 
 ---
 
