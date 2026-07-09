@@ -216,7 +216,7 @@ function formatIssueSummary(issueData, startupBundle, linkedPrData) {
 }
 
 function buildPrInfo(prNumber, repo, cwd) {
-  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,baseRefName,author,mergedAt,mergeable,mergeStateStatus,url,reviewRequests"], cwd);
+  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,author,mergedAt,mergeable,mergeStateStatus,url,reviewRequests"], cwd);
   
   let handoffResult = null;
   try {

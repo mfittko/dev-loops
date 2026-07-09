@@ -90,9 +90,37 @@ defaulting to a heuristic that a project MUST override when its log format
 differs). The login form is branch-controlled trusted input, same threat
 boundary as the run recipe.
 
+## Diagnose + anchor
+
+Once failures are captured, the route maps each one to a source line and then to
+a PR diff line so the poster can anchor an inline comment on a real changed line,
+via
+`scripts/loop/ui-review-diagnose.mjs --pr <n> --drive-result <p> [--repo <slug>]`
+(pure mapping in `packages/core/src/loop/ui-review-diagnose.mjs`). It reuses PR
+state from `loop info --pr` rather than re-fetching, fetches the PR's unified
+diff, and for each failure parses the exception type/message plus the top in-repo
+stack frame (JS `at` frame, Ruby/Python traceback frame; vendor/framework frames
+in `node_modules`/`gems`/`vendor` are skipped). It then resolves the source
+`file:line` to a diff anchor `{ path, line, side: RIGHT }` on the head.
+
+Only ADDED lines are anchor targets: an inline comment lands on code the PR
+introduced, never on an unchanged context line. A failure is NEVER silently
+dropped — one with no source location, a file that is not among the changed
+files, a line that is not on a changed diff line, or a file that maps
+ambiguously to more than one changed file is retained as a finding flagged
+non-anchorable (with a stated reason) so the poster body-attaches it instead of
+inlining. Each finding carries a reference to the drive's final captured
+screenshot/state artifact when one exists (null otherwise) — a single shared
+object across all findings, NOT per-failure attribution — so a Stage-4 consumer
+null-checks it and must not present it as proof of a specific finding.
+
+The findings list is ranked deterministically — severity, then anchorable-first,
+then kind, then source `file:line` — with no wall-clock or input-order
+dependence, so the same failures always produce the same ordered output.
+
 ## Non-goals
 
-No diagnose/report/teardown logic lives here yet. The drive stage does not map an
-exception to its source line, post the review, pixel-diff for visual regression,
-run a cross-browser matrix, or touch a production DB — those are later stages or
-explicit non-goals.
+No report/teardown logic lives here yet. The stage does not post the review,
+publish artifacts, auto-fix the located defects, pixel-diff for visual
+regression, run a cross-browser matrix, or touch a production DB — those are
+later stages or explicit non-goals.
