@@ -3,7 +3,9 @@
 // artifact — the fail-safe backstop diverts un-refined issues here rather than
 // into the pickup column. This is the deterministic query a headless/auto
 // dev-loop session uses to find items it should auto-refine (via the refiner /
-// loop-grill --auto) and re-enqueue. It is PURE-DETERMINISTIC: it reads the
+// loop-grill --auto) and then promote into the pickup column (via `queue move`;
+// an already-parked item is on the board, so `add-queue-item` is a no-op for it).
+// It is PURE-DETERMINISTIC: it reads the
 // board (list-queue-items) and each issue body (gh issue view) and runs the
 // single-source refinement-completeness module (detectIssueRefinementArtifact).
 // It NEVER grills, NEVER synthesizes ACs, and runs NO LLM / inline interpreter —
@@ -26,8 +28,8 @@ const USAGE = `Usage: dev-loops queue parked-unrefined --repo <owner/name> [--pr
 
 List issues parked in the non-pickup park column (queue.nonSuccessStatus,
 default "Backlog") that carry NO refinement artifact — the items a headless/
-auto dev-loop session should auto-refine (refiner / loop-grill --auto) and
-re-enqueue. Deterministic: reads the board + each issue body and runs the same
+auto dev-loop session should auto-refine (refiner / loop-grill --auto) and then
+promote into the pickup column (via `queue move`). Deterministic: reads the board + each issue body and runs the same
 refinement-completeness check as the enqueue gate. It never grills or mutates.
 
 Options:
