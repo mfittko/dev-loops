@@ -4,6 +4,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { z } from "zod";
+
 import { DevLoopConfigSchema } from "@dev-loops/core/config";
 
 // Docs-accuracy guard for docs/ui-review-recipe-contract.md (#1122): every
@@ -18,7 +20,15 @@ const DOC_PATH = path.join(REPO_ROOT, "docs", "ui-review-recipe-contract.md");
 // zod v4 wrappers that carry an innerType we peel through to the core type.
 const WRAPPERS = new Set(["optional", "default", "nullable", "nonoptional", "readonly", "catch"]);
 
-/** Peel optional/default/etc. (and pipes) down to the core zod type. */
+/**
+ * Peel optional/default/etc. (and pipes) down to the core zod type so the walk
+ * reaches the inner object/array. In zod v4 `z.preprocess`/`.transform` both
+ * become a `pipe`: preprocess parks the real schema on `.out` (its `.in` is the
+ * transform), while `.transform` parks it on `.in` (its `.out` is the transform).
+ * `.refine`/`.superRefine` leave `.shape` intact (no wrapper), so they need no
+ * peeling. Picking the non-transform side keeps a wrapped nested object from being
+ * mistaken for a leaf and silently dropping its keys.
+ */
 function coreType(schema) {
   let cur = schema;
   for (let i = 0; i < 30 && cur?._def; i += 1) {
@@ -28,7 +38,7 @@ function coreType(schema) {
       continue;
     }
     if (def.type === "pipe") {
-      cur = def.out ?? def.in;
+      cur = def.out?._def?.type === "transform" ? def.in : (def.out ?? def.in);
       continue;
     }
     break;
@@ -100,5 +110,28 @@ test("recipe doc config keys match the shipped uiReview/worktree schema", async 
     undocumented,
     [],
     `schema has config keys the recipe doc does not document: ${undocumented.join(", ")}`,
+  );
+
+  // Anchor the count so a wrapped-then-dropped key (see below) can't pass by
+  // matching a doc that dropped the same key.
+  assert.equal(schema.size, 31, "expected 31 uiReview/worktree schema leaves");
+});
+
+test("collectKeys descends through effects/preprocess wrappers at nested levels", () => {
+  // Wrap a nested object in preprocess (zod v4 pipe) and the whole thing in a
+  // transform (pipe the other way). A walk that treated a pipe as a leaf would
+  // miss inner.x/inner.y entirely.
+  const schema = z
+    .object({
+      inner: z.preprocess((v) => v, z.object({ x: z.string(), y: z.number() })),
+      flat: z.string(),
+    })
+    .transform((v) => v);
+  const out = new Set();
+  collectKeys(schema, "root", out);
+  assert.deepEqual(
+    [...out].sort(),
+    ["root.flat", "root.inner.x", "root.inner.y"],
+    "walk must descend through pipe/transform wrappers to reach nested keys",
   );
 });

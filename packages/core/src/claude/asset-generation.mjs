@@ -89,12 +89,14 @@ export function rewriteCliInvocation(body, version) {
 }
 
 /**
- * Rewrite repo-root `../docs/…` markdown links in a generated *command* body so they resolve from
- * the generated file's deeper location. Source commands live at `commands/<name>.command.md`, so
- * `../docs/x` resolves to repo-root `docs/x`; the generated wrapper lives one level deeper at
- * `.claude/commands/<name>.md`, where `../docs/x` would wrongly resolve to `.claude/docs/x` (there
- * is no such dir). Repo-root `docs/` is NOT mirrored into `.claude/`, so the link must gain one
- * `../` to reach repo-root: `../docs/x` → `../../docs/x`.
+ * Rewrite repo-root `../docs/…` *inline* markdown links `](../docs/…)` in a generated *command*
+ * body so they resolve from the generated file's deeper location. Only the inline `](…)` link form
+ * is rewritten (reference-style `[label]: …` and HTML `<a href>` links are left as-is) — command
+ * bodies only use inline links, so that is the sole form that occurs. Source commands live at
+ * `commands/<name>.command.md`, so `../docs/x` resolves to repo-root `docs/x`; the generated
+ * wrapper lives one level deeper at `.claude/commands/<name>.md`, where `../docs/x` would wrongly
+ * resolve to `.claude/docs/x` (there is no such dir). Repo-root `docs/` is NOT mirrored into
+ * `.claude/`, so the link must gain one `../` to reach repo-root: `../docs/x` → `../../docs/x`.
  *
  * Scoped to `../docs/` on purpose. Other `../…` command links point at subtrees the generator
  * mirrors under `.claude/` (e.g. `../skills/docs/x` → the bundled `.claude/skills/docs/x`), whose
