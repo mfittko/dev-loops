@@ -148,6 +148,36 @@ test("buildReviewInput: anchorable finding with a malformed anchor falls back to
   assert.match(payload.body, /NoMethodError/);
 });
 
+test("buildReviewInput: anchorable finding with line<=0 or a whitespace-only path falls to the body, never dropped", () => {
+  // Both anchors pass Number.isFinite/non-empty-string but buildDraftReviewPayload
+  // filters them (it keeps only line>0 and a non-blank trimmed path). hasValidAnchor
+  // must mirror that filter so neither finding is lost between the two layers.
+  const findings = [
+    {
+      severity: "must-fix",
+      kind: "server-log-exception",
+      exception: { type: "ZeroLineError", message: "line is 0" },
+      anchor: { path: "app/models/user.rb", line: 0, side: "RIGHT" },
+      anchorable: true,
+    },
+    {
+      severity: "must-fix",
+      kind: "error-response",
+      exception: { type: "BlankPathError", message: "path is blank" },
+      anchor: { path: "   ", line: 12, side: "RIGHT" },
+      anchorable: true,
+    },
+  ];
+  const reviewInput = buildReviewInput({ findings, headSha: HEAD_SHA });
+  const payload = buildDraftReviewPayload(reviewInput);
+
+  // Neither is inlined (both anchors are what the payload would drop) ...
+  assert.equal(payload.comments.length, 0);
+  // ... and both land in the review body, so neither finding is lost.
+  assert.match(payload.body, /ZeroLineError/);
+  assert.match(payload.body, /BlankPathError/);
+});
+
 test("buildReviewInput: artifactBodyLine hostedUrl is copilot-summon-sanitized in the body", () => {
   const summonUrl = "https://example.test/@copilot/report.html";
   assert.equal(containsBareCopilotSummon(summonUrl), true);

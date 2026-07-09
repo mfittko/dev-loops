@@ -140,16 +140,17 @@ function artifactBodyLine({ hosting, hostedUrl }) {
 }
 
 /** A finding is inlineable ONLY with a complete anchor buildDraftReviewPayload
- * will keep: non-empty path, finite line, side RIGHT. A finding flagged
- * anchorable but carrying a malformed/incomplete anchor falls back to the body
- * (summaryFindings) instead of being dropped by the payload's null-anchor filter. */
+ * will keep: a non-blank path and a line > 0 (exactly the payload's inline
+ * filter), side RIGHT. A finding flagged anchorable but carrying a
+ * malformed/incomplete anchor (blank path, line <= 0) falls back to the body
+ * (summaryFindings) instead of being dropped by the payload's inline filter. */
 function hasValidAnchor(finding) {
   const a = finding?.anchor;
   return Boolean(
     finding?.anchorable &&
     a &&
-    typeof a.path === "string" && a.path.length > 0 &&
-    typeof a.line === "number" && Number.isFinite(a.line) &&
+    typeof a.path === "string" && a.path.trim().length > 0 &&
+    typeof a.line === "number" && a.line > 0 &&
     a.side === "RIGHT"
   );
 }
