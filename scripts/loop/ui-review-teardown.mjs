@@ -90,15 +90,17 @@ export function parseUiReviewTeardownCliArgs(argv) {
   return options;
 }
 
-/** Read + parse a prior-stage result JSON, bounded. Returns null for an absent
- * path (an optional input); throws on an oversized/unreadable/invalid file. */
-function readResultJson(file, { optional = false } = {}) {
+/** Read + parse a prior-stage result JSON, bounded. Returns null ONLY for a
+ * genuinely OMITTED path (`file === undefined`); a SUPPLIED path that can't be
+ * stat/read/parsed FAILS CLOSED (throws). A supplied-but-unreadable path silently
+ * nulled would let teardown proceed on an incomplete ledger, misreporting rows as
+ * none/may-remain off missing input even though a path was explicitly provided. */
+function readResultJson(file) {
   if (file === undefined) return null;
   let size;
   try {
     size = statSync(file).size;
   } catch (err) {
-    if (optional) return null;
     throw parseError(`cannot read ${file}: ${(err.message ?? err).toString()}`);
   }
   if (size > MAX_RESULT_BYTES) throw parseError(`${file} is too large (${size} bytes > ${MAX_RESULT_BYTES} cap)`);
@@ -153,8 +155,24 @@ function signalProcess(pid, sig) {
 }
 
 /** Stop a process: SIGTERM, wait a bounded budget for a clean exit, then a
- * LOGGED SIGKILL fallback. A failed kill is reported (never swallowed). */
-export async function killProcess({ pid, graceMs = 3000, pollMs = 100 }) {
+ * LOGGED SIGKILL fallback. A failed kill is reported (never swallowed).
+ *
+ * win32 FAIL-CLOSED: Node cannot signal a process GROUP on Windows (the `-pid`
+ * form is unsupported and throws), and Stage 1 boots the app detached via a
+ * shell — so the real server is a CHILD of the shell PID we hold. The group
+ * signal would throw, `signalProcess` would fall back to the bare shell PID, and
+ * a bare-pid `isAlive` poll would then report `stopped:true` while the detached
+ * server keeps running — a FALSE success the ledger would enshrine. Rather than
+ * misreport, we refuse to attempt the kill and report the app as NOT reliably
+ * stopped (mapped to a not-stopped ledger status upstream). `platform` is
+ * injectable so the win32 path is testable off a real Windows host.
+ * ponytail: fail-closed stated-limitation, not a taskkill /T tree-kill — honest
+ * and minimal for this stage; upgrade to a Windows process-tree kill if/when the
+ * loop actually needs to run and reliably stop the app on win32. */
+export async function killProcess({ pid, graceMs = 3000, pollMs = 100, platform = process.platform }) {
+  if (platform === "win32") {
+    return { stopped: false, forced: false, detail: "win32 process-group kill unsupported; app may still be running (a shell-PID kill would not reach the detached server child)" };
+  }
   try {
     signalProcess(pid, "SIGTERM");
   } catch (err) {
@@ -191,7 +209,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   if (options.help) { stdout.write(`${USAGE}\n`); return; }
 
   const provisionResult = readResultJson(options.provisionResult);
-  const driveResult = readResultJson(options.driveResult, { optional: true });
+  const driveResult = readResultJson(options.driveResult);
   const rowManifest = readRowManifest(options.rowManifest);
 
   const result = await teardown(

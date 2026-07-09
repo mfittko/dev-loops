@@ -304,7 +304,45 @@ test("killProcess escalates to SIGKILL (forced:true) for a child that ignores SI
   assert.equal(res.forced, true, "SIGTERM-ignoring child forces the SIGKILL escalation");
 });
 
-// Thread 1: a present-but-malformed --row-manifest must FAIL CLOSED (clear parse
+// Thread 1: win32 has no process-group signalling and Stage 1 boots the app
+// detached via a shell, so a bare shell-PID kill would leave the real server
+// running while a bare-pid poll falsely reports stopped. killProcess must FAIL
+// CLOSED on win32 — report not-stopped, never a false success — and the core
+// must map that to a not-stopped ledger status (never PROCESS_STATUS.STOPPED).
+test("killProcess fails closed on win32 (process-group kill unsupported): stopped:false, not a false success", async () => {
+  const res = await killProcess({ pid: 4242, platform: "win32" });
+  assert.equal(res.stopped, false, "win32 must not claim the app stopped");
+  assert.equal(res.forced, false);
+  assert.match(res.detail, /win32.*(may still be running|unsupported)/i);
+});
+
+test("win32 killProcess flows to a not-stopped ledger (KILL_FAILED, ok:false), never a false STOPPED", async () => {
+  const { seams } = makeSeams({ killProcess: (a) => killProcess({ ...a, platform: "win32" }) });
+  const res = await teardown({ provisionResult: PROVISION, confirm: true }, seams);
+  assert.notEqual(res.ledger.process.status, PROCESS_STATUS.STOPPED, "win32 must never report a false STOPPED");
+  assert.equal(res.ledger.process.status, PROCESS_STATUS.KILL_FAILED);
+  assert.equal(res.ok, false);
+  assert.match(res.ledger.process.detail, /win32/i);
+});
+
+// Thread 2: --drive-result is optional only when OMITTED. A SUPPLIED-but-
+// unreadable path must FAIL CLOSED (clear error), never be silently nulled into
+// an incomplete ledger that misreports rows off missing input.
+test("runCli: supplied-but-unreadable --drive-result fails closed (not silent null + incomplete ledger)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-drive-"));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify(PROVISION));
+  const missingDrivePath = join(dir, "does-not-exist.json"); // supplied, unreadable
+
+  const argv = ["--repo-root", "/r", "--provision-result", provisionPath, "--drive-result", missingDrivePath];
+  const sink = { write: () => true };
+  await assert.rejects(
+    runCli(argv, { stdout: sink, stderr: sink }),
+    /cannot read .*does-not-exist/i,
+  );
+});
+
+// Thread 1 (prior): a present-but-malformed --row-manifest must FAIL CLOSED (clear parse
 // error), never be silently nulled into a misleading "may remain (untagged)"
 // ledger even though a manifest file WAS supplied. Absent --row-manifest is the
 // honest untagged path and stays fine (covered by the core tests above).
