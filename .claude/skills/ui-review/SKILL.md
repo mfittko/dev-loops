@@ -151,9 +151,46 @@ artifact is unhosted (with the reason), so the review never blocks on hosting.
 Every bounded cap — findings truncated past the artifact cap, an oversized or
 unreadable evidence screenshot omitted — is logged, never silent.
 
+## Teardown + side-effect ledger
+
+The terminal cleanup stage tears down the loop's transient state — stops the
+app booted in provision, drops the dev-DB rows the drive created, removes the
+provisioned worktree — and ALWAYS emits a side-effect ledger so nothing is
+silently orphaned, via
+`scripts/loop/ui-review-teardown.mjs --repo-root <p> --provision-result <p> [--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
+(pure decisions in `packages/core/src/loop/ui-review-teardown.mjs`). It reads
+the prior-stage result JSON — the app PID + applied migrations + worktree path
+from provision, and the rows-created signal from the drive.
+
+The destructive steps (dev-DB row drops and worktree removal) run ONLY with an
+explicit `--confirm`. Without it, those steps are skipped and the ledger records
+what remains; stopping the app still runs, because it is a clean shutdown of a
+process the loop itself started, not a mutation of persisted state. The app is
+stopped via the provision boot PID (SIGTERM, then a LOGGED SIGKILL fallback); a
+null PID is never a blind kill — the ledger reports the process may still be
+running. Worktree removal delegates to `scripts/loop/cleanup-worktree.mjs`,
+which refuses any path outside the loop namespace and leaves the primary
+checkout untouched.
+
+The side-effect ledger is emitted in EVERY case (success, skip, partial
+failure) and enumerates: migrations applied (recorded as applied-not-reverted —
+reversing a dev-DB migration is a separate explicit action, never a default),
+rows created/dropped or left behind, the worktree path + whether it was removed,
+and the process status. A failed kill/drop/removal is reported in the ledger and
+the result's `errors` list, never swallowed.
+
+Row dropping is honest about a known limitation: the drive does not tag the
+dev-DB rows it creates with a session id or manifest, so this stage cannot know
+which rows to drop and MUST NOT guess. It drops rows only from an explicit
+manifest handed in; when the drive walked mutating flows without one, the ledger
+reports rows "may remain (untagged)". Making the drop real requires row/session
+tagging upstream in the drive.
+
 ## Non-goals
 
-No teardown logic lives here yet. The stage does not auto-submit a review
+The teardown stage never rolls back the branch's dev-DB migrations by default
+(the ledger records they were applied, not reverted) and never tears down a
+production DB. The stage does not auto-submit a review
 without explicit authorization, publish to a production/non-dev posting target,
 ship the GitHub-native hosted-artifact fallback, auto-fix the located defects,
 pixel-diff for visual regression, run a cross-browser matrix, or touch a
