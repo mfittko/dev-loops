@@ -185,9 +185,9 @@ async function authenticate({ page, login, timeoutMs = 15000 }) {
   }
 }
 
-/** Dismiss config-declared interstitials once. A non-optional interstitial that
- * never appears is not fatal here (the drive stage records it, not this seam);
- * a click failure is swallowed so one stubborn overlay can't abort the walk. */
+/** Dismiss config-declared interstitials once, best-effort: an interstitial that
+ * never appears or is not clickable is skipped silently so one stubborn overlay
+ * can't abort the walk. */
 async function dismissInterstitials({ page, interstitials, timeoutMs = 2000 }) {
   const dismissed = [];
   for (const it of interstitials ?? []) {
