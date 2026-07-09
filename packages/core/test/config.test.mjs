@@ -360,6 +360,22 @@ describe("schema validation", () => {
     assert.ok(result.success);
   });
 
+  test("S31: destructivePattern valid bare but invalid under `u` flag is rejected at load", () => {
+    // `[a-\d]` compiles as `new RegExp(p)` but throws under `new RegExp(p, "iu")`,
+    // the exact flags inspectMigrations uses at the destructive-migration boundary.
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: {
+        run: {
+          command: "npm start",
+          readyUrl: "http://127.0.0.1:3000/health",
+          migrate: { statusCommand: "s", applyCommand: "a", destructivePattern: "[a-\\d]" },
+        },
+      },
+    });
+    assert.ok(!result.success);
+  });
+
 });
 
 // ============================================================================

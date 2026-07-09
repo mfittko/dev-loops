@@ -193,7 +193,10 @@ const UiReviewMigrateConfig = z.strictObject({
     .min(1)
     .refine((p) => {
       try {
-        new RegExp(p);
+        // Validate under the exact flags the runtime compile uses at the
+        // destructive-migration safety boundary (inspectMigrations), so a
+        // pattern valid bare but invalid under `u` is rejected at load time.
+        new RegExp(p, "iu");
         return true;
       } catch {
         return false;

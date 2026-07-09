@@ -182,7 +182,7 @@ function migrateCwd(worktreePath, recipe) {
  * line) and flag destructive ones by regex. A status command that itself fails
  * is treated as a migration-safety block (fail closed via a synthetic finding).
  */
-function inspectMigrations({ worktreePath, recipe }) {
+export function inspectMigrations({ worktreePath, recipe }) {
   const cwd = migrateCwd(worktreePath, recipe);
   let out;
   try {

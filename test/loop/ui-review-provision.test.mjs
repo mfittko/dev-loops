@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe } from "@dev-loops/core/config";
-import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules } from "../../scripts/loop/ui-review-provision.mjs";
+import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations } from "../../scripts/loop/ui-review-provision.mjs";
 
 // A "fixture project": a temp dir whose .devloops declares a ui-review run
 // recipe. The real config resolver reads it; the rest of the IO is injected.
@@ -277,6 +277,19 @@ test("ensureOwnNodeModules: materializes a symlinked node_modules without touchi
   // The primary's real node_modules is untouched — an install would go here
   // if we had written through the symlink.
   assert.deepEqual(readdirSync(primaryNm), ["left-pad"]);
+});
+
+test("inspectMigrations: a failing statusCommand fails closed with a non-empty destructive[]", async () => {
+  // The decision seam: if migration state cannot be verified, it must synthesize
+  // a destructive finding so the orchestrator blocks (not return destructive: []).
+  const worktree = mkdtempSync(path.join(tmpdir(), "ui-prov-migrate-"));
+  tempRoots.push(worktree);
+  const recipe = { migrate: { statusCommand: "exit 1", applyCommand: "true", destructivePattern: "drop" } };
+
+  const result = await inspectMigrations({ worktreePath: worktree, recipe });
+
+  assert.ok(result.destructive.length > 0);
+  assert.match(result.destructive[0], /migration status failed/);
 });
 
 test("ensureOwnNodeModules: leaves a real node_modules alone", () => {
