@@ -89,6 +89,26 @@ export function rewriteCliInvocation(body, version) {
 }
 
 /**
+ * Rewrite repo-root `../docs/…` markdown links in a generated *command* body so they resolve from
+ * the generated file's deeper location. Source commands live at `commands/<name>.command.md`, so
+ * `../docs/x` resolves to repo-root `docs/x`; the generated wrapper lives one level deeper at
+ * `.claude/commands/<name>.md`, where `../docs/x` would wrongly resolve to `.claude/docs/x` (there
+ * is no such dir). Repo-root `docs/` is NOT mirrored into `.claude/`, so the link must gain one
+ * `../` to reach repo-root: `../docs/x` → `../../docs/x`.
+ *
+ * Scoped to `../docs/` on purpose. Other `../…` command links point at subtrees the generator
+ * mirrors under `.claude/` (e.g. `../skills/docs/x` → the bundled `.claude/skills/docs/x`), whose
+ * relative depth is preserved verbatim — shifting those would break them. Skills need no rewrite
+ * at all for the same reason (their `../docs/x` targets the bundled `.claude/skills/docs/x`).
+ *
+ * @param {string} body
+ * @returns {string}
+ */
+export function rewriteCommandRepoLinks(body) {
+  return String(body).replace(/(\]\(<?)(\.\.\/docs\/)/g, "$1../$2");
+}
+
+/**
  * Map a single Pi tool name to its Claude tool name(s).
  * @param {string} name
  * @returns {string[]} Claude tool names (empty if unknown).
@@ -180,7 +200,7 @@ export function transformAgent({ source, raw, version = "latest" }) {
  */
 export function transformCommand({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version);
+  const body = rewriteCommandRepoLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
 
   const lines = ["---"];
   if (frontmatter.description != null) {
