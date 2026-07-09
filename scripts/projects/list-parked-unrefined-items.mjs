@@ -12,10 +12,12 @@
 //
 // The park column is the configured queue.nonSuccessStatus (default "Backlog");
 // PRs are skipped because the refinement gate is issue-only.
-import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
+import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
@@ -103,21 +105,7 @@ function parseCliArgs(argv) {
   return args;
 }
 
-async function fetchIssueBody(repo, issueNumber, env, runChild) {
-  const result = await runChild(
-    "gh",
-    ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout, { label: "gh issue view" });
-  return typeof payload?.body === "string" ? payload.body : "";
-}
-
-async function main(args, { env = process.env, runChild, cwd = process.cwd() } = {}) {
+async function main(args, { env = process.env, runChild = _runChild, cwd = process.cwd() } = {}) {
   // The park column is where the enqueue fail-safe diverts un-refined issues.
   const parkedColumn = nonSuccessBoardColumn(cwd);
   const listed = await listQueueItems(
@@ -130,7 +118,10 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
   for (const item of items) {
     // Issue-only: a PR in the park column is not gated by the refinement check.
     if (item.issueNumber == null) continue;
-    const body = await fetchIssueBody(args.repo, item.issueNumber, env, runChild);
+    const body = await fetchIssueBody(
+      { repo: args.repo, issue: item.issueNumber },
+      { env, runChild },
+    );
     const artifact = detectIssueRefinementArtifact({ body, issueNumber: item.issueNumber });
     // finding !== null is the explicit "has NO refinement artifact" signal.
     if (artifact.finding === null) continue;

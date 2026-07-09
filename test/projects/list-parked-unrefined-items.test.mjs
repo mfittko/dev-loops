@@ -115,6 +115,20 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
     assert.ok(typeof r.items[0].reason === "string" && r.items[0].reason.length > 0);
   });
 
+  it("propagates a gh issue-view failure (fails closed, not silently empty)", async () => {
+    const child = boardRunChild({
+      columns: { Backlog: [{ issueNumber: 42, title: "Un-refined" }] },
+      bodies: { 42: UNREFINED_BODY },
+    });
+    const failing = async (cmd, argv, env) => {
+      if (cmd === "gh" && argv[0] === "issue" && argv[1] === "view") {
+        return { code: 1, stdout: "", stderr: "gh: not found" };
+      }
+      return child(cmd, argv, env);
+    };
+    await assert.rejects(run(failing), /gh command failed/);
+  });
+
   it("resolves the configured non-success park column from .devloops", async () => {
     const dir = mkdtempSync(nodePath.join(tmpdir(), "parked-unrefined-parkcol-"));
     try {
