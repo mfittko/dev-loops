@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -10,6 +10,7 @@ import {
   selectFlows,
   classifyFailures,
   driveUiReview,
+  isErrorResponseStatus,
 } from "@dev-loops/core/loop/ui-review-drive";
 import { resolveUiReviewDriveRecipe, DEFAULT_SERVER_LOG_EXCEPTION_PATTERN } from "@dev-loops/core/config";
 import {
@@ -109,28 +110,66 @@ test("classifyFailures: an invalid serverLogExceptionPattern degrades to a surfa
   assert.ok(!byKind["server-log-exception"], "server-log line classification is skipped");
 });
 
-test("classifyFailures: a requestFailure becomes request-failed and a pageError becomes page-error", () => {
+test("isErrorResponseStatus: one owner flags <200/>=400 and clears 2xx/3xx", () => {
+  assert.equal(isErrorResponseStatus(500), true);
+  assert.equal(isErrorResponseStatus(199), true);
+  assert.equal(isErrorResponseStatus(200), false);
+  assert.equal(isErrorResponseStatus(302), false, "3xx redirects are normal navigation");
+  assert.equal(isErrorResponseStatus(399), false);
+  assert.equal(isErrorResponseStatus(400), true);
+  assert.equal(isErrorResponseStatus("500"), false, "non-number is not an error status");
+});
+
+test("classifyFailures: server-log-exception carries surrounding traceback frames as context", () => {
+  const tail = [
+    "I, [ts] INFO -- : Started POST /save",
+    "app/controllers/save_controller.rb:17:in `create'",
+    "ERROR 500 Internal Server Error: NoMethodError",
+    "app/models/deck.rb:42:in `publish'",
+    "I, [ts] INFO -- : Completed 500",
+  ].join("\n");
+  const failures = classifyFailures({ serverLogTail: tail, serverLogExceptionPattern: "ERROR 500" });
+  const exc = failures.find((f) => f.kind === "server-log-exception");
+  assert.ok(exc, "the matching line is classified");
+  // The file:line frames sit on adjacent, non-matching lines; they survive.
+  assert.match(exc.context, /save_controller\.rb:17/);
+  assert.match(exc.context, /deck\.rb:42/);
+});
+
+test("classifyFailures: a requestFailure becomes request-failed and a pageError becomes page-error carrying err.stack", () => {
   const failures = classifyFailures({
     requestFailures: [{ url: "http://x/img", failure: "net::ERR" }],
-    pageErrors: [{ message: "TypeError: boom" }],
+    pageErrors: [{ message: "TypeError: boom", stack: "TypeError: boom\n    at app.js:42:9" }],
   });
   const byKind = Object.fromEntries(failures.map((f) => [f.kind, f]));
   assert.equal(byKind["request-failed"].severity, "must-fix");
   assert.match(byKind["request-failed"].message, /request failed at http:\/\/x\/img: net::ERR/);
   assert.equal(byKind["page-error"].severity, "must-fix");
   assert.match(byKind["page-error"].message, /uncaught page error: TypeError: boom/);
+  // Stage 3 exception -> source-line mapping needs the stack on the feed entry.
+  assert.match(byKind["page-error"].stack, /at app\.js:42:9/);
 });
 
-test("attachPageListeners: captures requestfailed and pageerror", () => {
+test("classifyFailures: page-error stack is null when absent and bounded when huge", () => {
+  const huge = "x".repeat(10000);
+  const failures = classifyFailures({ pageErrors: [{ message: "no stack" }, { message: "big", stack: huge }] });
+  const entries = failures.filter((f) => f.kind === "page-error");
+  assert.equal(entries[0].stack, null, "no stack -> null, never undefined");
+  assert.ok(entries[1].stack.length < huge.length, "a runaway stack is bounded before it lands on the feed");
+});
+
+test("attachPageListeners: captures requestfailed and pageerror (with err.stack for Stage 3)", () => {
   const page = fakePage();
   const { getCapturedEvents } = attachPageListeners(page);
   page.emit("response", { status: () => 204, url: () => "http://x/ok" }); // 2xx ignored
+  page.emit("response", { status: () => 302, url: () => "http://x/redir" }); // 3xx ignored (shared predicate)
   page.emit("requestfailed", { url: () => "http://x/img", failure: () => ({ errorText: "net::ERR" }) });
-  page.emit("pageerror", { message: "TypeError: boom" });
+  page.emit("pageerror", { message: "TypeError: boom", stack: "TypeError: boom\n    at app.js:42:9" });
   const e = getCapturedEvents();
-  assert.equal(e.responses.length, 0, "2xx responses are not retained");
+  assert.equal(e.responses.length, 0, "2xx/3xx responses are not retained");
   assert.deepEqual(e.requestFailures, [{ url: "http://x/img", failure: "net::ERR" }]);
-  assert.deepEqual(e.pageErrors, [{ message: "TypeError: boom" }]);
+  // The file:line signal Stage 3 needs is captured off err.stack, not discarded.
+  assert.deepEqual(e.pageErrors, [{ message: "TypeError: boom", stack: "TypeError: boom\n    at app.js:42:9" }]);
 });
 
 test("openServerLogTail: absent path is a no-op; missing file reads once created", async () => {
@@ -139,6 +178,18 @@ test("openServerLogTail: absent path is a no-op; missing file reads once created
   const tail = openServerLogTail(p); // file does not exist yet
   writeFileSync(p, "boot line\n");
   assert.match(await tail.read(), /boot line/);
+});
+
+test("openServerLogTail: a present-but-unreadable log is surfaced as a note, not silent empty", async () => {
+  if (typeof process.getuid === "function" && process.getuid() === 0) return; // root bypasses file perms
+  const p = path.join(tempDir(), "locked.log");
+  writeFileSync(p, "ERROR 500 boom\n"); // present, with content a review would want
+  chmodSync(p, 0o000); // now unreadable
+  const notes = [];
+  const out = await openServerLogTail(p, { log: (m) => notes.push(m) }).read();
+  chmodSync(p, 0o600); // restore so temp cleanup can remove it
+  assert.equal(out, "", "degrades to an empty tail (never throws)");
+  assert.ok(notes.some((m) => /unreadable/.test(m)), "a genuinely unreadable log is surfaced, not silently treated as empty");
 });
 
 test("openServerLogTail: caps a huge delta to the last maxBytes and logs the truncation", async () => {

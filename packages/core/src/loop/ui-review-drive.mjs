@@ -26,6 +26,26 @@
 
 const MUST_FIX = "must-fix";
 
+/** The one owner of the error-response threshold: an error response is anything
+ * outside 2xx/3xx. 3xx redirects are normal navigation (login/canonical), not
+ * errors, so they are not flagged. Shared by the CLI listener's pre-filter (for
+ * buffer bounding) and the classifier, so the policy has a single source. */
+export function isErrorResponseStatus(status) {
+  return typeof status === "number" && (status < 200 || status >= 400);
+}
+
+/** Bound the stack text carried onto a page-error failure so a runaway stack
+ * (or a synthetic error with a huge stack) can't bloat the feed envelope. Keeps
+ * the head — the top frames, where the throwing file:line sits. */
+const PAGE_ERROR_STACK_MAX_CHARS = 4000;
+
+/** Lines of context to preserve on each side of a matching server-log line, so
+ * the traceback frames that carry file:line (often on adjacent, non-matching
+ * lines) survive into the Stage 3 feed. */
+const SERVER_LOG_CONTEXT_LINES = 4;
+/** Char cap on the preserved server-log context window per failure entry. */
+const SERVER_LOG_CONTEXT_MAX_CHARS = 2000;
+
 /** Bounded caps. A project cannot raise these past the ceilings — the walker is
  * a diagnostic pass over the changed flows, never an unbounded crawl. */
 export const DEFAULT_DRIVE_CAPS = Object.freeze({
@@ -96,7 +116,7 @@ export function selectFlows({ flows = [], changedPaths = [], caps = DEFAULT_DRIV
  * @param {object} input
  * @param {{url?:string,status:number}[]} [input.responses] - from page.on('response')
  * @param {{url?:string,failure?:string}[]} [input.requestFailures] - from page.on('requestfailed')
- * @param {{message?:string}[]} [input.pageErrors] - from page.on('pageerror')
+ * @param {{message?:string,stack?:string|null}[]} [input.pageErrors] - from page.on('pageerror'); `stack` (file:line) feeds Stage 3
  * @param {string} [input.serverLogTail] - tail text of the project server log
  * @param {string} [input.serverLogExceptionPattern] - regex (source) flagging a log exception line
  * @returns {{kind:string, severity:string, message:string, [k:string]:unknown}[]}
@@ -111,11 +131,10 @@ export function classifyFailures({
   const failures = [];
 
   for (const r of responses) {
-    // An error response is anything outside 2xx/3xx (status <200 or >=400). 3xx
-    // redirects are normal navigation (login/canonical), not errors, so they are
-    // not flagged. A swallowed 500 lands here even when the page rendered a
-    // success state, because the listener sees the wire.
-    if (typeof r.status === "number" && (r.status < 200 || r.status >= 400)) {
+    // A swallowed 500 lands here even when the page rendered a success state,
+    // because the listener sees the wire. The error-response threshold has one
+    // owner: isErrorResponseStatus.
+    if (isErrorResponseStatus(r.status)) {
       failures.push({
         kind: "error-response",
         severity: MUST_FIX,
@@ -136,10 +155,14 @@ export function classifyFailures({
   }
 
   for (const e of pageErrors) {
+    // Carry the bounded stack so Stage 3's exception -> source-line mapping has
+    // the file:line signal; null when the listener captured no stack.
+    const stack = typeof e.stack === "string" && e.stack.length > 0 ? e.stack.slice(0, PAGE_ERROR_STACK_MAX_CHARS) : null;
     failures.push({
       kind: "page-error",
       severity: MUST_FIX,
       message: `uncaught page error: ${e.message ?? "(no message)"}`,
+      stack,
     });
   }
 
@@ -158,13 +181,21 @@ export function classifyFailures({
       });
     }
     if (re) {
-      for (const line of serverLogTail.split("\n")) {
-        const trimmed = line.trim();
+      const lines = serverLogTail.split("\n");
+      for (let i = 0; i < lines.length; i += 1) {
+        const trimmed = lines[i].trim();
         if (trimmed.length > 0 && re.test(trimmed)) {
+          // Preserve the contiguous frames around the match: the file:line the
+          // traceback carries usually sits on adjacent, non-matching lines that
+          // the per-line match alone would drop. Bounded on both axes.
+          const from = Math.max(0, i - SERVER_LOG_CONTEXT_LINES);
+          const to = Math.min(lines.length, i + SERVER_LOG_CONTEXT_LINES + 1);
+          const context = lines.slice(from, to).join("\n").slice(0, SERVER_LOG_CONTEXT_MAX_CHARS);
           failures.push({
             kind: "server-log-exception",
             severity: MUST_FIX,
             message: `server log exception: ${trimmed.slice(0, 500)}`,
+            context,
           });
         }
       }

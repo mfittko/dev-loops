@@ -23,7 +23,7 @@ import { webkit } from "@playwright/test";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
-import { driveUiReview } from "@dev-loops/core/loop/ui-review-drive";
+import { driveUiReview, isErrorResponseStatus } from "@dev-loops/core/loop/ui-review-drive";
 import { captureNamedUiState } from "../../test/playwright/harness/webkit-smoke-harness.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -101,9 +101,9 @@ export function parseUiReviewDriveCliArgs(argv) {
 /**
  * Register the response/requestfailed/pageerror listeners on a page (or any
  * object exposing the same `on(event, cb)` emitter interface, so this is unit
- * testable without a browser). Only error responses (status <200 or >=400; 3xx
- * redirects are normal navigation and are not flagged) are retained so the buffer
- * stays bounded; the pure classifier decides severity from the collected set.
+ * testable without a browser). Only error responses (per isErrorResponseStatus,
+ * the shared threshold owner) are retained so the buffer stays bounded; the pure
+ * classifier decides severity from the collected set.
  *
  * @returns {{ getCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]} }}
  */
@@ -113,7 +113,7 @@ export function attachPageListeners(page) {
   const pageErrors = [];
   page.on("response", (res) => {
     const status = typeof res.status === "function" ? res.status() : res.status;
-    if (typeof status === "number" && (status < 200 || status >= 400)) {
+    if (isErrorResponseStatus(status)) {
       const url = typeof res.url === "function" ? res.url() : res.url;
       responses.push({ url, status });
     }
@@ -124,7 +124,9 @@ export function attachPageListeners(page) {
     requestFailures.push({ url, failure: failure ?? null });
   });
   page.on("pageerror", (err) => {
-    pageErrors.push({ message: err?.message ?? String(err) });
+    // Carry err.stack (the file:line signal Stage 3's exception -> source-line
+    // mapping needs); the classifier bounds it before it lands on the feed.
+    pageErrors.push({ message: err?.message ?? String(err), stack: err?.stack ?? null });
   });
   return { getCapturedEvents: () => ({ responses, requestFailures, pageErrors }) };
 }
@@ -175,7 +177,10 @@ export function openServerLogTail(logPath, { maxBytes = SERVER_LOG_TAIL_MAX_BYTE
         const buf = Buffer.alloc(length);
         await handle.read(buf, 0, length, readFrom);
         return buf.toString("utf8");
-      } catch {
+      } catch (err) {
+        // Degrade to an empty tail, but never silently: a present-but-unreadable
+        // log (permissions, mid-run rotation) is a real signal, not "no errors".
+        log(`server-log tail unreadable at ${logPath}; treated as empty: ${(err?.message ?? String(err)).split("\n")[0]}`);
         return "";
       } finally {
         await handle?.close();
