@@ -29,7 +29,7 @@ const USAGE = `Usage: dev-loops queue parked-unrefined --repo <owner/name> [--pr
 List issues parked in the non-pickup park column (queue.nonSuccessStatus,
 default "Backlog") that carry NO refinement artifact — the items a headless/
 auto dev-loop session should auto-refine (refiner / loop-grill --auto) and then
-promote into the pickup column (via `queue move`). Deterministic: reads the board + each issue body and runs the same
+promote into the pickup column (via queue move). Deterministic: reads the board + each issue body and runs the same
 refinement-completeness check as the enqueue gate. It never grills or mutates.
 
 Options:
