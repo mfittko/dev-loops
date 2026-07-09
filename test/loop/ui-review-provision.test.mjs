@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
-import { loadDevLoopConfig, resolveUiReviewRunRecipe } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveUiReviewRunRecipe, DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN } from "@dev-loops/core/config";
 import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations } from "../../scripts/loop/ui-review-provision.mjs";
 
 // A "fixture project": a temp dir whose .devloops declares a ui-review run
@@ -290,6 +290,34 @@ test("inspectMigrations: a failing statusCommand fails closed with a non-empty d
 
   assert.ok(result.destructive.length > 0);
   assert.match(result.destructive[0], /migration status failed/);
+});
+
+test("inspectMigrations: DEFAULT destructive pattern flags a real DROP TABLE line end-to-end", async () => {
+  // Positive path: exercise the real regex-match against the shipped default
+  // pattern (no destructivePattern override) so a broken default fails the suite
+  // instead of failing open (running a destructive migration without ack).
+  const worktree = mkdtempSync(path.join(tmpdir(), "ui-prov-migrate-pos-"));
+  tempRoots.push(worktree);
+  const recipe = {
+    migrate: {
+      statusCommand: "echo 'DROP TABLE users'",
+      applyCommand: "true",
+      destructivePattern: DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN,
+    },
+  };
+
+  const result = await inspectMigrations({ worktreePath: worktree, recipe });
+
+  assert.deepEqual(result.pending, ["DROP TABLE users"]);
+  assert.deepEqual(result.destructive, ["DROP TABLE users"]);
+});
+
+test("DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN matches known destructive statements", () => {
+  const re = new RegExp(DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN, "iu");
+  for (const line of ["DROP TABLE users", "TRUNCATE users", "DELETE FROM users"]) {
+    assert.ok(re.test(line), `expected default pattern to flag: ${line}`);
+  }
+  assert.equal(re.test("ADD COLUMN email"), false);
 });
 
 test("ensureOwnNodeModules: leaves a real node_modules alone", () => {
