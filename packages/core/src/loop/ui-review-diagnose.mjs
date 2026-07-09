@@ -55,7 +55,10 @@ export function parseException(text = "") {
 function extractFrameFromLine(line) {
   let m = line.match(/File "([^"]+)", line (\d+)/u);
   if (m) return { file: m[1], line: Number(m[2]) };
-  m = line.match(/\bat\s+(?:.*\()?([^\s():]+):(\d+)(?::\d+)?\)?\s*$/u);
+  // The file capture excludes only whitespace/parens (not `:`) and is lazy, so a
+  // served URL (`http://host:3000/assets/x.js`) is captured whole up to the
+  // trailing `:line:col` — normalizeFrameFile then strips the scheme/authority.
+  m = line.match(/\bat\s+(?:.*\()?([^\s()]+?):(\d+)(?::\d+)?\)?\s*$/u);
   if (m) return { file: m[1], line: Number(m[2]) };
   m = line.match(/([^\s():]+\.[A-Za-z0-9_]+):(\d+)\b/u);
   if (m) return { file: m[1], line: Number(m[2]) };
@@ -98,18 +101,22 @@ export function parseDiffAnchors(diffOutput = "") {
   let inHunk = false;
   for (const line of String(diffOutput).split("\n")) {
     if (line.startsWith("diff --git")) {
+      // The only hunk terminator: a bare `diff --git` can never be hunk content
+      // (content lines always carry a `+`/`-`/space prefix), so it always resets.
       currentPath = null;
       inHunk = false;
       continue;
     }
-    if (line.startsWith("+++ ")) {
+    // File headers appear only before the first hunk. Inside a hunk a line
+    // beginning `+++ `/`--- ` is content (an added `++ x` / a deleted `-- x`),
+    // so it must fall through to the `+`/`-` content handling below, not be
+    // misread as a header that rebinds the path or drops the rest of the hunk.
+    if (!inHunk && line.startsWith("+++ ")) {
       const p = line.slice(4).trim();
       currentPath = p === "/dev/null" ? null : p.replace(/^b\//u, "");
-      inHunk = false;
       continue;
     }
-    if (line.startsWith("--- ")) {
-      inHunk = false;
+    if (!inHunk && line.startsWith("--- ")) {
       continue;
     }
     if (line.startsWith("@@")) {

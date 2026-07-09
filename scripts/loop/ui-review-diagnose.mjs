@@ -12,7 +12,7 @@
  * parsing/mapping/ranking decisions live in core.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -22,7 +22,11 @@ import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-s
 import { diagnoseFailures } from "@dev-loops/core/loop/ui-review-diagnose";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const REPO_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)), "..");
+/** The `loop info` script is a same-dir sibling (both live in scripts/loop/). */
+export const LOOP_INFO_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "info.mjs");
+
+/** Bound the drive-result read, matching the PR diff fetch's maxBuffer. */
+const MAX_DRIVE_RESULT_BYTES = 16 * 1024 * 1024;
 
 const USAGE = `Usage:
   ui-review-diagnose.mjs --pr <number> --drive-result <path> [--repo <slug>]
@@ -37,7 +41,7 @@ Optional:
   -h, --help          Show this help.
 Output (stdout, JSON):
   { "ok": bool, "pr": {number,headRefName,baseRefName,state},
-    "findings": [ { severity, kind, exception:{type,message}, source:{file,line}|null,
+    "findings": [ { severity, kind, message, exception:{type,message}, source:{file,line}|null,
                     anchor:{path,line,side}|null, anchorable, nonAnchorableReason, evidence } ],
     "counts": { total, anchorable, nonAnchorable } }
 
@@ -90,8 +94,7 @@ export function parseUiReviewDiagnoseCliArgs(argv) {
 
 /** Reuse PR state from `loop info --pr --json` rather than re-fetching ad hoc. */
 function loadPrInfo(pr, repo, cwd) {
-  const script = path.join(REPO_ROOT, "loop/info.mjs");
-  const raw = execFileSync(process.execPath, [script, "--pr", String(pr), "--repo", repo, "--json"], {
+  const raw = execFileSync(process.execPath, [LOOP_INFO_SCRIPT, "--pr", String(pr), "--repo", repo, "--json"], {
     cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
   });
   const info = JSON.parse(raw);
@@ -119,6 +122,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   if (!rawRepo) throw parseError("Repo auto-detection failed. Set origin remote or use --repo.");
   const repo = normalizeRepoSlug(rawRepo, { errorMessage: "--repo must match <owner/name>" });
 
+  const driveSize = statSync(options.driveResult).size;
+  if (driveSize > MAX_DRIVE_RESULT_BYTES) {
+    throw parseError(`--drive-result is too large (${driveSize} bytes > ${MAX_DRIVE_RESULT_BYTES} cap)`);
+  }
   const drive = JSON.parse(readFileSync(options.driveResult, "utf8"));
   const pr = loadPrInfo(options.pr, repo, cwd);
   const diffOutput = loadPrDiff(options.pr, repo, cwd);

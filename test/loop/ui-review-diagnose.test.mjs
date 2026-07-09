@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -7,8 +8,10 @@ import {
   extractFrames,
   diagnoseFailures,
   rankFindings,
+  isInRepoFrame,
+  topInRepoFrame,
 } from "@dev-loops/core/loop/ui-review-diagnose";
-import { parseUiReviewDiagnoseCliArgs } from "../../scripts/loop/ui-review-diagnose.mjs";
+import { parseUiReviewDiagnoseCliArgs, LOOP_INFO_SCRIPT } from "../../scripts/loop/ui-review-diagnose.mjs";
 
 // A synthetic PR diff over two changed files. Added (RIGHT-side) head lines:
 //   app/models/user.rb  -> {11, 12, 14}   (line 13 is an unchanged context line)
@@ -46,6 +49,27 @@ test("parseDiffAnchors: maps each changed file to its added head lines (RIGHT si
   assert.ok(!anchors.get("app/assets/widget.js").has(1));
 });
 
+test("parseDiffAnchors: hunk content that renders as +++/--- is not misread as a file header", () => {
+  // A deleted line whose content is `-- x` renders `--- x`; an added line whose
+  // content is `++ x` renders `+++ x`. Both must be treated as hunk content, so
+  // the deletion does not drop the rest of the hunk and the added `++`/later
+  // added lines still anchor to the correct path and head line numbers.
+  const diff = `diff --git a/app/x.rb b/app/x.rb
+--- a/app/x.rb
++++ b/app/x.rb
+@@ -1,4 +1,5 @@
+ line1
+--- deleted comment
++++ added marker
+ line3
++real_added
+`;
+  const anchors = parseDiffAnchors(diff);
+  // Added head lines: `++ added marker` at 2, `real_added` at 4. The deletion
+  // (present only on the old side) does not advance the head counter.
+  assert.deepEqual([...anchors.get("app/x.rb")].sort((a, b) => a - b), [2, 4]);
+});
+
 // ── exception + frame parsing ───────────────────────────────────────────────
 
 test("parseException: extracts the type and message from a JS stack and a Ruby traceback", () => {
@@ -66,6 +90,24 @@ test("extractFrames: parses JS, Ruby, and Python frames in order", () => {
     { file: "app/models/user.rb", line: 11 },
     { file: "svc/job.py", line: 7 },
   ]);
+});
+
+test("extractFrames: a served-URL frame is captured whole (scheme+host:port), not port-glued garbage", () => {
+  // A browser page-error stack frame is a served URL. The host:port must not
+  // break the file capture — the whole URL is captured so normalizeFrameFile
+  // can strip the scheme/authority and suffix-match the repo-relative diff path.
+  assert.deepEqual(extractFrames("    at boom (http://localhost:3000/app/assets/widget.js:3:9)"), [
+    { file: "http://localhost:3000/app/assets/widget.js", line: 3 },
+  ]);
+});
+
+test("isInRepoFrame/topInRepoFrame: a non-node_modules vendor top frame (gems) is skipped", () => {
+  assert.equal(isInRepoFrame("/usr/local/gems/rails/lib/foo.rb"), false);
+  const frames = [
+    { file: "/usr/local/gems/rails/lib/foo.rb", line: 9 },
+    { file: "app/models/user.rb", line: 11 },
+  ];
+  assert.deepEqual(topInRepoFrame(frames), { file: "app/models/user.rb", line: 11 });
 });
 
 // ── the AC test: source -> diff-line anchoring, incl. the non-anchorable path ─
@@ -175,6 +217,33 @@ diff --git a/util.rb b/util.rb
   assert.match(findings[0].nonAnchorableReason, /ambiguous/i);
 });
 
+test("diagnoseFailures: a page-error whose frame is a served URL anchors to the repo-relative diff path", () => {
+  const diff = `diff --git a/app/assets/widget.js b/app/assets/widget.js
+--- a/app/assets/widget.js
++++ b/app/assets/widget.js
+@@ -1,2 +1,4 @@
+ const x = 1;
++function boom() {
++  throw new TypeError("bad");
+ }
+`;
+  const failures = [
+    {
+      kind: "page-error",
+      severity: "must-fix",
+      message: "uncaught page error",
+      // Browser page-error stack frame served over http with a host:port.
+      stack: "TypeError: bad\n    at boom (http://localhost:3000/app/assets/widget.js:3:9)",
+    },
+  ];
+  const { findings } = diagnoseFailures({ failures, diffOutput: diff });
+  // The whole served URL is retained as the source; the scheme/authority is
+  // stripped only for matching, so the anchor lands on the repo-relative path.
+  assert.equal(findings[0].source.file, "http://localhost:3000/app/assets/widget.js");
+  assert.deepEqual(findings[0].anchor, { path: "app/assets/widget.js", line: 3, side: "RIGHT" });
+  assert.equal(findings[0].anchorable, true);
+});
+
 test("rankFindings: is stable and deterministic across input order", () => {
   const a = { severity: "note", anchorable: false, kind: "z", source: { file: "b", line: 2 } };
   const b = { severity: "must-fix", anchorable: false, kind: "a", source: { file: "a", line: 1 } };
@@ -194,4 +263,11 @@ test("parseUiReviewDiagnoseCliArgs: requires --pr and --drive-result", () => {
   assert.equal(o.pr, 7);
   assert.equal(o.driveResult, "/r.json");
   assert.equal(o.repo, "o/n");
+});
+
+test("LOOP_INFO_SCRIPT resolves to the real sibling loop-info script (the CLI non-help path)", () => {
+  // The CLI's non-help path shells out to this script via execFileSync; a wrong
+  // path throws ENOENT the moment `loop info` is reused. Assert it exists.
+  assert.ok(LOOP_INFO_SCRIPT.endsWith("scripts/loop/info.mjs"), LOOP_INFO_SCRIPT);
+  assert.ok(existsSync(LOOP_INFO_SCRIPT), `loop-info script must exist at ${LOOP_INFO_SCRIPT}`);
 });
