@@ -59,6 +59,7 @@
     "./loop/ui-e2e-scoping": "./src/loop/ui-e2e-scoping.mjs",
     "./loop/ui-review-provision": "./src/loop/ui-review-provision.mjs",
     "./loop/ui-review-drive": "./src/loop/ui-review-drive.mjs",
+    "./loop/ui-review-diagnose": "./src/loop/ui-review-diagnose.mjs",
     "./projects/list-queue-items": "./src/projects/list-queue-items.mjs",
     "./projects/move-queue-item": "./src/projects/move-queue-item.mjs",
     "./projects/resolve-project": "./src/projects/resolve-project.mjs",
