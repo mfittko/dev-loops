@@ -140,6 +140,17 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
 - Continue through GitHub/Copilot loop until stop condition or human approval checkpoint
 - Stop at the human approval checkpoint by default unless merge explicitly authorized
 
+## Headless auto-refine of parked un-refined items
+
+Headless/`--auto` only. The enqueue refinement gate never lets an un-refined issue reach the pickup column: in `--auto` mode `add-queue-item.mjs` diverts it to the non-pickup park column with a recorded reason (`refined:false, diverted:true, parkedColumn, reason`), and it deliberately does NOT grill — synthesizing the missing artifact is this orchestrator's job, never the coordinator script's (keeps `OPS-NO-INLINE-INTERPRETER` clean). So a headless auto session that finds the pickup source empty may still have parked issues awaiting refinement. Before idling, run this bounded sub-loop (skip it entirely for interactive runs and for a specific `--issue`/`--pr` target):
+
+1. **Discover (deterministic, no LLM).** List parked un-refined issues via `node scripts/projects/list-parked-unrefined-items.mjs --repo <owner/name>` (project auto-resolved from `.devloops`; add `--jq`/`--silent` per the token-economical convention). It reads the park column and runs the same refinement-completeness check as the enqueue gate; each item carries `{ issueNumber, reason, missing }`. Empty list → nothing to refine; proceed to the normal fail-closed idle.
+2. **Auto-refine (the LLM step, here in the orchestrator).** For a discovered item, run `/loop-grill <issueNumber> --auto` (the `loop-grill` skill synthesizes AC/DoD/Non-goals into the issue body — do not re-implement grilling, and never move it into a coordinator script).
+3. **Re-enqueue via the sanctioned path.** After a `grill-clean` verdict, promote the now-refined issue with `node scripts/projects/add-queue-item.mjs --repo <owner/name> --item <issueNumber> --next-up`. The enqueue gate re-checks refinement and admits it to the pickup column.
+4. **Fail-safe (unrefinable → stays parked).** If grilling cannot produce a usable artifact (`N unresolved items`, or the body still lacks AC/DoD/linked-doc), do NOT force the issue into Next Up. Re-enqueue with `--auto` (`… --item <issueNumber> --next-up --auto`) so the gate re-parks it in the non-pickup column with a recorded reason; surface that `refinement.reason` and leave it parked for a human. Never hand-edit the board to promote an item the gate rejected.
+
+This wires the auto-refine convenience at the orchestrator (LLM-agent) layer only. The deterministic scripts keep just the park/allow decision and the parked-item discovery.
+
 ## No gate exemptions
 
 All PRs must pass the full gate pipeline before merge. No scope is exempt: docs-only, tooling, meta, configuration, internal-process — all require `draft_gate`, current-head `pre_approval_gate` evidence, and Copilot review (except internal-only PRs detected by path pattern, which skip the Copilot convergence requirement).
