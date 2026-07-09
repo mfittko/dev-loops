@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe } from "@dev-loops/core/config";
-import { parseUiReviewProvisionCliArgs } from "../../scripts/loop/ui-review-provision.mjs";
+import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules } from "../../scripts/loop/ui-review-provision.mjs";
 
 // A "fixture project": a temp dir whose .devloops declares a ui-review run
 // recipe. The real config resolver reads it; the rest of the IO is injected.
@@ -70,7 +70,7 @@ function baseSeams(root, overrides = {}) {
       installDeps: async () => ({ ok: true, detail: "npm install" }),
       resolveRunRecipe: async (wt) => resolveUiReviewRunRecipe((await loadDevLoopConfig({ repoRoot: wt })).config),
       inspectMigrations: async () => ({ pending: [], destructive: [], detail: "none" }),
-      applyMigrations: async () => ({ applied: 0, detail: "n/a" }),
+      applyMigrations: async () => ({ ok: true, applied: 0, detail: "n/a" }),
       bootApp: async () => ({ pid: 4242, detail: "spawned" }),
       probe: async () => false,
       now: clock.now,
@@ -85,6 +85,11 @@ function baseSeams(root, overrides = {}) {
 test("parseUiReviewProvisionCliArgs: requires --repo-root and --pr", () => {
   assert.throws(() => parseUiReviewProvisionCliArgs(["--pr", "5"]), /repo-root/);
   assert.throws(() => parseUiReviewProvisionCliArgs(["--repo-root", "/r"]), /--pr/);
+});
+
+test("parseUiReviewProvisionCliArgs: rejects a non-integer --pr", () => {
+  assert.throws(() => parseUiReviewProvisionCliArgs(["--repo-root", "/r", "--pr", "abc"]), /positive integer/);
+  assert.throws(() => parseUiReviewProvisionCliArgs(["--repo-root", "/r", "--pr", "0"]), /positive integer/);
 });
 
 test("parseUiReviewProvisionCliArgs: parses pr, branch, ack flag", () => {
@@ -157,7 +162,7 @@ test("destructive migration requires explicit ack (fail closed)", async () => {
   // Without ack: stops, nothing applied.
   const blocked = await provisionAndBoot(
     { repoRoot: "/main", pr: 10 },
-    baseSeams(root, { inspectMigrations, applyMigrations: async () => { applied = true; return { applied: 1, detail: "x" }; } }).seams,
+    baseSeams(root, { inspectMigrations, applyMigrations: async () => { applied = true; return { ok: true, applied: 1, detail: "x" }; } }).seams,
   );
   assert.equal(blocked.ok, false);
   assert.equal(applied, false);
@@ -169,7 +174,7 @@ test("destructive migration requires explicit ack (fail closed)", async () => {
     { repoRoot: "/main", pr: 10, ackDestructiveMigration: true },
     baseSeams(root, {
       inspectMigrations,
-      applyMigrations: async () => ({ applied: 1, detail: "applied" }),
+      applyMigrations: async () => ({ ok: true, applied: 1, detail: "applied" }),
       probe: async () => (++probed >= 1),
     }).seams,
   );
@@ -192,4 +197,93 @@ test("dependency-lock delta triggers a scoped install (logged)", async () => {
   assert.equal(installed, true);
   assert.equal(result.depInstall.installed, true);
   assert.ok(logs.some((l) => /delta detected/.test(l)));
+});
+
+test("dependency install failure -> fail-closed stop before boot", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  let booted = false;
+  const { seams } = baseSeams(root, {
+    detectDepDelta: async () => ({ changed: true, detail: "differs" }),
+    installDeps: async () => ({ ok: false, detail: "npm ERR! boom" }),
+    bootApp: async () => { booted = true; return { pid: 1, detail: "spawned" }; },
+  });
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 20 }, seams);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped, true);
+  assert.match(result.stopReason, /dependency install failed/);
+  assert.ok(result.findings.some((f) => f.kind === "dep-install"));
+  assert.equal(booted, false); // never boots after a failed install
+});
+
+test("migration apply failure -> fail-closed stop before boot", async () => {
+  const root = makeFixture(RECIPE_WITH_MIGRATE_YAML);
+  let booted = false;
+  const { seams } = baseSeams(root, {
+    inspectMigrations: async () => ({ pending: ["001_add_col"], destructive: [], detail: "1 pending" }),
+    applyMigrations: async () => ({ ok: false, applied: 0, detail: "apply failed: exit 1" }),
+    bootApp: async () => { booted = true; return { pid: 1, detail: "spawned" }; },
+  });
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 21 }, seams);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped, true);
+  assert.match(result.stopReason, /migration apply failed/);
+  assert.ok(result.findings.some((f) => f.kind === "migration-apply"));
+  assert.equal(result.migrations.applied, 0);
+  assert.equal(booted, false); // a failed apply never proceeds to boot
+});
+
+test("worktree guard: refuses to operate in the primary checkout", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  let booted = false;
+  const { seams } = baseSeams(root, {
+    assertNotPrimary: () => ({ ok: false, message: "/repo resolves to the primary checkout" }),
+    bootApp: async () => { booted = true; return { pid: 1, detail: "spawned" }; },
+  });
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 22 }, seams);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped, true);
+  assert.match(result.stopReason, /primary checkout/);
+  assert.ok(result.findings.some((f) => f.kind === "worktree-guard"));
+  assert.equal(booted, false);
+});
+
+test("ensureOwnNodeModules: materializes a symlinked node_modules without touching the primary", () => {
+  // Primary checkout with a real node_modules holding one package.
+  const primary = mkdtempSync(path.join(tmpdir(), "ui-prov-primary-"));
+  tempRoots.push(primary);
+  const primaryNm = path.join(primary, "node_modules");
+  mkdirSync(path.join(primaryNm, "left-pad"), { recursive: true });
+  writeFileSync(path.join(primaryNm, "left-pad", "index.js"), "module.exports = 1;\n");
+
+  // Worktree whose node_modules is a symlink into the primary (linkOnInit).
+  const worktree = mkdtempSync(path.join(tmpdir(), "ui-prov-wt-"));
+  tempRoots.push(worktree);
+  symlinkSync(primaryNm, path.join(worktree, "node_modules"));
+
+  const materialized = ensureOwnNodeModules(worktree);
+
+  assert.equal(materialized, true);
+  // Worktree now owns a real (empty) node_modules — not a symlink.
+  const st = lstatSync(path.join(worktree, "node_modules"));
+  assert.equal(st.isSymbolicLink(), false);
+  assert.equal(st.isDirectory(), true);
+  assert.deepEqual(readdirSync(path.join(worktree, "node_modules")), []);
+  // The primary's real node_modules is untouched — an install would go here
+  // if we had written through the symlink.
+  assert.deepEqual(readdirSync(primaryNm), ["left-pad"]);
+});
+
+test("ensureOwnNodeModules: leaves a real node_modules alone", () => {
+  const worktree = mkdtempSync(path.join(tmpdir(), "ui-prov-real-"));
+  tempRoots.push(worktree);
+  mkdirSync(path.join(worktree, "node_modules"));
+
+  assert.equal(ensureOwnNodeModules(worktree), false);
+  assert.equal(lstatSync(path.join(worktree, "node_modules")).isDirectory(), true);
 });

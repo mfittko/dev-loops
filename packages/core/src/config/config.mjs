@@ -187,7 +187,19 @@ const WorktreeConfig = z.strictObject({
 const UiReviewMigrateConfig = z.strictObject({
   statusCommand: z.string().trim().min(1),
   applyCommand: z.string().trim().min(1),
-  destructivePattern: z.string().trim().min(1).optional(),
+  destructivePattern: z
+    .string()
+    .trim()
+    .min(1)
+    .refine((p) => {
+      try {
+        new RegExp(p);
+        return true;
+      } catch {
+        return false;
+      }
+    }, "destructivePattern must be a valid regex")
+    .optional(),
 });
 
 /**
@@ -198,7 +210,7 @@ const UiReviewMigrateConfig = z.strictObject({
  */
 const UiReviewRunConfig = z.strictObject({
   command: z.string().trim().min(1),
-  readyUrl: z.string().trim().min(1),
+  readyUrl: z.string().trim().url(),
   readyTimeoutMs: z.number().int().min(1).max(600000).default(60000),
   readyIntervalMs: z.number().int().min(1).max(60000).default(1000),
   cwd: z.string().trim().min(1).optional(),

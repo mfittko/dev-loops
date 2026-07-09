@@ -39,7 +39,7 @@ const MUST_FIX = "must-fix";
  * @param {(a:{worktreePath:string})=>Promise<{ok:boolean,detail:string}>} seams.installDeps
  * @param {(worktreePath:string)=>Promise<object|null>} seams.resolveRunRecipe
  * @param {(a:{worktreePath:string,recipe:object})=>Promise<{pending:string[],destructive:string[],detail:string}>} seams.inspectMigrations
- * @param {(a:{worktreePath:string,recipe:object})=>Promise<{applied:number,detail:string}>} seams.applyMigrations
+ * @param {(a:{worktreePath:string,recipe:object})=>Promise<{ok:boolean,applied:number,detail:string}>} seams.applyMigrations
  * @param {(a:{worktreePath:string,recipe:object})=>Promise<{pid:number|null,detail:string}>} seams.bootApp
  * @param {(url:string)=>Promise<boolean>} seams.probe
  * @param {(ms:number)=>Promise<void>} [seams.delay]
@@ -146,6 +146,13 @@ export async function provisionAndBoot(
         record(`destructive migration(s) acknowledged; applying ${mig.pending.length} pending migration(s)`);
       }
       const applied = await applyMigrations({ worktreePath, recipe });
+      if (!applied.ok) {
+        return stop(
+          "migration apply failed",
+          { kind: "migration-apply", severity: MUST_FIX, message: applied.detail },
+          { worktreePath, depInstall, migrations: { pending: mig.pending.length, applied: 0, destructive: mig.destructive, detail: applied.detail } },
+        );
+      }
       migrations = { pending: mig.pending.length, applied: applied.applied, destructive: mig.destructive, detail: applied.detail };
       record(`migrations applied: ${applied.applied} (${applied.detail})`);
     } else {

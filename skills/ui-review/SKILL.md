@@ -35,8 +35,13 @@ or a readiness probe that times out. Every bounded cap is logged.
 
 The run recipe is per-project and never hard-coded: a project declares
 `uiReview.run` in `.devloops` — a boot `command`, an HTTP `readyUrl`, probe
-`readyTimeoutMs`/`readyIntervalMs`, and an optional `migrate` sub-recipe
-(`statusCommand`/`applyCommand`, plus a `destructivePattern` guard).
+`readyTimeoutMs`/`readyIntervalMs`, an optional worktree-relative `cwd`, and an
+optional `migrate` sub-recipe (`statusCommand`/`applyCommand`, plus a
+`destructivePattern` guard).
+
+Threat boundary: the run recipe is branch-controlled, and its `command` is
+executed as a shell command in the worktree. Every later stage inherits this
+assumption — a run recipe is trusted-branch input, not untrusted data.
 
 ## Non-goals
 

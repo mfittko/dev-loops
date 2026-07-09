@@ -12,7 +12,7 @@
  * orchestrator (packages/core/src/loop/ui-review-provision.mjs).
  */
 import { execFileSync, spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
@@ -130,11 +130,40 @@ function detectDepDelta({ repoRoot, worktreePath }) {
   return Promise.resolve({ changed: true, detail: "package-lock.json differs" });
 }
 
-/** npm install in the worktree — incremental, so it reconciles only the delta. */
+/**
+ * Ensure the worktree owns its node_modules before installing. linkOnInit can
+ * symlink node_modules into the primary checkout; running `npm install` through
+ * that symlink would write into the primary's real node_modules — mutating
+ * shared deps. Replace a symlinked node_modules with a real (empty) directory so
+ * the install is isolated to the worktree, leaving the primary untouched.
+ *
+ * ponytail: materializing to an empty dir makes `npm install` reinstall the full
+ * tree (not just the lock delta); if that install cost matters, copy the
+ * primary's real node_modules into the worktree first for an incremental
+ * reconcile.
+ *
+ * @returns {boolean} true when a symlinked node_modules was materialized.
+ */
+export function ensureOwnNodeModules(worktreePath) {
+  const nm = path.join(worktreePath, "node_modules");
+  let st;
+  try {
+    st = lstatSync(nm);
+  } catch {
+    return false; // absent — npm install creates a real dir
+  }
+  if (!st.isSymbolicLink()) return false;
+  rmSync(nm); // unlinks only the symlink; the primary's real dir is untouched
+  mkdirSync(nm);
+  return true;
+}
+
+/** npm install in the worktree, after ensuring it owns its node_modules. */
 function installDeps({ worktreePath }) {
   try {
+    const materialized = ensureOwnNodeModules(worktreePath);
     execFileSync("npm", ["install"], { cwd: worktreePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    return Promise.resolve({ ok: true, detail: "npm install" });
+    return Promise.resolve({ ok: true, detail: materialized ? "npm install (materialized own node_modules)" : "npm install" });
   } catch (err) {
     return Promise.resolve({ ok: false, detail: (err.stderr ?? err.message ?? "npm install failed").toString().trim() });
   }
@@ -173,10 +202,10 @@ function applyMigrations({ worktreePath, recipe }) {
   const cwd = migrateCwd(worktreePath, recipe);
   try {
     runShell(recipe.migrate.applyCommand, cwd);
-    return Promise.resolve({ applied: 1, detail: "apply command ran" });
+    return Promise.resolve({ ok: true, applied: 1, detail: "apply command ran" });
   } catch (err) {
     const msg = (err.stderr ?? err.message ?? "migration apply failed").toString().trim();
-    return Promise.resolve({ applied: 0, detail: `apply failed: ${msg}` });
+    return Promise.resolve({ ok: false, applied: 0, detail: `apply failed: ${msg}` });
   }
 }
 
