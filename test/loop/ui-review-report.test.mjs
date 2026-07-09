@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import {
   buildReviewInput,
@@ -7,10 +10,11 @@ import {
   decideHosting,
   buildArtifactHtml,
   ARTIFACT_MAX_FINDINGS,
+  ARTIFACT_MAX_SCREENSHOT_BYTES,
 } from "@dev-loops/core/loop/ui-review-report";
 import { buildDraftReviewPayload } from "@dev-loops/core/loop/reviewer-loop-state";
 import { containsBareCopilotSummon } from "@dev-loops/core/github/copilot-helpers";
-import { parseUiReviewReportCliArgs } from "../../scripts/loop/ui-review-report.mjs";
+import { parseUiReviewReportCliArgs, loadScreenshot } from "../../scripts/loop/ui-review-report.mjs";
 
 const HEAD_SHA = "a".repeat(40);
 
@@ -260,6 +264,48 @@ test("CLI: parses required args, submit-authorized and dry-run default off", () 
   assert.equal(opts.submitAuthorized, false);
   assert.equal(opts.dryRun, false);
   assert.throws(() => parseUiReviewReportCliArgs(["--diagnose-result", "d.json", "--html-output", "o.html"]), /Missing required --pr/);
+});
+
+test("loadScreenshot: raw-file cap agrees with the data-URI budget (no read-then-drop)", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ui-review-shot-"));
+  const prefixLen = "data:image/png;base64,".length;
+  // Largest raw size whose base64 data URI still fits the budget (mirrors the
+  // omission boundary buildArtifactHtml applies to the inlined data-URI length).
+  const maxRawBytes = 3 * Math.floor((ARTIFACT_MAX_SCREENSHOT_BYTES - prefixLen) / 4);
+
+  const shot = (name, bytes) => {
+    const p = path.join(dir, name);
+    writeFileSync(p, Buffer.alloc(bytes));
+    return [{ evidence: { screenshotPath: p } }];
+  };
+  const dataUriLen = (bytes) => prefixLen + 4 * Math.ceil(bytes / 3);
+
+  // One byte over the raw threshold: its data URI would exceed the budget, so it
+  // is omitted+logged HERE — never read + base64-encoded only to be dropped by
+  // buildArtifactHtml (which is where the old raw-vs-data-URI mismatch wasted IO).
+  const overSize = maxRawBytes + 1;
+  assert.ok(overSize < ARTIFACT_MAX_SCREENSHOT_BYTES, "over case is still under the old raw cap");
+  assert.ok(dataUriLen(overSize) > ARTIFACT_MAX_SCREENSHOT_BYTES, "over case data URI exceeds budget");
+  const overCaps = [];
+  assert.equal(loadScreenshot(shot("over.png", overSize), overCaps), null);
+  assert.ok(overCaps.some((c) => /screenshot/i.test(c) && /omitted/i.test(c)));
+
+  // Exactly at the threshold: data URI fits the budget, so it is read + inlined
+  // and buildArtifactHtml keeps it (the two checks agree).
+  assert.ok(dataUriLen(maxRawBytes) <= ARTIFACT_MAX_SCREENSHOT_BYTES, "under case data URI fits budget");
+  const underCaps = [];
+  const loaded = loadScreenshot(shot("under.png", maxRawBytes), underCaps);
+  assert.ok(loaded && loaded.dataUri.length <= ARTIFACT_MAX_SCREENSHOT_BYTES);
+  assert.equal(underCaps.length, 0);
+  const { html, caps } = buildArtifactHtml({
+    findings: FINDINGS,
+    counts: { total: 3, anchorable: 2, nonAnchorable: 1 },
+    pr: { number: 42, headSha: HEAD_SHA },
+    screenshot: loaded,
+    generatedAt: "2026-07-09T00:00:00.000Z",
+  });
+  assert.match(html, /data:image\/png;base64,/);
+  assert.equal(caps.length, 0);
 });
 
 test("buildArtifactHtml: oversized screenshot is omitted and logged, never silently dropped", () => {

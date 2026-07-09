@@ -120,8 +120,14 @@ function loadLiveHeadSha(pr, repo, cwd) {
 
 /** Read the shared reproduced-evidence screenshot (Stage 3 surfaces one shared
  * ref across findings) and inline it as a data URI. Bounded: an oversized or
- * unreadable screenshot is skipped with a logged cap, never fatal. */
-function loadScreenshot(findings, caps) {
+ * unreadable screenshot is skipped with a logged cap, never fatal.
+ *
+ * The artifact cap (ARTIFACT_MAX_SCREENSHOT_BYTES) bounds the INLINED data-URI
+ * length, not the raw file. Base64 expands ~4/3 plus the `data:<mime>;base64,`
+ * prefix, so we derive the largest raw file size whose data URI still fits that
+ * budget and omit oversize files here — before the wasted read+encode that
+ * buildArtifactHtml would only drop again. Both layers then apply one limit. */
+export function loadScreenshot(findings, caps) {
   const withEvidence = findings.find((f) => f?.evidence?.screenshotPath);
   const p = withEvidence?.evidence?.screenshotPath;
   if (!p) return null;
@@ -132,11 +138,15 @@ function loadScreenshot(findings, caps) {
     caps.push(`artifact: evidence screenshot not readable, omitted: ${p}`);
     return null;
   }
-  if (size > ARTIFACT_MAX_SCREENSHOT_BYTES) {
-    caps.push(`artifact: screenshot omitted (${size} bytes > ${ARTIFACT_MAX_SCREENSHOT_BYTES} cap): ${p}`);
+  const mime = MIME_BY_EXT[path.extname(p).toLowerCase()] ?? "image/png";
+  const prefixLen = `data:${mime};base64,`.length;
+  // Largest raw byte count whose base64 data URI stays within the budget:
+  // dataUri.length = prefixLen + 4*ceil(size/3) <= ARTIFACT_MAX_SCREENSHOT_BYTES.
+  const maxRawBytes = 3 * Math.floor((ARTIFACT_MAX_SCREENSHOT_BYTES - prefixLen) / 4);
+  if (size > maxRawBytes) {
+    caps.push(`artifact: screenshot omitted (${size} raw bytes exceed the ${ARTIFACT_MAX_SCREENSHOT_BYTES}-byte data-URI cap): ${p}`);
     return null;
   }
-  const mime = MIME_BY_EXT[path.extname(p).toLowerCase()] ?? "image/png";
   const dataUri = `data:${mime};base64,${readFileSync(p).toString("base64")}`;
   return { path: p, dataUri };
 }
