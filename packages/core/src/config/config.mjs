@@ -178,6 +178,42 @@ const WorktreeConfig = z.strictObject({
   linkOnInit: z.array(z.string().trim().min(1)).optional(),
 });
 
+/**
+ * Dev-DB migration sub-recipe for the ui-review run recipe. `statusCommand`
+ * lists pending migrations (one per line); `applyCommand` applies them.
+ * `destructivePattern` is an optional regex (default in resolveUiReviewRunRecipe)
+ * matched against the status output to fail closed on destructive migrations.
+ */
+const UiReviewMigrateConfig = z.strictObject({
+  statusCommand: z.string().trim().min(1),
+  applyCommand: z.string().trim().min(1),
+  destructivePattern: z.string().trim().min(1).optional(),
+});
+
+/**
+ * Per-project boot recipe: a shell `command` that starts the branch's app and a
+ * `readyUrl` an HTTP readiness probe polls until the app is up (never a fixed
+ * sleep). No app is hard-coded — a project declares its own recipe. `cwd` is an
+ * optional worktree-relative subdir to run in.
+ */
+const UiReviewRunConfig = z.strictObject({
+  command: z.string().trim().min(1),
+  readyUrl: z.string().trim().min(1),
+  readyTimeoutMs: z.number().int().min(1).max(600000).default(60000),
+  readyIntervalMs: z.number().int().min(1).max(60000).default(1000),
+  cwd: z.string().trim().min(1).optional(),
+  migrate: UiReviewMigrateConfig.optional(),
+});
+
+/**
+ * UI-review route config: the generic, per-project provision+boot recipe. Absent
+ * (the default) means no bootable recipe is declared — the provision+boot stage
+ * stops with that as a stated reason rather than guessing how to run the app.
+ */
+const UiReviewConfig = z.strictObject({
+  run: UiReviewRunConfig.optional(),
+});
+
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */
 const InternalPatternsConfig = z.array(z.string().trim().min(1)).min(1);
 
@@ -232,6 +268,7 @@ export const DevLoopConfigSchema = z.strictObject({
   personas: PersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.optional(),
+  uiReview: UiReviewConfig.optional(),
   // Deprecated (removed in #1088): tolerated so consumer .devloops files that
   // still carry a localPlanning block keep parsing. Accepted, never read.
   localPlanning: z.unknown().optional(),
@@ -304,6 +341,7 @@ export const FileConfigSchema = z.strictObject({
   personas: FilePersonasConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.partial().optional(),
+  uiReview: UiReviewConfig.partial().optional(),
   // Deprecated (removed in #1088): tolerated so consumer .devloops files that
   // still carry a localPlanning block keep parsing. Accepted, never read.
   localPlanning: z.unknown().optional(),
@@ -1383,6 +1421,48 @@ export function resolveWorktreeConfig(config) {
       ? v.map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => s.length > 0)
       : [];
   return { copyOnInit: list(wt?.copyOnInit), linkOnInit: list(wt?.linkOnInit) };
+}
+
+/**
+ * Default destructive-migration signal: SQL statements that drop or wipe data.
+ * Matched (case-insensitive) against the migration status output. A project may
+ * override via `uiReview.run.migrate.destructivePattern`.
+ */
+export const DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN =
+  "\\b(DROP\\s+(TABLE|COLUMN|DATABASE|SCHEMA)|TRUNCATE|DELETE\\s+FROM|ALTER\\s+TABLE\\s+.*\\bDROP\\b)";
+
+/**
+ * Resolve the ui-review provision+boot run recipe from the merged config.
+ *
+ * Returns null when no `uiReview.run.command` is declared — the provision+boot
+ * stage treats that as a stated stop reason (no app is ever guessed). Numeric
+ * probe bounds fall back to sane defaults so a partial file-level config (whose
+ * schema defaults are dropped by `.partial()`) still resolves fully.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {null | { command: string, readyUrl: string, readyTimeoutMs: number,
+ *   readyIntervalMs: number, cwd: string|null,
+ *   migrate: null | { statusCommand: string, applyCommand: string, destructivePattern: string } }}
+ */
+export function resolveUiReviewRunRecipe(config) {
+  const run = config?.uiReview?.run;
+  if (!run || typeof run.command !== "string" || run.command.trim().length === 0) return null;
+  if (typeof run.readyUrl !== "string" || run.readyUrl.trim().length === 0) return null;
+  const migrate = run.migrate
+    ? {
+        statusCommand: run.migrate.statusCommand,
+        applyCommand: run.migrate.applyCommand,
+        destructivePattern: run.migrate.destructivePattern ?? DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN,
+      }
+    : null;
+  return {
+    command: run.command.trim(),
+    readyUrl: run.readyUrl.trim(),
+    readyTimeoutMs: Number.isInteger(run.readyTimeoutMs) ? run.readyTimeoutMs : 60000,
+    readyIntervalMs: Number.isInteger(run.readyIntervalMs) ? run.readyIntervalMs : 1000,
+    cwd: typeof run.cwd === "string" && run.cwd.trim().length > 0 ? run.cwd.trim() : null,
+    migrate,
+  };
 }
 
 /**
