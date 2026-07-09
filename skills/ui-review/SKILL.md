@@ -170,7 +170,9 @@ what remains; stopping the app still runs, because it is a clean shutdown of a
 process the loop itself started, not a mutation of persisted state. The app is
 stopped via the provision boot PID (SIGTERM, then a LOGGED SIGKILL fallback); a
 null PID is never a blind kill — the ledger reports the process may still be
-running. Worktree removal delegates to `scripts/loop/cleanup-worktree.mjs`,
+running. On win32 the app-stop fails closed (process-group kill is unsupported,
+so the kill is not attempted): the ledger reports may-be-running rather than a
+false stopped. Worktree removal delegates to `scripts/loop/cleanup-worktree.mjs`,
 which refuses any path outside the loop namespace and leaves the primary
 checkout untouched.
 

@@ -87,7 +87,9 @@ function driveMayHaveCreatedRows(driveResult) {
  * @param {boolean} [input.stopApp] - Stop the Stage-1 app (default true). This is
  *   a clean shutdown, NOT gated on confirmation.
  * @param {object} seams
- * @param {(a:{pid:number})=>Promise<{stopped:boolean,forced:boolean,detail:string}>} seams.killProcess
+ * @param {(a:{pid:number})=>Promise<{stopped:boolean,forced:boolean,detail:string,mayBeRunning?:boolean}>} seams.killProcess
+ *   `mayBeRunning:true` marks a NOT-ATTEMPTED outcome (e.g. win32, where process-group
+ *   signalling is unsupported) — mapped to MAY_BE_RUNNING (non-fatal), not KILL_FAILED.
  * @param {(a:{rows:Array<object>})=>Promise<{ok:boolean,dropped:number,detail:string}>} seams.dropRows
  * @param {(a:{worktreePath:string})=>Promise<{removed:string|null,ok:boolean,detail:string}>} seams.removeWorktree
  * @param {(msg:string)=>void} [seams.log]
@@ -146,6 +148,13 @@ export async function teardown(
       if (kill.stopped) {
         processLedger = { pid, status: PROCESS_STATUS.STOPPED, forced: !!kill.forced, detail: kill.detail };
         record(`app stopped (pid ${pid})${kill.forced ? " [force-killed: SIGKILL fallback]" : ""}: ${kill.detail}`);
+      } else if (kill.mayBeRunning) {
+        // The kill was NOT ATTEMPTED (e.g. win32 process-group signalling is
+        // unsupported) — this is a "couldn't stop", not a failed attempt, so it
+        // is non-fatal (matches the null-PID may-be-running treatment): the
+        // ledger reports the app may still be running and `ok` is left intact.
+        processLedger = { pid, status: PROCESS_STATUS.MAY_BE_RUNNING, forced: !!kill.forced, detail: kill.detail };
+        record(`app stop: ${kill.detail}`);
       } else {
         processLedger = { pid, status: PROCESS_STATUS.KILL_FAILED, forced: !!kill.forced, detail: kill.detail };
         fail(`app stop FAILED (pid ${pid}): ${kill.detail}`);

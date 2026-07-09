@@ -163,15 +163,16 @@ function signalProcess(pid, sig) {
  * signal would throw, `signalProcess` would fall back to the bare shell PID, and
  * a bare-pid `isAlive` poll would then report `stopped:true` while the detached
  * server keeps running — a FALSE success the ledger would enshrine. Rather than
- * misreport, we refuse to attempt the kill and report the app as NOT reliably
- * stopped (mapped to a not-stopped ledger status upstream). `platform` is
+ * misreport, we refuse to ATTEMPT the kill and report the app as may-still-be-
+ * running (`mayBeRunning:true` → mapped to a MAY_BE_RUNNING ledger status
+ * upstream, non-fatal: a "couldn't stop", not a failed attempt). `platform` is
  * injectable so the win32 path is testable off a real Windows host.
  * ponytail: fail-closed stated-limitation, not a taskkill /T tree-kill — honest
  * and minimal for this stage; upgrade to a Windows process-tree kill if/when the
  * loop actually needs to run and reliably stop the app on win32. */
 export async function killProcess({ pid, graceMs = 3000, pollMs = 100, platform = process.platform }) {
   if (platform === "win32") {
-    return { stopped: false, forced: false, detail: "win32 process-group kill unsupported; app may still be running (a shell-PID kill would not reach the detached server child)" };
+    return { stopped: false, forced: false, mayBeRunning: true, detail: "win32 process-group kill unsupported; app may still be running (a shell-PID kill would not reach the detached server child)" };
   }
   try {
     signalProcess(pid, "SIGTERM");

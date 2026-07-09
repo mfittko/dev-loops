@@ -307,21 +307,24 @@ test("killProcess escalates to SIGKILL (forced:true) for a child that ignores SI
 // Thread 1: win32 has no process-group signalling and Stage 1 boots the app
 // detached via a shell, so a bare shell-PID kill would leave the real server
 // running while a bare-pid poll falsely reports stopped. killProcess must FAIL
-// CLOSED on win32 — report not-stopped, never a false success — and the core
-// must map that to a not-stopped ledger status (never PROCESS_STATUS.STOPPED).
-test("killProcess fails closed on win32 (process-group kill unsupported): stopped:false, not a false success", async () => {
+// CLOSED on win32 — the kill is NOT ATTEMPTED, so it reports may-be-running
+// (never a false STOPPED) via mayBeRunning:true, which the core maps to
+// MAY_BE_RUNNING (non-fatal: a "couldn't stop", not a failed attempt).
+test("killProcess fails closed on win32 (process-group kill unsupported): not attempted, may-be-running", async () => {
   const res = await killProcess({ pid: 4242, platform: "win32" });
   assert.equal(res.stopped, false, "win32 must not claim the app stopped");
   assert.equal(res.forced, false);
+  assert.equal(res.mayBeRunning, true, "win32 kill is not attempted => may-be-running, not a failed attempt");
   assert.match(res.detail, /win32.*(may still be running|unsupported)/i);
 });
 
-test("win32 killProcess flows to a not-stopped ledger (KILL_FAILED, ok:false), never a false STOPPED", async () => {
+test("win32 killProcess flows to a MAY_BE_RUNNING ledger (non-fatal), never a false STOPPED", async () => {
   const { seams } = makeSeams({ killProcess: (a) => killProcess({ ...a, platform: "win32" }) });
   const res = await teardown({ provisionResult: PROVISION, confirm: true }, seams);
   assert.notEqual(res.ledger.process.status, PROCESS_STATUS.STOPPED, "win32 must never report a false STOPPED");
-  assert.equal(res.ledger.process.status, PROCESS_STATUS.KILL_FAILED);
-  assert.equal(res.ok, false);
+  assert.equal(res.ledger.process.status, PROCESS_STATUS.MAY_BE_RUNNING);
+  assert.equal(res.ok, true, "not-attempted (couldn't stop) is non-fatal, matching the null-PID may-be-running treatment");
+  assert.ok(!res.errors.some((e) => /app stop FAILED/.test(e)), "win32 not-attempted must not surface as a kill failure");
   assert.match(res.ledger.process.detail, /win32/i);
 });
 
