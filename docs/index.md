@@ -23,6 +23,7 @@ Start here for repository documentation.
 - [UI Smoke Harness](./ui-smoke-harness.md)
 - [UI Artifact Contract](./ui-artifact-contract.md)
 - [UI Designer + Vision Review Loop](./ui-designer-review-loop.md)
+- [UI-Review Run/Auth Recipe Contract](./ui-review-recipe-contract.md) — per-project run/login/flow recipe for `/loop-review-ui`
 - [Slides Content & Storytelling Review Loop](./slides-story-review-loop.md)
 - [A/B Contrast Deslop Step](./ab-contrast-deslop-step.md)
 - [Docs-Grill Step](./docs-grill-step.md) — autonomous in-loop check of a change against its contracts/docs

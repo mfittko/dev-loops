@@ -160,6 +160,16 @@ test("transformCommand keeps description+argument-hint, rewrites CLI, adds banne
   assert.equal(out.includes("<dev-loops-package-root>"), false);
 });
 
+test("transformCommand shifts repo-root ../docs links (not bundled ../skills links) for the deeper .claude/commands/ location", () => {
+  const raw = `---\ndescription: "Review UI."\n---\nSee the [Recipe Contract](../docs/ui-review-recipe-contract.md) and [Intake](../skills/docs/issue-intake-procedure.md).\n`;
+  const out = transformCommand({ source: "commands/loop-review-ui.command.md", raw });
+  // Repo-root docs/ is not mirrored into .claude/, so it shifts one level.
+  assert.ok(out.includes("(../../docs/ui-review-recipe-contract.md)"));
+  assert.equal(out.includes("(../docs/ui-review-recipe-contract.md)"), false);
+  // ../skills/docs is bundled to .claude/skills/docs — the relative path is preserved verbatim.
+  assert.ok(out.includes("(../skills/docs/issue-intake-procedure.md)"));
+});
+
 test("transformSkill preserves user-invocable: true for the public entry skill", () => {
   const out = transformSkill({
     source: "skills/dev-loop/SKILL.md",
