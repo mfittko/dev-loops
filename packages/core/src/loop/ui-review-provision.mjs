@@ -21,6 +21,8 @@
  * posting, production DB.
  */
 
+import path from "node:path";
+
 const MUST_FIX = "must-fix";
 
 /**
@@ -42,6 +44,8 @@ const MUST_FIX = "must-fix";
  * @param {(a:{worktreePath:string,recipe:object})=>Promise<{ok:boolean,applied:number,detail:string}>} seams.applyMigrations
  * @param {(a:{worktreePath:string,recipe:object})=>Promise<{pid:number|null,detail:string}>} seams.bootApp
  * @param {(url:string)=>Promise<boolean>} seams.probe
+ * @param {(ms:number)=>Promise<false>} [seams.probeTimeout] - Per-attempt cap:
+ *   resolves false once `ms` elapses, so a hung probe can't outlive the budget.
  * @param {(ms:number)=>Promise<void>} [seams.delay]
  * @param {()=>number} [seams.now]
  * @param {(msg:string)=>void} [seams.log]
@@ -59,6 +63,11 @@ export async function provisionAndBoot(
     applyMigrations,
     bootApp,
     probe,
+    probeTimeout = (ms) =>
+      new Promise((resolve) => {
+        const t = setTimeout(() => resolve(false), ms);
+        t.unref?.(); // never hold the process open on the success path
+      }),
     delay = (ms) => new Promise((r) => setTimeout(r, ms)),
     now = () => Date.now(),
     log = () => {},
@@ -122,6 +131,21 @@ export async function provisionAndBoot(
     );
   }
 
+  // 4b. The run recipe's cwd is worktree-relative; a recipe that escapes the
+  //     worktree (e.g. cwd "../..") would run migrate/boot in another checkout.
+  //     Fail closed unless the resolved cwd stays inside the provisioned tree.
+  if (recipe.cwd) {
+    const resolvedCwd = path.resolve(worktreePath, recipe.cwd);
+    const insideWorktree = resolvedCwd === worktreePath || resolvedCwd.startsWith(worktreePath + path.sep);
+    if (!insideWorktree) {
+      return stop(
+        "run recipe cwd escapes the provisioned worktree",
+        { kind: "cwd-traversal", severity: MUST_FIX, message: `uiReview.run.cwd (${recipe.cwd}) resolves outside the worktree: ${resolvedCwd}` },
+        { worktreePath, depInstall },
+      );
+    }
+  }
+
   // 5. Dev-DB migrations. A destructive/blocked migration fails closed to a
   //    finding requiring explicit ack; nothing is applied until acknowledged.
   let migrations = { pending: 0, applied: 0, destructive: [], detail: "no migrate recipe" };
@@ -178,9 +202,13 @@ export async function provisionAndBoot(
     attempts += 1;
     // Fail closed: a probe that throws/rejects counts as "not ready yet" so the
     // deadline path produces the clean boot-timeout stop instead of crashing.
+    // Bound each attempt by the remaining budget (raced against probeTimeout) so
+    // a slow/hung probe can't exceed the deadline or block forever — a per-attempt
+    // timeout is just "not ready yet", keeping boot-timeout deterministic.
     let probeOk = false;
     try {
-      probeOk = await probe(recipe.readyUrl);
+      const remaining = Math.max(0, deadline - now());
+      probeOk = await Promise.race([Promise.resolve(probe(recipe.readyUrl)), probeTimeout(remaining)]);
     } catch {
       probeOk = false;
     }

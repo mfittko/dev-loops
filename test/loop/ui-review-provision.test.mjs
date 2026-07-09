@@ -73,6 +73,9 @@ function baseSeams(root, overrides = {}) {
       applyMigrations: async () => ({ ok: true, applied: 0, detail: "n/a" }),
       bootApp: async () => ({ pid: 4242, detail: "spawned" }),
       probe: async () => false,
+      // Never fires by default so the probe result decides; the fake clock is
+      // driven by the poll interval, not the per-attempt cap.
+      probeTimeout: () => new Promise(() => {}),
       now: clock.now,
       delay: clock.delay,
       log: (m) => logs.push(m),
@@ -98,6 +101,17 @@ test("parseUiReviewProvisionCliArgs: parses pr, branch, ack flag", () => {
   assert.equal(o.pr, 12);
   assert.equal(o.branch, "b");
   assert.equal(o.ackDestructiveMigration, true);
+});
+
+test("parseUiReviewProvisionCliArgs: --ack-destructive-migration=false does NOT ack (fail closed)", () => {
+  const base = ["--repo-root", "/r", "--pr", "12"];
+  // Bare flag and explicit truthy values ack.
+  assert.equal(parseUiReviewProvisionCliArgs([...base, "--ack-destructive-migration"]).ackDestructiveMigration, true);
+  assert.equal(parseUiReviewProvisionCliArgs([...base, "--ack-destructive-migration=true"]).ackDestructiveMigration, true);
+  // Explicit falsy values must NOT ack — otherwise a destructive migration runs.
+  for (const v of ["false", "0", "no"]) {
+    assert.equal(parseUiReviewProvisionCliArgs([...base, `--ack-destructive-migration=${v}`]).ackDestructiveMigration, false, v);
+  }
 });
 
 test("readiness-probe success: app becomes ready within the timeout", async () => {
@@ -152,6 +166,43 @@ test("throwing probe fails closed to boot-timeout (does not propagate)", async (
   assert.equal(result.stopped, true);
   assert.match(result.stopReason, /readiness probe timed out after 5000ms/);
   assert.ok(result.findings.some((f) => f.kind === "boot-timeout"));
+});
+
+test("hung probe (never resolves) still yields a deterministic boot-timeout", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  const { seams } = baseSeams(root, {
+    probe: () => new Promise(() => {}), // never resolves — would hang without the per-attempt cap
+    probeTimeout: () => Promise.resolve(false), // per-attempt budget elapses immediately
+  });
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 8 }, seams);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped, true);
+  assert.match(result.stopReason, /readiness probe timed out after 5000ms/);
+  assert.ok(result.findings.some((f) => f.kind === "boot-timeout"));
+});
+
+test("run recipe cwd escaping the worktree fails closed (no boot)", async () => {
+  const root = makeFixture(`version: 1
+uiReview:
+  run:
+    command: "true"
+    readyUrl: "http://127.0.0.1:65535/health"
+    cwd: "../.."
+`);
+  let booted = false;
+  const { seams } = baseSeams(root, {
+    bootApp: async () => { booted = true; return { pid: 1, detail: "spawned" }; },
+  });
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 8 }, seams);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped, true);
+  assert.match(result.stopReason, /cwd escapes the provisioned worktree/);
+  assert.ok(result.findings.some((f) => f.kind === "cwd-traversal"));
+  assert.equal(booted, false); // never boots outside the worktree
 });
 
 test("no run recipe -> fail-closed stop before boot", async () => {

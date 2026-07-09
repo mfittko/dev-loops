@@ -87,7 +87,9 @@ export function parseUiReviewProvisionCliArgs(argv) {
       continue;
     }
     if (token.name === "ack-destructive-migration") {
-      options.ackDestructiveMigration = true;
+      // Bare flag or `=true` acks; an explicit `=false`/`=0`/`=no` must NOT ack
+      // (fail closed — a destructive migration stays blocked unless truly asked).
+      options.ackDestructiveMigration = token.value === undefined || !/^(false|0|no)$/iu.test(token.value.trim());
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -137,8 +139,8 @@ function detectDepDelta({ repoRoot, worktreePath }) {
  * shared deps. Replace a symlinked node_modules with a real (empty) directory so
  * the install is isolated to the worktree, leaving the primary untouched.
  *
- * ponytail: materializing to an empty dir makes `npm install` reinstall the full
- * tree (not just the lock delta); if that install cost matters, copy the
+ * Note: materializing to an empty dir makes `npm install` reinstall the full
+ * tree (not just the lock delta). If that install cost matters, copy the
  * primary's real node_modules into the worktree first for an incremental
  * reconcile.
  *
