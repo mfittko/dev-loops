@@ -116,9 +116,46 @@ The findings list is ranked deterministically — severity, then anchorable-firs
 then kind, then source `file:line` — with no wall-clock or input-order
 dependence, so the same failures always produce the same ordered output.
 
+## Report
+
+The terminal reporting stage turns the ranked findings into a head-pinned
+PENDING PR review plus a self-contained screenshot artifact, via
+`scripts/loop/ui-review-report.mjs --pr <n> --diagnose-result <p> --html-output <p> [--repo <slug>]`
+(pure decisions in `packages/core/src/loop/ui-review-report.mjs`). It reuses the
+shared pending-review poster (`scripts/github/stage-reviewer-draft.mjs` +
+`buildDraftReviewPayload`) — a caller/adapter, not a new poster. Each anchorable
+finding becomes an inline comment on its exact `{path,line,side:RIGHT}` anchor
+carrying the reproduced exception + a fix direction; non-anchorable findings are
+retained in the review body (never dropped). It reuses the live head SHA from
+`loop info` and fails closed when the diagnosed head is missing or the live head
+has advanced since diagnose, so the inline anchors always bind to the exact
+reviewed commit.
+
+The review defaults to **pending/draft** (no `event`) — this stage never
+auto-submits. A confirmed user-facing server error (a must-fix error-response /
+server-log-exception) maps to `REQUEST_CHANGES` **only when submit is
+authorized**; otherwise the review stays pending with the severity recorded. The
+severity->event decision is emitted as guidance; submitting via the events
+endpoint is a separate authorized action outside this stage.
+
+The self-contained artifact is always produced: a CSP-safe, fully inlined HTML
+(ranked findings + the reproduced-evidence screenshot as a data URI, no external
+resources). Hosting is harness-aware: on the **Claude Code** harness the stage
+emits a publishable directive (`{ hosting: "claude-artifact", htmlPath,
+publishable: true }`) for the orchestrating agent to publish via Claude
+Artifacts — the module never calls an Artifacts tool itself. On any other
+harness it **fails closed with a stated reason** (`{ hosting: "unavailable",
+reason, followup }`); the GitHub-native fallback publisher is deferred. The
+review body links a hosted artifact when one exists and otherwise states the
+artifact is unhosted (with the reason), so the review never blocks on hosting.
+Every bounded cap — findings truncated past the artifact cap, an oversized or
+unreadable evidence screenshot omitted — is logged, never silent.
+
 ## Non-goals
 
-No report/teardown logic lives here yet. The stage does not post the review,
-publish artifacts, auto-fix the located defects, pixel-diff for visual
-regression, run a cross-browser matrix, or touch a production DB — those are
-later stages or explicit non-goals.
+No teardown logic lives here yet. The stage does not auto-submit a review
+without explicit authorization, publish to a production/non-dev posting target,
+ship the GitHub-native hosted-artifact fallback, auto-fix the located defects,
+pixel-diff for visual regression, run a cross-browser matrix, or touch a
+production DB — those are later stages or explicit non-goals. It does not
+replace the product/eng `review` angle or the Copilot gate.
