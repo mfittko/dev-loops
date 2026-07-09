@@ -147,8 +147,10 @@ const SERVER_LOG_TAIL_MAX_BYTES = 1024 * 1024; // 1 MiB
  * @param {string|null} logPath
  * @param {{maxBytes?:number, log?:(msg:string)=>void}} [opts] - `maxBytes` caps a
  *   single read; `log` receives a truncation note when the delta exceeds it.
+ *   Defaults to `console.warn` so a truncation is surfaced by default (honoring
+ *   the "logged, never silent" contract); pass `log: () => {}` to opt into silence.
  */
-export function openServerLogTail(logPath, { maxBytes = SERVER_LOG_TAIL_MAX_BYTES, log = () => {} } = {}) {
+export function openServerLogTail(logPath, { maxBytes = SERVER_LOG_TAIL_MAX_BYTES, log = console.warn } = {}) {
   if (!logPath) return { read: async () => "" };
   let startOffset = 0;
   try {
