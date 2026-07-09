@@ -42,9 +42,12 @@ drive your app.
    diff line so a finding can anchor on a real changed line.
 4. **Report** — posts a head-pinned **pending** PR review and produces a
    self-contained HTML artifact.
-5. **Teardown** — stops the booted app, optionally drops dev-DB rows and removes
-   the worktree (only with explicit confirmation), and always emits a
-   side-effect ledger.
+5. **Teardown** — stops the booted app and, only with explicit confirmation,
+   removes the worktree (the working destructive step). Dev-DB row-drop currently
+   **fails closed** — the tagged-drop seam is not wired, so a confirmed manifest
+   is recorded as a drop failure and untagged rows may remain (a real tagged drop
+   is a tracked follow-up). A side-effect ledger is ALWAYS emitted, enumerating
+   what was done vs. left behind.
 
 ## Guardrails (non-negotiable)
 
