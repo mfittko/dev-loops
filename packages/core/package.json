@@ -61,6 +61,7 @@
     "./loop/ui-review-drive": "./src/loop/ui-review-drive.mjs",
     "./loop/ui-review-diagnose": "./src/loop/ui-review-diagnose.mjs",
     "./loop/ui-review-report": "./src/loop/ui-review-report.mjs",
+    "./loop/ui-review-teardown": "./src/loop/ui-review-teardown.mjs",
     "./projects/list-queue-items": "./src/projects/list-queue-items.mjs",
     "./projects/move-queue-item": "./src/projects/move-queue-item.mjs",
     "./projects/resolve-project": "./src/projects/resolve-project.mjs",
