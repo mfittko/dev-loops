@@ -105,28 +105,50 @@ export async function teardown(
   };
 
   const provision = provisionResult ?? {};
-  const worktreePath = provision.worktreePath ?? null;
+  // `worktreePath` is read from disk (trust boundary). A non-string (number,
+  // object, array) must never reach `removeWorktree` — the CLI's cleanup path
+  // calls `path.resolve(worktreePath)`, which throws on a non-string, breaking
+  // the always-emit-ledger invariant. Coerce to a usable string or null here.
+  const rawWorktreePath = provision.worktreePath ?? null;
+  const worktreePath = typeof rawWorktreePath === "string" ? rawWorktreePath : null;
+  const worktreePathMalformed = rawWorktreePath != null && typeof rawWorktreePath !== "string";
   const pid = provision.boot?.pid ?? null;
   const migrations = provision.migrations ?? { applied: 0, pending: 0, destructive: [], detail: "no provision migrations" };
 
   // 1. Stop the app (clean shutdown; NOT confirmation-gated). Uses the Stage-1
-  //    boot PID. A null PID means we never captured one, so we cannot stop it —
-  //    the ledger reports it may still be running rather than guessing.
+  //    boot PID. A missing OR unusable PID means we cannot stop it — the ledger
+  //    reports it may still be running rather than guessing. `boot.pid` is read
+  //    from disk (trust boundary), so anything that is not a positive integer
+  //    (0, negative, NaN, float, string) is rejected here: passing it to the
+  //    kill seam would let the CLI's process-group kill signal `process.kill(0)`
+  //    (this loop's OWN group) or `process.kill(-1)` (every process).
+  const usablePid = Number.isInteger(pid) && pid > 0;
   let processLedger;
   if (!stopApp) {
-    processLedger = { pid, status: PROCESS_STATUS.SKIPPED, forced: false, detail: "app stop skipped by request" };
-    record(`app stop skipped (pid ${pid ?? "n/a"})`);
-  } else if (pid == null) {
-    processLedger = { pid: null, status: PROCESS_STATUS.MAY_BE_RUNNING, forced: false, detail: "no PID captured from Stage 1; process may still be running" };
-    record("app stop: no PID captured from Stage 1; process may still be running");
+    processLedger = { pid: usablePid ? pid : null, status: PROCESS_STATUS.SKIPPED, forced: false, detail: "app stop skipped by request" };
+    record(`app stop skipped (pid ${usablePid ? pid : "n/a"})`);
+  } else if (!usablePid) {
+    const detail = pid == null
+      ? "no PID captured from Stage 1; process may still be running"
+      : "no usable PID from Stage 1 (not a positive integer); process may still be running";
+    processLedger = { pid: null, status: PROCESS_STATUS.MAY_BE_RUNNING, forced: false, detail };
+    record(`app stop: ${detail}`);
   } else {
-    const kill = await killProcess({ pid });
-    if (kill.stopped) {
-      processLedger = { pid, status: PROCESS_STATUS.STOPPED, forced: !!kill.forced, detail: kill.detail };
-      record(`app stopped (pid ${pid})${kill.forced ? " [force-killed: SIGKILL fallback]" : ""}: ${kill.detail}`);
-    } else {
-      processLedger = { pid, status: PROCESS_STATUS.KILL_FAILED, forced: !!kill.forced, detail: kill.detail };
-      fail(`app stop FAILED (pid ${pid}): ${kill.detail}`);
+    // A seam that THROWS must still yield a fully-emitted ledger: catch it,
+    // record KILL_FAILED, and press on. The always-emit invariant holds even
+    // when a real IO seam rejects.
+    try {
+      const kill = await killProcess({ pid });
+      if (kill.stopped) {
+        processLedger = { pid, status: PROCESS_STATUS.STOPPED, forced: !!kill.forced, detail: kill.detail };
+        record(`app stopped (pid ${pid})${kill.forced ? " [force-killed: SIGKILL fallback]" : ""}: ${kill.detail}`);
+      } else {
+        processLedger = { pid, status: PROCESS_STATUS.KILL_FAILED, forced: !!kill.forced, detail: kill.detail };
+        fail(`app stop FAILED (pid ${pid}): ${kill.detail}`);
+      }
+    } catch (err) {
+      processLedger = { pid, status: PROCESS_STATUS.KILL_FAILED, forced: false, detail: `kill seam threw: ${err?.message ?? err}` };
+      fail(`app stop FAILED (pid ${pid}): kill seam threw: ${err?.message ?? err}`);
     }
   }
 
@@ -145,13 +167,18 @@ export async function teardown(
       rowsLedger = { status: ROW_STATUS.NONE, dropped: 0, candidates: 0, detail: "no rows created (drive drove no mutating steps)" };
     }
   } else if (hasManifest) {
-    const drop = await dropRows({ rows: rowManifest });
-    if (drop.ok) {
-      rowsLedger = { status: ROW_STATUS.DROPPED, dropped: drop.dropped ?? rowManifest.length, candidates: rowManifest.length, detail: drop.detail };
-      record(`dev-DB rows dropped: ${drop.dropped ?? rowManifest.length} (${drop.detail})`);
-    } else {
-      rowsLedger = { status: ROW_STATUS.DROP_FAILED, dropped: drop.dropped ?? 0, candidates: rowManifest.length, detail: drop.detail };
-      fail(`dev-DB row drop FAILED: ${drop.detail}`);
+    try {
+      const drop = await dropRows({ rows: rowManifest });
+      if (drop.ok) {
+        rowsLedger = { status: ROW_STATUS.DROPPED, dropped: drop.dropped ?? rowManifest.length, candidates: rowManifest.length, detail: drop.detail };
+        record(`dev-DB rows dropped: ${drop.dropped ?? rowManifest.length} (${drop.detail})`);
+      } else {
+        rowsLedger = { status: ROW_STATUS.DROP_FAILED, dropped: drop.dropped ?? 0, candidates: rowManifest.length, detail: drop.detail };
+        fail(`dev-DB row drop FAILED: ${drop.detail}`);
+      }
+    } catch (err) {
+      rowsLedger = { status: ROW_STATUS.DROP_FAILED, dropped: 0, candidates: rowManifest.length, detail: `drop seam threw: ${err?.message ?? err}` };
+      fail(`dev-DB row drop FAILED: drop seam threw: ${err?.message ?? err}`);
     }
   } else if (driveMayHaveCreatedRows(driveResult)) {
     // Confirmed, but nothing to target: honesty over a guess-drop.
@@ -164,20 +191,28 @@ export async function teardown(
   // 3. Remove the worktree — DESTRUCTIVE, confirmation-gated. Delegated to the
   //    shared cleanup path, which refuses anything outside the loop namespace.
   let worktreeLedger;
-  if (!worktreePath) {
+  if (worktreePathMalformed) {
+    worktreeLedger = { path: null, removed: false, status: WORKTREE_STATUS.REMOVE_FAILED, detail: `malformed worktree path in provision result (not a string): ${typeof rawWorktreePath}` };
+    fail(`worktree removal FAILED: malformed worktree path in provision result (not a string): ${typeof rawWorktreePath}`);
+  } else if (!worktreePath) {
     worktreeLedger = { path: null, removed: false, status: WORKTREE_STATUS.SKIPPED_UNCONFIRMED, detail: "no worktree path in provision result" };
     record("worktree removal skipped: no worktree path in provision result");
   } else if (!confirm) {
     worktreeLedger = { path: worktreePath, removed: false, status: WORKTREE_STATUS.SKIPPED_UNCONFIRMED, detail: "worktree retained: teardown not confirmed" };
     record(`worktree removal skipped (not confirmed): ${worktreePath} retained`);
   } else {
-    const rm = await removeWorktree({ worktreePath });
-    if (rm.removed) {
-      worktreeLedger = { path: worktreePath, removed: true, status: WORKTREE_STATUS.REMOVED, detail: rm.detail };
-      record(`worktree removed: ${worktreePath} (${rm.detail})`);
-    } else {
-      worktreeLedger = { path: worktreePath, removed: false, status: WORKTREE_STATUS.REMOVE_FAILED, detail: rm.detail };
-      fail(`worktree removal FAILED: ${worktreePath} (${rm.detail})`);
+    try {
+      const rm = await removeWorktree({ worktreePath });
+      if (rm.removed) {
+        worktreeLedger = { path: worktreePath, removed: true, status: WORKTREE_STATUS.REMOVED, detail: rm.detail };
+        record(`worktree removed: ${worktreePath} (${rm.detail})`);
+      } else {
+        worktreeLedger = { path: worktreePath, removed: false, status: WORKTREE_STATUS.REMOVE_FAILED, detail: rm.detail };
+        fail(`worktree removal FAILED: ${worktreePath} (${rm.detail})`);
+      }
+    } catch (err) {
+      worktreeLedger = { path: worktreePath, removed: false, status: WORKTREE_STATUS.REMOVE_FAILED, detail: `removeWorktree seam threw: ${err?.message ?? err}` };
+      fail(`worktree removal FAILED: ${worktreePath} (removeWorktree seam threw: ${err?.message ?? err})`);
     }
   }
 

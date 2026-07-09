@@ -184,7 +184,10 @@ dev-DB rows it creates with a session id or manifest, so this stage cannot know
 which rows to drop and MUST NOT guess. It drops rows only from an explicit
 manifest handed in; when the drive walked mutating flows without one, the ledger
 reports rows "may remain (untagged)". Making the drop real requires row/session
-tagging upstream in the drive.
+tagging upstream in the drive. The CLI's row-drop seam is not yet wired: a
+confirmed manifest fails CLOSED (the ledger records a drop failure, never a drop)
+rather than silently no-op'ing, so a caller can never believe rows were dropped;
+wiring a real drop is a tracked follow-up.
 
 ## Non-goals
 

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import test from "node:test";
 
 import { teardown, ROW_STATUS, WORKTREE_STATUS, PROCESS_STATUS } from "@dev-loops/core/loop/ui-review-teardown";
-import { parseUiReviewTeardownCliArgs } from "../../scripts/loop/ui-review-teardown.mjs";
+import { parseUiReviewTeardownCliArgs, killProcess } from "../../scripts/loop/ui-review-teardown.mjs";
 
 // A Stage-1 provision result: a booted app (pid), applied migrations, a worktree.
 const PROVISION = {
@@ -169,6 +170,132 @@ test("--no-stop-app path leaves the process untouched but still enumerates it", 
   assert.equal(calls.kill, 0);
   assert.equal(res.ledger.process.status, PROCESS_STATUS.SKIPPED);
   assert.equal(res.ledger.process.pid, 4242);
+});
+
+// Fix 1: a PID that is not a positive integer must NEVER reach the kill seam.
+// The CLI's group-kill would signal `process.kill(0)` (this loop's OWN group)
+// for pid 0 or `process.kill(-1)` (every process) for pid -1.
+for (const badPid of [0, -1, NaN, 3.5, "4242", {}]) {
+  test(`non-positive/non-integer PID (${String(badPid)}) never reaches the kill seam; ledger reports may-be-running`, async () => {
+    const { seams, calls } = makeSeams();
+    const provisionBadPid = { ...PROVISION, boot: { pid: badPid, ready: true } };
+    const res = await teardown({ provisionResult: provisionBadPid, confirm: true }, seams);
+    assert.equal(calls.kill, 0, "unusable PID => never call kill");
+    assert.equal(res.ledger.process.status, PROCESS_STATUS.MAY_BE_RUNNING);
+    assert.equal(res.ledger.process.pid, null, "unusable PID is nulled in the ledger");
+    assert.match(res.ledger.process.detail, /may still be running/i);
+  });
+}
+
+// Fix 2: the always-emit-ledger invariant must survive a seam that THROWS.
+test("a throwing kill seam still yields a fully-emitted ledger (KILL_FAILED, ok:false)", async () => {
+  const { seams } = makeSeams({
+    killProcess: async () => { throw new Error("kill seam boom"); },
+  });
+  const res = await teardown({ provisionResult: PROVISION, confirm: true }, seams);
+  assert.equal(res.ok, false);
+  assert.equal(res.ledger.process.status, PROCESS_STATUS.KILL_FAILED);
+  // Ledger is STILL emitted in full despite the throw.
+  assert.ok(res.ledger.migrations && res.ledger.rows && res.ledger.worktree && res.ledger.process);
+  assert.ok(res.errors.some((e) => /kill seam threw/.test(e)));
+});
+
+test("a throwing removeWorktree seam still yields a fully-emitted ledger (REMOVE_FAILED, ok:false)", async () => {
+  const { seams } = makeSeams({
+    removeWorktree: async () => { throw new Error("rm seam boom"); },
+  });
+  const res = await teardown({ provisionResult: PROVISION, confirm: true }, seams);
+  assert.equal(res.ok, false);
+  assert.equal(res.ledger.worktree.status, WORKTREE_STATUS.REMOVE_FAILED);
+  assert.ok(res.ledger.migrations && res.ledger.rows && res.ledger.worktree && res.ledger.process);
+  assert.ok(res.errors.some((e) => /removeWorktree seam threw/.test(e)));
+});
+
+test("a throwing dropRows seam still yields a fully-emitted ledger (DROP_FAILED, ok:false)", async () => {
+  const { seams } = makeSeams({
+    dropRows: async () => { throw new Error("drop seam boom"); },
+  });
+  const res = await teardown(
+    { provisionResult: PROVISION, driveResult: DRIVE_WITH_STEPS, rowManifest: [{ id: 1 }], confirm: true },
+    seams,
+  );
+  assert.equal(res.ok, false);
+  assert.equal(res.ledger.rows.status, ROW_STATUS.DROP_FAILED);
+  assert.ok(res.ledger.migrations && res.ledger.rows && res.ledger.worktree && res.ledger.process);
+  assert.ok(res.errors.some((e) => /drop seam threw/.test(e)));
+});
+
+// Fix 2: a non-string worktreePath must not throw (path.resolve would); it is
+// recorded as a malformed-path failure and the removeWorktree seam is not called.
+test("malformed (non-string) worktreePath fails closed, never reaches removeWorktree, ledger still emitted", async () => {
+  const { seams, calls } = makeSeams();
+  const provisionBadPath = { ...PROVISION, worktreePath: { not: "a string" } };
+  const res = await teardown({ provisionResult: provisionBadPath, confirm: true }, seams);
+  assert.equal(calls.removeWorktree, 0, "malformed path must not reach the removal seam");
+  assert.equal(res.ledger.worktree.status, WORKTREE_STATUS.REMOVE_FAILED);
+  assert.match(res.ledger.worktree.detail, /malformed worktree path/i);
+  assert.equal(res.ok, false);
+});
+
+// Fix 3(a): unconfirmed drive-with-steps and no manifest => rows may remain.
+test("confirm:false + drive-with-steps + no manifest => MAY_REMAIN_UNTAGGED, drop seam not called", async () => {
+  const { seams, calls } = makeSeams();
+  const res = await teardown(
+    { provisionResult: PROVISION, driveResult: DRIVE_WITH_STEPS, rowManifest: null, confirm: false },
+    seams,
+  );
+  assert.equal(res.ledger.rows.status, ROW_STATUS.MAY_REMAIN_UNTAGGED);
+  assert.equal(calls.drop, 0);
+  assert.equal(res.ok, true);
+});
+
+// Fix 3(b): unconfirmed stopped-drive (no rows) => NONE.
+test("confirm:false + stopped drive (no rows) => ROW_STATUS.NONE", async () => {
+  const { seams, calls } = makeSeams();
+  const res = await teardown(
+    { provisionResult: PROVISION, driveResult: DRIVE_STOPPED, confirm: false },
+    seams,
+  );
+  assert.equal(res.ledger.rows.status, ROW_STATUS.NONE);
+  assert.equal(calls.drop, 0);
+});
+
+// Fix 3(c): provision without worktreePath => skipped with the distinct detail.
+test("provision without worktreePath => worktree skipped with 'no worktree path' detail, removeWorktree not called", async () => {
+  const { seams, calls } = makeSeams();
+  const provisionNoWorktree = { ...PROVISION, worktreePath: undefined };
+  const res = await teardown({ provisionResult: provisionNoWorktree, confirm: true }, seams);
+  assert.equal(res.ledger.worktree.status, WORKTREE_STATUS.SKIPPED_UNCONFIRMED);
+  assert.match(res.ledger.worktree.detail, /no worktree path/i);
+  assert.equal(res.ledger.worktree.path, null);
+  assert.equal(calls.removeWorktree, 0);
+});
+
+// Folded defer: real killProcess against a spawned child process. Each child
+// prints "ready" AFTER its handlers are installed; the test waits for that line
+// to avoid a startup race where a signal arrives before the child is set up.
+function spawnReadyChild(script) {
+  const child = spawn(process.execPath, ["-e", script], { detached: true });
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.stdout.on("data", (buf) => {
+      if (buf.toString().includes("ready")) resolve(child);
+    });
+  });
+}
+
+test("killProcess stops a real short-lived child (stopped:true via SIGTERM)", async () => {
+  const child = await spawnReadyChild("console.log('ready'); setInterval(() => {}, 60000)");
+  const res = await killProcess({ pid: child.pid, graceMs: 3000, pollMs: 50 });
+  assert.equal(res.stopped, true);
+});
+
+test("killProcess escalates to SIGKILL (forced:true) for a child that ignores SIGTERM", async () => {
+  // Traps SIGTERM (no-op) and keeps running; only the SIGKILL fallback stops it.
+  const child = await spawnReadyChild("process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 60000)");
+  const res = await killProcess({ pid: child.pid, graceMs: 500, pollMs: 50 });
+  assert.equal(res.stopped, true);
+  assert.equal(res.forced, true, "SIGTERM-ignoring child forces the SIGKILL escalation");
 });
 
 test("parseUiReviewTeardownCliArgs: requires --repo-root and --provision-result", () => {

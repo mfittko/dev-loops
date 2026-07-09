@@ -124,6 +124,13 @@ function isAlive(pid) {
  * child in that group; signalling the group reaches it. Fall back to the bare
  * pid when the group signal is not deliverable. */
 function signalProcess(pid, sig) {
+  // Defense-in-depth: never signal unless `pid` is a positive integer. A pid of
+  // 0 (`process.kill(0)` targets our OWN process group) or -1 (`process.kill(-1)`
+  // targets EVERY process) would be catastrophic; the core already rejects these,
+  // this guard makes it impossible for a group-kill to ever fire on a bad pid.
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new Error(`refusing to signal non-positive-integer pid: ${pid}`);
+  }
   try {
     process.kill(-pid, sig);
     return;
@@ -134,7 +141,7 @@ function signalProcess(pid, sig) {
 
 /** Stop a process: SIGTERM, wait a bounded budget for a clean exit, then a
  * LOGGED SIGKILL fallback. A failed kill is reported (never swallowed). */
-async function killProcess({ pid, graceMs = 3000, pollMs = 100 }) {
+export async function killProcess({ pid, graceMs = 3000, pollMs = 100 }) {
   try {
     signalProcess(pid, "SIGTERM");
   } catch (err) {
