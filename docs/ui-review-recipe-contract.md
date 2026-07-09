@@ -9,8 +9,9 @@ hard-coded — every project declares its own recipe.
 This doc is the contract a **consuming repo** satisfies so `/loop-review-ui`
 can run against it. All keys below exist in the shipped config schema
 (`packages/core/src/config/config.mjs`) and are enforced at load time. A
-docs-accuracy test (`test/docs/ui-review-recipe-doc.test.mjs`) fails CI if any
-key named here drifts from the schema.
+docs-accuracy test (`test/docs/ui-review-recipe-doc.test.mjs`) fails CI if the
+enumerated config-key reference below drifts from the schema (in either
+direction).
 
 Every value shown is a **generic example** — replace it with your project's own.
 No downstream or private identifiers belong in this repo.
