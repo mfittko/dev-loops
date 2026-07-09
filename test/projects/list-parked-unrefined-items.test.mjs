@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
-import { main } from "../../scripts/projects/list-parked-unrefined-items.mjs";
+import { main, parseCliArgs } from "../../scripts/projects/list-parked-unrefined-items.mjs";
 
 // Isolated default cwd (no .devloops): main() resolves the park column
 // (nonSuccessBoardColumn) from cwd, so the default park column is "Backlog".
@@ -113,6 +113,12 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
     assert.equal(r.items[0].issueNumber, 42);
     assert.equal(r.items[0].finding, "missing_refinement_artifact");
     assert.ok(typeof r.items[0].reason === "string" && r.items[0].reason.length > 0);
+  });
+
+  it("requires --repo (proper usage error, not a downstream failure)", () => {
+    assert.throws(() => parseCliArgs(["--project", "7"]), (e) => e.code === "INVALID_REPO" && /--repo is required/.test(e.message));
+    // --help short-circuits the requirement.
+    assert.equal(parseCliArgs(["--help"]).help, true);
   });
 
   it("propagates a gh issue-view failure (fails closed, not silently empty)", async () => {

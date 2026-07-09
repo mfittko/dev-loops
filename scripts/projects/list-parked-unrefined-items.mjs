@@ -102,6 +102,9 @@ function parseCliArgs(argv) {
       }
     }
   }
+  if (!args.help && (typeof args.repo !== "string" || args.repo.length === 0)) {
+    throw Object.assign(new Error("--repo is required (owner/name)"), { usage: USAGE, code: "INVALID_REPO" });
+  }
   return args;
 }
 
