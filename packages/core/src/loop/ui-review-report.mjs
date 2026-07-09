@@ -20,6 +20,7 @@
  */
 
 import { isClaudeHarness } from "./run-context.mjs";
+import { sanitizeCopilotSummonTokens } from "../github/copilot-helpers.mjs";
 
 /** Follow-up marker for the descoped GitHub-native hosting fallback. */
 export const HOSTING_FOLLOWUP = "#1285";
@@ -157,16 +158,19 @@ export function buildReviewInput({ findings = [], headSha = null, hosting = null
   const anchorable = list.filter((f) => f?.anchorable && f?.anchor);
   const nonAnchorable = list.filter((f) => !(f?.anchorable && f?.anchor));
 
+  // Untrusted target-app text (exception type/message, log lines, nonAnchorableReason)
+  // flows into these bodies. Sanitize copilot-summon tokens before they enter the
+  // payload buildDraftReviewPayload posts verbatim — every sibling posting path does.
   const inlineComments = anchorable.map((f) => ({
     path: f.anchor.path,
     line: f.anchor.line,
-    message: formatInlineBody(f),
+    message: sanitizeCopilotSummonTokens(formatInlineBody(f)),
     severity: f.severity ?? "note",
   }));
 
   const summaryFindings = [
     { message: artifactBodyLine({ hosting, hostedUrl }), severity: "note" },
-    ...nonAnchorable.map((f) => ({ message: nonAnchorableBodyMessage(f), severity: f.severity ?? "note" })),
+    ...nonAnchorable.map((f) => ({ message: sanitizeCopilotSummonTokens(nonAnchorableBodyMessage(f)), severity: f.severity ?? "note" })),
   ];
 
   const blocking = list.some(isBlockingFinding);

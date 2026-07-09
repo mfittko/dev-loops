@@ -55,7 +55,7 @@ Optional:
   --dry-run             Build + write the artifact and emit the directive, but do NOT post.
   -h, --help            Show this help.
 Output (stdout, JSON):
-  { ok, pr, htmlPath, hosting:{hosting,publishable,...}, policy:{event,blocking,severity},
+  { ok, pr, htmlPath, reviewFile, hosting:{hosting,publishable,...}, policy:{event,blocking,severity},
     review:{reviewId,reviewUrl,commitSha}|null, caps:[...] }
 
 ${JQ_OUTPUT_USAGE}`.trim();
