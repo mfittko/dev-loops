@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { runConductorMonitor, isPrHealthy } from "../../scripts/loop/conductor-monitor.mjs";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/conductor-monitor.mjs");
 const mixedThreadsFixturePath = path.resolve("packages/core/test/fixtures/github/review-threads/mixed-threads.json");
@@ -178,11 +178,11 @@ async function writeAsyncRun({
   return { statusPath, outputPath, eventsPath };
 }
 
-async function runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo, env }) {
+async function runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo, runChild }) {
   return runConductorMonitor(
     { repo, autoResume: true },
     {
-      env,
+      runChild,
       repoRoot,
       sessionRoots: [sessionsRoot],
       asyncRunRoots: [asyncRunsRoot],
@@ -336,11 +336,11 @@ test("conductor-monitor --auto-resume ignores invalid async JSON side artifacts 
     await writeFile(path.join(badAsyncDir, "events.jsonl"), "", "utf8");
     await writeFile(path.join(badAsyncDir, "output-0.log"), "Active PR: owner/repo#40\n", "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 40, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.queueStatus, "monitoring");
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 0);
@@ -359,11 +359,11 @@ test("conductor-monitor --auto-resume ignores malformed session artifact meta JS
     await writeFile(path.join(badArtifactsDir, "run-bad-meta-99_dev-loop_0_meta.json"), "{not valid json\n", "utf8");
     await writeFile(path.join(badArtifactsDir, "run-bad-meta-99_dev-loop_0_output.md"), "Active PR: owner/repo#99\n", "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 44, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.queueStatus, "monitoring");
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 0);
@@ -379,11 +379,11 @@ test("conductor-monitor --auto-resume ignores malformed async result JSON instea
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
     await writeFile(path.join(asyncResultsRoot, "run-bad-result-45.json"), "{not valid json\n", "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 45, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.queueStatus, "monitoring");
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 0);
@@ -461,11 +461,11 @@ test("conductor-monitor --auto-resume ignores malformed session headers instead 
     );
     await writeFile(path.join(badArtifactsDir, "run-bad-session-41_dev-loop_0_output.md"), "Active PR: owner/repo#41\n", "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 41, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.queueStatus, "monitoring");
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 0);
@@ -497,11 +497,11 @@ test("conductor-monitor --auto-resume ignores parse-failed artifacts that do not
       outputText: "Active PR: owner/repo#99\n",
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 42, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.queueStatus, "monitoring");
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 0);
@@ -537,11 +537,11 @@ test("conductor-monitor --auto-resume fails closed when an active matching run c
     await writeFile(statusPath, `${JSON.stringify(activeStatus, null, 2)}
 `, "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 43, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 1);
     assert.equal(payload.needsManualAttention[0].pr, 43);
@@ -565,7 +565,7 @@ test("conductor-monitor --auto-resume preserves artifact run ids that contain un
       outputText: "Active PR: owner/repo#55\nArtifact state: open\nLoop state: unresolved_feedback_present\n",
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 55,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -574,7 +574,7 @@ test("conductor-monitor --auto-resume preserves artifact run ids that contain un
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     assert.equal(payload.resumePlans[0].runId, "pr_55");
   } finally {
@@ -595,11 +595,11 @@ test("conductor-monitor --auto-resume fails closed when run exit state cannot be
     await writeFile(path.join(artifactsDir, "run-unknown-56_dev-loop_0_output.md"), "Active PR: owner/repo#56\nArtifact state: open\nLoop state: waiting_for_copilot_review\n", "utf8");
     await writeFile(path.join(runDir, "session.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "run-unknown-56-session", timestamp: "2026-06-03T00:00:00.000Z", cwd: repoRoot })}\n`, "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 56, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 1);
     assert.equal(payload.needsManualAttention[0].pr, 56);
@@ -633,7 +633,7 @@ test("conductor-monitor --auto-resume preserves the stronger failed run state wh
       outputText: "Active PR: owner/repo#57\nLoop state: unresolved_feedback_present\n",
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 57,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -642,7 +642,7 @@ test("conductor-monitor --auto-resume preserves the stronger failed run state wh
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     assert.equal(payload.resumePlans[0].runState, "failed");
   } finally {
@@ -683,11 +683,11 @@ test("conductor-monitor --auto-resume uses grouped result summaries as the artif
     }, null, 2)}
 `, "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 58, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     assert.equal(payload.resumePlans[0].artifactPath, summaryPath);
   } finally {
@@ -742,7 +742,7 @@ test("conductor-monitor --auto-resume reuses grouped result summaries when accep
     }, null, 2)}
 `, "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 58,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -750,7 +750,7 @@ test("conductor-monitor --auto-resume reuses grouped result summaries when accep
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     assert.equal(payload.manualAttentionCount, 0);
     assert.equal(payload.resumePlans[0].pr, 58);
@@ -808,7 +808,7 @@ test("conductor-monitor --auto-resume falls back to deterministic output logs wh
     }, null, 2)}
 `, "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 58,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -816,7 +816,7 @@ test("conductor-monitor --auto-resume falls back to deterministic output logs wh
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     assert.equal(payload.manualAttentionCount, 0);
     assert.equal(payload.resumePlans[0].pr, 58);
@@ -849,11 +849,11 @@ test("conductor-monitor --auto-resume fails closed when an active matching run h
       outputText: "Active PR: owner/repo#59\nLoop state: waiting_for_copilot_review\n",
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 59, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 1);
     assert.equal(payload.needsManualAttention[0].pr, 59);
@@ -888,11 +888,11 @@ test("conductor-monitor --auto-resume does not invent a failed run state from me
       outputText: "Active PR: owner/repo#60\nLoop state: waiting_for_copilot_review\n",
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 60, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     assert.equal(payload.resumePlans[0].runState, "completed");
   } finally {
@@ -934,11 +934,11 @@ test("conductor-monitor --auto-resume keeps stale-worktree runs resumable when J
     }, null, 2)}
 `, "utf8");
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 61, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     assert.equal(payload.resumePlans[0].pr, 61);
     assert.equal(payload.resumePlans[0].staleWorktree, true);
@@ -963,7 +963,7 @@ test("conductor-monitor --auto-resume includes a non-zero child index in the res
       outputText: "Active PR: owner/repo#62\nArtifact state: open\nLoop state: unresolved_feedback_present\n",
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 62,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -972,7 +972,7 @@ test("conductor-monitor --auto-resume includes a non-zero child index in the res
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     assert.match(payload.resumePlans[0].resumeCommandPreview, /index: 1/);
   } finally {
@@ -1002,7 +1002,7 @@ test("conductor-monitor --auto-resume emits a feedback-fix resume plan for an or
       ].join("\n"),
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 17,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -1011,7 +1011,7 @@ test("conductor-monitor --auto-resume emits a feedback-fix resume plan for an or
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
 
     assert.equal(payload.autoResumeRequested, true);
     assert.equal(payload.resumePlanCount, 1);
@@ -1073,7 +1073,7 @@ test("conductor-monitor --auto-resume fails closed when recorded handoff contrac
       ].join("\n"),
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 17,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -1082,7 +1082,7 @@ test("conductor-monitor --auto-resume fails closed when recorded handoff contrac
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
 
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 1);
@@ -1116,7 +1116,7 @@ test("conductor-monitor --auto-resume emits a final-approval resume plan for an 
       ].join("\n"),
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 22,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -1124,7 +1124,7 @@ test("conductor-monitor --auto-resume emits a final-approval resume plan for an 
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     const plan = payload.resumePlans[0];
     assert.equal(plan.pr, 22);
@@ -1156,7 +1156,7 @@ test("conductor-monitor --auto-resume emits a merge-authorization resume plan fo
       ].join("\n"),
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 24,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -1164,7 +1164,7 @@ test("conductor-monitor --auto-resume emits a merge-authorization resume plan fo
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     const plan = payload.resumePlans[0];
     assert.equal(plan.pr, 24);
@@ -1205,11 +1205,11 @@ test("conductor-monitor --auto-resume ignores an older completed run when a newe
       outputText: "Active PR: owner/repo#30\nLoop state: waiting_for_copilot_review\n",
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 30, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 0);
     assert.equal(payload.orphanedPrCount, 0);
@@ -1242,7 +1242,7 @@ test("conductor-monitor --auto-resume fails closed when the output artifact is m
       outputText: "Active PR: owner/repo#31\n",
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 31,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -1250,7 +1250,7 @@ test("conductor-monitor --auto-resume fails closed when the output artifact is m
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 1);
     assert.equal(payload.needsManualAttention[0].pr, 31);
@@ -1277,11 +1277,11 @@ test("conductor-monitor --auto-resume fails closed on ambiguous PR identity insi
       ].join("\n"),
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 33 }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 1);
     assert.equal(payload.needsManualAttention[0].reason, "ambiguous_pr_identity");
@@ -1309,7 +1309,7 @@ test("conductor-monitor --auto-resume keeps a stale-worktree run resumable when 
       ].join("\n"),
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 35,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -1318,7 +1318,7 @@ test("conductor-monitor --auto-resume keeps a stale-worktree run resumable when 
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 1);
     assert.equal(payload.resumePlans[0].pr, 35);
     assert.equal(payload.resumePlans[0].staleWorktree, true);
@@ -1349,11 +1349,11 @@ test("conductor-monitor --auto-resume ignores non-dev-loop runs and runs from ot
       outputText: "Active PR: owner/repo#36\n",
     });
 
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{ number: 36, requestCopilot: true }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
     assert.equal(payload.resumePlanCount, 0);
     assert.equal(payload.manualAttentionCount, 0);
     assert.equal(payload.orphanedPrCount, 0);
@@ -1383,7 +1383,7 @@ test("conductor-monitor --auto-resume suppresses orphan alert for healthy PR (no
     });
 
     // Healthy PR: CI green, no unresolved threads
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 40,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -1392,7 +1392,7 @@ test("conductor-monitor --auto-resume suppresses orphan alert for healthy PR (no
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
 
     assert.equal(payload.autoResumeRequested, true);
     // Orphan detection suppressed — no resume plan for healthy PR
@@ -1427,7 +1427,7 @@ test("conductor-monitor --auto-resume still flags orphan for unhealthy PR (unres
     });
 
     // Unhealthy PR: CI green but has unresolved threads
-    const env = await writeGhStub(tempDir, buildGhEntries({
+    const { runChild } = makeGhMock(buildGhEntries({
       prs: [{
         number: 41,
         reviews: [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" } }],
@@ -1436,7 +1436,7 @@ test("conductor-monitor --auto-resume still flags orphan for unhealthy PR (unres
       }],
     }));
 
-    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", env });
+    const payload = await runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo: "owner/repo", runChild });
 
     // Should still flag as orphan — PR has unresolved threads
     assert.equal(payload.orphanedPrCount, 1);
