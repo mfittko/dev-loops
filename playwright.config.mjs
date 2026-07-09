@@ -41,10 +41,21 @@ export default defineConfig({
     trace: "retain-on-failure",
     video: "off",
   },
-  projects: sliceIds.map((sliceId) => ({
-    name: sliceId,
-    testMatch: [`${sliceId}.spec.mjs`],
-    outputDir: `test-results/ui-smoke/${sliceId}`,
-    use: { browserName: "webkit" },
-  })),
+  projects: [
+    ...sliceIds.map((sliceId) => ({
+      name: sliceId,
+      testMatch: [`${sliceId}.spec.mjs`],
+      outputDir: `test-results/ui-smoke/${sliceId}`,
+      use: { browserName: "webkit" },
+    })),
+    // ui_review drive harness smoke: a net-new spec (not registry-driven) that
+    // drives a fixture app exhibiting a swallowed error response and asserts the
+    // listener + server-log tail both catch it.
+    {
+      name: "ui-review-drive",
+      testMatch: ["ui-review-drive.spec.mjs"],
+      outputDir: "test-results/ui-smoke/ui-review-drive",
+      use: { browserName: "webkit" },
+    },
+  ],
 });

@@ -49,8 +49,48 @@ Threat boundary: the run recipe is branch-controlled, and its `command` is
 executed as a shell command in the worktree. Every later stage inherits this
 assumption — a run recipe is trusted-branch input, not untrusted data.
 
+## Drive
+
+Once the app is booted, the route drives the changed UI flows against the
+handed-off app URL via
+`scripts/loop/ui-review-drive.mjs --repo-root <p> --app-url <url> --output-dir <p> [--changed-path <p> ...]`
+(pure orchestration in `packages/core/src/loop/ui-review-drive.mjs`). It launches
+one headless WebKit context, authenticates as the change's target role through a
+project-provided dev-login recipe, dismisses config-declared interstitials once
+per context, then walks the selected flows — rendering each page and exercising
+its declared create/edit/reorder/upload/toggle interactions — capturing a step
+screenshot + sibling `state.json` per step via `captureNamedUiState`. It fails
+closed to a stated stop reason when it cannot authenticate, and drives nothing.
+
+Throughout the walk, `response`, `requestfailed`, and `pageerror` listeners run
+and the project server log is tailed, so a swallowed error response (a 500 the UI
+hides behind a success state) is still recorded. An error response is a status
+<200 or >=400; 3xx redirects are normal navigation (login/canonical) and are not
+flagged. The stage emits an ordered set of step screenshots plus a structured
+captured-failures list (error responses, request failures, page errors,
+server-log exceptions) that
+feeds the next stage. Every bounded cap — max screenshots, screens skipped, and
+the fixed no-retry policy — is logged explicitly.
+
+Which flows are driven is a bounded heuristic over an explicit allowlist, never
+an unbounded crawl: each `uiReview.flows` entry declares `pathPatterns` matched
+against the PR's changed file paths; an entry with none is always driven, and an
+unknown diff drives every allowlisted flow. The selection is capped and the
+overflow logged.
+
+The drive recipe is per-project and never hard-coded: a project declares
+`uiReview.login` (a `loginUrl`, optional username/password field selectors with
+their dev-only values, a `submitSelector`, and a `successSelector` proving the
+session), optional `interstitials` (dismiss selectors), the `flows` allowlist,
+optional `caps` (clamped to the shipped ceilings — a project may only tighten
+them), and an optional `serverLogPath` (with a `serverLogExceptionPattern`
+defaulting to a heuristic that a project MUST override when its log format
+differs). The login form is branch-controlled trusted input, same threat
+boundary as the run recipe.
+
 ## Non-goals
 
-No drive/diagnose/report/teardown logic lives here yet, and provision+boot does
-not drive the browser, authenticate, capture screenshots, post the review, or
-touch a production DB — those are later stages.
+No diagnose/report/teardown logic lives here yet. The drive stage does not map an
+exception to its source line, post the review, pixel-diff for visual regression,
+run a cross-browser matrix, or touch a production DB — those are later stages or
+explicit non-goals.

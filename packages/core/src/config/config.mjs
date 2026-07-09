@@ -241,12 +241,114 @@ const UiReviewRunConfig = z.strictObject({
 });
 
 /**
- * UI-review route config: the generic, per-project provision+boot recipe. Absent
- * (the default) means no bootable recipe is declared — the provision+boot stage
- * stops with that as a stated reason rather than guessing how to run the app.
+ * Per-project dev-login recipe (Stage 2). The drive stage obtains a session for
+ * the change's target role by driving this login form in the browser. Nothing
+ * is hard-coded here — a project declares its own login URL, field selectors,
+ * and the shared dev credential (never a real user secret; a dev-only password
+ * or role). `successSelector` is what proves the session was established;
+ * without it the drive stage cannot confirm auth and fails closed.
+ */
+const UiReviewLoginConfig = z.strictObject({
+  loginUrl: z
+    .string()
+    .trim()
+    .url()
+    .refine((u) => {
+      try {
+        const p = new URL(u).protocol;
+        return p === "http:" || p === "https:";
+      } catch {
+        return false;
+      }
+    }, "loginUrl must be an http(s) URL"),
+  usernameSelector: z.string().trim().min(1).optional(),
+  usernameValue: z.string().min(1).optional(),
+  passwordSelector: z.string().trim().min(1).optional(),
+  passwordValue: z.string().min(1).optional(),
+  submitSelector: z.string().trim().min(1),
+  successSelector: z.string().trim().min(1),
+});
+
+/** A config-declared interstitial (cookie consent etc.) dismissed ONCE per
+ * browser context. */
+const UiReviewInterstitialConfig = z.strictObject({
+  selector: z.string().trim().min(1),
+});
+
+/** One driven step. The action set is deliberately small and maps 1:1 to a
+ * Playwright page call in the harness — enough to render a page and exercise the
+ * create/edit/reorder/upload/toggle interactions plus dispatch a real event. */
+const UiReviewFlowStepConfig = z.strictObject({
+  name: z.string().trim().min(1).optional(),
+  action: z.enum(["goto", "click", "fill", "select", "upload", "dispatch"]),
+  selector: z.string().trim().min(1).optional(),
+  path: z.string().trim().min(1).optional(),
+  value: z.string().optional(),
+  event: z.string().trim().min(1).optional(),
+}).superRefine((step, ctx) => {
+  // Every action but `goto` targets an element, so a missing selector is a
+  // config error, not a runtime step-failure. (`goto` uses `path`/url.)
+  if (step.action !== "goto" && (step.selector == null || step.selector.trim().length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["selector"], message: `step action "${step.action}" requires a selector` });
+  }
+  // Action-specific required fields. Rejecting these at parse time turns a silent
+  // wrong drive into a clear config error: a missing `goto.path` would drive "/",
+  // and a missing `upload.value` becomes setInputFiles(sel, "") which throws mid
+  // walk as a step-failure rather than a config problem.
+  if (step.action === "goto" && (step.path == null || step.path.trim().length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["path"], message: `step action "goto" requires a path` });
+  }
+  if (step.action === "upload" && (step.value == null || step.value.trim().length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["value"], message: `step action "upload" requires a value (the file path to upload)` });
+  }
+});
+
+/** An allowlisted changed flow. `pathPatterns` are plain substrings matched
+ * against the PR's changed file paths to decide whether the flow is in scope
+ * (the bounded changed-flow heuristic); a flow with none is always driven. */
+const UiReviewFlowConfig = z.strictObject({
+  name: z.string().trim().min(1),
+  pathPatterns: z.array(z.string().trim().min(1)).optional(),
+  steps: z.array(UiReviewFlowStepConfig).min(1),
+});
+
+/** Bounded drive caps (Stage 2). Every field is optional and clamped to a
+ * ceiling at resolve time — a project may only tighten a cap, never loosen it. */
+const UiReviewCapsConfig = z.strictObject({
+  maxScreenshots: z.number().int().min(1).optional(),
+  maxFlows: z.number().int().min(1).optional(),
+  maxStepsPerFlow: z.number().int().min(1).optional(),
+});
+
+/**
+ * UI-review route config: the generic, per-project provision+boot recipe (Stage
+ * 1) plus the drive recipe (Stage 2: login, interstitials, changed-flow
+ * allowlist, and an optional server-log path/pattern for tailing). Absent (the
+ * default) means no recipe is declared — the corresponding stage stops with that
+ * as a stated reason rather than guessing how to run or drive the app.
  */
 const UiReviewConfig = z.strictObject({
   run: UiReviewRunConfig.optional(),
+  login: UiReviewLoginConfig.optional(),
+  interstitials: z.array(UiReviewInterstitialConfig).optional(),
+  flows: z.array(UiReviewFlowConfig).optional(),
+  caps: UiReviewCapsConfig.optional(),
+  // Filesystem path (worktree-relative or absolute) to the project's server log.
+  // The drive stage tails it so a swallowed 500 the UI hid is still recorded.
+  serverLogPath: z.string().trim().min(1).optional(),
+  serverLogExceptionPattern: z
+    .string()
+    .trim()
+    .min(1)
+    .refine((p) => {
+      try {
+        new RegExp(p, "iu");
+        return true;
+      } catch {
+        return false;
+      }
+    }, "serverLogExceptionPattern must be a valid regex")
+    .optional(),
 });
 
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */
@@ -1504,6 +1606,59 @@ export function resolveUiReviewRunRecipe(config) {
     readyIntervalMs: Number.isInteger(run.readyIntervalMs) ? run.readyIntervalMs : 1000,
     cwd: typeof run.cwd === "string" && run.cwd.trim().length > 0 ? run.cwd.trim() : null,
     migrate,
+  };
+}
+
+/**
+ * Default server-log exception signal for the drive stage's log tail. Matched
+ * (case-insensitive, per line) against the tailed server-log text. This is a
+ * HEURISTIC default tuned for common framework logs (a 5xx status, an
+ * uncaught/unhandled marker, an exception/traceback). A project whose log format
+ * these miss MUST override `uiReview.serverLogExceptionPattern` to match its own
+ * server log — the default cannot detect what its log never prints.
+ */
+export const DEFAULT_SERVER_LOG_EXCEPTION_PATTERN =
+  "\\b(5\\d{2}\\b|Internal Server Error|Unhandled|Uncaught|Traceback|Exception|FATAL|\\bERROR\\b)";
+
+/**
+ * Resolve the ui-review drive recipe (Stage 2) from the merged config.
+ *
+ * Returns null when no `uiReview.login` is declared — the drive stage treats
+ * that as a stated stop reason (it cannot authenticate, so it drives nothing).
+ * The server-log exception pattern falls back to the shipped heuristic default
+ * when a `serverLogPath` is set without an explicit pattern.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {null | { login: object, interstitials: object[], flows: object[],
+ *   caps: object, serverLogPath: string|null, serverLogExceptionPattern: string }}
+ */
+export function resolveUiReviewDriveRecipe(config) {
+  const ui = config?.uiReview;
+  const login = ui?.login;
+  if (!login || typeof login.loginUrl !== "string" || login.loginUrl.trim().length === 0) return null;
+  if (typeof login.submitSelector !== "string" || login.submitSelector.trim().length === 0) return null;
+  if (typeof login.successSelector !== "string" || login.successSelector.trim().length === 0) return null;
+  const serverLogPath = typeof ui.serverLogPath === "string" && ui.serverLogPath.trim().length > 0 ? ui.serverLogPath.trim() : null;
+  return {
+    login: {
+      loginUrl: login.loginUrl.trim(),
+      usernameSelector: login.usernameSelector ?? null,
+      usernameValue: login.usernameValue ?? null,
+      passwordSelector: login.passwordSelector ?? null,
+      passwordValue: login.passwordValue ?? null,
+      submitSelector: login.submitSelector.trim(),
+      successSelector: login.successSelector.trim(),
+    },
+    interstitials: Array.isArray(ui.interstitials)
+      ? ui.interstitials.map((i) => ({ selector: i.selector }))
+      : [],
+    flows: Array.isArray(ui.flows) ? ui.flows : [],
+    caps: ui.caps ?? {},
+    serverLogPath,
+    serverLogExceptionPattern:
+      typeof ui.serverLogExceptionPattern === "string" && ui.serverLogExceptionPattern.trim().length > 0
+        ? ui.serverLogExceptionPattern.trim()
+        : DEFAULT_SERVER_LOG_EXCEPTION_PATTERN,
   };
 }
 
