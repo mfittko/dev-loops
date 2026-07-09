@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// Mirror the issue-body AC/DoD tick procedure onto the PR body: after a clean
-// pre_approval_gate verification, flip each verified item's `- [ ]` to `- [x]`
-// in the PR body via a single `gh pr edit --body-file` update. Matches labels by
-// EXACT (trimmed) text and fails closed — never blanket-checks, never unchecks.
+// Sync verified AC/DoD checkboxes into the PR body and/or the linked issue body:
+// after a clean pre_approval_gate verification, flip each verified item's `- [ ]`
+// to `- [x]` in the PR body (a single `gh pr edit --body-file` update) and/or the
+// linked issue body (`gh issue edit --body-file`, via edit-issue.mjs). Matches
+// labels by EXACT (trimmed) text and fails closed — never blanket-checks, never
+// unchecks. Pass --pr, --issue, or both; --pr alone preserves prior behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
