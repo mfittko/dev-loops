@@ -189,9 +189,50 @@ test("diagnoseFailures: anchors in-repo frames to changed diff lines and retains
   assert.equal(findings[3].kind, "page-error");
   assert.match(findings[3].nonAnchorableReason, /not among the PR's changed files/i);
 
-  // (3) line-not-changed reason (unchanged context line of a changed file).
+  // (3) line-not-added reason (unchanged context line of a changed file).
   assert.equal(findings[4].kind, "server-log-exception");
-  assert.match(findings[4].nonAnchorableReason, /not on a changed diff line/i);
+  assert.match(findings[4].nonAnchorableReason, /not on an added diff line/i);
+});
+
+test("diagnoseFailures: a changed file with no added lines (deletion-only) reports the changed-file reason, not not-changed", () => {
+  // A deletion-only hunk: the file IS changed (keeps its `+++ b/path` header)
+  // but adds no anchorable line. A frame landing on it must report the
+  // added-line reason, NOT "not among the PR's changed files".
+  const diff = `diff --git a/app/models/user.rb b/app/models/user.rb
+--- a/app/models/user.rb
++++ b/app/models/user.rb
+@@ -10,3 +10,2 @@ class User
+   def name
+-    stale_call
+   end
+`;
+  const failures = [
+    { kind: "page-error", severity: "must-fix", message: "x", stack: "Error: x\n    at f (app/models/user.rb:11:1)" },
+  ];
+  const { findings } = diagnoseFailures({ failures, diffOutput: diff });
+  assert.equal(findings[0].anchorable, false);
+  assert.match(findings[0].nonAnchorableReason, /not on an added diff line/i);
+  assert.doesNotMatch(findings[0].nonAnchorableReason, /not among the PR's changed files/i);
+});
+
+test("diagnoseFailures: a Windows backslash frame path anchors to the forward-slash diff path", () => {
+  const diff = `diff --git a/app/assets/widget.js b/app/assets/widget.js
+--- a/app/assets/widget.js
++++ b/app/assets/widget.js
+@@ -1,2 +1,4 @@
+ const x = 1;
++function boom() {
++  throw new TypeError("bad");
+ }
+`;
+  const failures = [
+    // A Windows-style frame path (backslash separators) must fold to `/` so it
+    // suffix-matches the repo-relative diff path.
+    { kind: "page-error", severity: "must-fix", message: "x", stack: "TypeError: bad\n    at boom (C:\\repo\\app\\assets\\widget.js:3:9)" },
+  ];
+  const { findings } = diagnoseFailures({ failures, diffOutput: diff });
+  assert.deepEqual(findings[0].anchor, { path: "app/assets/widget.js", line: 3, side: "RIGHT" });
+  assert.equal(findings[0].anchorable, true);
 });
 
 test("diagnoseFailures: an ambiguous suffix match is flagged non-anchorable, never guessed", () => {

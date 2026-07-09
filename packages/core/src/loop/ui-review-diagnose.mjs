@@ -86,16 +86,23 @@ export function topInRepoFrame(frames, inRepo = isInRepoFrame) {
 
 /**
  * Parse a unified diff into a map of changed file -> set of ADDED head line
- * numbers (the RIGHT side). Only added (`+`) lines are anchor targets: an inline
- * comment on an added line points at code the PR introduced. Unchanged context
- * lines advance the head counter but are not anchor targets — a defect on an
- * unchanged line is body-attached, not falsely pinned to "changed" code.
+ * numbers (the RIGHT side). EVERY changed file is a key (registered from its
+ * `diff --git`/`+++ ` header) so a file that is changed but adds no anchorable
+ * line (deletion-only, binary, or mode-only) still reports as changed with an
+ * empty set — distinct from a file the PR never touched. Only added (`+`) lines
+ * are anchor targets: an inline comment on an added line points at code the PR
+ * introduced. Unchanged context lines advance the head counter but are not
+ * anchor targets — a defect on an unchanged line is body-attached, not falsely
+ * pinned to "changed" code.
  *
  * @param {string} diffOutput - raw `gh pr diff` / `git diff` unified output.
  * @returns {Map<string, Set<number>>}
  */
 export function parseDiffAnchors(diffOutput = "") {
   const map = new Map();
+  const register = (p) => {
+    if (p !== null && !map.has(p)) map.set(p, new Set());
+  };
   let currentPath = null;
   let newLine = 0;
   let inHunk = false;
@@ -105,6 +112,10 @@ export function parseDiffAnchors(diffOutput = "") {
       // (content lines always carry a `+`/`-`/space prefix), so it always resets.
       currentPath = null;
       inHunk = false;
+      // Register the RIGHT-side path so binary/mode-only changes (which carry no
+      // `+++ ` header) still count as changed files.
+      const m = line.match(/^diff --git a\/.+ b\/(.+)$/u);
+      if (m) register(m[1]);
       continue;
     }
     // File headers appear only before the first hunk. Inside a hunk a line
@@ -114,6 +125,9 @@ export function parseDiffAnchors(diffOutput = "") {
     if (!inHunk && line.startsWith("+++ ")) {
       const p = line.slice(4).trim();
       currentPath = p === "/dev/null" ? null : p.replace(/^b\//u, "");
+      // Register even deletion-only files (they keep a `+++ b/path` header but
+      // add no line) so they report as changed rather than not-among-changed.
+      register(currentPath);
       continue;
     }
     if (!inHunk && line.startsWith("--- ")) {
@@ -144,12 +158,13 @@ export function parseDiffAnchors(diffOutput = "") {
 
 /** Normalize a stack-frame file to a repo-relative-comparable form: strip a URL
  * scheme+authority (`http://host/assets/x.js` -> `/assets/x.js`) and any
- * query/hash, so an absolute or served path can be suffix-matched to a diff path. */
+ * query/hash, then fold Windows `\` separators to `/`, so an absolute, served,
+ * or Windows-style path can be suffix-matched to a (forward-slash) diff path. */
 function normalizeFrameFile(file) {
   let s = String(file);
   const scheme = s.match(/^[a-z][a-z0-9+.\-]*:\/\/[^/]*(\/.*)$/iu);
   if (scheme) s = scheme[1];
-  return s.split(/[?#]/u)[0];
+  return s.split(/[?#]/u)[0].replace(/\\/gu, "/");
 }
 
 /** The source-file -> changed-file mapping is the fragile axis (bundlers, moved
@@ -208,7 +223,7 @@ function diagnoseOne(failure, anchorsByPath, inRepo, evidence) {
   }
   const path = matches[0];
   if (!anchorsByPath.get(path).has(frame.line)) {
-    finding.nonAnchorableReason = "source line is not on a changed diff line";
+    finding.nonAnchorableReason = "source line is not on an added diff line";
     return finding;
   }
   finding.anchor = { path, line: frame.line, side: RIGHT };
