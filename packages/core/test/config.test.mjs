@@ -392,6 +392,51 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
+  test("S32: uiReview.login with loginUrl + submit/success selectors parses", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { login: { loginUrl: "http://127.0.0.1:3000/login", submitSelector: "button", successSelector: "#home" } },
+    });
+    assert.ok(result.success);
+  });
+
+  test("S33: uiReview.login.loginUrl rejects a non-http(s) URL", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { login: { loginUrl: "ftp://x/login", submitSelector: "b", successSelector: "#h" } },
+    });
+    assert.ok(!result.success);
+  });
+
+  test("S34: uiReview.login requires submitSelector and successSelector", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { login: { loginUrl: "http://x/login", successSelector: "#h" } },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { login: { loginUrl: "http://x/login", submitSelector: "b" } },
+    }).success);
+  });
+
+  test("S35: uiReview.flows steps require a known action", () => {
+    assert.ok(DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "goto", path: "/decks" }] }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "teleport" }] }] },
+    }).success);
+  });
+
+  test("S36: uiReview.serverLogExceptionPattern rejects a malformed regex", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { serverLogExceptionPattern: "[" },
+    }).success);
+  });
+
 });
 
 // ============================================================================
