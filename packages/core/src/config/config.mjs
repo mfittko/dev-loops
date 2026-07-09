@@ -291,6 +291,16 @@ const UiReviewFlowStepConfig = z.strictObject({
   if (step.action !== "goto" && (step.selector == null || step.selector.trim().length === 0)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["selector"], message: `step action "${step.action}" requires a selector` });
   }
+  // Action-specific required fields. Rejecting these at parse time turns a silent
+  // wrong drive into a clear config error: a missing `goto.path` would drive "/",
+  // and a missing `upload.value` becomes setInputFiles(sel, "") which throws mid
+  // walk as a step-failure rather than a config problem.
+  if (step.action === "goto" && (step.path == null || step.path.trim().length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["path"], message: `step action "goto" requires a path` });
+  }
+  if (step.action === "upload" && (step.value == null || step.value.trim().length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["value"], message: `step action "upload" requires a value (the file path to upload)` });
+  }
 });
 
 /** An allowlisted changed flow. `pathPatterns` are plain substrings matched

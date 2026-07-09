@@ -62,11 +62,13 @@ its declared create/edit/reorder/upload/toggle interactions — capturing a step
 screenshot + sibling `state.json` per step via `captureNamedUiState`. It fails
 closed to a stated stop reason when it cannot authenticate, and drives nothing.
 
-Throughout the walk, `response` (non-2xx), `requestfailed`, and `pageerror`
-listeners run and the project server log is tailed, so a swallowed non-2xx (a 500
-the UI hides behind a success state) is still recorded. The stage emits an
-ordered set of step screenshots plus a structured captured-failures list
-(non-2xx responses, request failures, page errors, server-log exceptions) that
+Throughout the walk, `response`, `requestfailed`, and `pageerror` listeners run
+and the project server log is tailed, so a swallowed error response (a 500 the UI
+hides behind a success state) is still recorded. An error response is a status
+<200 or >=400; 3xx redirects are normal navigation (login/canonical) and are not
+flagged. The stage emits an ordered set of step screenshots plus a structured
+captured-failures list (error responses, request failures, page errors,
+server-log exceptions) that
 feeds the next stage. Every bounded cap — max screenshots, screens skipped, and
 the fixed no-retry policy — is logged explicitly.
 

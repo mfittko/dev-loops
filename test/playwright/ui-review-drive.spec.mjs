@@ -1,6 +1,5 @@
 import { createServer } from "node:http";
-import { mkdtempSync, existsSync, appendFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { test, expect } from "@playwright/test";
@@ -41,7 +40,7 @@ function makeFixtureApp(logPath) {
       return;
     }
     if (route === "/api/save") {
-      // The swallowed non-2xx: the server errors and logs it, the UI hides it.
+      // The swallowed error response: the server errors and logs it, the UI hides it.
       appendFileSync(logPath, "ERROR 500 Internal Server Error: NoMethodError in DecksController#save\n");
       res.writeHead(500, { "content-type": "text/plain" });
       res.end("boom");
@@ -52,9 +51,12 @@ function makeFixtureApp(logPath) {
   });
 }
 
-test("webkit drive harness captures a swallowed non-2xx via the response listener AND the server-log tail", async ({ page }) => {
-  const outputDir = mkdtempSync(path.join(tmpdir(), "ui-drive-spec-"));
-  const logPath = path.join(outputDir, "server.log");
+test("webkit drive harness captures a swallowed error response via the response listener AND the server-log tail", async ({ page }, testInfo) => {
+  // Write artifacts under Playwright's per-test outputDir so CI artifact
+  // collection/retention captures them and cleanup is handled — not an OS temp
+  // dir that leaks and escapes outputDir retention.
+  const outputDir = testInfo.outputDir;
+  const logPath = testInfo.outputPath("server.log");
   writeFileSync(logPath, "GET /login 200\n"); // history the tail must not re-report
 
   const { server, url } = await startFixtureServer(() => makeFixtureApp(logPath));
@@ -119,7 +121,7 @@ test("webkit drive harness captures a swallowed non-2xx via the response listene
 
     // The UI hid the failure ("Saved!"), yet the drive stage recorded it twice.
     const kinds = result.failures.map((f) => f.kind);
-    expect(kinds, "response listener must record the swallowed 500").toContain("non-2xx-response");
+    expect(kinds, "response listener must record the swallowed 500").toContain("error-response");
     expect(kinds, "server-log tail must record the swallowed 500").toContain("server-log-exception");
     expect(result.captures.length).toBe(2);
     expect(existsSync(result.captures[0].screenshotPath)).toBe(true);

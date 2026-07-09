@@ -441,6 +441,27 @@ describe("schema validation", () => {
     }).success);
   });
 
+  test("S35c: goto requires a path and upload requires a value; both rejected at parse time", () => {
+    // goto: accepts with a path, rejects without one (a missing path would drive "/").
+    assert.ok(DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "goto", path: "/decks" }] }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "goto" }] }] },
+    }).success);
+    // upload: accepts with a value (file path), rejects without one (setInputFiles("") throws).
+    assert.ok(DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "upload", selector: "#file", value: "fixtures/a.png" }] }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "upload", selector: "#file" }] }] },
+    }).success);
+  });
+
   test("S36: uiReview.serverLogExceptionPattern rejects a malformed regex", () => {
     assert.ok(!DevLoopConfigSchema.safeParse({
       version: 1,

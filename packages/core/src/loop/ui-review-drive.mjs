@@ -6,7 +6,7 @@
  * handed off by Stage 1 — rendering each page, exercising its declared
  * interactions, and capturing an ordered set of step screenshots. While it
  * drives, response/requestfailed/pageerror listeners and a server-log tail run
- * so a swallowed non-2xx (a 500 the UI hides) is still recorded.
+ * so a swallowed error response (a 500 the UI hides) is still recorded.
  *
  * This module is PURE orchestration: all browser/page IO, the auth recipe, the
  * interstitial dismissal, the per-step capture, the event collection, and the
@@ -14,7 +14,7 @@
  * (WebKit). The decision logic that lives here is: which flows to drive
  * (a bounded changed-flow heuristic over an explicit allowlist), cap
  * enforcement (max screenshots, screens skipped, no-retry) with explicit logs,
- * and failure classification (collating non-2xx responses, request failures,
+ * and failure classification (collating error responses, request failures,
  * page errors, and server-log exceptions into one structured list).
  *
  * Fail closed: a can't-authenticate condition STOPS with a stated reason and
@@ -89,9 +89,9 @@ export function selectFlows({ flows = [], changedPaths = [], caps = DEFAULT_DRIV
 
 /**
  * Classify raw captured events + the server-log tail into one structured failure
- * list. Pure. This is where a swallowed non-2xx surfaces twice — once from the
- * response listener and once from the server-log tail — so a 500 the UI hid is
- * still recorded.
+ * list. Pure. This is where a swallowed error response surfaces twice — once
+ * from the response listener and once from the server-log tail — so a 500 the UI
+ * hid is still recorded.
  *
  * @param {object} input
  * @param {{url?:string,status:number}[]} [input.responses] - from page.on('response')
@@ -111,15 +111,17 @@ export function classifyFailures({
   const failures = [];
 
   for (const r of responses) {
-    // Non-2xx = anything outside 2xx/3xx. A swallowed 500 lands here even when
-    // the page rendered a success state, because the listener sees the wire.
+    // An error response is anything outside 2xx/3xx (status <200 or >=400). 3xx
+    // redirects are normal navigation (login/canonical), not errors, so they are
+    // not flagged. A swallowed 500 lands here even when the page rendered a
+    // success state, because the listener sees the wire.
     if (typeof r.status === "number" && (r.status < 200 || r.status >= 400)) {
       failures.push({
-        kind: "non-2xx-response",
+        kind: "error-response",
         severity: MUST_FIX,
         status: r.status,
         url: r.url ?? null,
-        message: `non-2xx response ${r.status}${r.url ? ` at ${r.url}` : ""}`,
+        message: `error response ${r.status}${r.url ? ` at ${r.url}` : ""}`,
       });
     }
   }
@@ -142,15 +144,29 @@ export function classifyFailures({
   }
 
   if (serverLogTail && serverLogExceptionPattern) {
-    const re = new RegExp(serverLogExceptionPattern, "iu");
-    for (const line of serverLogTail.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed.length > 0 && re.test(trimmed)) {
-        failures.push({
-          kind: "server-log-exception",
-          severity: MUST_FIX,
-          message: `server log exception: ${trimmed.slice(0, 500)}`,
-        });
+    // Config validates the pattern only on the CLI path; a direct caller can
+    // pass an invalid regex. Guard the compile so a bad pattern degrades to a
+    // surfaced note instead of throwing and breaking the whole drive envelope.
+    let re;
+    try {
+      re = new RegExp(serverLogExceptionPattern, "iu");
+    } catch (err) {
+      failures.push({
+        kind: "server-log-pattern-invalid",
+        severity: "note",
+        message: `server-log exception pattern is not a valid regex; skipped server-log classification: ${err?.message ?? String(err)}`,
+      });
+    }
+    if (re) {
+      for (const line of serverLogTail.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.length > 0 && re.test(trimmed)) {
+          failures.push({
+            kind: "server-log-exception",
+            severity: MUST_FIX,
+            message: `server log exception: ${trimmed.slice(0, 500)}`,
+          });
+        }
       }
     }
   }

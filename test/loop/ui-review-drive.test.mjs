@@ -54,9 +54,9 @@ test("parseUiReviewDriveCliArgs: collects repeatable --changed-path", () => {
   assert.deepEqual(o.changedPaths, ["app/a.rb", "app/b.rb"]);
 });
 
-// ── The AC test: a swallowed non-2xx is captured by the listener AND the log ──
+// ─ The AC test: a swallowed error response is captured by the listener AND log ─
 
-test("swallowed non-2xx: the response listener AND the server-log tail both capture a hidden 500", async () => {
+test("swallowed error response: the response listener AND the server-log tail both capture a hidden 500", async () => {
   // Fixture: a page that fires a 500 response the UI swallows (no visible error),
   // and a server that logs the 500 during the drive. Uses the real harness
   // listener + real log tail + real classifier — no browser required.
@@ -88,8 +88,25 @@ test("swallowed non-2xx: the response listener AND the server-log tail both capt
     serverLogExceptionPattern: DEFAULT_SERVER_LOG_EXCEPTION_PATTERN,
   });
   const kinds = failures.map((f) => f.kind);
-  assert.ok(kinds.includes("non-2xx-response"), "response listener must record the swallowed 500");
+  assert.ok(kinds.includes("error-response"), "response listener must record the swallowed 500");
   assert.ok(kinds.includes("server-log-exception"), "server-log tail must record the swallowed 500");
+});
+
+test("classifyFailures: an invalid serverLogExceptionPattern degrades to a surfaced note (no throw)", () => {
+  let failures;
+  assert.doesNotThrow(() => {
+    failures = classifyFailures({
+      responses: [{ url: "http://app/save", status: 500 }],
+      serverLogTail: "ERROR 500 Internal Server Error\n",
+      serverLogExceptionPattern: "[", // not a valid regex
+    });
+  });
+  const byKind = Object.fromEntries(failures.map((f) => [f.kind, f]));
+  // The bad pattern is surfaced as a note, server-log classification is skipped,
+  // and the wire-level error response is still recorded.
+  assert.equal(byKind["server-log-pattern-invalid"].severity, "note");
+  assert.ok(byKind["error-response"], "response classification still runs");
+  assert.ok(!byKind["server-log-exception"], "server-log line classification is skipped");
 });
 
 test("classifyFailures: a requestFailure becomes request-failed and a pageError becomes page-error", () => {
@@ -122,6 +139,19 @@ test("openServerLogTail: absent path is a no-op; missing file reads once created
   const tail = openServerLogTail(p); // file does not exist yet
   writeFileSync(p, "boot line\n");
   assert.match(await tail.read(), /boot line/);
+});
+
+test("openServerLogTail: caps a huge delta to the last maxBytes and logs the truncation", async () => {
+  const p = path.join(tempDir(), "big.log");
+  writeFileSync(p, ""); // pins offset at 0
+  const notes = [];
+  const tail = openServerLogTail(p, { maxBytes: 1024, log: (m) => notes.push(m) });
+  // Append far more than the cap; the newest bytes carry the marker to keep.
+  appendFileSync(p, "x".repeat(4096) + "\nTAIL_MARKER\n");
+  const out = await tail.read();
+  assert.ok(Buffer.byteLength(out, "utf8") <= 1024, "read is capped to maxBytes");
+  assert.match(out, /TAIL_MARKER/, "the newest bytes (where a just-logged 500 lives) are kept");
+  assert.ok(notes.some((m) => /truncated/.test(m)), "truncation is logged, not silent");
 });
 
 // ── Changed-flow discovery heuristic ─────────────────────────────────────────
@@ -226,7 +256,7 @@ test("driveUiReview: caps a flow at maxStepsPerFlow and logs the truncation", as
   assert.ok(logs.some((m) => /maxStepsPerFlow cap \(2\)/.test(m)), "the step truncation is logged");
 });
 
-test("driveUiReview: collates a swallowed non-2xx from the injected listener + log tail", async () => {
+test("driveUiReview: collates a swallowed error response from the injected listener + log tail", async () => {
   const r = await driveUiReview(
     { appUrl: "http://app", login: {}, flows: [{ name: "f", steps: [{ name: "save", action: "click" }] }], serverLogExceptionPattern: DEFAULT_SERVER_LOG_EXCEPTION_PATTERN },
     baseSeams({
@@ -236,7 +266,7 @@ test("driveUiReview: collates a swallowed non-2xx from the injected listener + l
   );
   assert.equal(r.ok, false);
   const kinds = r.failures.map((f) => f.kind).sort();
-  assert.deepEqual(kinds, ["non-2xx-response", "server-log-exception"]);
+  assert.deepEqual(kinds, ["error-response", "server-log-exception"]);
 });
 
 // ── Config resolver ──────────────────────────────────────────────────────────

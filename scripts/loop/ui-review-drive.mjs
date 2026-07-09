@@ -7,7 +7,7 @@
  * interstitials once, then walks the changed flows against the arbitrary
  * running-app URL from Stage 1 — capturing a step screenshot + state.json per
  * step. Response/requestfailed/pageerror listeners plus a server-log tail run
- * throughout so a swallowed non-2xx is still recorded.
+ * throughout so a swallowed error response is still recorded.
  *
  * This is a thin adapter: it wires the real IO seams (WebKit browser/page, the
  * page-event listeners, captureNamedUiState, the login form driving, the
@@ -30,7 +30,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 const USAGE = `Usage:
   ui-review-drive.mjs --repo-root <p> --app-url <url> --output-dir <p> [--changed-path <p> ...]
 Authenticate as the target role and drive the changed UI flows headless (WebKit),
-capturing step screenshots + non-2xx/pageerror/server-log failures (Stage 2 of the ui_review route).
+capturing step screenshots + error-response/pageerror/server-log failures (Stage 2 of the ui_review route).
 Required:
   --repo-root <p>      Absolute path to the (provisioned) worktree carrying the .devloops recipe.
   --app-url <url>      The running-app URL handed off by Stage 1.
@@ -101,7 +101,8 @@ export function parseUiReviewDriveCliArgs(argv) {
 /**
  * Register the response/requestfailed/pageerror listeners on a page (or any
  * object exposing the same `on(event, cb)` emitter interface, so this is unit
- * testable without a browser). Only non-2xx responses are retained so the buffer
+ * testable without a browser). Only error responses (status <200 or >=400; 3xx
+ * redirects are normal navigation and are not flagged) are retained so the buffer
  * stays bounded; the pure classifier decides severity from the collected set.
  *
  * @returns {{ getCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]} }}
@@ -128,6 +129,12 @@ export function attachPageListeners(page) {
   return { getCapturedEvents: () => ({ responses, requestFailures, pageErrors }) };
 }
 
+/** Cap the bytes a single tail read pulls into memory, so a huge log growth
+ * (a runaway error loop dumping megabytes) can't OOM the drive. On overflow we
+ * keep the LAST maxBytes of the delta (the newest lines, where a just-logged 500
+ * lives) and log the truncation — a bounded cap, never a silent one. */
+const SERVER_LOG_TAIL_MAX_BYTES = 1024 * 1024; // 1 MiB
+
 /**
  * Open a server-log tail bound to the log's size at drive start. `read()` returns
  * only the bytes appended since — the tail of one drive run, so a 500 logged
@@ -136,8 +143,12 @@ export function attachPageListeners(page) {
  * ponytail: tracks a byte offset, not the inode. If the project rotates the log
  * mid-run the offset goes stale; upgrade to an inode/rename watch if that
  * matters. Absent log path => a no-op read (empty tail).
+ *
+ * @param {string|null} logPath
+ * @param {{maxBytes?:number, log?:(msg:string)=>void}} [opts] - `maxBytes` caps a
+ *   single read; `log` receives a truncation note when the delta exceeds it.
  */
-export function openServerLogTail(logPath) {
+export function openServerLogTail(logPath, { maxBytes = SERVER_LOG_TAIL_MAX_BYTES, log = () => {} } = {}) {
   if (!logPath) return { read: async () => "" };
   let startOffset = 0;
   try {
@@ -152,9 +163,15 @@ export function openServerLogTail(logPath) {
         handle = await open(logPath, "r");
         const { size } = await handle.stat();
         if (size <= startOffset) return "";
-        const length = size - startOffset;
+        const delta = size - startOffset;
+        // Keep the newest maxBytes of the delta on overflow; read from the tail.
+        const length = Math.min(delta, maxBytes);
+        const readFrom = size - length;
+        if (delta > maxBytes) {
+          log(`server-log tail truncated: kept the last ${length} of ${delta} appended byte(s) at the ${maxBytes}-byte cap`);
+        }
         const buf = Buffer.alloc(length);
-        await handle.read(buf, 0, length, startOffset);
+        await handle.read(buf, 0, length, readFrom);
         return buf.toString("utf8");
       } catch {
         return "";
@@ -269,7 +286,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   }
 
   const serverLogPath = recipe.serverLogPath ? path.resolve(options.repoRoot, recipe.serverLogPath) : null;
-  const logTail = openServerLogTail(serverLogPath);
+  const logTail = openServerLogTail(serverLogPath, { log: (msg) => stderr.write(`[ui-review-drive] ${msg}\n`) });
 
   const browser = await webkit.launch({ headless: true });
   try {

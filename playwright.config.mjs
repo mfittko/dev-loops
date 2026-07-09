@@ -49,7 +49,7 @@ export default defineConfig({
       use: { browserName: "webkit" },
     })),
     // ui_review drive harness smoke: a net-new spec (not registry-driven) that
-    // drives a fixture app exhibiting a swallowed non-2xx and asserts the
+    // drives a fixture app exhibiting a swallowed error response and asserts the
     // listener + server-log tail both catch it.
     {
       name: "ui-review-drive",
