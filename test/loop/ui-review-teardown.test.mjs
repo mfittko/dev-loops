@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { teardown, ROW_STATUS, WORKTREE_STATUS, PROCESS_STATUS } from "@dev-loops/core/loop/ui-review-teardown";
-import { parseUiReviewTeardownCliArgs, killProcess } from "../../scripts/loop/ui-review-teardown.mjs";
+import { parseUiReviewTeardownCliArgs, killProcess, runCli } from "../../scripts/loop/ui-review-teardown.mjs";
 
 // A Stage-1 provision result: a booted app (pid), applied migrations, a worktree.
 const PROVISION = {
@@ -260,12 +263,15 @@ test("confirm:false + stopped drive (no rows) => ROW_STATUS.NONE", async () => {
   assert.equal(calls.drop, 0);
 });
 
-// Fix 3(c): provision without worktreePath => skipped with the distinct detail.
-test("provision without worktreePath => worktree skipped with 'no worktree path' detail, removeWorktree not called", async () => {
+// Fix 3(c): provision without worktreePath => distinct MISSING_PATH status (NOT
+// conflated with SKIPPED_UNCONFIRMED — the ledger must say WHY removal did not
+// run: a missing path, not a withheld confirmation). Holds even with confirm:true.
+test("provision without worktreePath => MISSING_PATH (distinct from unconfirmed-skip), removeWorktree not called", async () => {
   const { seams, calls } = makeSeams();
   const provisionNoWorktree = { ...PROVISION, worktreePath: undefined };
   const res = await teardown({ provisionResult: provisionNoWorktree, confirm: true }, seams);
-  assert.equal(res.ledger.worktree.status, WORKTREE_STATUS.SKIPPED_UNCONFIRMED);
+  assert.equal(res.ledger.worktree.status, WORKTREE_STATUS.MISSING_PATH);
+  assert.notEqual(res.ledger.worktree.status, WORKTREE_STATUS.SKIPPED_UNCONFIRMED);
   assert.match(res.ledger.worktree.detail, /no worktree path/i);
   assert.equal(res.ledger.worktree.path, null);
   assert.equal(calls.removeWorktree, 0);
@@ -296,6 +302,25 @@ test("killProcess escalates to SIGKILL (forced:true) for a child that ignores SI
   const res = await killProcess({ pid: child.pid, graceMs: 500, pollMs: 50 });
   assert.equal(res.stopped, true);
   assert.equal(res.forced, true, "SIGTERM-ignoring child forces the SIGKILL escalation");
+});
+
+// Thread 1: a present-but-malformed --row-manifest must FAIL CLOSED (clear parse
+// error), never be silently nulled into a misleading "may remain (untagged)"
+// ledger even though a manifest file WAS supplied. Absent --row-manifest is the
+// honest untagged path and stays fine (covered by the core tests above).
+test("runCli: present-but-malformed --row-manifest fails closed with a clear parse error (not silent null)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-manifest-"));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify(PROVISION));
+  const manifestPath = join(dir, "manifest.json");
+  writeFileSync(manifestPath, JSON.stringify({ notRows: [{ id: 1 }] })); // wrong shape
+
+  const argv = ["--repo-root", "/r", "--provision-result", provisionPath, "--row-manifest", manifestPath];
+  const sink = { write: () => true };
+  await assert.rejects(
+    runCli(argv, { stdout: sink, stderr: sink }),
+    /--row-manifest .* malformed/i,
+  );
 });
 
 test("parseUiReviewTeardownCliArgs: requires --repo-root and --provision-result", () => {

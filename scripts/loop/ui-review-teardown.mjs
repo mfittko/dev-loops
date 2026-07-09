@@ -14,7 +14,6 @@
  * result JSON from disk.
  */
 import { readFileSync, statSync } from "node:fs";
-import path from "node:path";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
@@ -106,6 +105,20 @@ function readResultJson(file, { optional = false } = {}) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
+/** Read + validate an explicit `--row-manifest`. Absent (`undefined`) is the
+ * honest "no manifest" path -> null. When a manifest path IS supplied, it must
+ * parse to a JSON array or `{ rows: [...] }`; any other shape is a user/config
+ * error and FAILS CLOSED (throws), never silently nulled — a silent null would
+ * hide the error behind a misleading "may remain (untagged)" ledger even though
+ * a manifest file was provided. */
+function readRowManifest(file) {
+  if (file === undefined) return null;
+  const manifestJson = readResultJson(file); // present but unreadable/unparseable throws
+  if (Array.isArray(manifestJson)) return manifestJson;
+  if (Array.isArray(manifestJson?.rows)) return manifestJson.rows;
+  throw parseError(`--row-manifest ${file} is malformed: expected a JSON array or { "rows": [...] }`);
+}
+
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** True while `pid` is still alive. `process.kill(pid,0)` throws ESRCH when gone;
@@ -179,8 +192,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
 
   const provisionResult = readResultJson(options.provisionResult);
   const driveResult = readResultJson(options.driveResult, { optional: true });
-  const manifestJson = readResultJson(options.rowManifest, { optional: true });
-  const rowManifest = Array.isArray(manifestJson) ? manifestJson : Array.isArray(manifestJson?.rows) ? manifestJson.rows : null;
+  const rowManifest = readRowManifest(options.rowManifest);
 
   const result = await teardown(
     {

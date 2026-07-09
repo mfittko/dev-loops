@@ -47,6 +47,10 @@ const WORKTREE_STATUS = Object.freeze({
   REMOVED: "removed",
   REMOVE_FAILED: "remove-failed",
   SKIPPED_UNCONFIRMED: "skipped-unconfirmed",
+  // No worktree path in the provision result at all. Distinct from
+  // SKIPPED_UNCONFIRMED (which is the confirmation gate) so the ledger says WHY
+  // removal did not run — a missing path, not a withheld confirmation.
+  MISSING_PATH: "missing-path",
 });
 
 const PROCESS_STATUS = Object.freeze({
@@ -195,7 +199,7 @@ export async function teardown(
     worktreeLedger = { path: null, removed: false, status: WORKTREE_STATUS.REMOVE_FAILED, detail: `malformed worktree path in provision result (not a string): ${typeof rawWorktreePath}` };
     fail(`worktree removal FAILED: malformed worktree path in provision result (not a string): ${typeof rawWorktreePath}`);
   } else if (!worktreePath) {
-    worktreeLedger = { path: null, removed: false, status: WORKTREE_STATUS.SKIPPED_UNCONFIRMED, detail: "no worktree path in provision result" };
+    worktreeLedger = { path: null, removed: false, status: WORKTREE_STATUS.MISSING_PATH, detail: "no worktree path in provision result" };
     record("worktree removal skipped: no worktree path in provision result");
   } else if (!confirm) {
     worktreeLedger = { path: worktreePath, removed: false, status: WORKTREE_STATUS.SKIPPED_UNCONFIRMED, detail: "worktree retained: teardown not confirmed" };
