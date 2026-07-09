@@ -225,8 +225,8 @@ When an existing sub-issue tree needs **scope alignment, AC/DoD contracts, and d
 
 Before updating the GitHub issue body, show the diff and get explicit confirmation. Then use:
 ```sh
-gh issue edit <number> --repo <resolved-repo> --body-file <updated-body-file>
-gh issue edit <number> --repo <resolved-repo> --add-assignee copilot-swe-agent
+node scripts/github/edit-issue.mjs --repo <resolved-repo> --issue <number> --body-file <updated-body-file>
+node scripts/github/edit-issue.mjs --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent
 ```
 Verify assignment with:
 ```sh

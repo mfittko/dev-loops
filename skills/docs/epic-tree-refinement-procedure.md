@@ -65,7 +65,7 @@ For the root issue:
 7. Confirm **non-goals** section — prevents scope creep into adjacent areas
 8. Write the updated body to a tmp file: `tmp/issues/<root>/refinement/root-body.md`
 9. Show the diff and obtain confirmation before mutating GitHub
-10. Apply: `gh issue edit <root> --repo <repo> --body-file tmp/issues/<root>/refinement/root-body.md`
+10. Apply: `node scripts/github/edit-issue.mjs --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-body.md`
 
 <!-- rule: EPIC-REFINEMENT-SERIAL-PHASE-GATE -->
 **Gate:** Phase B MUST NOT start until Phase A is complete and the root body is updated on GitHub. The same serial-gate discipline applies at every phase boundary below: a level/phase MUST fully complete (siblings may run in parallel within it) before the next one starts.
@@ -92,7 +92,7 @@ parent's updated body, not each other's output.
    - **Non-goals** — what this child intentionally excludes
 6. Write refined body to `tmp/issues/<child>/refinement/child-body.md`
 7. Show the diff and obtain confirmation before mutating (unless running unattended with explicit authorization)
-8. Apply: `gh issue edit <child> --repo <repo> --body-file tmp/issues/<child>/refinement/child-body.md`
+8. Apply: `node scripts/github/edit-issue.mjs --repo <repo> --issue <child> --body-file tmp/issues/<child>/refinement/child-body.md`
 
 **Parallelism rule:** All siblings at the same level can be refined concurrently. No child needs
 another child's output; each child only reads the parent's contract and its own current body.
@@ -121,7 +121,7 @@ updated bodies, not sibling parents).
 4. Update the parent's phase scope table and AC/DoD as needed to reflect what children now explicitly own
 5. Write refined body to `tmp/issues/<parent>/refinement/parent-reconciled-body.md`
 6. Show the diff and obtain confirmation before mutating
-7. Apply: `gh issue edit <parent> --repo <repo> --body-file tmp/issues/<parent>/refinement/parent-reconciled-body.md`
+7. Apply: `node scripts/github/edit-issue.mjs --repo <repo> --issue <parent> --body-file tmp/issues/<parent>/refinement/parent-reconciled-body.md`
 
 **Serial gate between levels** ([EPIC-REFINEMENT-SERIAL-PHASE-GATE](#phase-a--root-refinement-serial)): all parents at depth N must complete reconciliation before ascending to depth N-1.
 
@@ -140,7 +140,7 @@ After all immediate children of the root have been reconciled:
 4. Update the root body with the final reconciled phase scope table and AC/DoD
 5. Write to `tmp/issues/<root>/refinement/root-final-body.md`
 6. Show the diff and obtain confirmation before mutating
-7. Apply: `gh issue edit <root> --repo <repo> --body-file tmp/issues/<root>/refinement/root-final-body.md`
+7. Apply: `node scripts/github/edit-issue.mjs --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-final-body.md`
 8. Verify the sub-issue tree still reflects the correct execution order:
    ```sh
    node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
@@ -156,7 +156,7 @@ After all immediate children of the root have been reconciled:
 
 <!-- rule: EPIC-REFINEMENT-SCOPE-BOUNDARY -->
 This procedure MUST stay refinement-only: no implementation, no PRs, no Copilot assignment.
-Apply changes directly with `gh issue edit` — never create new issues or PRs. Hierarchy MUST
+Apply changes directly with `scripts/github/edit-issue.mjs` — never create new issues or PRs. Hierarchy MUST
 stay in the GitHub sub-issues API, not prose parent/child links or a duplicated child-list
 checklist in parent bodies.
 
@@ -168,7 +168,7 @@ AC/DoD matrix, and an explicit scope boundary in the format
 <!-- rule: EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE -->
 `EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE`: The procedure MUST write the refined body to
 `tmp/issues/<number>/refinement/` first and MUST show the diff and get confirmation before
-each `gh issue edit` mutation, unless running unattended with explicit authorization.
+each `edit-issue.mjs` mutation, unless running unattended with explicit authorization.
 
 ---
 
