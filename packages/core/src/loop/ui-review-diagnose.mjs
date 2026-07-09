@@ -38,11 +38,16 @@ export function isInRepoFrame(file) {
 }
 
 /** Extract the exception type + message from stack/traceback text. Matches the
- * first `SomethingError`/`SomethingException` token and the text that follows it
- * (JS `TypeError: msg`, Ruby `NoMethodError (msg)`, Python `ValueError: msg`).
- * Returns nulls when no recognizable exception name is present. */
+ * first exception token and the text that follows it: a `SomethingError`/
+ * `SomethingException`-suffixed name (JS `TypeError: msg`, Ruby `NoMethodError
+ * (msg)`, Python/dotted `django.core.exceptions.ValidationError: msg`) OR a Ruby
+ * `::`-namespaced constant like `ActiveRecord::RecordNotFound` /
+ * `Mongoid::Errors::DocumentNotFound`, captured whole. The `::` alternative
+ * requires at least one namespace segment so it signals a class, not an
+ * arbitrary identifier. Returns nulls when no recognizable exception name is
+ * present. */
 export function parseException(text = "") {
-  const m = String(text).match(/([A-Za-z_][\w.]*(?:Error|Exception))\b[:\s(]*([^\n)]*)/u);
+  const m = String(text).match(/([A-Z]\w*(?:::[A-Z]\w*)+|[A-Za-z_][\w.]*(?:Error|Exception))\b[:\s(]*([^\n)]*)/u);
   if (!m) return { type: null, message: null };
   const message = m[2].trim();
   return { type: m[1], message: message.length > 0 ? message : null };

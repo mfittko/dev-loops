@@ -81,6 +81,18 @@ test("parseException: extracts the type and message from a JS stack and a Ruby t
   assert.deepEqual(parseException("nothing here"), { type: null, message: null });
 });
 
+test("parseException: captures Ruby `::`-namespaced exception types whole", () => {
+  assert.deepEqual(parseException("ActiveRecord::RecordNotFound: Couldn't find User with 'id'=1"), {
+    type: "ActiveRecord::RecordNotFound",
+    message: "Couldn't find User with 'id'=1",
+  });
+  // Multi-segment namespace (and a name not suffixed with Error/Exception).
+  assert.deepEqual(parseException("Mongoid::Errors::DocumentNotFound: no document"), {
+    type: "Mongoid::Errors::DocumentNotFound",
+    message: "no document",
+  });
+});
+
 test("extractFrames: parses JS, Ruby, and Python frames in order", () => {
   const frames = extractFrames(
     `    at boom (/repo/app/assets/widget.js:3:9)\napp/models/user.rb:11:in 'save'\n  File "svc/job.py", line 7, in run`,
