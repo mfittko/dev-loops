@@ -11,7 +11,7 @@ import {
   isInRepoFrame,
   topInRepoFrame,
 } from "@dev-loops/core/loop/ui-review-diagnose";
-import { parseUiReviewDiagnoseCliArgs, LOOP_INFO_SCRIPT } from "../../scripts/loop/ui-review-diagnose.mjs";
+import { parseUiReviewDiagnoseCliArgs, normalizePrInfo, LOOP_INFO_SCRIPT } from "../../scripts/loop/ui-review-diagnose.mjs";
 
 // A synthetic PR diff over two changed files. Added (RIGHT-side) head lines:
 //   app/models/user.rb  -> {11, 12, 14}   (line 13 is an unchanged context line)
@@ -316,6 +316,23 @@ test("parseUiReviewDiagnoseCliArgs: requires --pr and --drive-result", () => {
   assert.equal(o.pr, 7);
   assert.equal(o.driveResult, "/r.json");
   assert.equal(o.repo, "o/n");
+});
+
+test("normalizePrInfo: surfaces the reviewed head SHA (headRefOid -> headSha) into the emitted pr envelope", () => {
+  const pr = normalizePrInfo(
+    { pr: { number: 7, headRefName: "issue-1119", headRefOid: "abc123def", baseRefName: "main", state: "OPEN" } },
+    7,
+  );
+  assert.deepEqual(pr, {
+    number: 7,
+    headRefName: "issue-1119",
+    headSha: "abc123def",
+    baseRefName: "main",
+    state: "OPEN",
+  });
+  // Missing head oid is surfaced as null (never undefined) so Stage 4 null-checks it.
+  assert.equal(normalizePrInfo({ pr: { number: 7 } }, 7).headSha, null);
+  assert.equal(normalizePrInfo({}, 7).headSha, null);
 });
 
 test("LOOP_INFO_SCRIPT resolves to the real sibling loop-info script (the CLI non-help path)", () => {

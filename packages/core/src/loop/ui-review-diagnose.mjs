@@ -6,9 +6,8 @@
  * source location (the top in-repo stack frame), then to a diff line on the PR
  * head so the poster stage can anchor an inline comment on a real changed line.
  *
- * This module is PURE: the diff text and the drive result are inputs, the
- * in-repo-frame predicate is an injectable seam. The thin CLI wires the real IO
- * (loop info for PR state + the PR diff fetch).
+ * This module is PURE: the diff text and the drive result are inputs. The thin
+ * CLI wires the real IO (loop info for PR state + the PR diff fetch).
  *
  * Contract: a failure is NEVER silently dropped. One that has no source
  * location, whose file is not in the diff, whose line is not on a changed diff
@@ -85,8 +84,8 @@ export function extractFrames(text = "") {
  * a frame that happens to be in the diff — anchoring a lower frame would point at
  * a caller, not the failing line. A deeper frame that is in-repo but not in the
  * diff is handled downstream as non-anchorable, never by guessing past the top. */
-export function topInRepoFrame(frames, inRepo = isInRepoFrame) {
-  return frames.find((f) => inRepo(f.file)) ?? null;
+export function topInRepoFrame(frames) {
+  return frames.find((f) => isInRepoFrame(f.file)) ?? null;
 }
 
 /**
@@ -187,10 +186,9 @@ function matchDiffPaths(frameFile, anchorPaths) {
  *
  * @param {object} failure - a `classifyFailures` entry `{kind, severity, message, ...}`.
  * @param {Map<string,Set<number>>} anchorsByPath
- * @param {(file:string)=>boolean} inRepo
  * @param {object|null} evidence - the reproduced-evidence reference to attach.
  */
-function diagnoseOne(failure, anchorsByPath, inRepo, evidence) {
+function diagnoseOne(failure, anchorsByPath, evidence) {
   // page-error carries `stack`; server-log-exception carries `context`; the
   // wire-level failures (error/request) carry neither -> no source location.
   const sourceText =
@@ -210,7 +208,7 @@ function diagnoseOne(failure, anchorsByPath, inRepo, evidence) {
     evidence,
   };
 
-  const frame = topInRepoFrame(extractFrames(sourceText || ""), inRepo);
+  const frame = topInRepoFrame(extractFrames(sourceText || ""));
   if (!frame) {
     finding.nonAnchorableReason = "no source location (no in-repo stack frame in the captured failure)";
     return finding;
@@ -264,20 +262,15 @@ export function rankFindings(findings) {
 /**
  * Diagnose the drive stage's captured failures into a ranked findings list with
  * diff-line anchors or explicit non-anchorable flags plus reproduced-evidence
- * references. Pure; inject `isInRepoFrame` to override the in-repo heuristic.
+ * references. Pure.
  *
  * @param {object} input
  * @param {object[]} [input.failures] - the drive stage's `failures`.
  * @param {object[]} [input.captures] - the drive stage's `captures` (evidence).
  * @param {string} [input.diffOutput] - the PR's unified diff.
- * @param {object} [seams]
- * @param {(file:string)=>boolean} [seams.isInRepoFrame]
  * @returns {{ok:boolean, findings:object[], counts:{total:number,anchorable:number,nonAnchorable:number}}}
  */
-export function diagnoseFailures(
-  { failures = [], captures = [], diffOutput = "" } = {},
-  { isInRepoFrame: inRepo = isInRepoFrame } = {},
-) {
+export function diagnoseFailures({ failures = [], captures = [], diffOutput = "" } = {}) {
   const anchorsByPath = parseDiffAnchors(diffOutput);
   // ponytail: one reproduced-evidence reference per finding — the drive's final
   // captured state (the last screenshot/state pair). Per-step attribution would
@@ -288,7 +281,7 @@ export function diagnoseFailures(
     ? { flow: last.flow ?? null, step: last.step ?? null, screenshotPath: last.screenshotPath ?? null, statePath: last.statePath ?? null }
     : null;
 
-  const findings = rankFindings(failures.map((f) => diagnoseOne(f, anchorsByPath, inRepo, evidence)));
+  const findings = rankFindings(failures.map((f) => diagnoseOne(f, anchorsByPath, evidence)));
   const anchorable = findings.filter((f) => f.anchorable).length;
   return {
     ok: findings.length === 0,

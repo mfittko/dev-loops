@@ -40,7 +40,7 @@ Optional:
   --repo <slug>       Repository slug (auto-detected from the git remote when omitted).
   -h, --help          Show this help.
 Output (stdout, JSON):
-  { "ok": bool, "pr": {number,headRefName,baseRefName,state},
+  { "ok": bool, "pr": {number,headRefName,headSha,baseRefName,state},
     "findings": [ { severity, kind, message, exception:{type,message}, source:{file,line}|null,
                     anchor:{path,line,side}|null, anchorable, nonAnchorableReason, evidence } ],
     "counts": { total, anchorable, nonAnchorable } }
@@ -92,14 +92,26 @@ export function parseUiReviewDiagnoseCliArgs(argv) {
   return options;
 }
 
+/** Shape the loop-info JSON into the emitted `pr` envelope. Surfaces the reviewed
+ * head SHA (`headRefOid` -> `headSha`): Stage 4's inline poster needs a commit_id
+ * and must detect the head advancing between diagnose and post. */
+export function normalizePrInfo(info, pr) {
+  const p = info?.pr ?? {};
+  return {
+    number: p.number ?? pr,
+    headRefName: p.headRefName ?? null,
+    headSha: p.headRefOid ?? null,
+    baseRefName: p.baseRefName ?? null,
+    state: p.state ?? null,
+  };
+}
+
 /** Reuse PR state from `loop info --pr --json` rather than re-fetching ad hoc. */
 function loadPrInfo(pr, repo, cwd) {
   const raw = execFileSync(process.execPath, [LOOP_INFO_SCRIPT, "--pr", String(pr), "--repo", repo, "--json"], {
     cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
   });
-  const info = JSON.parse(raw);
-  const p = info.pr ?? {};
-  return { number: p.number ?? pr, headRefName: p.headRefName ?? null, baseRefName: p.baseRefName ?? null, state: p.state ?? null };
+  return normalizePrInfo(JSON.parse(raw), pr);
 }
 
 /** Fetch the PR's unified diff. A bounded read: the diff is the head-vs-base

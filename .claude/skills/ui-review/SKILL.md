@@ -107,8 +107,10 @@ dropped — one with no source location, a file that is not among the changed
 files, a line that is not on a changed diff line, or a file that maps
 ambiguously to more than one changed file is retained as a finding flagged
 non-anchorable (with a stated reason) so the poster body-attaches it instead of
-inlining. Every finding carries a reproduced-evidence reference to the drive's
-captured screenshot/state artifact.
+inlining. Each finding carries a reference to the drive's final captured
+screenshot/state artifact when one exists (null otherwise) — a single shared
+object across all findings, NOT per-failure attribution — so a Stage-4 consumer
+null-checks it and must not present it as proof of a specific finding.
 
 The findings list is ranked deterministically — severity, then anchorable-first,
 then kind, then source `file:line` — with no wall-clock or input-order
