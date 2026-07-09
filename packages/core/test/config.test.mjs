@@ -316,6 +316,82 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
+  test("S27: uiReview.run with a valid readyUrl parses", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { run: { command: "npm start", readyUrl: "http://127.0.0.1:3000/health" } },
+    });
+    assert.ok(result.success);
+  });
+
+  test("S28: uiReview.run.readyUrl rejects a malformed URL", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { run: { command: "npm start", readyUrl: "not-a-url" } },
+    });
+    assert.ok(!result.success);
+  });
+
+  test("S28b: uiReview.run.readyUrl rejects a non-http(s) URL", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { run: { command: "npm start", readyUrl: "ftp://example.com/health" } },
+    });
+    assert.ok(!result.success);
+  });
+
+  test("S28c: uiReview.run.readyUrl accepts https", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { run: { command: "npm start", readyUrl: "https://example.com/health" } },
+    });
+    assert.ok(result.success);
+  });
+
+  test("S29: uiReview.run.migrate.destructivePattern rejects a malformed regex", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: {
+        run: {
+          command: "npm start",
+          readyUrl: "http://127.0.0.1:3000/health",
+          migrate: { statusCommand: "s", applyCommand: "a", destructivePattern: "[" },
+        },
+      },
+    });
+    assert.ok(!result.success);
+  });
+
+  test("S30: uiReview.run.migrate.destructivePattern accepts a valid regex", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: {
+        run: {
+          command: "npm start",
+          readyUrl: "http://127.0.0.1:3000/health",
+          migrate: { statusCommand: "s", applyCommand: "a", destructivePattern: "drop|truncate" },
+        },
+      },
+    });
+    assert.ok(result.success);
+  });
+
+  test("S31: destructivePattern valid bare but invalid under `u` flag is rejected at load", () => {
+    // `[a-\d]` compiles as `new RegExp(p)` but throws under `new RegExp(p, "iu")`,
+    // the exact flags inspectMigrations uses at the destructive-migration boundary.
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: {
+        run: {
+          command: "npm start",
+          readyUrl: "http://127.0.0.1:3000/health",
+          migrate: { statusCommand: "s", applyCommand: "a", destructivePattern: "[a-\\d]" },
+        },
+      },
+    });
+    assert.ok(!result.success);
+  });
+
 });
 
 // ============================================================================
