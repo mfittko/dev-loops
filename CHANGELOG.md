@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.9.0 - 2026-07-09
+
+The v0.9 headline is the **`/loop-review-ui` epic (#1114)** — a UI-review dev-loop route that proves a change in the running app — plus a batch of loop-hardening and dev-loop self-convention fixes.
+
+### Added
+
+- **`/loop-review-ui` — running-app UI-review route (#1114, Stages 0–6).** A new dev-loop strategy that boots the app and reviews a PR against it: route + command scaffold with stop rules and acceptance self-validation (#1279); provision-and-boot module (#1280); auth + Playwright drive harness that captures page errors, error responses, and a server-log tail (#1281); diagnose that anchors reproduced exceptions to the exact diff lines (#1282); report that posts a head-pinned pending review with inline comments and a self-contained screenshot artifact, severity→event policy, harness-aware hosting (Claude Artifacts out of the box, fail-closed elsewhere) (#1286); teardown with an always-emit side-effect ledger (#1288); and command help + README + a per-project run/auth recipe contract (#1289). The full GitHub-native artifact-hosting fallback is tracked as follow-up #1285.
+- **Headless auto-refine of parked un-refined items (#1258).** A deterministic `queue parked-unrefined` discovery helper surfaces issues the #1251 enqueue fail-safe parked without a refinement artifact; a headless/`--auto` dev-loop session auto-refines them at the orchestrator layer (`loop-grill --auto`) and promotes each into the pickup column via `queue move` — bounded (ascending order, at most once per session), with unrefinable items left parked with a recorded reason. No LLM in any coordinator script.
+
+### Changed
+
+- **PR-body convention + `pr-description` gate angle (#1283).** The `pr-description` draft-gate angle no longer requires (or flags the absence of) a "File-by-file changes" section — GitHub's Files-changed tab already covers it and the mandate churned gate findings. Linked-issue AC-checkbox syncing is now a first-class capability of `tick-verified-checkboxes.mjs` (`--issue`, or `--pr --issue` in one call), so a tracker-backed PR's approval gate keeps the issue's checkboxes honest instead of relying on a skippable manual step.
+- **`gh issue edit` call-sites routed through the `edit-issue.mjs` wrapper (#1255)** so the loop's internal-tooling record stays complete (no agent-level raw `gh issue edit`).
+
+### Fixed
+
+- **CI verify-suite drift guard (#1273).** A contract test fails the build if `package.json`'s `test:*` scripts drift from the `ci.yml` verify-suite matrix in either direction.
+
+### Performance
+
+- **Faster `test:scripts` real-git files (#1277).** The heaviest real-git-repo test files were converted to a module-seam gh mock, in-process CLI, cheap shell git-stubs, and a copy-once git fixture (e.g. conductor-monitor 11.5s→2.5s), with genuine git-boundary/CLI-error smokes deliberately kept as real spawns. Suite wall time is throughput-bound and largely unchanged; throughput-aware wall reduction is tracked as follow-up #1294.
+
 ## 0.8.0 - 2026-07-08
 
 <!-- Release date is set at tag time; see the release runbook. This section is prepared ahead of the v0.8.0 tag. -->
