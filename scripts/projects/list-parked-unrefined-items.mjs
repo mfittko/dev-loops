@@ -20,7 +20,7 @@ import { main as listQueueItems } from "./list-queue-items.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
-import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { detectIssueRefinementArtifact, REFINEMENT_ARTIFACT_SOURCES } from "@dev-loops/core/loop/issue-refinement-artifact";
 
 const USAGE = `Usage: dev-loops queue parked-unrefined --repo <owner/name> [--project <number|id>]
 
@@ -135,13 +135,9 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
       itemId: item.itemId ?? null,
       finding: artifact.finding,
       reason: artifact.reason,
-      // The three artifact sources any ONE of which clears the gate — mirrors
-      // the enqueue gate's `missing` so the orchestrator surfaces one vocabulary.
-      missing: [
-        "Acceptance criteria section",
-        "Definition of done section",
-        "linked refinement doc",
-      ],
+      // The three artifact sources any ONE of which clears the gate — the same
+      // single-source vocabulary the enqueue gate reports (one taxonomy, no drift).
+      missing: [...REFINEMENT_ARTIFACT_SOURCES],
     });
   }
 
