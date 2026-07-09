@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync, cpSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
@@ -19,6 +19,27 @@ import {
 const scriptPath = path.resolve("scripts/loop/resolve-dev-loop-startup.mjs");
 
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+
+// Build a throwaway git repo carrying the standard origin remote ONCE, then
+// stamp per-test copies by cloning the .git dir on disk (no git subprocess per
+// test). buildAutoResolvedInput still shells out to git to read the remote, so
+// the git-remote-detection boundary stays exercised — only the identical repo
+// setup is amortized.
+let originRepoTemplate = null;
+function stampRepoWithOrigin() {
+  if (originRepoTemplate === null) {
+    const template = mkdtempSync(path.join(os.tmpdir(), "dev-loop-origin-template-"));
+    execFileSync("git", ["init"], { cwd: template, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: template, stdio: "ignore" });
+    originRepoTemplate = template;
+  }
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
+  cpSync(path.join(originRepoTemplate, ".git"), path.join(tmp, ".git"), { recursive: true });
+  return tmp;
+}
+after(() => {
+  if (originRepoTemplate) rmSync(originRepoTemplate, { recursive: true, force: true });
+});
 
 async function writeTempJson(tempDir, name, value) {
   const filePath = path.join(tempDir, name);
@@ -805,10 +826,8 @@ test("resolver does not block non-local_implementation strategies from main chec
 });
 
 test("buildAutoResolvedInput returns warnings array for failed detection", () => {
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
+  const tmp = stampRepoWithOrigin();
   try {
-    execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({ issue: 999999, cwd: tmp });
     assert.equal(result.intent, "start_issue_locally");
     assert.equal(result.artifactState, "not_applicable");
@@ -824,10 +843,8 @@ test("buildAutoResolvedInput returns warnings array for failed detection", () =>
 });
 
 test("buildAutoResolvedInput sets linkedPr null when detection fails", () => {
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
+  const tmp = stampRepoWithOrigin();
   try {
-    execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({ issue: 999999, cwd: tmp });
     assert.equal(result.currentState.target.linkedPr, null);
     assert.equal(result.issueLinkageResolution, "resolved_no_open_pr");
@@ -837,10 +854,8 @@ test("buildAutoResolvedInput sets linkedPr null when detection fails", () => {
 });
 
 test("buildAutoResolvedInput for PR returns pr_followup_start", () => {
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
+  const tmp = stampRepoWithOrigin();
   try {
-    execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({ pr: 999999, cwd: tmp });
     assert.equal(result.intent, "continue_on_pr");
     assert.equal(result.loopState, "pr_followup_start");
@@ -852,10 +867,8 @@ test("buildAutoResolvedInput for PR returns pr_followup_start", () => {
 });
 
 test("buildAutoResolvedInput returns valid targetPreference", () => {
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
+  const tmp = stampRepoWithOrigin();
   try {
-    execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({ issue: 999999, cwd: tmp });
     assert.ok(
       result.targetPreference === "prefer_local" || result.targetPreference === "prefer_github_first",
@@ -866,10 +879,8 @@ test("buildAutoResolvedInput returns valid targetPreference", () => {
 });
 
 test("buildAutoResolvedInput with local-first tracker source keeps issue-backed startup state", () => {
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
+  const tmp = stampRepoWithOrigin();
   try {
-    execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({
       issue: 999999,
       cwd: tmp,
@@ -885,10 +896,8 @@ test("buildAutoResolvedInput with local-first tracker source keeps issue-backed 
 });
 
 test("buildAutoResolvedInput with local-first phase-doc source uses local_phase startup state", () => {
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "dev-loop-511-"));
+  const tmp = stampRepoWithOrigin();
   try {
-    execFileSync("git", ["init"], { cwd: tmp, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tmp, stdio: "ignore" });
     const result = buildAutoResolvedInput({
       issue: 999999,
       cwd: tmp,

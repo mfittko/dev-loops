@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { access, open, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { requireTokenValue } from "../_cli-primitives.mjs";
+import { requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, readJsonIfExists } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
@@ -207,10 +207,10 @@ function buildPrReport(pr, interpretation, interpretationSummary, snapshot) {
     },
   };
 }
-async function buildPrReports(prs, { repo, env, ghCommand }) {
+async function buildPrReports(prs, { repo, env, ghCommand, runChild }) {
   const reports = [];
   for (const pr of prs) {
-    const snapshot = await autoDetectSnapshot({ repo, pr: pr.number }, { env, ghCommand });
+    const snapshot = await autoDetectSnapshot({ repo, pr: pr.number }, { env, ghCommand, runChild });
     const interpretation = interpretLoopState(snapshot);
     const interpretationSummary = summarizeLoopInterpretation(interpretation);
     reports.push(buildPrReport(pr, interpretation, interpretationSummary, snapshot));
@@ -1754,13 +1754,14 @@ export async function runConductorMonitor(
   {
     env = process.env,
     ghCommand = "gh",
+    runChild = defaultRunChild,
     repoRoot = process.cwd(),
     sessionRoots,
     asyncRunRoots,
     asyncResultRoots,
   } = {},
 ) {
-  const prs = await listOpenPrs({ repo }, { env, ghCommand });
+  const prs = await listOpenPrs({ repo }, { env, ghCommand, runChild });
   if (prs.length === 0) {
     const baseResult = buildBaseResult(repo, []);
     if (!autoResume) {
@@ -1785,7 +1786,7 @@ export async function runConductorMonitor(
       localPhaseResumePlans: localPhaseRuns.map((run) => buildLocalPhaseResumePlan(run)),
     });
   }
-  const reports = await buildPrReports(prs, { repo, env, ghCommand });
+  const reports = await buildPrReports(prs, { repo, env, ghCommand, runChild });
   const baseResult = buildBaseResult(repo, reports);
   if (!autoResume) {
     return baseResult;

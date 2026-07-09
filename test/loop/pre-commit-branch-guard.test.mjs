@@ -14,22 +14,21 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, opt
 
 async function writeGitStub(tempDir, { branch = "copilot/feature-branch", logFile } = {}) {
   const gitPath = path.join(tempDir, "git");
+  // Shell stub (cheap spawn) standing in for the real git binary: it still runs
+  // as a subprocess resolved via PATH, so the git-command boundary stays under
+  // test, but without paying node startup on every git invocation.
   await writeFile(
     gitPath,
     [
-      "#!/usr/bin/env node",
-      "import { appendFileSync } from 'node:fs';",
-      "const args = process.argv.slice(2);",
-      "const joined = args.join(' ');",
-      "if (process.env.BRANCH_GUARD_LOG_FILE) {",
-      "  appendFileSync(process.env.BRANCH_GUARD_LOG_FILE, `${joined}\\n`);",
-      "}",
-      "if (joined === 'branch --show-current') {",
-      `  process.stdout.write(${JSON.stringify(`${branch}\n`)});`,
-      "  process.exit(0);",
-      "}",
-      "process.stderr.write(`unexpected git args: ${joined}\\n`);",
-      "process.exit(1);",
+      "#!/usr/bin/env sh",
+      'joined="$*"',
+      'if [ -n "$BRANCH_GUARD_LOG_FILE" ]; then printf \'%s\\n\' "$joined" >> "$BRANCH_GUARD_LOG_FILE"; fi',
+      'if [ "$joined" = "branch --show-current" ]; then',
+      `  printf '%s\\n' ${JSON.stringify(branch)}`,
+      "  exit 0",
+      "fi",
+      'printf \'unexpected git args: %s\\n\' "$joined" >&2',
+      "exit 1",
       "",
     ].join("\n"),
     "utf8",
@@ -217,27 +216,27 @@ async function writeWorktreeGitStub(tempDir, {
   logFile,
 } = {}) {
   const gitPath = path.join(tempDir, "git");
-  const escapedWorktreeList = JSON.stringify(worktreeListOut);
+  // Shell stub (cheap spawn) standing in for the real git binary — still spawned
+  // as a subprocess resolved via PATH, preserving the git-command boundary, but
+  // without node startup per git invocation.
   await writeFile(
     gitPath,
     [
-      "#!/usr/bin/env node",
-      "import { appendFileSync } from 'node:fs';",
-      "const args = process.argv.slice(2);",
-      "const joined = args.join(' ');",
-      "if (process.env.BRANCH_GUARD_LOG_FILE) {",
-      "  appendFileSync(process.env.BRANCH_GUARD_LOG_FILE, `${joined}\\n`);",
-      "}",
-      "if (joined === 'branch --show-current') {",
-      `  process.stdout.write(${JSON.stringify(`${branch}\n`)});`,
-      "  process.exit(0);",
-      "}",
-      "if (joined === 'worktree list') {",
-      `  process.stdout.write(${escapedWorktreeList});`,
-      "  process.exit(0);",
-      "}",
-      "process.stderr.write(`unexpected git args: ${joined}\\n`);",
-      "process.exit(1);",
+      "#!/usr/bin/env sh",
+      'joined="$*"',
+      'if [ -n "$BRANCH_GUARD_LOG_FILE" ]; then printf \'%s\\n\' "$joined" >> "$BRANCH_GUARD_LOG_FILE"; fi',
+      'if [ "$joined" = "branch --show-current" ]; then',
+      `  printf '%s\\n' ${JSON.stringify(branch)}`,
+      "  exit 0",
+      "fi",
+      'if [ "$joined" = "worktree list" ]; then',
+      "  cat <<'WTEOF'",
+      ...worktreeListOut.split("\n"),
+      "WTEOF",
+      "  exit 0",
+      "fi",
+      'printf \'unexpected git args: %s\\n\' "$joined" >&2',
+      "exit 1",
       "",
     ].join("\n"),
     "utf8",

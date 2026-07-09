@@ -1,12 +1,12 @@
 // Shared loop PR-aggregation helpers used by both conductor-monitor.mjs and
 // run-conductor-cycle.mjs. Spawns `gh`, so this lives at the scripts level
 // rather than in @dev-loops/core.
-import { runChild } from "../_cli-primitives.mjs";
+import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseJsonText } from "../_core-helpers.mjs";
 
 export const OPEN_PR_LIST_LIMIT = 1000;
 
-export async function listOpenPrs({ repo }, { env, ghCommand }) {
+export async function listOpenPrs({ repo }, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(
     ghCommand,
     [

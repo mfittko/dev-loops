@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { execFileSync } from "node:child_process";
 import test from "node:test";
 
-import { parsePreFlightGateCliArgs } from "../../scripts/loop/pre-flight-gate.mjs";
+import { parsePreFlightGateCliArgs, runCli } from "../../scripts/loop/pre-flight-gate.mjs";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,29 +40,34 @@ function writeGitStub(tempDir, {
   return gitPath;
 }
 
-const PREFLIGHT_SCRIPT = path.resolve("scripts/loop/pre-flight-gate.mjs");
-
-function runGate(args = [], { cwd, env = {}, gitDir, logFile } = {}) {
+async function runGate(args = [], { cwd, env = {}, gitDir } = {}) {
+  // Run the CLI in-process (no node subprocess per test) while keeping the real
+  // git boundary: the shell git stub at `<gitDir|cwd>/git` is still spawned via
+  // execFileSync inside the gate, so the git-command contract stays under test.
+  const gitCommand = path.join(gitDir ?? cwd, "git");
   const fullEnv = { ...process.env, ...env };
-  // Ensure PATH includes cwd and gitDir so the git stub is found
-  const paths = [];
-  if (cwd) paths.push(cwd);
-  if (gitDir && gitDir !== cwd) paths.push(gitDir);
-  if (paths.length > 0) {
-    fullEnv.PATH = `${paths.join(path.delimiter)}${path.delimiter}${fullEnv.PATH || ""}`;
-  }
+  let outBuf = "";
+  let errBuf = "";
+  const collect = (bucket) => ({
+    write: (chunk) => {
+      if (bucket === "out") outBuf += String(chunk);
+      else errBuf += String(chunk);
+      return true;
+    },
+  });
+  const previousExitCode = process.exitCode;
+  process.exitCode = 0;
   try {
-    const stdout = execFileSync(
-      process.execPath,
-      [PREFLIGHT_SCRIPT, ...args],
-      { cwd, env: fullEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
-    return { exitCode: 0, stdout: stdout.trim(), stderr: "" };
-  } catch (err) {
-    const code = err.status ?? 1;
-    const stdout = (err.stdout ?? "").trim();
-    const stderr = (err.stderr ?? err.message ?? "").trim();
-    return { exitCode: code, stdout, stderr };
+    await runCli(args, {
+      cwd,
+      env: fullEnv,
+      gitCommand,
+      stdout: collect("out"),
+      stderr: collect("err"),
+    });
+    return { exitCode: process.exitCode ?? 0, stdout: outBuf.trim(), stderr: errBuf.trim() };
+  } finally {
+    process.exitCode = previousExitCode;
   }
 }
 
@@ -122,10 +126,10 @@ test("parsePreFlightGateCliArgs: rejects --expected-branch with missing value", 
 // Bypass
 // ---------------------------------------------------------------------------
 
-test("gate passes with DEVLOOPS_PREFLIGHT_BYPASS=1 from main checkout", () => {
+test("gate passes with DEVLOOPS_PREFLIGHT_BYPASS=1 from main checkout", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-bypass-"));
   try {
-    const result = runGate([], {
+    const result = await runGate([], {
       cwd: tempDir,
       env: { DEVLOOPS_PREFLIGHT_BYPASS: "1" },
     });
@@ -143,7 +147,7 @@ test("gate passes with DEVLOOPS_PREFLIGHT_BYPASS=1 from main checkout", () => {
 // Worktree isolation: pass
 // ---------------------------------------------------------------------------
 
-test("gate passes when cwd is under tmp/worktrees/", () => {
+test("gate passes when cwd is under tmp/worktrees/", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-worktree-ok-"));
   try {
     const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-497");
@@ -157,7 +161,7 @@ test("gate passes when cwd is under tmp/worktrees/", () => {
 
     writeGitStub(tempDir, { worktreeListOut, logFile });
 
-    const result = runGate([], { cwd: worktreeDir, gitDir: tempDir });
+    const result = await runGate([], { cwd: worktreeDir, gitDir: tempDir });
 
     assert.equal(result.exitCode, 0);
     const payload = JSON.parse(result.stdout);
@@ -172,7 +176,7 @@ test("gate passes when cwd is under tmp/worktrees/", () => {
 // Worktree isolation: fail
 // ---------------------------------------------------------------------------
 
-test("gate fails when cwd is main checkout (detects main_checkout_detected)", () => {
+test("gate fails when cwd is main checkout (detects main_checkout_detected)", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-main-fail-"));
   try {
     const logFile = path.join(tempDir, "git.log");
@@ -180,7 +184,7 @@ test("gate fails when cwd is main checkout (detects main_checkout_detected)", ()
 
     writeGitStub(tempDir, { worktreeListOut, logFile });
 
-    const result = runGate([], { cwd: tempDir });
+    const result = await runGate([], { cwd: tempDir });
 
     assert.equal(result.exitCode, 1);
     assert.ok(result.stderr.length > 0, "stderr should have content");
@@ -193,7 +197,7 @@ test("gate fails when cwd is main checkout (detects main_checkout_detected)", ()
   }
 });
 
-test("gate fails when cwd is main checkout with main-checkout-detected error (under main)", () => {
+test("gate fails when cwd is main checkout with main-checkout-detected error (under main)", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-main-subdir-"));
   try {
     const subDir = path.join(tempDir, "src");
@@ -204,7 +208,7 @@ test("gate fails when cwd is main checkout with main-checkout-detected error (un
 
     writeGitStub(tempDir, { worktreeListOut, logFile });
 
-    const result = runGate([], { cwd: subDir, gitDir: tempDir });
+    const result = await runGate([], { cwd: subDir, gitDir: tempDir });
 
     assert.equal(result.exitCode, 1);
     const payload = JSON.parse(result.stderr);
@@ -218,13 +222,13 @@ test("gate fails when cwd is main checkout with main-checkout-detected error (un
   }
 });
 
-test("gate fails when git worktree list fails", () => {
+test("gate fails when git worktree list fails", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-git-fail-"));
   try {
     const gitPath = path.join(tempDir, "git");
     writeFileSync(gitPath, "#!/usr/bin/env sh\nexit 1\n", { mode: 0o755 });
 
-    const result = runGate([], { cwd: tempDir });
+    const result = await runGate([], { cwd: tempDir });
 
     assert.equal(result.exitCode, 1);
     const payload = JSON.parse(result.stderr);
@@ -235,7 +239,7 @@ test("gate fails when git worktree list fails", () => {
   }
 });
 
-test("gate fails when cwd is under tmp/worktrees/ but not a real git worktree", () => {
+test("gate fails when cwd is under tmp/worktrees/ but not a real git worktree", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-fake-worktree-"));
   try {
     const fakeWorktreeDir = path.join(tempDir, "tmp", "worktrees", "fake-issue");
@@ -246,7 +250,7 @@ test("gate fails when cwd is under tmp/worktrees/ but not a real git worktree", 
 
     writeGitStub(tempDir, { worktreeListOut, logFile });
 
-    const result = runGate([], { cwd: fakeWorktreeDir, gitDir: tempDir });
+    const result = await runGate([], { cwd: fakeWorktreeDir, gitDir: tempDir });
 
     assert.equal(result.exitCode, 1);
     const payload = JSON.parse(result.stderr);
@@ -265,7 +269,7 @@ test("gate fails when cwd is under tmp/worktrees/ but not a real git worktree", 
 // Branch identity
 // ---------------------------------------------------------------------------
 
-test("gate passes when --expected-branch matches current branch", () => {
+test("gate passes when --expected-branch matches current branch", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-branch-ok-"));
   try {
     const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-497");
@@ -294,7 +298,7 @@ test("gate passes when --expected-branch matches current branch", () => {
     ];
     writeFileSync(gitPath, lines.join("\n"), { mode: 0o755 });
 
-    const result = runGate(["--expected-branch", "issue-497"], { cwd: worktreeDir, gitDir: tempDir });
+    const result = await runGate(["--expected-branch", "issue-497"], { cwd: worktreeDir, gitDir: tempDir });
 
     assert.equal(result.exitCode, 0);
     const payload = JSON.parse(result.stdout);
@@ -305,7 +309,7 @@ test("gate passes when --expected-branch matches current branch", () => {
   }
 });
 
-test("gate fails when --expected-branch does not match current branch", () => {
+test("gate fails when --expected-branch does not match current branch", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-branch-mismatch-"));
   try {
     const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-497");
@@ -332,7 +336,7 @@ test("gate fails when --expected-branch does not match current branch", () => {
     ];
     writeFileSync(gitPath, lines.join("\n"), { mode: 0o755 });
 
-    const result = runGate(["--expected-branch", "issue-497"], { cwd: worktreeDir, gitDir: tempDir });
+    const result = await runGate(["--expected-branch", "issue-497"], { cwd: worktreeDir, gitDir: tempDir });
 
     assert.equal(result.exitCode, 1);
     const payload = JSON.parse(result.stderr);
@@ -343,7 +347,7 @@ test("gate fails when --expected-branch does not match current branch", () => {
   }
 });
 
-test("gate skips branch check when --expected-branch not provided", () => {
+test("gate skips branch check when --expected-branch not provided", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-no-branch-"));
   try {
     const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-497");
@@ -357,7 +361,7 @@ test("gate skips branch check when --expected-branch not provided", () => {
 
     writeGitStub(tempDir, { worktreeListOut, logFile });
 
-    const result = runGate([], { cwd: worktreeDir, gitDir: tempDir });
+    const result = await runGate([], { cwd: worktreeDir, gitDir: tempDir });
 
     assert.equal(result.exitCode, 0);
     const payload = JSON.parse(result.stdout);
@@ -371,7 +375,7 @@ test("gate skips branch check when --expected-branch not provided", () => {
 // Subagent availability
 // ---------------------------------------------------------------------------
 
-test("gate reports subagent status skipped when --check-subagents not set", () => {
+test("gate reports subagent status skipped when --check-subagents not set", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-subagent-skip-"));
   try {
     const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-497");
@@ -385,7 +389,7 @@ test("gate reports subagent status skipped when --check-subagents not set", () =
 
     writeGitStub(tempDir, { worktreeListOut, logFile });
 
-    const result = runGate([], {
+    const result = await runGate([], {
       cwd: worktreeDir,
       gitDir: tempDir,
       env: { DEVLOOPS_SUBAGENT_AVAILABLE: "1" },
@@ -399,7 +403,7 @@ test("gate reports subagent status skipped when --check-subagents not set", () =
   }
 });
 
-test("gate reports subagent available when DEVLOOPS_SUBAGENT_AVAILABLE=1 and --check-subagents", () => {
+test("gate reports subagent available when DEVLOOPS_SUBAGENT_AVAILABLE=1 and --check-subagents", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-subagent-ok-"));
   try {
     const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-497");
@@ -413,7 +417,7 @@ test("gate reports subagent available when DEVLOOPS_SUBAGENT_AVAILABLE=1 and --c
 
     writeGitStub(tempDir, { worktreeListOut, logFile });
 
-    const result = runGate(["--check-subagents"], {
+    const result = await runGate(["--check-subagents"], {
       cwd: worktreeDir,
       gitDir: tempDir,
       env: { DEVLOOPS_SUBAGENT_AVAILABLE: "1" },
@@ -427,7 +431,7 @@ test("gate reports subagent available when DEVLOOPS_SUBAGENT_AVAILABLE=1 and --c
   }
 });
 
-test("gate reports subagent unavailable when --check-subagents and env var not set", () => {
+test("gate reports subagent unavailable when --check-subagents and env var not set", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-subagent-unavail-"));
   try {
     const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-497");
@@ -441,7 +445,7 @@ test("gate reports subagent unavailable when --check-subagents and env var not s
 
     writeGitStub(tempDir, { worktreeListOut, logFile });
 
-    const result = runGate(["--check-subagents"], { cwd: worktreeDir, gitDir: tempDir });
+    const result = await runGate(["--check-subagents"], { cwd: worktreeDir, gitDir: tempDir });
 
     assert.equal(result.exitCode, 0);
     const payload = JSON.parse(result.stdout);
@@ -455,7 +459,7 @@ test("gate reports subagent unavailable when --check-subagents and env var not s
 // Output contract
 // ---------------------------------------------------------------------------
 
-test("success output is valid JSON on stdout", () => {
+test("success output is valid JSON on stdout", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-output-ok-"));
   try {
     const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-497");
@@ -482,7 +486,7 @@ test("success output is valid JSON on stdout", () => {
     ];
     writeFileSync(gitPath, branchAwareLines.join("\n"), { mode: 0o755 });
 
-    const result = runGate(["--expected-branch", "issue-497"], {
+    const result = await runGate(["--expected-branch", "issue-497"], {
       cwd: worktreeDir,
       gitDir: tempDir,
       env: { DEVLOOPS_SUBAGENT_AVAILABLE: "1" },
@@ -499,7 +503,7 @@ test("success output is valid JSON on stdout", () => {
   }
 });
 
-test("failure output is valid JSON on stderr with error + guidance + checks", () => {
+test("failure output is valid JSON on stderr with error + guidance + checks", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-output-fail-"));
   try {
     const logFile = path.join(tempDir, "git.log");
@@ -507,7 +511,7 @@ test("failure output is valid JSON on stderr with error + guidance + checks", ()
 
     writeGitStub(tempDir, { worktreeListOut, logFile });
 
-    const result = runGate([], { cwd: tempDir });
+    const result = await runGate([], { cwd: tempDir });
 
     assert.equal(result.exitCode, 1);
     assert.ok(result.stderr.length > 0, "stderr should have content");
@@ -527,10 +531,10 @@ test("failure output is valid JSON on stderr with error + guidance + checks", ()
 // --help
 // ---------------------------------------------------------------------------
 
-test("gate prints usage with --help", () => {
+test("gate prints usage with --help", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-help-"));
   try {
-    const result = runGate(["--help"], { cwd: tempDir });
+    const result = await runGate(["--help"], { cwd: tempDir });
     assert.equal(result.exitCode, 0);
     assert.ok(result.stdout.includes("Usage"), "stdout should contain usage text");
   } finally {
@@ -538,10 +542,10 @@ test("gate prints usage with --help", () => {
   }
 });
 
-test("gate prints usage with -h", () => {
+test("gate prints usage with -h", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-h-"));
   try {
-    const result = runGate(["-h"], { cwd: tempDir });
+    const result = await runGate(["-h"], { cwd: tempDir });
     assert.equal(result.exitCode, 0);
     assert.ok(result.stdout.includes("Usage"), "stdout should contain usage text");
   } finally {
