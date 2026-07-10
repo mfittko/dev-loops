@@ -17,7 +17,7 @@ test('ui smoke harness doc defines the bounded reusable local Playwright/WebKit 
   assert.match(doc, /Playwright/i);
   assert.match(doc, /WebKit only/i);
   assert.match(doc, /fixture-backed/i);
-  assert.match(doc, /named screenshot\/state\/snapshot artifact capture/i);
+  assert.match(doc, /named screenshot\/state\/snapshot\/axe artifact capture/i);
   assert.match(doc, /test-results\/ui-smoke\/inspect-run-viewer/i);
   assert.match(doc, /playwright-report\/ui-smoke\/inspect-run-viewer/i);
   assert.match(doc, /ui-artifact-contract\.md/i);

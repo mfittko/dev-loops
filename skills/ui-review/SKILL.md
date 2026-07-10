@@ -61,7 +61,7 @@ one headless WebKit context, authenticates as the change's target role through a
 project-provided dev-login recipe, dismisses config-declared interstitials once
 per context, then walks the selected flows — rendering each page and exercising
 its declared create/edit/reorder/upload/toggle interactions — capturing a step
-screenshot + sibling `state.json` + `snapshot.json` per step via `captureNamedUiState`. It fails
+screenshot + sibling `state.json` + `snapshot.json` + `axe.json` per step via `captureNamedUiState`. It fails
 closed to a stated stop reason when it cannot authenticate, and drives nothing.
 
 Throughout the walk, `response`, `requestfailed`, and `pageerror` listeners run

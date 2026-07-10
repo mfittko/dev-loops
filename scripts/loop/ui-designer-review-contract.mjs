@@ -1,3 +1,20 @@
+// axe-core impact → review finding severity. Computable a11y facts (contrast,
+// missing names/roles, etc.) come from axe.json evidence, not model judgment;
+// this pins how an axe impact rank becomes a finding severity. A null/unknown
+// impact (e.g. an `incomplete` result axe could not rank) maps to `medium` on
+// purpose — conservative, so an unranked issue is not silently minimized.
+const AXE_IMPACT_TO_FINDING_SEVERITY = {
+  critical: 'high',
+  serious: 'high',
+  moderate: 'medium',
+  minor: 'low',
+};
+
+export function mapAxeImpactToFindingSeverity(impact) {
+  const key = typeof impact === 'string' ? impact.trim().toLowerCase() : '';
+  return AXE_IMPACT_TO_FINDING_SEVERITY[key] ?? 'medium';
+}
+
 export function validateUiDesignerReviewInput(input = {}) {
   if (input.workType !== 'ui' || input.uiReviewRequested !== true) {
     return {
@@ -55,6 +72,9 @@ export function validateUiDesignerReviewInput(input = {}) {
     if (typeof state.snapshotPath !== 'string' || state.snapshotPath.trim().length === 0) {
       incompleteArtifacts.push(`artifactBundle.namedStates[${index}].snapshotPath`);
     }
+    if (typeof state.axePath !== 'string' || state.axePath.trim().length === 0) {
+      incompleteArtifacts.push(`artifactBundle.namedStates[${index}].axePath`);
+    }
     if (reviewMode === 'vision' && typeof state.screenshotPath === 'string' && state.screenshotPath.trim().length > 0 && !state.screenshotPath.trim().endsWith('screenshot.png')) {
       incompleteArtifacts.push(`artifactBundle.namedStates[${index}].screenshotPath`);
     }
@@ -63,6 +83,9 @@ export function validateUiDesignerReviewInput(input = {}) {
     }
     if (reviewMode === 'vision' && typeof state.snapshotPath === 'string' && state.snapshotPath.trim().length > 0 && !state.snapshotPath.trim().endsWith('snapshot.json')) {
       incompleteArtifacts.push(`artifactBundle.namedStates[${index}].snapshotPath`);
+    }
+    if (reviewMode === 'vision' && typeof state.axePath === 'string' && state.axePath.trim().length > 0 && !state.axePath.trim().endsWith('axe.json')) {
+      incompleteArtifacts.push(`artifactBundle.namedStates[${index}].axePath`);
     }
   });
   if (incompleteArtifacts.length > 0) {

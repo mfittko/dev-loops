@@ -58,6 +58,7 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.0",
     "@playwright/test": "^1.60.0",
     "npm-run-all2": "^9.0.2",
     "tsx": "^4.22.0"
