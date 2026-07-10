@@ -15,12 +15,14 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
+import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
 const NO_CHANGES_SINCE_LAST_REVIEW_STATUS = "no_changes_since_last_review";
+const SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS = "suppressed_post_convergence_docs_only";
 const SUPPRESSED_DRAFT_STATUS = "suppressed_draft";
 const USAGE = `Usage: request-copilot-review.mjs --repo <owner/name> --pr <number>
 Request Copilot as a reviewer on a GitHub pull request.
@@ -39,7 +41,7 @@ Debug:
   DEVLOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
                             convergence detection falls back to unsuppressed behavior
 Output (stdout, JSON):
-  { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_draft",
+  { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence_docs_only"|"suppressed_draft",
     "repo": "...", "pr": N, "reviewer": "Copilot", "detail"?: "...",
     "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N,
     "configWarning"?: "..." (present only when --lightweight and dev-loop config failed to load/validate;
@@ -52,6 +54,9 @@ Request statuses:
   blocked_by_copilot_comment    A non-Copilot PR comment contains @copilot or /copilot; delete the comment(s) first
   round_cap_reached             Maximum Copilot review rounds reached; no further re-requests will be made
   no_changes_since_last_review  --force-rerequest-review used but PR head has not changed since the last review
+  suppressed_post_convergence_docs_only  At the round cap, the post-convergence head bump is a provable pure doc/prose
+                                delta since the last Copilot-reviewed head; no fresh blocking round is forced (the prior
+                                converged review stands). Any code/test/config/CI or unclassifiable delta re-opens the round.
   suppressed_draft              PR is in draft state; review requests are blocked until the PR is marked ready for review
 Error output (stderr, JSON):
   Argument/usage errors:
@@ -66,7 +71,8 @@ is a caller-must-branch outcome, not a silent success.
 --silent exit code: 0 only when status is "requested" (a new request was just
 placed this run); non-zero for every other status, including
 already-requested/suppressed_same_head_clean/unavailable/blocked_by_copilot_comment/
-round_cap_reached/no_changes_since_last_review/suppressed_draft. Without
+round_cap_reached/no_changes_since_last_review/suppressed_post_convergence_docs_only/
+suppressed_draft. Without
 --silent the JSON body always prints regardless of status. --jq combined with
 --silent keeps the shared jq-stream truthiness semantics (exit reflects the
 filtered value) and is exempt from the status-based rule above.
@@ -337,6 +343,58 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
     }
     return { eligible: false, interpretation: null };
   }
+}
+// AC2 convergence carry-forward input: the changed-file PATHS between the
+// last-Copilot-reviewed head and the current head, via a single gh compare call.
+// FAIL-CLOSED — returns null on ANY uncertainty so the caller re-opens the round
+// exactly as before:
+//   - compare call throws / non-zero exit / unparseable JSON
+//   - the advance is not a strict linear ancestor->descendant (status !== "ahead"),
+//     so the destination-path file list cannot be trusted as the exact delta
+//   - any rename/copy entry, whose destination-path classification could misread a
+//     code file moved to a doc path as pure-doc
+//   - the compare API caps `files` at 300 entries per page, so a returned list AT
+//     that cap may be truncated — a code/test/config/CI file beyond position 300
+//     would be invisible and a real code change wrongly suppressed; a >=300-file
+//     delta is never "provably pure-doc" from one page
+// Only a provably linear, rename-free, non-truncated delta yields the destination
+// paths, which the path-based resolveConvergenceCarryForward can then classify.
+const COMPARE_FILES_PAGE_CAP = 300;
+async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  let result;
+  try {
+    result = await runChild(ghCommand, ["api", `repos/${repo}/compare/${base}...${head}`], env);
+  } catch {
+    return null;
+  }
+  if (result.code !== 0) {
+    return null;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+  if (payload?.status !== "ahead") {
+    return null;
+  }
+  const files = Array.isArray(payload.files) ? payload.files : [];
+  // Fail closed on a possibly-truncated page: a >=300-file delta cannot be
+  // trusted as the exact, complete file list (see COMPARE_FILES_PAGE_CAP above).
+  if (files.length >= COMPARE_FILES_PAGE_CAP) {
+    return null;
+  }
+  const changed = [];
+  for (const file of files) {
+    if (file?.status === "renamed" || file?.status === "copied") {
+      return null;
+    }
+    if (typeof file?.filename === "string" && file.filename.length > 0) {
+      changed.push(file.filename);
+    }
+  }
+  return changed;
 }
 function getLastCopilotReviewHeadSha(prData) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
@@ -612,7 +670,37 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
         maxRounds,
       });
     }
-    // Has new commits — bypass the round cap and proceed with the request
+    // AC2 fail-closed convergence carry-forward: at the round cap, a post-convergence
+    // head bump whose delta since the last Copilot-reviewed head is PROVABLY a pure
+    // doc/prose bump must NOT force a fresh blocking Copilot round — this is the exact
+    // choke point (shared by --force-rerequest-review and the auto-rerequest-eligible
+    // path) where new commits bypass the cap. Consult the pure, path-based seam
+    // resolveConvergenceCarryForward on that delta. DEFAULT-SAFE: the delta lookup
+    // fails closed (null) on any uncertainty, and the seam returns carryForward:false
+    // on any code/test/config/CI or unclassifiable file (and on an empty delta), so
+    // every non-pure-doc case re-opens the round exactly as before. The
+    // "significant post-convergence change re-opens a cycle" exception and the round
+    // cap itself are untouched for those deltas.
+    const deltaChangedFiles = await fetchDeltaChangedFiles(
+      { repo: options.repo, base: lastReviewSha, head: currentHeadSha },
+      runtime,
+    );
+    if (deltaChangedFiles !== null) {
+      const convergence = resolveConvergenceCarryForward({ changedFiles: deltaChangedFiles });
+      if (convergence.carryForward) {
+        return withConfigWarning({
+          ok: true,
+          status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
+          repo: options.repo,
+          pr: options.pr,
+          reviewer: "Copilot",
+          detail: `Post-convergence head bump is a pure doc/prose delta (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
+          completedRounds,
+          maxRounds,
+        });
+      }
+    }
+    // Has new (review-relevant) commits — bypass the round cap and proceed with the request
   }
   const sameHeadCleanConverged = await detectSameHeadCleanConvergence(
     options,

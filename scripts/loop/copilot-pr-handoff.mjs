@@ -8,7 +8,7 @@ import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement }
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
 import { detectInternalOnly as detectPrInternalOnly } from "./detect-internal-only-pr.mjs";
-import { applyConfirmedReviewRequest, interpretLoopState, NEXT_ACTIONS, STATE, summarizeLoopInterpretation, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
+import { applyConfirmedReviewRequest, interpretLoopState, NEXT_ACTIONS, STATE, summarizeLoopInterpretation, toSharedRequestStatus, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
 import { PR_LIFECYCLE_STATE } from "@dev-loops/core/loop/pr-lifecycle";
 import { ensureAsyncRunnerOwnership, releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -50,6 +50,7 @@ Output (stdout, JSON):
   { "ok": true, "action": "watch"|"fix"|"stop", "state": "...",
     "allowedTransitions": [...], "nextAction": "...", "snapshot": {...},
     "reviewRequestStatus"?: "...", "watchStatus"?: "...",
+    "suppressedPostConvergenceDocsOnly"?: true,
     "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false,
     "roundCapCleanEligible": true|false, "loopDisposition": "...", "terminal": true|false,
     "requestWatchContract": {
@@ -67,6 +68,13 @@ Actions:
   watch   Copilot review was requested; use watchArgs with probe-copilot-review.mjs
   fix     Unresolved feedback exists; address it before re-requesting review
   stop    No automatic next step; report the current state (terminal, blocked, or operator-decision-required) and do not proceed
+suppressedPostConvergenceDocsOnly:
+  Present (true) only when the round cap was reached and the post-convergence head
+  bump was a provable pure doc/prose delta, so no fresh Copilot round was placed.
+  This is a converged/proceed outcome (action=stop, terminal): route to the
+  pre-approval gate exactly as a clean round-cap fallback — never enter a Copilot
+  wait. requestWatchContract.requestStatus is "none" for this case (the shared
+  enum carries no active request).
 Watch refresh rule:
   watcher timeout/idle is observational only. Re-run this helper with
   --watch-status and stop only when terminal=true. Pending or unresolved
@@ -647,11 +655,28 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       }),
     };
   }
-  const normalizedRequestStatus = effectiveReviewRequestStatus
+  // The request tool reports a richer status enum than the shared loop contract
+  // (round_cap_reached, suppressed_*, no_changes_since_last_review, ...). Collapse
+  // any such non-shared outcome to the canonical snapshot enum before it enters
+  // requestWatchContract.requestStatus, so a suppression/cap diagnostic never
+  // leaks into that shared field. The diagnostic itself is preserved on the
+  // top-level reviewRequestStatus (open field) and, for the docs-only case, on
+  // suppressedPostConvergenceDocsOnly below.
+  const normalizedRequestStatus = toSharedRequestStatus(
+    effectiveReviewRequestStatus
     ?? (snapshot.copilotReviewRequestStatus === "unavailable"
       || snapshot.copilotReviewRequestStatus === "failed"
       ? snapshot.copilotReviewRequestStatus
-      : "none");
+      : "none"),
+  );
+  // Post-convergence docs-only suppression is a refinement of the round-cap
+  // "converged / proceed" disposition (NOT a Copilot-wait). The request status
+  // has already been collapsed to "none" for the shared contract, so surface the
+  // diagnostic explicitly: callers proceed to the gate exactly as they would on a
+  // clean round-cap fallback — never enter a wait seam on it.
+  if (reviewRequestStatus === "suppressed_post_convergence_docs_only") {
+    result.suppressedPostConvergenceDocsOnly = true;
+  }
   result.requestWatchContract = summarizeRequestWatchContract({
     interpretation,
     action,

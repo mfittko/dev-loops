@@ -110,9 +110,10 @@ Contract:
 - normalizes known repository/tooling limitations into a machine-readable `unavailable` result instead of forcing callers to parse ad hoc stderr
 
 Success output shape:
-- `{ "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_draft", "repo": "owner/name", "pr": 17, "reviewer": "Copilot", ... }`
+- `{ "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence_docs_only"|"suppressed_draft", "repo": "owner/name", "pr": 17, "reviewer": "Copilot", ... }`
 - `unavailable` also includes a `detail` string with the normalized GitHub/CLI limitation
 - `round_cap_reached` includes `completedRounds` and `maxRounds` fields
+- `suppressed_post_convergence_docs_only`, like `round_cap_reached`, carries `completedRounds` and `maxRounds` and is a suppressed (non-request) outcome: at the round cap, the post-convergence head bump is a provable pure doc/prose delta since the last Copilot-reviewed head, so no fresh blocking round is forced
 - `no_changes_since_last_review` is returned by `--force-rerequest-review` when the PR head SHA has not changed since the last Copilot review
 
 Failure behavior:

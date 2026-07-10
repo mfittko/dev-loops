@@ -10,6 +10,7 @@ import {
   applyConfirmedReviewRequest,
   summarizeLoopInterpretation,
   isCopilotRoundCapReached,
+  toSharedRequestStatus,
 } from "../src/loop/copilot-loop-state.mjs";
 
 // ---------------------------------------------------------------------------
@@ -400,6 +401,52 @@ test("applyConfirmedReviewRequest clears current-head convergence without invent
   assert.equal(result.copilotReviewRequestStatus, "requested");
   assert.equal(result.copilotReviewOnCurrentHead, false);
   assert.equal(result.copilotReviewPresent, true);
+});
+
+test("toSharedRequestStatus keeps shared enum members and collapses non-shared request outcomes to none", () => {
+  for (const shared of ["requested", "already-requested", "unavailable", "none", "failed"]) {
+    assert.equal(toSharedRequestStatus(shared), shared);
+  }
+  for (const nonShared of [
+    "suppressed_post_convergence_docs_only",
+    "round_cap_reached",
+    "no_changes_since_last_review",
+    "suppressed_same_head_clean",
+    "suppressed_draft",
+    "blocked_by_copilot_comment",
+    undefined,
+  ]) {
+    assert.equal(toSharedRequestStatus(nonShared), "none");
+  }
+});
+
+test("a suppressed_post_convergence_docs_only request routes to the round-cap converged/proceed disposition, never a Copilot wait", () => {
+  // At the cap, a docs-only post-convergence suppression means "no fresh request
+  // was placed; the prior converged review stands". Confirming that request result
+  // onto the snapshot must NOT leave a stray non-shared status, and the loop must
+  // route to the same clean round-cap fallback (terminal proceed) — not a wait.
+  const snapshot = applyConfirmedReviewRequest({
+    prExists: true,
+    prNumber: 17,
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: true,
+    copilotReviewRequestStatus: "none",
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 5,
+    ciStatus: "success",
+  }, "suppressed_post_convergence_docs_only");
+
+  // Non-shared status collapses to "none": nothing leaks into the shared contract.
+  assert.equal(snapshot.copilotReviewRequestStatus, "none");
+
+  const interpretation = interpretLoopState(snapshot, { maxCopilotRounds: 2 });
+  assert.equal(interpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.notEqual(interpretation.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+
+  const summary = summarizeLoopInterpretation(interpretation, { maxCopilotRounds: 2 });
+  assert.equal(summary.loopDisposition, DISPOSITION.DONE);
+  assert.equal(summary.terminal, true);
 });
 
 test("interpretLoopState stays in waiting_for_copilot_review when review is not yet on current head", () => {
