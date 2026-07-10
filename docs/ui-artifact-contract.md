@@ -56,6 +56,12 @@ Why all five are required:
 - `axe.json` is the computed accessibility facts (axe-core results) for the same state, so contrast and other computable a11y issues are asserted from a tool, not eyeballed from pixels
 - `console.json` is the console errors and failed network requests attributed to the same state, so a swallowed error (a 500 hidden behind a success toast, an uncaught page error) is a review input rather than something only a live re-run would surface
 
+These five artifacts are the evidence base for the four review **lenses** —
+`a11y` (grounded in `axe.json`), `layout-geometry` (`snapshot.json`), `visual`
+(`screenshot.png`), and `interaction` (`console.json`) — whose findings are
+merged by the pure `convergeUiReviewLenses` seam. See
+[Designer + vision review loop](./ui-designer-review-loop.md#four-lenses-over-one-bundle-converged-deterministically).
+
 ### 3. CI-required artifacts
 
 These use the same deterministic artifact shape as smoke-validation artifacts, but
