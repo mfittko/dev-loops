@@ -1,0 +1,301 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  UI_REVIEW_LENS_NAMES,
+  UI_REVIEW_OUTCOMES,
+  convergeUiReviewLenses,
+  convergeUiReviewRouteFindings,
+  lensFindingDedupeKey,
+  validateUiReviewLensResults,
+} from '../../scripts/loop/ui-review-lenses.mjs';
+
+const F = (over = {}) => ({
+  stateName: 'empty-state',
+  region: '#main .card',
+  category: 'color-contrast',
+  severity: 'medium',
+  blocking: false,
+  ...over,
+});
+
+/** A complete 4-lens set with each lens carrying the given findings. */
+function lensSet({ a11y = [], 'layout-geometry': geometry = [], visual = [], interaction = [] } = {}) {
+  return [
+    { lens: 'a11y', findings: a11y },
+    { lens: 'layout-geometry', findings: geometry },
+    { lens: 'visual', findings: visual },
+    { lens: 'interaction', findings: interaction },
+  ];
+}
+
+test('the four canonical lenses are named and stable', () => {
+  assert.deepEqual(UI_REVIEW_LENS_NAMES, ['a11y', 'layout-geometry', 'visual', 'interaction']);
+});
+
+test('dedupe key normalizes (stateName, region, category)', () => {
+  assert.equal(
+    lensFindingDedupeKey(F({ stateName: ' Empty-State ', region: '#Main .Card', category: 'Color-Contrast' })),
+    lensFindingDedupeKey(F({ stateName: 'empty-state', region: '#main .card', category: 'color-contrast' })),
+  );
+});
+
+test('converge dedups cross-lens duplicates into one representative with merged provenance', () => {
+  const { findings } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'medium' })],
+    visual: [F({ severity: 'medium' })],
+  }));
+  assert.equal(findings.length, 1);
+  assert.deepEqual(findings[0].lenses, ['a11y', 'visual']);
+});
+
+test('precedence: the worse severity wins when two lenses report the same defect', () => {
+  const { findings } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'high' })],
+    visual: [F({ severity: 'low' })],
+  }));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'high');
+  assert.deepEqual(findings[0].lenses, ['a11y', 'visual']);
+});
+
+test('distinct defects on the same state are kept, ordered worst-first then by region/category', () => {
+  const { findings } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ region: '#b', category: 'z', severity: 'low' })],
+    visual: [F({ region: '#a', category: 'x', severity: 'high' })],
+  }));
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].severity, 'high');
+  assert.equal(findings[1].severity, 'low');
+});
+
+test('output ordering is deterministic regardless of input lens/finding order', () => {
+  const a = convergeUiReviewLenses(lensSet({
+    a11y: [F({ stateName: 'b', category: 'x' }), F({ stateName: 'a', category: 'y' })],
+  }));
+  const b = convergeUiReviewLenses(lensSet({
+    interaction: [F({ stateName: 'a', category: 'y' })],
+    a11y: [F({ stateName: 'b', category: 'x' })],
+  }));
+  assert.deepEqual(a.findings.map((f) => `${f.stateName}/${f.category}`), b.findings.map((f) => `${f.stateName}/${f.category}`));
+});
+
+test('outcome: no must-fix findings ⇒ satisfied', () => {
+  const { outcome } = convergeUiReviewLenses(lensSet({ visual: [F({ severity: 'low' })] }));
+  assert.equal(outcome, UI_REVIEW_OUTCOMES.SATISFIED);
+});
+
+test('outcome: a must-fix/high finding ⇒ not satisfied (continue fix loop)', () => {
+  assert.equal(convergeUiReviewLenses(lensSet({ interaction: [F({ severity: 'must-fix' })] })).outcome, UI_REVIEW_OUTCOMES.CONTINUE);
+  assert.equal(convergeUiReviewLenses(lensSet({ a11y: [F({ severity: 'high' })] })).outcome, UI_REVIEW_OUTCOMES.CONTINUE);
+});
+
+test('outcome: a fail-closed (blocking) signal ⇒ blocked, taking precedence over continue', () => {
+  const { outcome } = convergeUiReviewLenses(lensSet({
+    interaction: [F({ severity: 'must-fix' })],
+    visual: [F({ region: '#conflict', category: 'design', severity: 'high', blocking: true })],
+  }));
+  assert.equal(outcome, UI_REVIEW_OUTCOMES.BLOCKED);
+});
+
+test('an empty (all-lenses-clean) set is satisfied', () => {
+  const { findings, outcome } = convergeUiReviewLenses(lensSet());
+  assert.deepEqual(findings, []);
+  assert.equal(outcome, UI_REVIEW_OUTCOMES.SATISFIED);
+});
+
+test('validator rejects a missing lens fail-closed', () => {
+  const result = validateUiReviewLensResults([
+    { lens: 'a11y', findings: [] },
+    { lens: 'layout-geometry', findings: [] },
+    { lens: 'visual', findings: [] },
+  ]);
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'blocked_missing_lens');
+  assert.ok(result.missing.includes('lens:interaction'));
+});
+
+test('validator rejects a malformed finding fail-closed', () => {
+  const result = validateUiReviewLensResults(lensSet({ a11y: [F({ severity: 'catastrophic' })] }));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_finding_malformed');
+  assert.ok(result.missing.some((m) => m.endsWith('.severity')));
+});
+
+test('validator rejects an unknown or duplicate lens', () => {
+  assert.equal(validateUiReviewLensResults([...lensSet(), { lens: 'novel', findings: [] }]).ok, false);
+  assert.equal(validateUiReviewLensResults([...lensSet(), { lens: 'a11y', findings: [] }]).ok, false);
+});
+
+test('validator accepts a complete, well-formed set', () => {
+  assert.equal(validateUiReviewLensResults(lensSet({ a11y: [F()] })).ok, true);
+});
+
+test('converge fails closed (throws) on a partial lens-result set rather than converging it', () => {
+  assert.throws(() => convergeUiReviewLenses([{ lens: 'a11y', findings: [] }]), /refusing to converge/);
+});
+
+test('a blocking signal survives the merge onto the single representative', () => {
+  // Same (stateName, region, category) triple across two lenses: one blocking, one not.
+  const { findings, outcome } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'high', blocking: false })],
+    visual: [F({ severity: 'high', blocking: true })],
+  }));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].blocking, true);
+  assert.equal(outcome, UI_REVIEW_OUTCOMES.BLOCKED);
+});
+
+test('the worse severity wins even when the milder duplicate is processed first', () => {
+  // a11y (processed first) reports low; visual (processed later) reports high.
+  const { findings } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'low' })],
+    visual: [F({ severity: 'high' })],
+  }));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'high');
+});
+
+test('validator rejects a non-array lens-result set fail-closed', () => {
+  const result = validateUiReviewLensResults(null);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_results_not_array');
+  assert.deepEqual(result.missing, ['lensResults']);
+});
+
+test('validator rejects a finding missing region fail-closed', () => {
+  const result = validateUiReviewLensResults(lensSet({ a11y: [F({ region: '' })] }));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_finding_malformed');
+  assert.ok(result.missing.some((m) => m.endsWith('.region')));
+});
+
+test('validator rejects a non-boolean blocking field fail-closed', () => {
+  const result = validateUiReviewLensResults(lensSet({ a11y: [F({ blocking: 'yes' })] }));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_finding_malformed');
+  assert.ok(result.missing.some((m) => m.endsWith('.blocking')));
+});
+
+test('validator rejects a finding that OMITS blocking fail-closed', () => {
+  // `blocking` is required — a finding missing it must not read as non-blocking.
+  const { blocking, ...noBlocking } = F();
+  const result = validateUiReviewLensResults(lensSet({ a11y: [noBlocking] }));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_finding_malformed');
+  assert.ok(result.missing.some((m) => m.endsWith('.blocking')));
+});
+
+test('route entrypoint groups the flat template findings by lens and converges them', () => {
+  // The vision template emits ONE flat findings array, each finding tagged with its lens.
+  const { findings, outcome } = convergeUiReviewRouteFindings([
+    { lens: 'a11y', ...F({ severity: 'high' }) },
+    { lens: 'visual', ...F({ severity: 'low' }) },
+  ]);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'high');
+  assert.deepEqual(findings[0].lenses, ['a11y', 'visual']);
+  assert.equal(outcome, UI_REVIEW_OUTCOMES.CONTINUE);
+});
+
+test('route entrypoint fails closed on an unknown-lens finding rather than dropping it', () => {
+  assert.throws(() => convergeUiReviewRouteFindings([{ lens: 'novel', ...F() }]), /refusing to converge/);
+});
+
+test('validator rejects a prototype-chain severity (toString/constructor) fail-closed', () => {
+  for (const poison of ['toString', 'constructor', 'hasOwnProperty', '__proto__']) {
+    const result = validateUiReviewLensResults(lensSet({ a11y: [F({ severity: poison })] }));
+    assert.equal(result.ok, false, `severity=${poison} must be rejected`);
+    assert.equal(result.reason, 'lens_finding_malformed');
+    assert.ok(result.missing.some((m) => m.endsWith('.severity')));
+  }
+});
+
+test('converge fails closed on a prototype-chain severity rather than silently downgrading it', () => {
+  // `in` would let severity:"toString" pass, then SEVERITY_RANK["toString"] is a
+  // prototype fn ⇒ NaN comparisons ⇒ isMustFixFinding false ⇒ wrongly satisfied.
+  assert.throws(
+    () => convergeUiReviewRouteFindings([{ lens: 'a11y', ...F({ severity: 'toString' }) }]),
+    /refusing to converge/,
+  );
+  assert.throws(
+    () => convergeUiReviewRouteFindings([{ lens: 'a11y', ...F({ severity: 'constructor' }) }]),
+    /refusing to converge/,
+  );
+});
+
+test('route entrypoint fails closed on a non-array input', () => {
+  assert.throws(() => convergeUiReviewRouteFindings(null), /expected a findings array/);
+});
+
+test('validator rejects a lens whose findings field is not an array', () => {
+  const result = validateUiReviewLensResults([
+    { lens: 'a11y', findings: 'x' },
+    { lens: 'layout-geometry', findings: [] },
+    { lens: 'visual', findings: [] },
+    { lens: 'interaction', findings: [] },
+  ]);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_finding_malformed');
+  assert.ok(result.missing.some((m) => m.endsWith('findings')));
+});
+
+test('validator rejects a non-object finding (null) fail-closed', () => {
+  const result = validateUiReviewLensResults(lensSet({ a11y: [null] }));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_finding_malformed');
+  assert.ok(result.missing.some((m) => m.endsWith('findings[0]')));
+});
+
+test('validator rejects a lens entry with an empty/undefined lens name', () => {
+  for (const badName of ['', undefined]) {
+    const result = validateUiReviewLensResults([
+      { lens: badName, findings: [] },
+      { lens: 'layout-geometry', findings: [] },
+      { lens: 'visual', findings: [] },
+      { lens: 'interaction', findings: [] },
+    ]);
+    assert.equal(result.ok, false, `lens=${String(badName)} must be rejected`);
+    assert.ok(result.missing.some((m) => m.endsWith('.lens')));
+  }
+});
+
+test('converge carries suggestedFix through to the representative finding', () => {
+  const { findings } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'high', suggestedFix: 'add an accessible name' })],
+  }));
+  assert.equal(findings[0].suggestedFix, 'add an accessible name');
+});
+
+test('the worse-severity representative keeps its own suggestedFix across a merge', () => {
+  const { findings } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'low', suggestedFix: 'mild fix' })],
+    visual: [F({ severity: 'high', suggestedFix: 'the real fix' })],
+  }));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'high');
+  assert.equal(findings[0].suggestedFix, 'the real fix');
+});
+
+test('validator rejects a finding whose stateName/region/category contains the dedupe separator', () => {
+  const NUL = String.fromCharCode(0); // the U+0000 dedupe-key separator, kept out of the source as raw bytes
+  for (const field of ['stateName', 'region', 'category']) {
+    const result = validateUiReviewLensResults(lensSet({ a11y: [F({ [field]: `a${NUL}b` })] }));
+    assert.equal(result.ok, false, `${field} containing the separator must be rejected`);
+    assert.equal(result.reason, 'lens_finding_malformed');
+    assert.ok(result.missing.some((m) => m.endsWith(`.${field}`)));
+  }
+});
+
+test('a severity-tie representative is deterministic regardless of input lens order', () => {
+  const a11yFinding = F({ severity: 'medium', problem: 'a11y problem', suggestedFix: 'a11y fix' });
+  const visualFinding = F({ severity: 'medium', problem: 'visual problem', suggestedFix: 'visual fix' });
+  const set = lensSet({ a11y: [a11yFinding], visual: [visualFinding] });
+  const forward = convergeUiReviewLenses(set);
+  const reverse = convergeUiReviewLenses([...set].reverse());
+  assert.equal(forward.findings.length, 1);
+  assert.equal(reverse.findings.length, 1);
+  // The earlier canonical lens (a11y) supplies the descriptive fields, both orders.
+  assert.equal(forward.findings[0].problem, 'a11y problem');
+  assert.deepEqual(forward.findings[0], reverse.findings[0]);
+});

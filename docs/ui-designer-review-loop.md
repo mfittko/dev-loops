@@ -78,6 +78,45 @@ being removed from that walk-level gate, so `console.json` and the mechanical
 failure set are two views of the same error; the final report dedups so it is
 never posted twice.
 
+## Four lenses over one bundle, converged deterministically
+
+A review pass judges ONE enriched named-state bundle through four parallel
+**lenses**, each grounded in a different artifact:
+
+- `a11y` — computable accessibility facts, grounded in `axe.json`
+- `layout-geometry` — layout, spacing, clipping, overlap, grounded in `snapshot.json`/geometry
+- `visual` — visual hierarchy, callouts, state-transition clarity, grounded in the screenshot
+- `interaction` — console errors, failed network requests, interaction-state signals, grounded in `console.json`
+
+Lens **execution** stays in the review route (designer/vision): each lens is a
+named producer that takes the enriched bundle and returns a findings array. The
+vision template emits one FLAT `findings[]`, each finding tagged with its `lens`;
+the route hands that array to `convergeUiReviewRouteFindings(findings)`, which
+groups it by lens (seeding an empty bucket for each of the four canonical lenses,
+so an all-clean lens is still present) and calls the **pure converge seam**,
+`convergeUiReviewLenses(lensResults[]) -> { findings, outcome }`, in
+`scripts/loop/ui-review-lenses.mjs`. The seam is deterministic and
+harness-agnostic — no browser, no model.
+
+- **Dedupe key.** Two findings from any lenses are the same defect when they
+  share a normalized `(stateName, region/selector, category/rule)` triple; they
+  collapse to one representative and every contributing lens is recorded on
+  `lenses`.
+- **Precedence.** When two lenses report the same defect the worse severity wins
+  (ladder: `must-fix` > `high` > `medium` > `low`); on a severity tie the earlier
+  canonical lens (`a11y` > `layout-geometry` > `visual` > `interaction`) supplies
+  the representative's descriptive fields, so the merge is independent of input
+  order. A `blocking` signal from any contributing lens survives the merge.
+- **Stable ordering.** Findings are ordered by `stateName`, then severity
+  (worst first), then region, then category.
+- **Outcome mapping** (the existing enum, unchanged): any `blocking` finding ⇒
+  `blocked_needs_human_decision`; else any must-fix finding (severity `must-fix`
+  or `high`) ⇒ `continue_ui_fix_loop`; else ⇒ `ui_review_satisfied`.
+- **Fail-closed.** `validateUiReviewLensResults` rejects a set that is missing a
+  lens, carries an unknown/duplicate lens, or holds a malformed finding; the
+  converge seam refuses to merge such a set rather than converging a partial
+  review.
+
 ## Review modes behind `dev-loop`
 
 Two bounded reviewer modes are supported for opted-in UI slices:
@@ -172,3 +211,10 @@ The pure validation helper at `scripts/loop/ui-designer-review-contract.mjs` cod
 - only a complete artifact bundle is eligible for routed review (`ready_for_designer_review` or `ready_for_vision_review`)
 
 This keeps the boundary testable before any later higher-level reviewer orchestration is layered on top.
+
+The pure lens-converge seam at `scripts/loop/ui-review-lenses.mjs` codifies the
+deterministic tail:
+- `UI_REVIEW_LENSES` names the four lenses and the artifact each is grounded in
+- `validateUiReviewLensResults` rejects a missing/unknown/duplicate lens or a malformed finding fail-closed
+- `convergeUiReviewLenses` merges the four findings arrays into one deduped set and maps it to the unchanged outcome enum
+- `convergeUiReviewRouteFindings` is the route's entrypoint: it groups the vision template's flat `findings[]` (each tagged with its `lens`) into the four-lens result set and calls `convergeUiReviewLenses`, so the template output and the seam meet at one documented, fail-closed boundary
