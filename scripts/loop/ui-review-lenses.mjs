@@ -67,6 +67,31 @@ export const UI_REVIEW_OUTCOMES = Object.freeze({
  * a crafted value can never forge a collision. */
 const DEDUPE_KEY_SEPARATOR = "\u0000";
 
+/** Acceptance-criterion reference tokens. Every finding (and every affirmative
+ * "checked" mark) references ONE acceptance criterion from the provided list by
+ * its 1-based position as `AC<n>` (`AC1` is `acceptanceCriteria[0]`). Compact and
+ * stable within a single review pass, and trivially auditable back to the
+ * criterion text — so per-criterion coverage is computable, not a gestalt call.
+ *
+ * Resolve + fail-closed-validate the acceptance-criteria list into the canonical
+ * trimmed criteria and the set of valid `AC<n>` refs. Returns null when the list
+ * is not a non-empty array of non-empty strings (the seam's precondition — the
+ * same non-empty AC list `validateUiDesignerReviewInput` already requires); a hole
+ * (a non-string/empty entry) is rejected rather than silently dropped, so a ref
+ * can never map to a phantom criterion.
+ */
+function resolveAcceptanceCriteria(acceptanceCriteria) {
+  if (!Array.isArray(acceptanceCriteria) || acceptanceCriteria.length === 0) return null;
+  const criteria = acceptanceCriteria.map((c) => (typeof c === "string" ? c.trim() : ""));
+  if (criteria.some((c) => c.length === 0)) return null;
+  const validRefs = new Set(criteria.map((_, i) => `AC${i + 1}`));
+  return { criteria, validRefs };
+}
+
+function acRefFromValue(value) {
+  return typeof value === "string" ? value.trim() : value;
+}
+
 function normalizeKeyPart(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -90,12 +115,22 @@ function isNonEmptyString(value) {
  * a lens, carries an unknown/duplicate lens, or holds a malformed finding —
  * rather than letting the converge seam silently merge a partial review.
  *
+ * Also requires the acceptance-criteria list (the same non-empty list
+ * `validateUiDesignerReviewInput` requires) and that EVERY finding carries an
+ * `acceptanceCriterionRef` mapping to a criterion in it — a finding with no
+ * mappable criterion is itself a fail-closed signal, never silently converged.
+ *
  * @param {{lens:string, findings:object[]}[]} lensResults
+ * @param {string[]} acceptanceCriteria - the criteria findings must map to
  * @returns {{ok:boolean, status:string, reason:string, missing:string[]}}
  */
-export function validateUiReviewLensResults(lensResults) {
+export function validateUiReviewLensResults(lensResults, acceptanceCriteria) {
   if (!Array.isArray(lensResults)) {
     return { ok: false, status: "blocked_malformed_lens_results", reason: "lens_results_not_array", missing: ["lensResults"] };
+  }
+  const acResolved = resolveAcceptanceCriteria(acceptanceCriteria);
+  if (!acResolved) {
+    return { ok: false, status: "blocked_missing_acceptance_criteria", reason: "acceptance_criteria_missing", missing: ["acceptanceCriteria"] };
   }
   const seen = new Map();
   const problems = [];
@@ -143,6 +178,13 @@ export function validateUiReviewLensResults(lensResults) {
       // that OMITS it would silently read as non-blocking and hide a human-decision
       // signal — reject a missing/non-boolean `blocking` fail-closed.
       if (typeof finding.blocking !== "boolean") problems.push(`${where}.blocking`);
+      // acceptanceCriterionRef is REQUIRED and MUST map to a criterion in the
+      // provided AC list (an `AC<n>` within range). A missing or unmappable ref is
+      // a fail-closed malformed finding — coverage is auditable only when every
+      // finding names the criterion it speaks to.
+      if (!isNonEmptyString(finding.acceptanceCriterionRef) || !acResolved.validRefs.has(finding.acceptanceCriterionRef.trim())) {
+        problems.push(`${where}.acceptanceCriterionRef`);
+      }
     });
   });
   const missingLenses = UI_REVIEW_LENS_NAMES.filter((name) => !seen.has(name)).map((name) => `lens:${name}`);
@@ -176,16 +218,67 @@ function pickRepresentative(incoming, existing) {
 }
 
 /**
- * Map the deduped findings to the UNCHANGED outcome enum, by the same rules the
- * designer/vision contract states:
- *   - any fail-closed signal (`blocking: true`) ⇒ blocked_needs_human_decision
- *   - else any must-fix finding                 ⇒ continue_ui_fix_loop (not satisfied)
- *   - else                                       ⇒ ui_review_satisfied
- * Precedence: blocked > continue > satisfied.
+ * Fail-closed-validate the affirmative per-AC "checked" marks: each mark names an
+ * AC that maps to the list (`AC<n>` in range) over a NAMED STATE. A "checked" mark
+ * is how a criterion is covered by a PASS (an affirmative review with no finding);
+ * a malformed mark cannot silently satisfy a criterion, so converge throws on one.
+ * An absent/empty list is fine (no passes). Returns the malformed paths (empty ⇒ ok).
  */
-function deriveOutcome(findings) {
+function validateCheckedCriteria(checkedCriteria, validRefs) {
+  if (checkedCriteria === undefined || checkedCriteria === null) return [];
+  if (!Array.isArray(checkedCriteria)) return ["checkedCriteria"];
+  const problems = [];
+  checkedCriteria.forEach((mark, index) => {
+    const where = `checkedCriteria[${index}]`;
+    if (!mark || typeof mark !== "object") {
+      problems.push(where);
+      return;
+    }
+    if (!isNonEmptyString(mark.acceptanceCriterionRef) || !validRefs.has(mark.acceptanceCriterionRef.trim())) problems.push(`${where}.acceptanceCriterionRef`);
+    if (!isNonEmptyString(mark.stateName)) problems.push(`${where}.stateName`);
+  });
+  return problems;
+}
+
+/**
+ * The per-criterion coverage audit. An acceptance criterion is COVERED when it is
+ * referenced by >=1 converged finding OR by >=1 affirmative "checked" mark over a
+ * named state. The full bar (`satisfiedBarMet`) is met only when EVERY criterion
+ * is covered — the gate `ui_review_satisfied` sits behind. The audit is emitted on
+ * the result so which AC each finding maps to and which ACs are covered vs
+ * uncovered are readable straight from the structured output.
+ */
+function computeCoverage(findings, criteria, checkedCriteria) {
+  const perRef = new Map(criteria.map((criterion, i) => [`AC${i + 1}`, { ref: `AC${i + 1}`, criterion, findingCount: 0, checked: false }]));
+  for (const finding of findings) {
+    const entry = perRef.get(finding.acceptanceCriterionRef);
+    if (entry) entry.findingCount += 1;
+  }
+  for (const mark of checkedCriteria ?? []) {
+    const entry = perRef.get(acRefFromValue(mark?.acceptanceCriterionRef));
+    if (entry) entry.checked = true;
+  }
+  const perCriterion = [...perRef.values()].map((entry) => ({ ...entry, covered: entry.findingCount > 0 || entry.checked }));
+  const covered = perCriterion.filter((entry) => entry.covered).map((entry) => entry.ref);
+  const uncovered = perCriterion.filter((entry) => !entry.covered).map((entry) => entry.ref);
+  return { perCriterion, covered, uncovered, satisfiedBarMet: uncovered.length === 0 };
+}
+
+/**
+ * Map the deduped findings to the UNCHANGED outcome enum, by the same rules the
+ * designer/vision contract states, now GATED on per-criterion coverage:
+ *   - any fail-closed signal (`blocking: true`)   ⇒ blocked_needs_human_decision
+ *   - else any must-fix finding                   ⇒ continue_ui_fix_loop (not satisfied)
+ *   - else any UNCOVERED acceptance criterion      ⇒ continue_ui_fix_loop (coverage gap)
+ *   - else                                         ⇒ ui_review_satisfied
+ * Precedence: blocked > continue > satisfied. An unaudited criterion (no finding
+ * AND no affirmative check) is a coverage GAP, not a human-decision blocker, so it
+ * downgrades satisfaction to continue rather than escalating.
+ */
+function deriveOutcome(findings, coverage) {
   if (findings.some((f) => f.blocking === true)) return UI_REVIEW_OUTCOMES.BLOCKED;
   if (findings.some(isMustFixFinding)) return UI_REVIEW_OUTCOMES.CONTINUE;
+  if (!coverage.satisfiedBarMet) return UI_REVIEW_OUTCOMES.CONTINUE;
   return UI_REVIEW_OUTCOMES.SATISFIED;
 }
 
@@ -200,16 +293,29 @@ function deriveOutcome(findings) {
  * Ordering is stable and deterministic: by stateName, then severity (worst
  * first), then region, then category.
  *
- * Fails closed: a malformed/partial lens-result set throws rather than
- * converging a partial review (see validateUiReviewLensResults).
+ * Fails closed: a malformed/partial lens-result set (or a missing acceptance-
+ * criteria list, an unmappable finding ref, or a malformed checked mark) throws
+ * rather than converging a partial/unauditable review (see
+ * validateUiReviewLensResults / validateCheckedCriteria).
+ *
+ * `ui_review_satisfied` is GATED on per-criterion coverage: it is returned only
+ * when every acceptance criterion is covered by >=1 finding-or-affirmative-check
+ * (and there are no must-fix/blocking findings). The coverage audit is emitted on
+ * the result so satisfaction is auditable rather than a gestalt call.
  *
  * @param {{lens:string, findings:object[]}[]} lensResults
- * @returns {{findings:object[], outcome:string}}
+ * @param {{acceptanceCriteria:string[], checkedCriteria?:{acceptanceCriterionRef:string, stateName:string}[]}} options
+ * @returns {{findings:object[], outcome:string, coverage:object}}
  */
-export function convergeUiReviewLenses(lensResults) {
-  const validation = validateUiReviewLensResults(lensResults);
+export function convergeUiReviewLenses(lensResults, { acceptanceCriteria, checkedCriteria } = {}) {
+  const validation = validateUiReviewLensResults(lensResults, acceptanceCriteria);
   if (!validation.ok) {
     throw new Error(`convergeUiReviewLenses: refusing to converge a ${validation.reason} lens-result set; missing/malformed: ${validation.missing.join(", ")}`);
+  }
+  const { criteria, validRefs } = resolveAcceptanceCriteria(acceptanceCriteria);
+  const checkedProblems = validateCheckedCriteria(checkedCriteria, validRefs);
+  if (checkedProblems.length > 0) {
+    throw new Error(`convergeUiReviewLenses: refusing to converge with malformed checked-criteria; malformed: ${checkedProblems.join(", ")}`);
   }
 
   const byKey = new Map();
@@ -220,6 +326,7 @@ export function convergeUiReviewLenses(lensResults) {
         stateName: raw.stateName,
         region: raw.region,
         category: raw.category,
+        acceptanceCriterionRef: raw.acceptanceCriterionRef.trim(),
         severity: raw.severity.trim(),
         blocking: raw.blocking === true,
         problem: isNonEmptyString(raw.problem) ? raw.problem : null,
@@ -238,7 +345,8 @@ export function convergeUiReviewLenses(lensResults) {
       // suggestedFix/evidence follow via the `...winner` spread); on a severity
       // tie the earlier canonical lens wins (pickRepresentative) so the result is
       // input-order-independent; a blocking signal from any contributing lens
-      // survives; union the contributing lenses.
+      // survives; union the contributing lenses. The representative keeps its own
+      // acceptanceCriterionRef (the same defect maps to one primary criterion).
       const lenses = [...new Set([...existing.lenses, lens])].sort();
       const winner = pickRepresentative(finding, existing);
       byKey.set(key, { ...winner, blocking: existing.blocking || finding.blocking, lenses });
@@ -254,7 +362,8 @@ export function convergeUiReviewLenses(lensResults) {
     );
   });
 
-  return { findings, outcome: deriveOutcome(findings) };
+  const coverage = computeCoverage(findings, criteria, checkedCriteria);
+  return { findings, outcome: deriveOutcome(findings, coverage), coverage };
 }
 
 /**
@@ -270,10 +379,15 @@ export function convergeUiReviewLenses(lensResults) {
  * lands in its own bucket, so the fail-closed validator rejects it rather than
  * dropping it.
  *
+ * The acceptance-criteria list and the affirmative per-AC `checkedCriteria` marks
+ * pass straight through to `convergeUiReviewLenses`, which gates
+ * `ui_review_satisfied` on per-criterion coverage and emits the coverage audit.
+ *
  * @param {object[]} routeFindings - the template's flat `findings[]` (each `{lens, ...}`)
- * @returns {{findings:object[], outcome:string}}
+ * @param {{acceptanceCriteria:string[], checkedCriteria?:{acceptanceCriterionRef:string, stateName:string}[]}} options
+ * @returns {{findings:object[], outcome:string, coverage:object}}
  */
-export function convergeUiReviewRouteFindings(routeFindings) {
+export function convergeUiReviewRouteFindings(routeFindings, options = {}) {
   if (!Array.isArray(routeFindings)) {
     throw new Error("convergeUiReviewRouteFindings: expected a findings array from the review route");
   }
@@ -284,5 +398,5 @@ export function convergeUiReviewRouteFindings(routeFindings) {
     byLens.get(lens).push(finding);
   }
   const lensResults = [...byLens.entries()].map(([lens, findings]) => ({ lens, findings }));
-  return convergeUiReviewLenses(lensResults);
+  return convergeUiReviewLenses(lensResults, options);
 }

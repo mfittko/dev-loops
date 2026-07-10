@@ -111,11 +111,46 @@ harness-agnostic — no browser, no model.
   (worst first), then region, then category.
 - **Outcome mapping** (the existing enum, unchanged): any `blocking` finding ⇒
   `blocked_needs_human_decision`; else any must-fix finding (severity `must-fix`
-  or `high`) ⇒ `continue_ui_fix_loop`; else ⇒ `ui_review_satisfied`.
+  or `high`) ⇒ `continue_ui_fix_loop`; else any acceptance criterion left
+  uncovered (see the coverage gate below) ⇒ `continue_ui_fix_loop`; else ⇒
+  `ui_review_satisfied`.
 - **Fail-closed.** `validateUiReviewLensResults` rejects a set that is missing a
-  lens, carries an unknown/duplicate lens, or holds a malformed finding; the
-  converge seam refuses to merge such a set rather than converging a partial
-  review.
+  lens, carries an unknown/duplicate lens, holds a malformed finding, is missing
+  the acceptance-criteria list, or holds a finding whose `acceptanceCriterionRef`
+  does not map to a criterion; the converge seam refuses to merge such a set
+  rather than converging a partial or unauditable review.
+
+## Per-criterion coverage gates `ui_review_satisfied`
+
+`ui_review_satisfied` is not a gestalt "looks good enough" call: it is gated on
+**per-criterion coverage**, enforced in the same pure fail-closed seam, so
+satisfaction is auditable from the emitted result.
+
+- **Every finding maps to a criterion.** Each converged finding carries an
+  `acceptanceCriterionRef` — an `AC<n>` token referencing one criterion in the
+  provided `acceptanceCriteria` list by 1-based position (`AC1` is the first). A
+  finding with a missing or unmappable ref is a fail-closed malformed finding
+  (`validateUiReviewLensResults` rejects it; converge throws), never silently
+  satisfied.
+- **The coverage bar.** A criterion is **covered** when it is referenced by >=1
+  converged finding OR by >=1 affirmative **checked** mark over a named state
+  (`checkedCriteria[] = { acceptanceCriterionRef, stateName }`, the reviewer's
+  affirmative "I checked this criterion and found no problem" pass). The full bar
+  (`coverage.satisfiedBarMet`) is met only when EVERY criterion is covered.
+- **The gate.** `ui_review_satisfied` is returned only when the coverage bar is
+  met AND there are no must-fix/blocking findings. A criterion covered by neither
+  a finding nor a check is an unaudited coverage GAP — not a human-decision
+  blocker — so it downgrades the outcome to `continue_ui_fix_loop` (the loop keeps
+  going until every criterion is audited), never straight to satisfied.
+- **Auditable output.** `convergeUiReviewLenses` / `convergeUiReviewRouteFindings`
+  emit a `coverage` audit alongside `{findings, outcome}`:
+  `coverage.perCriterion[]` (`{ ref, criterion, findingCount, checked, covered }`),
+  `coverage.covered[]` / `coverage.uncovered[]` (the `AC<n>` refs), and
+  `coverage.satisfiedBarMet`. Which AC each finding maps to, and which criteria are
+  covered vs uncovered, are readable straight from the structured result.
+- **Fail-closed checks.** A malformed `checkedCriteria` mark (missing `stateName`,
+  or an `acceptanceCriterionRef` that does not map) fails closed — the converge
+  seam throws rather than letting a bad mark silently satisfy a criterion.
 
 ## Review modes behind `dev-loop`
 
@@ -160,6 +195,11 @@ The handoff goes back to the fixer/developer with:
 Use this when:
 - the named states in scope satisfy the review brief and acceptance criteria closely enough to stop iterating on the UI/design side
 - any remaining issues are minor enough that they do not justify another dedicated UI-fix pass
+
+This outcome is gated on **per-criterion coverage** (see "Per-criterion coverage
+gates `ui_review_satisfied`" above): the seam returns it only when every
+acceptance criterion is covered by a finding or an affirmative check and no
+must-fix/blocking findings remain. It is auditable, not a gestalt call.
 
 This does **not** replace normal engineering validation; it only means the designer-persona review loop is satisfied.
 
@@ -215,6 +255,6 @@ This keeps the boundary testable before any later higher-level reviewer orchestr
 The pure lens-converge seam at `scripts/loop/ui-review-lenses.mjs` codifies the
 deterministic tail:
 - `UI_REVIEW_LENSES` names the four lenses and the artifact each is grounded in
-- `validateUiReviewLensResults` rejects a missing/unknown/duplicate lens or a malformed finding fail-closed
-- `convergeUiReviewLenses` merges the four findings arrays into one deduped set and maps it to the unchanged outcome enum
-- `convergeUiReviewRouteFindings` is the route's entrypoint: it groups the vision template's flat `findings[]` (each tagged with its `lens`) into the four-lens result set and calls `convergeUiReviewLenses`, so the template output and the seam meet at one documented, fail-closed boundary
+- `validateUiReviewLensResults` rejects a missing/unknown/duplicate lens, a malformed finding, a missing acceptance-criteria list, or a finding whose `acceptanceCriterionRef` does not map, fail-closed
+- `convergeUiReviewLenses(lensResults, { acceptanceCriteria, checkedCriteria })` merges the four findings arrays into one deduped set, computes the per-criterion `coverage` audit, and maps it to the unchanged outcome enum — `ui_review_satisfied` only when every criterion is covered and no must-fix/blocking finding remains
+- `convergeUiReviewRouteFindings` is the route's entrypoint: it groups the vision template's flat `findings[]` (each tagged with its `lens` and its `acceptanceCriterionRef`) into the four-lens result set and passes the acceptance-criteria list + `checkedCriteria` passes through to `convergeUiReviewLenses`, so the template output and the seam meet at one documented, fail-closed boundary
