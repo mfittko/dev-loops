@@ -118,7 +118,10 @@ export function validateUiReviewLensResults(lensResults) {
       if (!isNonEmptyString(finding.stateName)) problems.push(`${where}.stateName`);
       if (!isNonEmptyString(finding.region)) problems.push(`${where}.region`);
       if (!isNonEmptyString(finding.category)) problems.push(`${where}.category`);
-      if (!isNonEmptyString(finding.severity) || !(finding.severity.trim() in SEVERITY_RANK)) problems.push(`${where}.severity`);
+      // `includes` on own known keys, NOT `in` — `in` walks Object.prototype, so
+      // `severity: "toString"`/"constructor"/"__proto__" would pass and then resolve
+      // to a prototype fn in SEVERITY_RANK[...], silently downgrading a real defect.
+      if (!isNonEmptyString(finding.severity) || !UI_REVIEW_FINDING_SEVERITIES.includes(finding.severity.trim())) problems.push(`${where}.severity`);
       if (finding.blocking !== undefined && typeof finding.blocking !== "boolean") problems.push(`${where}.blocking`);
     });
   });
@@ -188,6 +191,7 @@ export function convergeUiReviewLenses(lensResults) {
         severity: raw.severity.trim(),
         blocking: raw.blocking === true,
         problem: isNonEmptyString(raw.problem) ? raw.problem : null,
+        suggestedFix: isNonEmptyString(raw.suggestedFix) ? raw.suggestedFix : null,
         evidence: raw.evidence && typeof raw.evidence === "object" ? raw.evidence : null,
         lenses: [lens],
       };
@@ -197,8 +201,9 @@ export function convergeUiReviewLenses(lensResults) {
         byKey.set(key, finding);
         continue;
       }
-      // Merge: keep the worse severity as the representative; a blocking signal
-      // from any contributing lens survives; union the contributing lenses.
+      // Merge: keep the worse severity as the representative (its problem/
+      // suggestedFix follow via the `...winner` spread); a blocking signal from
+      // any contributing lens survives; union the contributing lenses.
       const lenses = [...new Set([...existing.lenses, lens])].sort();
       const winner = SEVERITY_RANK[finding.severity] < SEVERITY_RANK[existing.severity] ? finding : existing;
       byKey.set(key, { ...winner, blocking: existing.blocking || finding.blocking, lenses });

@@ -191,3 +191,78 @@ test('route entrypoint groups the flat template findings by lens and converges t
 test('route entrypoint fails closed on an unknown-lens finding rather than dropping it', () => {
   assert.throws(() => convergeUiReviewRouteFindings([{ lens: 'novel', ...F() }]), /refusing to converge/);
 });
+
+test('validator rejects a prototype-chain severity (toString/constructor) fail-closed', () => {
+  for (const poison of ['toString', 'constructor', 'hasOwnProperty', '__proto__']) {
+    const result = validateUiReviewLensResults(lensSet({ a11y: [F({ severity: poison })] }));
+    assert.equal(result.ok, false, `severity=${poison} must be rejected`);
+    assert.equal(result.reason, 'lens_finding_malformed');
+    assert.ok(result.missing.some((m) => m.endsWith('.severity')));
+  }
+});
+
+test('converge fails closed on a prototype-chain severity rather than silently downgrading it', () => {
+  // `in` would let severity:"toString" pass, then SEVERITY_RANK["toString"] is a
+  // prototype fn ⇒ NaN comparisons ⇒ isMustFixFinding false ⇒ wrongly satisfied.
+  assert.throws(
+    () => convergeUiReviewRouteFindings([{ lens: 'a11y', ...F({ severity: 'toString' }) }]),
+    /refusing to converge/,
+  );
+  assert.throws(
+    () => convergeUiReviewRouteFindings([{ lens: 'a11y', ...F({ severity: 'constructor' }) }]),
+    /refusing to converge/,
+  );
+});
+
+test('route entrypoint fails closed on a non-array input', () => {
+  assert.throws(() => convergeUiReviewRouteFindings(null), /expected a findings array/);
+});
+
+test('validator rejects a lens whose findings field is not an array', () => {
+  const result = validateUiReviewLensResults([
+    { lens: 'a11y', findings: 'x' },
+    { lens: 'layout-geometry', findings: [] },
+    { lens: 'visual', findings: [] },
+    { lens: 'interaction', findings: [] },
+  ]);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_finding_malformed');
+  assert.ok(result.missing.some((m) => m.endsWith('findings')));
+});
+
+test('validator rejects a non-object finding (null) fail-closed', () => {
+  const result = validateUiReviewLensResults(lensSet({ a11y: [null] }));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_finding_malformed');
+  assert.ok(result.missing.some((m) => m.endsWith('findings[0]')));
+});
+
+test('validator rejects a lens entry with an empty/undefined lens name', () => {
+  for (const badName of ['', undefined]) {
+    const result = validateUiReviewLensResults([
+      { lens: badName, findings: [] },
+      { lens: 'layout-geometry', findings: [] },
+      { lens: 'visual', findings: [] },
+      { lens: 'interaction', findings: [] },
+    ]);
+    assert.equal(result.ok, false, `lens=${String(badName)} must be rejected`);
+    assert.ok(result.missing.some((m) => m.endsWith('.lens')));
+  }
+});
+
+test('converge carries suggestedFix through to the representative finding', () => {
+  const { findings } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'high', suggestedFix: 'add an accessible name' })],
+  }));
+  assert.equal(findings[0].suggestedFix, 'add an accessible name');
+});
+
+test('the worse-severity representative keeps its own suggestedFix across a merge', () => {
+  const { findings } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'low', suggestedFix: 'mild fix' })],
+    visual: [F({ severity: 'high', suggestedFix: 'the real fix' })],
+  }));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'high');
+  assert.equal(findings[0].suggestedFix, 'the real fix');
+});
