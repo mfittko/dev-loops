@@ -352,6 +352,12 @@ const UiReviewFlowStepConfig = z.strictObject({
   path: z.string().trim().min(1).optional(),
   value: z.string().optional(),
   event: z.string().trim().min(1).optional(),
+  // Responsive/stateful captures: a declared viewport resizes the page before the
+  // step and bakes into the named-state slug, so the mobile vs desktop (or
+  // default vs error) render lands in a distinct reviewable directory. The route
+  // NAMES its interaction states — the drive never enumerates them itself.
+  viewport: z.strictObject({ width: z.number().int().positive(), height: z.number().int().positive() }).optional(),
+  interactionState: z.enum(["none", "focus", "hover", "error"]).optional(),
 }).superRefine((step, ctx) => {
   // Every action but `goto` targets an element, so a missing selector is a
   // config error, not a runtime step-failure. (`goto` uses `path`/url.)

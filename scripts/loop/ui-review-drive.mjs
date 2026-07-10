@@ -282,8 +282,19 @@ async function dismissInterstitials({ page, interstitials, timeoutMs = 2000 }) {
  * Exported so the per-state attribution + consolePath threading has a regression
  * test against the REAL production wiring (not a substitute fake runStep). */
 export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
+  // The Playwright page keeps its size across steps, so a declared viewport stays
+  // in effect for later undeclared steps too. Carry it forward so the slug always
+  // names the viewport the page is ACTUALLY at — never a stale `default`. Before
+  // any explicit resize the page is at the context default, which slugs as `default`.
+  let effectiveViewport;
   return async ({ appUrl, flow, step, index }) => {
     const sel = step.selector;
+    // Apply a declared viewport BEFORE the action so the render (and its capture)
+    // reflects it — otherwise a mobile-slugged directory would hold desktop pixels.
+    if (step.viewport) {
+      await page.setViewportSize(step.viewport);
+      effectiveViewport = step.viewport;
+    }
     switch (step.action) {
       case "goto":
         await page.goto(new URL(step.path ?? "/", appUrl).toString(), { waitUntil: "domcontentloaded" });
@@ -318,6 +329,8 @@ export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
       page,
       sliceId: flow.name,
       stateName,
+      viewport: effectiveViewport,
+      interactionState: step.interactionState,
       fullPage: false,
       outputDir,
       // Hand the already-sliced window to this state's console.json (same attribution

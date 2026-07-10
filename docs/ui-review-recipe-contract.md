@@ -178,6 +178,11 @@ allowlisted flow. The selection is capped and any overflow logged.
 - `uiReview.flows[].steps[].value` — required for `upload` (the file path);
   also the typed/selected value for `fill`/`select`.
 - `uiReview.flows[].steps[].event` — optional event name for `dispatch`.
+- `uiReview.flows[].steps[].viewport` — optional `{ width, height }`; resizes the
+  page before the step and slugs the capture so a responsive render lands in its
+  own reviewable directory.
+- `uiReview.flows[].steps[].interactionState` — optional `none`/`focus`/`hover`/`error`;
+  labels a stateful render the route names, slugged into its own directory.
 
 ```yaml
 uiReview:
@@ -270,6 +275,9 @@ from the schema or if the schema gains a key not listed here.
 - `uiReview.flows[].steps[].path`
 - `uiReview.flows[].steps[].value`
 - `uiReview.flows[].steps[].event`
+- `uiReview.flows[].steps[].viewport.width`
+- `uiReview.flows[].steps[].viewport.height`
+- `uiReview.flows[].steps[].interactionState`
 - `uiReview.caps.maxScreenshots`
 - `uiReview.caps.maxFlows`
 - `uiReview.caps.maxStepsPerFlow`
