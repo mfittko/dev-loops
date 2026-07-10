@@ -60,6 +60,13 @@ const PROCESS_STATUS = Object.freeze({
   SKIPPED: "skipped",
 });
 
+const GIST_STATUS = Object.freeze({
+  DELETED: "deleted",
+  DELETE_FAILED: "delete-failed",
+  SKIPPED_UNCONFIRMED: "skipped-unconfirmed",
+  NONE: "none",
+});
+
 /**
  * Did the Stage-2 drive potentially create dev-DB rows? Without row tagging this
  * is a coarse but honest signal: a drive that actually walked steps exercised
@@ -82,8 +89,12 @@ function driveMayHaveCreatedRows(driveResult) {
  *   signal (whether the drive walked mutating steps). Null when no drive ran.
  * @param {Array<object>|null} [input.rowManifest] - Explicit rows to drop, when
  *   a session tag/manifest is available. Absent/empty => untagged fallback.
+ * @param {{id?:string|null,url?:string|null}|null} [input.gist] - The Stage-4
+ *   GitHub-native hosting artifact (a secret gist) to prune, when one was
+ *   published off-Claude. Absent => nothing to prune.
  * @param {boolean} [input.confirm] - Explicit authorization for the destructive
- *   steps (row drop, worktree removal). Fail-safe: absent means NOT confirmed.
+ *   steps (row drop, worktree removal, gist deletion). Fail-safe: absent means
+ *   NOT confirmed.
  * @param {boolean} [input.stopApp] - Stop the Stage-1 app (default true). This is
  *   a clean shutdown, NOT gated on confirmation.
  * @param {object} seams
@@ -92,12 +103,14 @@ function driveMayHaveCreatedRows(driveResult) {
  *   signalling is unsupported) — mapped to MAY_BE_RUNNING (non-fatal), not KILL_FAILED.
  * @param {(a:{rows:Array<object>})=>Promise<{ok:boolean,dropped:number,detail:string}>} seams.dropRows
  * @param {(a:{worktreePath:string})=>Promise<{removed:string|null,ok:boolean,detail:string}>} seams.removeWorktree
+ * @param {(a:{id:string})=>Promise<{ok:boolean,detail:string}>} [seams.deleteGist] - Prune the
+ *   Stage-4 hosting gist. Only invoked when a gist id is present AND confirmed.
  * @param {(msg:string)=>void} [seams.log]
  * @returns {Promise<{ok:boolean,confirmed:boolean,ledger:object,errors:string[],logs:string[]}>}
  */
 export async function teardown(
-  { provisionResult, driveResult = null, rowManifest = null, confirm = false, stopApp = true },
-  { killProcess, dropRows, removeWorktree, log = () => {} } = {},
+  { provisionResult, driveResult = null, rowManifest = null, gist = null, confirm = false, stopApp = true },
+  { killProcess, dropRows, removeWorktree, deleteGist, log = () => {} } = {},
 ) {
   const logs = [];
   const errors = [];
@@ -229,6 +242,33 @@ export async function teardown(
     }
   }
 
+  // 4. Prune the Stage-4 hosting gist — DESTRUCTIVE, confirmation-gated. A gist
+  //    accretes one secret entry per run; deleting it keeps the hosting target
+  //    from piling up. Only ever acts on an explicit gist id from the report
+  //    result; a missing id is NONE (nothing published, or Claude-hosted).
+  const gistId = typeof gist?.id === "string" && gist.id.trim().length > 0 ? gist.id.trim() : null;
+  let gistLedger;
+  if (!gistId) {
+    gistLedger = { id: null, url: gist?.url ?? null, deleted: false, status: GIST_STATUS.NONE, detail: "no hosting gist to prune" };
+  } else if (!confirm) {
+    gistLedger = { id: gistId, url: gist?.url ?? null, deleted: false, status: GIST_STATUS.SKIPPED_UNCONFIRMED, detail: "hosting gist retained: teardown not confirmed" };
+    record(`gist prune skipped (not confirmed): ${gistId} retained`);
+  } else {
+    try {
+      const del = await deleteGist({ id: gistId });
+      if (del.ok) {
+        gistLedger = { id: gistId, url: gist?.url ?? null, deleted: true, status: GIST_STATUS.DELETED, detail: del.detail };
+        record(`hosting gist deleted: ${gistId} (${del.detail})`);
+      } else {
+        gistLedger = { id: gistId, url: gist?.url ?? null, deleted: false, status: GIST_STATUS.DELETE_FAILED, detail: del.detail };
+        fail(`hosting gist delete FAILED: ${gistId} (${del.detail})`);
+      }
+    } catch (err) {
+      gistLedger = { id: gistId, url: gist?.url ?? null, deleted: false, status: GIST_STATUS.DELETE_FAILED, detail: `deleteGist seam threw: ${err?.message ?? err}` };
+      fail(`hosting gist delete FAILED: ${gistId} (deleteGist seam threw: ${err?.message ?? err})`);
+    }
+  }
+
   // The ledger is ALWAYS emitted (every case), enumerating every known side
   // effect. Migrations are recorded as applied-not-reverted by design.
   const ledger = {
@@ -241,10 +281,11 @@ export async function teardown(
     },
     rows: rowsLedger,
     worktree: worktreeLedger,
+    gist: gistLedger,
     process: processLedger,
   };
 
   return { ok: errors.length === 0, confirmed: confirm, ledger, errors, logs };
 }
 
-export { ROW_STATUS, WORKTREE_STATUS, PROCESS_STATUS };
+export { ROW_STATUS, WORKTREE_STATUS, PROCESS_STATUS, GIST_STATUS };

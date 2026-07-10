@@ -3,20 +3,22 @@
  * CLI wrapper for the ui_review teardown stage (Stage 5, terminal cleanup).
  *
  * Stops the app booted in Stage 1, drops the dev-DB rows the Stage-2 drive
- * created (only from an explicit manifest, only on confirmation), and removes
- * the provisioned worktree via the shared cleanup path. It ALWAYS emits a
+ * created (only from an explicit manifest, only on confirmation), removes the
+ * provisioned worktree via the shared cleanup path, and prunes the Stage-4
+ * GitHub-native hosting gist (only on confirmation). It ALWAYS emits a
  * side-effect ledger enumerating what was torn down and what remains.
  *
  * Thin adapter: it wires the real IO seams — process kill (SIGTERM then a
- * logged SIGKILL fallback), row drop, and worktree removal (the shared
- * cleanup-worktree path) — into the pure core orchestrator
+ * logged SIGKILL fallback), row drop, worktree removal (the shared
+ * cleanup-worktree path), and gist deletion (`gh gist delete`) — into the pure
+ * core orchestrator
  * (packages/core/src/loop/ui-review-teardown.mjs), reading the prior-stage
  * result JSON from disk.
  */
 import { readFileSync, statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { requireTokenValue } from "../_cli-primitives.mjs";
+import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { teardown } from "@dev-loops/core/loop/ui-review-teardown";
 import { cleanupWorktree } from "./cleanup-worktree.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -24,22 +26,24 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 const MAX_RESULT_BYTES = 16 * 1024 * 1024;
 
 const USAGE = `Usage:
-  ui-review-teardown.mjs --repo-root <p> --provision-result <p> [--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]
+  ui-review-teardown.mjs --repo-root <p> --provision-result <p> [--drive-result <p>] [--report-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]
 Tear down the ui_review route's transient state and emit a side-effect ledger
 (Stage 5 of the ui_review route). Destructive steps (row drops, worktree
-removal) run ONLY with --confirm; the ledger is emitted in every case.
+removal, hosting-gist deletion) run ONLY with --confirm; the ledger is emitted
+in every case.
 Required:
   --repo-root <p>          Absolute path to the primary checkout (git cwd for worktree removal).
   --provision-result <p>   Path to the Stage-1 provision JSON (boot.pid, migrations, worktreePath).
 Optional:
   --drive-result <p>       Path to the Stage-2 drive JSON (the rows-created signal).
+  --report-result <p>      Path to the Stage-4 report JSON (its hosting.gist id, pruned with --confirm).
   --row-manifest <p>       Path to a JSON array of rows to drop (only used with --confirm).
-  --confirm                Authorize the destructive steps (row drop + worktree removal).
+  --confirm                Authorize the destructive steps (row drop + worktree removal + gist deletion).
   --no-stop-app            Do NOT stop the app process (clean shutdown otherwise runs regardless of --confirm).
   -h, --help               Show this help.
 Output (stdout, JSON):
   { "ok": bool, "confirmed": bool, "errors": [...], "logs": [...],
-    "ledger": { "migrations": {...}, "rows": {...}, "worktree": {...}, "process": {...} } }
+    "ledger": { "migrations": {...}, "rows": {...}, "worktree": {...}, "gist": {...}, "process": {...} } }
 
 ${JQ_OUTPUT_USAGE}`.trim();
 
@@ -48,7 +52,7 @@ const parseError = buildParseError(USAGE);
 export function parseUiReviewTeardownCliArgs(argv) {
   const options = {
     help: false, repoRoot: undefined, provisionResult: undefined, driveResult: undefined,
-    rowManifest: undefined, confirm: false, stopApp: true,
+    reportResult: undefined, rowManifest: undefined, confirm: false, stopApp: true,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -57,6 +61,7 @@ export function parseUiReviewTeardownCliArgs(argv) {
       "repo-root": { type: "string" },
       "provision-result": { type: "string" },
       "drive-result": { type: "string" },
+      "report-result": { type: "string" },
       "row-manifest": { type: "string" },
       confirm: { type: "boolean" },
       "no-stop-app": { type: "boolean" },
@@ -73,6 +78,7 @@ export function parseUiReviewTeardownCliArgs(argv) {
     if (token.name === "repo-root") { options.repoRoot = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
     if (token.name === "provision-result") { options.provisionResult = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
     if (token.name === "drive-result") { options.driveResult = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
+    if (token.name === "report-result") { options.reportResult = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
     if (token.name === "row-manifest") { options.rowManifest = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
     if (token.name === "confirm") {
       // Bare flag or `=true` confirms; explicit `=false`/`=0`/`=no` must NOT
@@ -205,12 +211,31 @@ function removeWorktree(repoRoot, { worktreePath }) {
   return Promise.resolve({ removed: res.removed, ok: res.ok, detail: res.reason });
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
+/** Extract the Stage-4 hosting gist ({id,url}) from a report result, or null.
+ * Only the GitHub-native path publishes a gist; any other hosting has none. */
+function gistFromReport(reportResult) {
+  const hosting = reportResult?.hosting;
+  if (hosting?.hosting !== "github-gist") return null;
+  const g = hosting.gist;
+  const id = typeof g?.id === "string" && g.id.trim().length > 0 ? g.id.trim() : null;
+  return id ? { id, url: g.url ?? null } : null;
+}
+
+/** Delete a hosting gist via `gh gist delete`. Maps a non-zero exit / thrown
+ * spawn to the teardown seam's fail-reported contract (never swallowed). */
+async function deleteGist({ id }, { run = runChild } = {}) {
+  const res = await run("gh", ["gist", "delete", id], process.env);
+  if (res.code === 0) return { ok: true, detail: "deleted via gh gist delete" };
+  return { ok: false, detail: `gh gist delete exit ${res.code}: ${res.stderr?.trim() || "no stderr"}` };
+}
+
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, run = runChild } = {}) {
   const options = parseUiReviewTeardownCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return; }
 
   const provisionResult = readResultJson(options.provisionResult);
   const driveResult = readResultJson(options.driveResult);
+  const reportResult = readResultJson(options.reportResult);
   const rowManifest = readRowManifest(options.rowManifest);
 
   const result = await teardown(
@@ -218,11 +243,13 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       provisionResult,
       driveResult,
       rowManifest,
+      gist: gistFromReport(reportResult),
       confirm: options.confirm,
       stopApp: options.stopApp,
     },
     {
       killProcess,
+      deleteGist: (a) => deleteGist(a, { run }),
       // No real drop seam yet: Stage 2 does not tag rows, so an actual manifest
       // never arrives today and the ledger reports "may remain (untagged)". A
       // manifest handed in is dropped by whatever project mechanism supplies it;
