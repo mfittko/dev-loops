@@ -16,10 +16,16 @@ const DEFAULT_SCAN_PATHS = Object.freeze([
   "docs",
   "skills",
   "agents",
+  ".claude",
 ]);
 
 const DEFAULT_SOURCE_EXCLUDES = Object.freeze([
   "docs/archive",
+  // Generated Claude skills carry consumer-project `../../…` links that target the INSTALLED
+  // repo (where the skill lives at a shallower depth), not this source tree, so they are broken
+  // by design from here. The generated `.claude/agents/**` and `.claude/commands/**` wrappers ARE
+  // scanned — their repo-doc links are depth-shifted to resolve, so broken ones fail CI.
+  ".claude/skills",
 ]);
 
 const DEFAULT_CANDIDATE_EXCLUDED_DIRS = new Set([

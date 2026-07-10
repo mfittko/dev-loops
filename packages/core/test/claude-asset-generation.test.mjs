@@ -170,6 +170,16 @@ test("transformCommand shifts repo-root ../docs links (not bundled ../skills lin
   assert.ok(out.includes("(../skills/docs/issue-intake-procedure.md)"));
 });
 
+test("transformAgent shifts repo-root ../docs links (not bundled ../skills links) for the deeper .claude/agents/ location", () => {
+  const raw = `---\nname: review\ndescription: "Gate reviewer."\ntools: [read]\n---\nSee the [Gate Contract](../docs/gate-review-sub-loop-contract.md) and [Intake](../skills/docs/issue-intake-procedure.md).\n`;
+  const out = transformAgent({ source: "agents/review.agent.md", raw });
+  // Repo-root docs/ is not mirrored into .claude/, so it shifts one level.
+  assert.ok(out.includes("(../../docs/gate-review-sub-loop-contract.md)"));
+  assert.equal(out.includes("(../docs/gate-review-sub-loop-contract.md)"), false);
+  // ../skills/docs is bundled to .claude/skills/docs — the relative path is preserved verbatim.
+  assert.ok(out.includes("(../skills/docs/issue-intake-procedure.md)"));
+});
+
 test("transformSkill preserves user-invocable: true for the public entry skill", () => {
   const out = transformSkill({
     source: "skills/dev-loop/SKILL.md",
