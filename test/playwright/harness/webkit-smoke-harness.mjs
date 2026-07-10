@@ -40,10 +40,26 @@ export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName }
     screenshotPath: path.join(artifactDir, 'screenshot.png'),
     statePath: path.join(artifactDir, 'state.json'),
     snapshotPath: path.join(artifactDir, 'snapshot.json'),
+    axePath: path.join(artifactDir, 'axe.json'),
   };
 }
 
-export async function captureNamedUiState({ page, testInfo, sliceId, stateName, metadata = {}, fullPage = true, outputDir } = {}) {
+// Run axe-core against the live page via @axe-core/playwright, best-effort.
+// The import is dynamic (and try/catch-wrapped) on purpose: axe only runs
+// against a real Playwright page, so mock-page smokes/tests and browser builds
+// where axe can't load degrade to a deterministic JSON null rather than throwing
+// — mirroring the snapshot.json best-effort policy. Real UI smokes install
+// @axe-core/playwright and get populated results.
+async function defaultRunAxe(page) {
+  try {
+    const { default: AxeBuilder } = await import('@axe-core/playwright');
+    return (await new AxeBuilder({ page }).analyze()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function captureNamedUiState({ page, testInfo, sliceId, stateName, metadata = {}, fullPage = true, outputDir, runAxe = defaultRunAxe } = {}) {
   const resolvedOutputDir = outputDir ?? testInfo?.project?.outputDir ?? testInfo?.config?.outputDir ?? testInfo?.outputDir;
   const paths = buildNamedUiStateArtifactPaths({
     outputDir: resolvedOutputDir,
@@ -70,6 +86,17 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   }
   await writeFile(paths.snapshotPath, `${JSON.stringify(accessibilityTree, null, 2)}\n`, 'utf8');
 
+  // Computed a11y facts: axe-core results next to the pixels/tree. Best-effort
+  // for the same reason as the snapshot (see defaultRunAxe); either way a
+  // deterministic JSON payload (raw axe results, or null) is emitted, never skipped.
+  let axeResults = null;
+  try {
+    axeResults = (await runAxe(page)) ?? null;
+  } catch {
+    axeResults = null;
+  }
+  await writeFile(paths.axePath, `${JSON.stringify(axeResults, null, 2)}\n`, 'utf8');
+
   const normalizedMetadata = {
     ...metadata,
     fixture: metadata.fixture ?? null,
@@ -78,7 +105,7 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   };
 
   const stateArtifact = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     artifactType: 'named-ui-state',
     validationLevel: 'deterministic-smoke',
     sliceId: paths.sliceId,
@@ -104,6 +131,11 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
         fileName: path.basename(paths.snapshotPath),
         relativePath: path.basename(paths.snapshotPath),
         path: paths.snapshotPath,
+      },
+      axe: {
+        fileName: path.basename(paths.axePath),
+        relativePath: path.basename(paths.axePath),
+        path: paths.axePath,
       },
     },
     metadata: normalizedMetadata,

@@ -29,12 +29,14 @@ test('buildNamedUiStateArtifactPaths derives deterministic screenshot and state 
   assert.equal(paths.screenshotPath, path.join(paths.artifactDir, 'screenshot.png'));
   assert.equal(paths.statePath, path.join(paths.artifactDir, 'state.json'));
   assert.equal(paths.snapshotPath, path.join(paths.artifactDir, 'snapshot.json'));
+  assert.equal(paths.axePath, path.join(paths.artifactDir, 'axe.json'));
 });
 
 test('captureNamedUiState writes the deterministic screenshot and state artifact bundle', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-'));
   const screenshots = [];
   const accessibilityTree = { role: 'WebArea', name: 'Current PR dashboard', children: [{ role: 'heading', name: 'Runs' }] };
+  const axeResults = { violations: [{ id: 'color-contrast', impact: 'serious' }], passes: [], incomplete: [], inapplicable: [] };
 
   try {
     const artifact = await captureNamedUiState({
@@ -48,6 +50,7 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
           },
         },
       },
+      runAxe: async () => axeResults,
       testInfo: {
         config: { outputDir: tempDir },
         project: { name: 'webkit', outputDir: tempDir },
@@ -69,7 +72,7 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
     await stat(artifact.artifactDir);
 
     const stateJson = JSON.parse(await readFile(artifact.statePath, 'utf8'));
-    assert.equal(stateJson.schemaVersion, 2);
+    assert.equal(stateJson.schemaVersion, 3);
     assert.equal(stateJson.artifactType, 'named-ui-state');
     assert.equal(stateJson.validationLevel, 'deterministic-smoke');
     assert.equal(stateJson.sliceId, 'inspect-run-viewer');
@@ -83,6 +86,8 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
     assert.equal(stateJson.artifacts.state.relativePath, 'state.json');
     assert.equal(stateJson.artifacts.snapshot.fileName, 'snapshot.json');
     assert.equal(stateJson.artifacts.snapshot.relativePath, 'snapshot.json');
+    assert.equal(stateJson.artifacts.axe.fileName, 'axe.json');
+    assert.equal(stateJson.artifacts.axe.relativePath, 'axe.json');
     assert.equal(stateJson.metadata.fixture, 'makeInspectionSnapshot');
     assert.equal(stateJson.metadata.route, '/');
     assert.match(stateJson.capturedAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -90,6 +95,10 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
     assert.equal(artifact.snapshotPath, path.join(artifact.artifactDir, 'snapshot.json'));
     const snapshotJson = JSON.parse(await readFile(artifact.snapshotPath, 'utf8'));
     assert.deepEqual(snapshotJson, accessibilityTree);
+
+    assert.equal(artifact.axePath, path.join(artifact.artifactDir, 'axe.json'));
+    const axeJson = JSON.parse(await readFile(artifact.axePath, 'utf8'));
+    assert.deepEqual(axeJson, axeResults);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -195,6 +204,44 @@ test('captureNamedUiState emits snapshot.json as JSON null when the accessibilit
       stateName: 'No accessibility API',
     });
     assert.equal(await readFile(artifact.snapshotPath, 'utf8'), 'null\n');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('captureNamedUiState emits axe.json as JSON null when axe cannot run', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-axe-null-'));
+
+  try {
+    // axe is best-effort: a mock page (or a browser build without the runner)
+    // throws inside the axe runner; capture falls back to a deterministic JSON
+    // null rather than crashing the whole capture. The default runner is used
+    // here (no injection), which dynamic-imports @axe-core/playwright and then
+    // fails against the mock page.
+    const artifact = await captureNamedUiState({
+      page: { async screenshot() {} },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'No axe run',
+    });
+    assert.equal(await readFile(artifact.axePath, 'utf8'), 'null\n');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('captureNamedUiState emits axe.json as JSON null when the injected runner throws', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-axe-throw-'));
+
+  try {
+    const artifact = await captureNamedUiState({
+      page: { async screenshot() {} },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'Throwing axe runner',
+      runAxe: async () => { throw new Error('axe unsupported'); },
+    });
+    assert.equal(await readFile(artifact.axePath, 'utf8'), 'null\n');
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

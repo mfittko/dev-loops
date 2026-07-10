@@ -19,6 +19,8 @@ test('ui artifact contract doc defines named-state artifacts and auto-scoped CI 
   assert.match(doc, /screenshot\.png/i);
   assert.match(doc, /state\.json/i);
   assert.match(doc, /snapshot\.json/i);
+  assert.match(doc, /axe\.json/i);
+  assert.match(doc, /axe-core/i);
   assert.match(doc, /test-results\/ui-smoke\/<sliceId>\/named-states\/<state-slug>/i);
   assert.match(doc, /screenshot alone is acceptable/i);
   assert.match(doc, /state artifact bundle is required/i);

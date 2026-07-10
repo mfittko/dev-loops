@@ -41,8 +41,28 @@ The loop requires all of the following inputs before it may run:
      - `screenshotPath`
      - `statePath`
      - `snapshotPath`
+     - `axePath`
 
 If any required part of this bundle is missing, incomplete, or ambiguous, the loop fails closed instead of guessing.
+
+## Accessibility findings come from axe, not pixels
+
+Computable accessibility facts — color contrast, missing accessible names/roles,
+and similar — are **asserted from `axe.json`**, not judged from the screenshot by
+the reviewer. Each named state carries an `axe.json` (raw `@axe-core/playwright`
+results, or JSON `null` when axe could not run). A reviewer grounds every
+accessibility finding in an axe violation and maps its `impact` to a finding
+severity with a fixed mapping:
+
+- `critical` → `high`
+- `serious` → `high`
+- `moderate` → `medium`
+- `minor` → `low`
+- unranked / unknown impact → `medium`
+
+This mapping is codified and tested in `scripts/loop/ui-designer-review-contract.mjs`
+(`mapAxeImpactToFindingSeverity`); the vision template no longer instructs the
+reviewer to eyeball contrast.
 
 ## Review modes behind `dev-loop`
 
@@ -106,10 +126,11 @@ The loop fails closed when:
 - the review brief is missing or empty
 - the artifact bundle is missing
 - the artifact bundle has no named states
-- a named state lacks `screenshotPath`, `statePath`, or `snapshotPath`
+- a named state lacks `screenshotPath`, `statePath`, `snapshotPath`, or `axePath`
 - vision mode is requested but a named state screenshot path does not end with `screenshot.png`
 - vision mode is requested but a named-state `statePath` does not end with `state.json`
 - vision mode is requested but a named-state `snapshotPath` does not end with `snapshot.json`
+- vision mode is requested but a named-state `axePath` does not end with `axe.json`
 - the work is not actually a UI slice \(the loop returns a skip outcome rather than failing closed\)
 - an unsupported `uiReviewMode` value (anything other than `designer` or `vision`) fails closed with `blocked_unsupported_review_mode`
 
