@@ -12,8 +12,9 @@
  *   - a self-contained, CSP-safe HTML artifact string (ranked findings + inline
  *     screenshot evidence), and
  *   - a harness-aware hosting directive (Claude Code -> a publishable Artifacts
- *     directive for the orchestrator; any other harness -> fail closed with a
- *     stated reason and a follow-up marker — no hosted link this stage).
+ *     directive for the orchestrator; any other harness -> a GitHub-native
+ *     gist-publish directive the CLI executes, which yields a real per-run URL
+ *     or fails closed with a stated reason — never a fake link).
  *
  * All IO (reading the diagnose output + the screenshot bytes, writing the HTML,
  * invoking the poster) lives in the thin CLI. This module reads only its inputs.
@@ -21,9 +22,6 @@
 
 import { isClaudeHarness } from "./run-context.mjs";
 import { sanitizeCopilotSummonTokens } from "../github/copilot-helpers.mjs";
-
-/** Follow-up marker for the descoped GitHub-native hosting fallback. */
-export const HOSTING_FOLLOWUP = "#1285";
 
 /** Findings past this cap are dropped from the artifact and the drop is logged. */
 export const ARTIFACT_MAX_FINDINGS = 100;
@@ -105,9 +103,11 @@ export function severityToEvent({ findings = [], submitAuthorized = false } = {}
 /**
  * Harness-aware hosting directive (pure). Claude Code -> a publishable Artifacts
  * directive for the orchestrator to host (this module never calls an agent tool
- * itself). Any other harness / Artifacts unavailable -> fail closed with a
- * stated reason and the follow-up marker. The self-contained HTML is produced
- * regardless; only this link step is harness-aware.
+ * itself). Any other harness -> the portable GitHub-native default: publish the
+ * self-contained HTML as a secret GitHub Gist (a real per-run URL, zero repo
+ * pollution). This module decides the STRATEGY only; the CLI performs the gist
+ * publish IO and fails closed with a stated reason if it does not yield a URL.
+ * The self-contained HTML is produced regardless; only this link step differs.
  *
  * @param {{htmlPath: string, env?: Record<string,string|undefined>}} input
  */
@@ -115,13 +115,7 @@ export function decideHosting({ htmlPath, env = process.env } = {}) {
   if (isClaudeHarness(env)) {
     return { hosting: "claude-artifact", publishable: true, htmlPath: htmlPath ?? null };
   }
-  return {
-    hosting: "unavailable",
-    publishable: false,
-    htmlPath: htmlPath ?? null,
-    reason: "no hosted-artifact publisher on this harness; GitHub-native fallback is deferred",
-    followup: HOSTING_FOLLOWUP,
-  };
+  return { hosting: "github-gist", publishable: true, htmlPath: htmlPath ?? null };
 }
 
 /** One review-body line describing where the screenshot artifact lives. Links a
@@ -129,14 +123,22 @@ export function decideHosting({ htmlPath, env = process.env } = {}) {
  * the review never blocks on hosting. */
 function artifactBodyLine({ hosting, hostedUrl }) {
   if (typeof hostedUrl === "string" && hostedUrl.length > 0) {
+    // Only an ACTUALLY-published gist gets the source-rendered caveat: an explicit
+    // --hosted-url override leaves the strategy as github-gist but sets no gist, so
+    // a self-hosted (maybe live-rendered) URL falls through to the neutral line.
+    const rawUrl = hosting?.gist?.rawUrl;
+    if (rawUrl) {
+      // A gist renders HTML as source, not a live page; the raw file is the
+      // download/plain-text view — surface it so "open raw" is actually actionable.
+      return `Screenshot artifact (GitHub Gist — renders as source; open the raw file to view/download the HTML): ${hostedUrl} (raw: ${rawUrl})`;
+    }
     return `Screenshot artifact: ${hostedUrl}`;
   }
   if (hosting?.hosting === "claude-artifact") {
     return "Screenshot artifact prepared for Claude Artifacts hosting (published by the harness; see run output).";
   }
   const reason = hosting?.reason ? ` (${hosting.reason})` : "";
-  const followup = hosting?.followup ? ` [follow-up ${hosting.followup}]` : "";
-  return `Screenshot artifact is unhosted this stage${reason}${followup}. Findings are included below.`;
+  return `Screenshot artifact is unhosted this stage${reason}. Findings are included below.`;
 }
 
 /** A finding is inlineable ONLY with a complete anchor buildDraftReviewPayload

@@ -44,11 +44,12 @@ drive your app.
 4. **Report** — posts a head-pinned **pending** PR review and produces a
    self-contained HTML artifact.
 5. **Teardown** — stops the booted app and, only with explicit confirmation,
-   removes the worktree (the working destructive step). Dev-DB row-drop currently
-   **fails closed** — the tagged-drop seam is not wired, so a confirmed manifest
-   is recorded as a drop failure and untagged rows may remain (a real tagged drop
-   is a tracked follow-up). A side-effect ledger is ALWAYS emitted, enumerating
-   what was done vs. left behind.
+   removes the worktree (the working destructive step) and prunes the Stage-4
+   hosting gist (`gh gist delete`, when a gist id is recorded in the report
+   result). Dev-DB row-drop currently **fails closed** — the tagged-drop seam is
+   not wired, so a confirmed manifest is recorded as a drop failure and untagged
+   rows may remain (a real tagged drop is a tracked follow-up). A side-effect
+   ledger is ALWAYS emitted, enumerating what was done vs. left behind.
 
 ## Guardrails (non-negotiable)
 
@@ -231,10 +232,23 @@ no external resources).
 - On the **Claude Code** harness the stage emits a publishable directive and the
   artifact is published via **Claude Code Artifacts** — a zero-setup hosted link
   the review body links to. The module never calls an Artifacts tool itself; the
-  orchestrating agent publishes.
-- On **any other harness** hosting **fails closed with a stated reason**: the
-  review body states the artifact is unhosted and why, and never blocks on
-  hosting. A GitHub-native fallback publisher is a **tracked follow-up**.
+  orchestrating agent publishes. This is an enhancement layered on top of the
+  portable default below, not a dependency of the core report flow.
+- On **any other harness** the portable **GitHub-native default** publishes the
+  self-contained HTML as a **secret GitHub Gist** (`gh gist create`) — a real
+  per-run URL with zero repo pollution. The review body links it. Two honest
+  caveats: a gist **renders HTML as source, not a live page**, so the review body
+  links the gist and points at its **raw** file (the plain-text/download view); and
+  a gist accretes one secret entry per run, so **Stage 5 teardown prunes it**
+  (`gh gist delete`) when the run records the gist id in the report result and
+  teardown is confirmed. If gist creation does not yield a URL the stage **fails
+  closed with a stated reason** — the review body states the artifact is unhosted
+  and why, and never links a fabricated URL.
+
+  Setup a consuming repo must provide: an authenticated **`gh`** with the **`gist`**
+  scope (`gh auth login`/`gh auth refresh -s gist`). No `.devloops` config key is
+  involved — hosting rides on the same `gh` auth the loop already uses for reviews.
+  An explicit `--hosted-url` overrides the gist path when you host the HTML yourself.
 
 ## Config key reference
 

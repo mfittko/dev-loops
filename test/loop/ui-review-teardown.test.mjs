@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { teardown, ROW_STATUS, WORKTREE_STATUS, PROCESS_STATUS } from "@dev-loops/core/loop/ui-review-teardown";
+import { teardown, ROW_STATUS, WORKTREE_STATUS, PROCESS_STATUS, GIST_STATUS } from "@dev-loops/core/loop/ui-review-teardown";
 import { parseUiReviewTeardownCliArgs, killProcess, runCli } from "../../scripts/loop/ui-review-teardown.mjs";
 
 // A Stage-1 provision result: a booted app (pid), applied migrations, a worktree.
@@ -23,8 +23,11 @@ const DRIVE_STOPPED = { ok: false, stopped: true, steps: [] };
 
 // Recording seams: every destructive seam logs whether it was called, so a test
 // can assert the confirmation gate actually blocked (not merely no-op'd) a step.
+// A Stage-4 report result carrying a published GitHub-native hosting gist.
+const REPORT_WITH_GIST = { ok: true, hosting: { hosting: "github-gist", gist: { id: "abc123def456", url: "https://gist.github.com/u/abc123def456" } } };
+
 function makeSeams(overrides = {}) {
-  const calls = { kill: 0, drop: 0, removeWorktree: 0 };
+  const calls = { kill: 0, drop: 0, removeWorktree: 0, deleteGist: 0 };
   const seams = {
     killProcess: async () => {
       calls.kill += 1;
@@ -38,6 +41,10 @@ function makeSeams(overrides = {}) {
       calls.removeWorktree += 1;
       return { removed: "/repo/tmp/worktrees/dev-loops/pr-7", ok: true, detail: "removed" };
     },
+    deleteGist: async () => {
+      calls.deleteGist += 1;
+      return { ok: true, detail: "deleted via gh gist delete" };
+    },
     log: () => {},
     ...overrides,
   };
@@ -47,27 +54,30 @@ function makeSeams(overrides = {}) {
 test("teardown always emits a ledger enumerating every known side effect (confirmed success)", async () => {
   const { seams, calls } = makeSeams();
   const res = await teardown(
-    { provisionResult: PROVISION, driveResult: DRIVE_WITH_STEPS, rowManifest: [{ table: "users", id: 1 }], confirm: true },
+    { provisionResult: PROVISION, driveResult: DRIVE_WITH_STEPS, rowManifest: [{ table: "users", id: 1 }], gist: REPORT_WITH_GIST.hosting.gist, confirm: true },
     seams,
   );
 
   assert.equal(res.ok, true);
   assert.equal(res.confirmed, true);
-  // Ledger enumerates ALL four side-effect categories.
+  // Ledger enumerates ALL side-effect categories.
   assert.ok(res.ledger.migrations, "migrations enumerated");
   assert.ok(res.ledger.rows, "rows enumerated");
   assert.ok(res.ledger.worktree, "worktree enumerated");
+  assert.ok(res.ledger.gist, "gist enumerated");
   assert.ok(res.ledger.process, "process enumerated");
   // Migrations recorded as applied-not-reverted (non-goal: no rollback).
   assert.equal(res.ledger.migrations.applied, 2);
   assert.equal(res.ledger.migrations.reverted, false);
-  // Destructive steps ran (confirmed): app stopped, rows dropped, worktree removed.
+  // Destructive steps ran (confirmed): app stopped, rows dropped, worktree removed, gist deleted.
   assert.equal(res.ledger.process.status, PROCESS_STATUS.STOPPED);
   assert.equal(res.ledger.rows.status, ROW_STATUS.DROPPED);
   assert.equal(res.ledger.rows.dropped, 1);
   assert.equal(res.ledger.worktree.status, WORKTREE_STATUS.REMOVED);
   assert.equal(res.ledger.worktree.path, PROVISION.worktreePath);
-  assert.deepEqual(calls, { kill: 1, drop: 1, removeWorktree: 1 });
+  assert.equal(res.ledger.gist.status, GIST_STATUS.DELETED);
+  assert.equal(res.ledger.gist.id, "abc123def456");
+  assert.deepEqual(calls, { kill: 1, drop: 1, removeWorktree: 1, deleteGist: 1 });
 });
 
 test("confirmation gate blocks destructive steps (no --confirm): app stops, row-drop + worktree-removal do NOT run, ledger still emitted", async () => {
@@ -362,6 +372,61 @@ test("runCli: present-but-malformed --row-manifest fails closed with a clear par
     runCli(argv, { stdout: sink, stderr: sink }),
     /--row-manifest .* malformed/i,
   );
+});
+
+test("gist prune: no gist in the report result => GIST_STATUS.NONE, deleteGist not called", async () => {
+  const { seams, calls } = makeSeams();
+  const res = await teardown({ provisionResult: PROVISION, confirm: true }, seams);
+  assert.equal(res.ledger.gist.status, GIST_STATUS.NONE);
+  assert.equal(calls.deleteGist, 0);
+});
+
+test("gist prune: unconfirmed retains the gist (SKIPPED_UNCONFIRMED), deleteGist not called", async () => {
+  const { seams, calls } = makeSeams();
+  const res = await teardown({ provisionResult: PROVISION, gist: REPORT_WITH_GIST.hosting.gist, confirm: false }, seams);
+  assert.equal(res.ledger.gist.status, GIST_STATUS.SKIPPED_UNCONFIRMED);
+  assert.equal(res.ledger.gist.id, "abc123def456");
+  assert.equal(calls.deleteGist, 0);
+  assert.equal(res.ok, true);
+});
+
+test("gist prune: a failed delete is reported (DELETE_FAILED, ok:false), never swallowed", async () => {
+  const { seams } = makeSeams({
+    deleteGist: async () => ({ ok: false, detail: "gh gist delete exit 1: not found" }),
+  });
+  const res = await teardown({ provisionResult: PROVISION, gist: REPORT_WITH_GIST.hosting.gist, confirm: true }, seams);
+  assert.equal(res.ledger.gist.status, GIST_STATUS.DELETE_FAILED);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => /gist delete FAILED/i.test(e)));
+});
+
+test("a throwing deleteGist seam still yields a fully-emitted ledger (DELETE_FAILED, ok:false)", async () => {
+  const { seams } = makeSeams({
+    deleteGist: async () => { throw new Error("network down"); },
+  });
+  const res = await teardown({ provisionResult: PROVISION, gist: REPORT_WITH_GIST.hosting.gist, confirm: true }, seams);
+  assert.equal(res.ledger.gist.status, GIST_STATUS.DELETE_FAILED);
+  assert.match(res.ledger.gist.detail, /deleteGist seam threw: network down/);
+  assert.equal(res.ok, false);
+});
+
+test("runCli: prunes the report-result gist via gh gist delete (confirmed), no live API", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-gist-"));
+  const provisionPath = join(dir, "provision.json");
+  const reportPath = join(dir, "report.json");
+  writeFileSync(provisionPath, JSON.stringify({ ...PROVISION, worktreePath: undefined, boot: {} }));
+  writeFileSync(reportPath, JSON.stringify(REPORT_WITH_GIST));
+
+  const ghCalls = [];
+  const run = async (cmd, args) => { ghCalls.push([cmd, ...args]); return { code: 0, stdout: "", stderr: "" }; };
+
+  let out = "";
+  const sink = { write: (s) => { out += s; return true; } };
+  const argv = ["--repo-root", "/r", "--provision-result", provisionPath, "--report-result", reportPath, "--confirm", "--no-stop-app", "--silent"];
+  await runCli(argv, { stdout: sink, stderr: sink, run });
+
+  // The gist id from the report result is deleted via gh gist delete (mock, no live API).
+  assert.deepEqual(ghCalls[0], ["gh", "gist", "delete", "abc123def456"]);
 });
 
 test("parseUiReviewTeardownCliArgs: requires --repo-root and --provision-result", () => {

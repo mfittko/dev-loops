@@ -20,7 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
+import { requireTokenValue, parsePositiveInteger, runChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   buildArtifactHtml,
@@ -161,7 +161,34 @@ function postPendingReview({ repo, pr, reviewFile, cwd }) {
   return { reviewId: parsed.reviewId ?? null, reviewUrl: parsed.reviewUrl ?? null, commitSha: parsed.commitSha ?? null };
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+/** Publish the self-contained HTML as a secret GitHub Gist and return its URL +
+ * id. This is the GitHub-native, harness-agnostic hosting default off-Claude: a
+ * real per-run URL with zero repo pollution, deletable by Stage-5 teardown (which
+ * consumes the recorded id). A gist renders HTML as source, so the raw file URL
+ * is the plain-text/download view. Fails closed: a non-zero gh exit or missing
+ * URL throws — the caller states the reason and never links a fake URL. */
+export async function publishGist({ htmlPath, pr, run = runChild, ghCommand = "gh", env = process.env }) {
+  const desc = `UI review findings — PR #${pr} (self-contained HTML; renders as source on GitHub Gist)`;
+  const result = await run(ghCommand, ["gist", "create", htmlPath, "--desc", desc], env);
+  if (result.code !== 0) {
+    throw new Error(`gh gist create failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
+  }
+  const url = result.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .pop() ?? null;
+  if (url === null || !/^https?:\/\//u.test(url)) {
+    throw new Error(`gh gist create did not return a gist URL (got: ${result.stdout.trim() || "<empty>"})`);
+  }
+  const id = url.split("/").filter((seg) => seg.length > 0).pop() ?? null;
+  return { url, id, rawUrl: `${url}/raw` };
+}
+
+export async function runCli(
+  argv = process.argv.slice(2),
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, run = runChild, loadLiveHead = loadLiveHeadSha, postReview = postPendingReview } = {},
+) {
   const options = parseUiReviewReportCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return; }
 
@@ -181,7 +208,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
 
   // Head pinning: the inline anchors bind to the reviewed commit. Fail closed
   // when the diagnose head is missing or the live head has advanced since.
-  const liveHeadSha = loadLiveHeadSha(options.pr, repo, cwd);
+  const liveHeadSha = loadLiveHead(options.pr, repo, cwd);
   if (!diagnosedHeadSha) {
     throw parseError("Stage-3 diagnose output has no pr.headSha; cannot head-pin the review. Failing closed.");
   }
@@ -203,14 +230,31 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   mkdirSync(path.dirname(path.resolve(options.htmlOutput)), { recursive: true });
   writeFileSync(options.htmlOutput, html, "utf8");
 
-  const hosting = decideHosting({ htmlPath: path.resolve(options.htmlOutput), env });
+  let hosting = decideHosting({ htmlPath: path.resolve(options.htmlOutput), env });
   const policy = severityToEvent({ findings, submitAuthorized: options.submitAuthorized });
+
+  // Off-Claude default: publish the HTML as a secret gist to yield a real hosted
+  // URL. An explicit --hosted-url wins (caller already hosted it); --dry-run
+  // skips the side effect. A gist-publish failure fails closed here — hosting
+  // becomes `unavailable` with the stated reason, never a fabricated link.
+  let hostedUrl = options.hostedUrl ?? null;
+  if (!hostedUrl && hosting.hosting === "github-gist" && !options.dryRun) {
+    try {
+      const gist = await publishGist({ htmlPath: path.resolve(options.htmlOutput), pr: options.pr, run, env });
+      hostedUrl = gist.url;
+      hosting = { ...hosting, gist: { id: gist.id, url: gist.url, rawUrl: gist.rawUrl } };
+    } catch (err) {
+      const reason = `GitHub-native gist publish failed: ${err?.message ?? err}`;
+      hosting = { hosting: "unavailable", publishable: false, htmlPath: hosting.htmlPath, reason };
+      caps.push(`hosting: ${reason}`);
+    }
+  }
 
   const reviewInput = buildReviewInput({
     findings,
     headSha: diagnosedHeadSha,
     hosting,
-    hostedUrl: options.hostedUrl ?? null,
+    hostedUrl,
   });
   const reviewFile = options.reviewFile
     ? path.resolve(options.reviewFile)
@@ -220,7 +264,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
 
   for (const cap of caps) stderr.write(`[ui-review-report] cap: ${cap}\n`);
 
-  const review = options.dryRun ? null : postPendingReview({ repo, pr: options.pr, reviewFile, cwd });
+  const review = options.dryRun ? null : postReview({ repo, pr: options.pr, reviewFile, cwd });
 
   const result = {
     ok: true,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -14,7 +14,8 @@ import {
 } from "@dev-loops/core/loop/ui-review-report";
 import { buildDraftReviewPayload } from "@dev-loops/core/loop/reviewer-loop-state";
 import { containsBareCopilotSummon } from "@dev-loops/core/github/copilot-helpers";
-import { parseUiReviewReportCliArgs, loadScreenshot } from "../../scripts/loop/ui-review-report.mjs";
+import { parseUiReviewReportCliArgs, loadScreenshot, publishGist, runCli } from "../../scripts/loop/ui-review-report.mjs";
+import { makeGhMock } from "../_helpers.mjs";
 
 const HEAD_SHA = "a".repeat(40);
 
@@ -211,17 +212,18 @@ test("severityToEvent: confirmed 500 stays PENDING unless submit is authorized",
   assert.equal(noteOnly.blocking, false);
 });
 
-test("decideHosting: Claude harness -> publishable directive; off-Claude -> fail closed with reason + follow-up", () => {
+test("decideHosting: Claude harness -> Artifacts directive; off-Claude -> portable GitHub-native gist strategy", () => {
   const onClaude = decideHosting({ htmlPath: "/out/report.html", env: { CLAUDECODE: "1" } });
   assert.equal(onClaude.hosting, "claude-artifact");
   assert.equal(onClaude.publishable, true);
   assert.equal(onClaude.htmlPath, "/out/report.html");
 
+  // Off-Claude is NOT harness-specific and never fails closed in the pure layer:
+  // it selects the portable GitHub-native gist strategy the CLI then publishes.
   const offClaude = decideHosting({ htmlPath: "/out/report.html", env: {} });
-  assert.equal(offClaude.hosting, "unavailable");
-  assert.equal(offClaude.publishable, false);
-  assert.ok(typeof offClaude.reason === "string" && offClaude.reason.length > 0);
-  assert.equal(offClaude.followup, "#1285");
+  assert.equal(offClaude.hosting, "github-gist");
+  assert.equal(offClaude.publishable, true);
+  assert.equal(offClaude.htmlPath, "/out/report.html");
 });
 
 test("buildArtifactHtml: self-contained + CSP-safe, inlines screenshot, logs caps", () => {
@@ -301,14 +303,39 @@ test("artifactBodyLine/verdict: hosted URL vs off-Claude follow-up, and empty/no
   });
   assert.match(hosted.summaryFindings[0].message, /https:\/\/example\.test\/report\.html/);
 
-  // Off-Claude with no hosted URL states the fail-closed reason + follow-up marker.
-  const offClaude = buildReviewInput({
+  // Off-Claude gist: the body links the gist URL, surfaces the raw URL, and states
+  // it renders as source.
+  const gistHosted = buildReviewInput({
     findings: [],
     headSha: HEAD_SHA,
-    hosting: decideHosting({ htmlPath: "/out/report.html", env: {} }),
+    hosting: { hosting: "github-gist", gist: { id: "abc123", url: "https://gist.github.com/u/abc123", rawUrl: "https://gist.github.com/u/abc123/raw" } },
+    hostedUrl: "https://gist.github.com/u/abc123",
   });
-  assert.match(offClaude.summaryFindings[0].message, /unhosted/i);
-  assert.match(offClaude.summaryFindings[0].message, /#1285/);
+  assert.match(gistHosted.summaryFindings[0].message, /gist\.github\.com\/u\/abc123/);
+  assert.match(gistHosted.summaryFindings[0].message, /renders as source/i);
+  assert.match(gistHosted.summaryFindings[0].message, /raw: https:\/\/gist\.github\.com\/u\/abc123\/raw/);
+
+  // Explicit --hosted-url override (strategy still github-gist, but NO published
+  // gist): the self-hosted URL is NOT mislabeled as a source-rendered gist.
+  const selfHosted = buildReviewInput({
+    findings: [],
+    headSha: HEAD_SHA,
+    hosting: { hosting: "github-gist" },
+    hostedUrl: "https://pages.example.test/report.html",
+  });
+  assert.equal(selfHosted.summaryFindings[0].message, "Screenshot artifact: https://pages.example.test/report.html");
+  assert.doesNotMatch(selfHosted.summaryFindings[0].message, /renders as source/i);
+
+  // Fail-closed hosting (gist publish failed): body states unhosted + the reason,
+  // and never links a fabricated URL.
+  const failClosed = buildReviewInput({
+    findings: [],
+    headSha: HEAD_SHA,
+    hosting: { hosting: "unavailable", publishable: false, reason: "gist publish failed: boom" },
+  });
+  assert.match(failClosed.summaryFindings[0].message, /unhosted/i);
+  assert.match(failClosed.summaryFindings[0].message, /gist publish failed/i);
+  assert.doesNotMatch(failClosed.summaryFindings[0].message, /https?:\/\//);
 
   // Zero findings -> APPROVE, severity none.
   assert.equal(hosted.verdict, "APPROVE");
@@ -372,6 +399,94 @@ test("loadScreenshot: raw-file cap agrees with the data-URI budget (no read-then
   });
   assert.match(html, /data:image\/png;base64,/);
   assert.equal(caps.length, 0);
+});
+
+test("publishGist: GitHub-native fallback yields a real per-run URL + id from the gist stdout (no live API)", async () => {
+  const gistUrl = "https://gist.github.com/octocat/abc123def456";
+  const { runChild, calls } = makeGhMock([
+    { stdout: `${gistUrl}\n`, assertArgs: ["gist", "create"] },
+  ]);
+  const gist = await publishGist({ htmlPath: "/out/report.html", pr: 42, run: runChild });
+
+  assert.equal(gist.url, gistUrl);
+  assert.equal(gist.id, "abc123def456");
+  assert.equal(gist.rawUrl, `${gistUrl}/raw`);
+  // The self-contained HTML file is what gets published.
+  assert.ok(calls[0].args.includes("/out/report.html"));
+});
+
+test("publishGist: fails closed on a non-zero gh exit — no fabricated link", async () => {
+  const { runChild } = makeGhMock([
+    { exitCode: 1, stderr: "HTTP 401: Bad credentials (missing gist scope)\n" },
+  ]);
+  await assert.rejects(
+    publishGist({ htmlPath: "/out/report.html", pr: 42, run: runChild }),
+    /gh gist create failed.*gist scope/i,
+  );
+});
+
+test("publishGist: fails closed when gh returns no URL — never links empty/garbage", async () => {
+  const { runChild } = makeGhMock([{ stdout: "created but no url line\n" }]);
+  await assert.rejects(
+    publishGist({ htmlPath: "/out/report.html", pr: 42, run: runChild }),
+    /did not return a gist URL/i,
+  );
+});
+
+// Off-Claude runCli end to end (no live API): the info/head + review-poster
+// spawns are injected, and the sole gh call (gist create) is a makeGhMock. This
+// covers the wiring decideHosting(github-gist) -> publishGist -> hostedUrl ->
+// buildReviewInput body, plus the fail-closed catch.
+function writeDiagnose(dir) {
+  const diagPath = path.join(dir, "diagnose.json");
+  writeFileSync(diagPath, JSON.stringify({
+    pr: { headSha: HEAD_SHA },
+    counts: { total: 1, anchorable: 0, nonAnchorable: 1 },
+    findings: [FINDINGS[2]],
+  }));
+  return diagPath;
+}
+
+test("runCli off-Claude: publishes a gist and the review body links the gist + raw URL (no live API)", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ui-review-runcli-"));
+  const diagPath = writeDiagnose(dir);
+  const htmlPath = path.join(dir, "report.html");
+  const gistUrl = "https://gist.github.com/octocat/abc123def456";
+  const { runChild } = makeGhMock([{ stdout: `${gistUrl}\n`, assertArgs: ["gist", "create"] }]);
+
+  const sink = { write: () => true };
+  await runCli(
+    ["--pr", "42", "--repo", "o/n", "--diagnose-result", diagPath, "--html-output", htmlPath],
+    { stdout: sink, stderr: sink, env: {}, run: runChild, loadLiveHead: () => null, postReview: () => ({ reviewId: 1, reviewUrl: "u", commitSha: HEAD_SHA }) },
+  );
+
+  const reviewInput = JSON.parse(readFileSync(`${htmlPath}.review.json`, "utf8"));
+  const artifactLine = reviewInput.summaryFindings[0].message;
+  assert.match(artifactLine, new RegExp(gistUrl.replace(/\//g, "\\/")));
+  assert.match(artifactLine, /raw: .*abc123def456\/raw/);
+  assert.match(artifactLine, /renders as source/i);
+});
+
+test("runCli off-Claude: a failed gist publish fails closed — unhosted body, stated reason, no fabricated link", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ui-review-runcli-fail-"));
+  const diagPath = writeDiagnose(dir);
+  const htmlPath = path.join(dir, "report.html");
+  const { runChild } = makeGhMock([{ exitCode: 1, stderr: "HTTP 401: missing gist scope\n" }]);
+
+  let errText = "";
+  const stderr = { write: (s) => { errText += s; return true; } };
+  await runCli(
+    ["--pr", "42", "--repo", "o/n", "--diagnose-result", diagPath, "--html-output", htmlPath],
+    { stdout: { write: () => true }, stderr, env: {}, run: runChild, loadLiveHead: () => null, postReview: () => ({ reviewId: 1, reviewUrl: "u", commitSha: HEAD_SHA }) },
+  );
+
+  const reviewInput = JSON.parse(readFileSync(`${htmlPath}.review.json`, "utf8"));
+  const artifactLine = reviewInput.summaryFindings[0].message;
+  assert.match(artifactLine, /unhosted/i);
+  assert.match(artifactLine, /gist publish failed/i);
+  assert.doesNotMatch(artifactLine, /https?:\/\//);
+  // The failure is logged as a cap, never swallowed.
+  assert.match(errText, /hosting: GitHub-native gist publish failed/i);
 });
 
 test("buildArtifactHtml: oversized screenshot is omitted and logged, never silently dropped", () => {
