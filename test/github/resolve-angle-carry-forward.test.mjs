@@ -1,10 +1,74 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
   buildCarryForwardPlan,
+  main,
   parseResolveAngleCarryForwardCliArgs,
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
+import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8" });
+}
+
+// Run the CLI main() against a repoRoot and return the parsed JSON result it
+// writes to stdout (default emitResult mode).
+async function runMain(argv, { repoRoot }) {
+  const chunks = [];
+  const orig = process.stdout.write;
+  process.stdout.write = (chunk) => { chunks.push(String(chunk)); return true; };
+  try {
+    await main(argv, { repoRoot });
+  } finally {
+    process.stdout.write = orig;
+  }
+  return JSON.parse(chunks.join(""));
+}
+
+async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate }) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-cli-"));
+  git(repoRoot, ["init", "-q"]);
+  git(repoRoot, ["config", "user.email", "test@example.com"]);
+  git(repoRoot, ["config", "user.name", "Test"]);
+  await writeFile(
+    path.join(repoRoot, ".devloops.yaml"),
+    `version: 1\ngates:\n  draft:\n    mandatoryAngles: ${JSON.stringify(mandatoryAngles)}\n`,
+    "utf8",
+  );
+  const base = {
+    "src/foo.mjs": "export function foo() { return 1; }\n",
+    "docs/guide.md": "# Guide\n",
+  };
+  for (const [rel, content] of Object.entries(base)) {
+    const abs = path.join(repoRoot, rel);
+    await mkdir(path.dirname(abs), { recursive: true });
+    await writeFile(abs, content, "utf8");
+  }
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "base"]);
+  const prevHead = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+
+  await mutate(repoRoot);
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "delta"]);
+  const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+
+  // Prior CLEAN findings-log recorded at prevHead.
+  const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(logPath), { recursive: true });
+  await writeFile(logPath, JSON.stringify({
+    headSha: prevHead,
+    verdict: "clean",
+    provenance: { distinctReviewers: perAngle.length, perAngle },
+  }), "utf8");
+
+  return { repoRoot, prevHead, headSha };
+}
 
 const cleanLog = {
   headSha: "aaaaaaa",
@@ -49,6 +113,74 @@ test("buildCarryForwardPlan fails closed on a non-clean or missing prior log", (
     () => buildCarryForwardPlan({ log: { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 0, perAngle: [] } }, changedFiles: ["docs/x.md"] }),
     /no provenance\.perAngle reviewers/,
   );
+});
+
+test("buildCarryForwardPlan never carries an alwaysRerun angle even when the delta is outside its surface", () => {
+  // `docs` surface is `docs`; a code-only delta does not touch it, so it would
+  // carry — but passing it in alwaysRerun (a configured mandatory angle) forces
+  // it to re-run.
+  const plan = buildCarryForwardPlan({ log: cleanLog, changedFiles: ["src/foo.mjs"], alwaysRerun: ["docs"] });
+  assert.ok(!plan.carried.some((c) => c.angle === "docs"), "docs must not be carried");
+  assert.ok(plan.mustRerun.some((m) => m.angle === "docs"), "docs must re-run (mandatory)");
+});
+
+test("CLI loads the gate's configured mandatoryAngles and never carries them (fail-closed hole)", async () => {
+  // `docs` is configured mandatory; the delta is code-only (outside docs' surface),
+  // so without loading mandatoryAngles docs would be CARRIED. It must re-run.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: ["docs"],
+    perAngle: [
+      { angle: "correctness", reviewer: "review-a" },
+      { angle: "docs", reviewer: "review-c" },
+    ],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    },
+  });
+  try {
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    const carried = result.carried.map((c) => c.angle);
+    const rerun = result.mustRerun.map((m) => m.angle);
+    assert.ok(!carried.includes("docs"), "configured mandatory docs must NOT be carried");
+    assert.ok(rerun.includes("docs"), "configured mandatory docs must re-run");
+    assert.ok(rerun.includes("correctness"), "code delta touches correctness surface");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI forces the RENAME_ONLY angles to re-run when the delta contains a rename", async () => {
+  // Pure rename of a doc file: classifying the destination path alone would only
+  // implicate docs; the rename must force scope/correctness/contract-surface/link-check too.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [
+      { angle: "scope", reviewer: "review-a" },
+      { angle: "correctness", reviewer: "review-b" },
+      { angle: "coverage", reviewer: "review-c" },
+    ],
+    mutate: async (root) => {
+      git(root, ["mv", "docs/guide.md", "docs/handbook.md"]);
+    },
+  });
+  try {
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    const rerun = result.mustRerun.map((m) => m.angle);
+    const carried = result.carried.map((c) => c.angle);
+    // RENAME_ONLY-mapped angles present in the prior log must re-run.
+    assert.ok(rerun.includes("scope"), "rename forces scope");
+    assert.ok(rerun.includes("correctness"), "rename forces correctness");
+    // coverage is not RENAME_ONLY-mapped and its surface (test/code) is untouched → carries.
+    assert.ok(carried.includes("coverage"), "coverage carries (not a rename angle, surface untouched)");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test("parseResolveAngleCarryForwardCliArgs requires the core args", () => {

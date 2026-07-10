@@ -26,7 +26,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
+import { loadDevLoopConfig, resolveGateAngleContract } from "@dev-loops/core/config";
 import {
+  RENAME_ONLY_ANGLES,
   resolveCarryForwardAngles,
   resolveConvergenceCarryForward,
 } from "@dev-loops/core/loop/gate-carry-forward";
@@ -35,7 +37,7 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { parseChangedFiles } from "./write-gate-context.mjs";
+import { hasRenameEntry, mapGateToConfigKey, parseChangedFiles } from "./write-gate-context.mjs";
 
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 
@@ -136,9 +138,13 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  * @param {object} input
  * @param {object|null} input.log — the prior findings-log JSON (verdict must be "clean")
  * @param {string[]} input.changedFiles — delta A..B changed files
+ * @param {Iterable<string>} [input.alwaysRerun] — angles that must NEVER carry
+ *   forward regardless of the delta (the gate's configured mandatory angles, plus
+ *   the RENAME_ONLY-mapped angles when the delta contains any rename). Each
+ *   resolves to an always-rerun surface so it lands in `mustRerun`, not `carried`.
  * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
-export function buildCarryForwardPlan({ log, changedFiles }) {
+export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
@@ -156,7 +162,11 @@ export function buildCarryForwardPlan({ log, changedFiles }) {
     }
   }
   const prevAngles = perAngle.map((a) => a.angle).filter((a) => typeof a === "string" && a.length > 0);
-  const { carried, mustRerun } = resolveCarryForwardAngles({ prevAngles, changedFiles });
+  const { carried, mustRerun } = resolveCarryForwardAngles({
+    prevAngles,
+    changedFiles,
+    options: { alwaysRerun: [...alwaysRerun] },
+  });
   const carriedProvenance = carried.map(({ angle, reason }) => {
     const reviewer = reviewerByAngle.get(angle);
     return {
@@ -186,7 +196,7 @@ function captureDeltaChangedFiles({ base, repoRoot }) {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  return parseChangedFiles(out);
+  return { changedFiles: parseChangedFiles(out), hasRename: hasRenameEntry(out) };
 }
 
 export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd() } = {}) {
@@ -219,8 +229,20 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       }
       throw err;
     }
-    const changedFiles = captureDeltaChangedFiles({ base: options.prevHead, repoRoot });
-    const plan = buildCarryForwardPlan({ log, changedFiles });
+    // Load the gate's CONFIGURED mandatory angles so any repo-configured
+    // mandatory angle (even a CATEGORY_ANGLE_MAP-mapped one like `docs` or
+    // `correctness`) is NEVER carried forward — it must be freshly re-reviewed at
+    // head B. Without this the fail-closed "mandatory always re-runs" promise
+    // would only cover the hardcoded ALWAYS_INCLUDE set. loadDevLoopConfig never
+    // throws; it returns { config, ... }.
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const { mandatoryAngles } = resolveGateAngleContract(config, mapGateToConfigKey(options.gate));
+    const { changedFiles, hasRename } = captureDeltaChangedFiles({ base: options.prevHead, repoRoot });
+    // A rename anywhere in the delta forces the RENAME_ONLY-mapped angles to
+    // re-run: parseChangedFiles keeps only a rename's destination path, so
+    // classifying that path alone misses what the rename itself implicates.
+    const alwaysRerun = [...mandatoryAngles, ...(hasRename ? RENAME_ONLY_ANGLES : [])];
+    const plan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun });
     const copilotConvergence = resolveConvergenceCarryForward({ changedFiles });
     const result = {
       ok: true,

@@ -1,12 +1,22 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
+import { CATEGORY_ANGLE_MAP } from "../src/analysis/change-classifier.mjs";
 import {
+  RENAME_ONLY_ANGLES,
   angleReviewSurface,
   resolveAngleCarryForward,
   resolveCarryForwardAngles,
   resolveConvergenceCarryForward,
 } from "../src/loop/gate-carry-forward.mjs";
+
+describe("RENAME_ONLY_ANGLES — derived from the single source of truth", () => {
+  test("matches CATEGORY_ANGLE_MAP[RENAME_ONLY] and is non-empty", () => {
+    assert.deepEqual(RENAME_ONLY_ANGLES, CATEGORY_ANGLE_MAP.RENAME_ONLY);
+    assert.ok(RENAME_ONLY_ANGLES.includes("link-check"), "a moved doc's broken link must be re-checkable");
+    assert.ok(RENAME_ONLY_ANGLES.includes("scope"), "a moved file shifts scope");
+  });
+});
 
 describe("angleReviewSurface — the pure angle -> surface mapping", () => {
   test("always-include angles never carry (kind: always)", () => {
@@ -162,5 +172,9 @@ describe("resolveConvergenceCarryForward — AC2 fail-closed Copilot convergence
   test("empty delta / unclassifiable file -> false (fail-closed)", () => {
     assert.equal(resolveConvergenceCarryForward({ changedFiles: [] }).carryForward, false);
     assert.equal(resolveConvergenceCarryForward({ changedFiles: ["assets/logo.png"] }).carryForward, false);
+  });
+
+  test("non-array changedFiles -> false (fail-closed)", () => {
+    assert.equal(resolveConvergenceCarryForward({ changedFiles: undefined }).carryForward, false);
   });
 });

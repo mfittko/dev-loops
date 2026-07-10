@@ -46,7 +46,13 @@ import { ALWAYS_INCLUDE, CATEGORY_ANGLE_MAP } from "../analysis/change-classifie
  * implicate the right angles (a renamed code file -> code -> LOGIC_CHANGE, a
  * renamed doc -> docs -> DOCS_ONLY). Folding RENAME_ONLY into every kind would
  * over-attribute code angles to a doc-only delta and defeat the primary
- * carry-forward case, so it is deliberately omitted.
+ * carry-forward case, so it is deliberately omitted here. A destination-kind
+ * classification alone, though, misses what the RENAME itself implicates (a
+ * moved doc can break a link; a moved test/code file shifts scope /
+ * contract-surface). Rename detection therefore lives at the DELTA layer: the
+ * CLI notices any rename/copy row and forces {@link RENAME_ONLY_ANGLES} to
+ * re-run for that run (fail-closed), instead of encoding a phantom "rename" file
+ * kind here.
  *
  * @type {Record<string, string[]>}
  */
@@ -57,6 +63,20 @@ const KIND_TO_CATEGORIES = {
   ci: ["CI_ONLY"],
   code: ["LOGIC_CHANGE", "COMMENT_ONLY"],
 };
+
+/**
+ * The angles a pure rename implicates (CATEGORY_ANGLE_MAP[RENAME_ONLY]), minus
+ * any always-run angle (already never carried). A delta containing ANY rename
+ * forces these to re-run — a rename's effect (moved doc breaking a link, moved
+ * test/code shifting scope/contract-surface) is not captured by classifying the
+ * destination path alone. Derived from the single source of truth so it never
+ * drifts from the dynamic-angle rules.
+ *
+ * @type {string[]}
+ */
+export const RENAME_ONLY_ANGLES = (CATEGORY_ANGLE_MAP.RENAME_ONLY ?? []).filter(
+  (angle) => !ALWAYS_INCLUDE.has(angle),
+);
 
 /**
  * angle -> Set<surface kind>: an angle's review surface is the set of file kinds
