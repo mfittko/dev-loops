@@ -40,6 +40,7 @@ The loop requires all of the following inputs before it may run:
      - `stateName`
      - `screenshotPath`
      - `statePath`
+     - `snapshotPath`
 
 If any required part of this bundle is missing, incomplete, or ambiguous, the loop fails closed instead of guessing.
 
@@ -105,7 +106,7 @@ The loop fails closed when:
 - the review brief is missing or empty
 - the artifact bundle is missing
 - the artifact bundle has no named states
-- a named state lacks `screenshotPath` or `statePath`
+- a named state lacks `screenshotPath`, `statePath`, or `snapshotPath`
 - vision mode is requested but a named state screenshot path does not end with `screenshot.png`
 - vision mode is requested but a named-state `statePath` does not end with `state.json`
 - the work is not actually a UI slice \(the loop returns a skip outcome rather than failing closed\)

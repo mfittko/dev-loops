@@ -38,7 +38,7 @@ drive your app.
    boots the app and polls an HTTP readiness probe.
 2. **Auth + drive** — launches one headless WebKit context, authenticates
    through your dev-login recipe, dismisses declared interstitials once, then
-   walks the changed UI flows, capturing a screenshot + `state.json` per step.
+   walks the changed UI flows, capturing a screenshot + `state.json` + `snapshot.json` per step.
 3. **Diagnose** — maps each captured failure to a source line and then to a PR
    diff line so a finding can anchor on a real changed line.
 4. **Report** — posts a head-pinned **pending** PR review and produces a
