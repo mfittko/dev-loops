@@ -169,10 +169,10 @@ models:
     quality: high            # promote a routine role
     developer: inherit       # opt a role out entirely
   roles:
-    security: gpt-5          # concrete per-angle override (beats any tier)
+    correctness: gpt-5       # concrete per-angle override (beats any tier)
 ```
 
-Critical review angles always resolve `high` via their `review` persona; a routine angle drops to `low` only by explicit `models.roleTiers` config (no silent downgrade). An unknown tier alias in `models.roleTiers` is rejected by the schema with a clear error.
+Angles that resolve to the `review` persona (e.g. `correctness`, `renderer-security`, `acceptance-criteria`) resolve `high`; an angle with no persona entry falls back to the default reviewer and inherits (no override) rather than resolving high. A routine angle drops to `low` only by explicit `models.roleTiers` config (no silent downgrade). An unknown tier alias in `models.roleTiers` is rejected by the schema with a clear error.
 
 ### Available review angles
 
