@@ -64,7 +64,7 @@ matters for `docs`: the `docs` angle must resolve high via `review`, not the `do
 writer role's low tier.
 The built-in policy runs routine subagents (`developer`/`docs`/`fixer`/`quality`)
 on the low tier, planning (`refiner`) and critical review (the `review` role, and gate
-fan-out review angles via the review tier forced by `kind:'angle'`) on the high tier, and lets the conductor
+fan-out review angles via the review tier forced by `kind: "angle"`) on the high tier, and lets the conductor
 (`dev-loop`) inherit. Built-in Pi tiers are `null`, so with zero config every role
 resolves to `null` and dispatch passes no model override — a genuine no-op on Pi.
 Operators opt in by setting concrete Pi ids under `models.tiers.<alias>.pi` (and may

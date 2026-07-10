@@ -154,7 +154,7 @@ workflow:
 
 Subagents run on a harness-neutral **tier** so a single policy expresses "high on both harnesses" even though the concrete model ids differ. A tier alias maps to a per-harness concrete model (or `null` = inherit / no-op on that harness); `models.roleTiers` maps each role/angle to an alias (or `inherit`).
 
-**Default policy (zero config):** routine subagents (`developer`, `docs`, `fixer`, `quality`) → `low`; planning (`refiner`) and critical review (`review`, including gate fan-out angles via their `review` persona) → `high`; the conductor (`dev-loop`) → `inherit`. Built-in tiers are `low: { claude: sonnet, pi: null }`, `high: { claude: opus, pi: null }`.
+**Default policy (zero config):** routine subagents (`developer`, `docs`, `fixer`, `quality`) → `low`; planning (`refiner`) and critical review (`review`, including gate fan-out angles via the review tier forced by `kind: "angle"`) → `high`; the conductor (`dev-loop`) → `inherit`. Built-in tiers are `low: { claude: sonnet, pi: null }`, `high: { claude: opus, pi: null }`.
 
 **Per-harness resolution:** `resolveRoleModel(config, { role, harness })` from `@dev-loops/core/config` returns a concrete model id or `null`. Precedence: `models.roles[role]` (concrete, highest) > tier from `models.roleTiers[role]` (or the built-in role tier) mapped through `models.tiers[alias][harness]` > `null`. The committed `.claude/agents/*.md` tree bakes the built-in (zero-config) tier policy into each agent's `model:` frontmatter — asset generation does not read repo `.devloops` config, so per-repo config never regenerates that frontmatter. Per-repo/per-dispatch tuning happens at dispatch time: on Pi via `resolveRoleModel` (passed only when non-null), on Claude via the Task `model` param.
 
