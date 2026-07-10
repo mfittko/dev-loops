@@ -28,9 +28,10 @@ const GIT_MOCK = Symbol.for("dev-loops.gitMock");
 // the stashed GIT_MOCK response (empty success by default; the conflict-resolution
 // case overrides it with porcelain output). `extra` merges in per-call runtime
 // overrides (e.g. gitCommand for the missing-git-binary boundary test — a non-gh,
-// non-git command makes makeGhMock throw, which fetchLocalConflictFiles tolerates
-// exactly as it tolerated a real ENOENT spawn). Used by both runNode and the
-// direct-function tests so neither spawns a subprocess.
+// non-git command is delegated to the real runChild so a genuinely-missing binary
+// produces a real ENOENT that fetchLocalConflictFiles tolerates exactly as before).
+// Used by both runNode and the direct-function tests; gh/git calls resolve in-process
+// via the mocks (no spawn), while that one missing-git boundary stays a real spawn.
 function buildMockRuntime(rawEnv = {}, extra = {}) {
   const entries = rawEnv[GH_MOCK_ENTRIES] ?? [];
   const gitMock = rawEnv[GIT_MOCK] ?? { stdout: "" };
