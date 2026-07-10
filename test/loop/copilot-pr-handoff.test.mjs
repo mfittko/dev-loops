@@ -1455,6 +1455,79 @@ test("copilot-pr-handoff re-requests Copilot review at the cap when a significan
   }
 });
 
+// #1326 (integration): when the handoff escape-hatch reopens a cycle (its
+// threshold detector sees a significant delta) but request-copilot-review's
+// fail-closed carry-forward seam classifies the SAME post-convergence delta as a
+// pure doc/prose bump, the request returns suppressed_post_convergence_docs_only.
+// That non-shared status must NOT leak into requestWatchContract.requestStatus and
+// must route to the converged/proceed disposition (stop, terminal) — never a
+// Copilot wait or a stuck state.
+test("copilot-pr-handoff treats a suppressed_post_convergence_docs_only request as converged/proceed and never leaks the status", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-docs-only-suppress-"));
+
+  try {
+    const { env } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({
+          isDraft: false, state: "OPEN", number: 17, headRefOid: "newsha",
+          reviews: CAP_REVIEWS,
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+        }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      // escape-hatch: shared threshold detector facts + compare → significant (a code
+      // file) → reopen the cycle and call request-copilot-review with force.
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
+        stdout: JSON.stringify({ headRefOid: "newsha", reviews: CAP_REVIEWS, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/oldsha-5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "packages/core/src/loop/foo.mjs", changes: 670 }] }) + "\n",
+      },
+      // request-copilot-review internals at the cap under force: before-state fetch,
+      // draft-gate round reconcile, then its carry-forward compare classifies the
+      // delta as pure doc/prose → suppressed_post_convergence_docs_only (no re-request).
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: JSON.stringify({ headRefOid: "newsha", isDraft: false, state: "OPEN", number: 17, reviews: CAP_REVIEWS, statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/oldsha-5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { filename: "README.md", status: "modified" }] }) + "\n",
+      },
+    ], { matchMode: "claims" });
+    env.DEVLOOPS_RUN_ID = "";
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    // Converged/proceed disposition — never a wait, never stuck.
+    assert.equal(output.action, "stop");
+    assert.equal(output.state, "round_cap_clean_fallback");
+    assert.equal(output.terminal, true);
+    assert.equal(output.loopDisposition, "done");
+    assert.equal(output.suppressedPostConvergenceDocsOnly, true);
+    // The non-shared status is preserved on the open diagnostic field...
+    assert.equal(output.reviewRequestStatus, "suppressed_post_convergence_docs_only");
+    // ...but must NOT leak into the shared request-status contract.
+    assert.equal(output.requestWatchContract.requestStatus, "none");
+    assert.notEqual(output.state, "waiting_for_copilot_review");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // #1126 fail-closed (integration): if the shared detector's gh compare exits
 // non-zero at the cap, significance is unknown → no re-request; clean fallback holds.
 test("copilot-pr-handoff stays at round_cap_clean_fallback when the compare call fails (fail closed)", async () => {

@@ -136,7 +136,25 @@ export const NEXT_ACTIONS = Object.freeze({
 
 const SAME_HEAD_CLEAN_CONVERGED_NEXT_ACTION = "Current head already has a clean submitted Copilot review; suppress automatic same-head re-request unless a meaningful remediation event occurs, or explicitly request another Copilot pass";
 
-const VALID_REVIEW_REQUEST_STATUSES = new Set(["requested", "already-requested", "unavailable", "none", "failed"]);
+/**
+ * Canonical snapshot request-status enum (single source of truth). Any request
+ * outcome plumbed into the shared loop contract MUST normalize to one of these;
+ * richer request-tool outcomes (round_cap_reached, suppressed_*, etc.) collapse
+ * to "none" here because they mean "no active Copilot request is in flight".
+ */
+export const VALID_REVIEW_REQUEST_STATUSES = new Set(["requested", "already-requested", "unavailable", "none", "failed"]);
+
+/**
+ * Collapse an arbitrary request-tool outcome to the canonical snapshot
+ * request-status enum. Unrecognized statuses (round cap / suppression
+ * diagnostics) map to "none" so they never leak into the shared contract.
+ *
+ * @param {string} status
+ * @returns {string} a member of VALID_REVIEW_REQUEST_STATUSES
+ */
+export function toSharedRequestStatus(status) {
+  return VALID_REVIEW_REQUEST_STATUSES.has(status) ? status : "none";
+}
 const VALID_CI_STATUSES = new Set(["success", "failure", "pending", "none", "crediblyGreen"]);
 const ACTIVE_REQUEST_STATUSES = new Set(["requested", "already-requested"]);
 
