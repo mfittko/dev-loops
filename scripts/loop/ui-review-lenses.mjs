@@ -78,7 +78,9 @@ const DEDUPE_KEY_SEPARATOR = "\u0000";
  * is not a non-empty array of non-empty strings (the seam's precondition — the
  * same non-empty AC list `validateUiDesignerReviewInput` already requires); a hole
  * (a non-string/empty entry) is rejected rather than silently dropped, so a ref
- * can never map to a phantom criterion.
+ * can never map to a phantom criterion. The caller distinguishes an ABSENT list
+ * (`acceptance_criteria_missing`) from a PRESENT-but-malformed one
+ * (`acceptance_criteria_malformed`) for an accurate fail-closed reason.
  */
 function resolveAcceptanceCriteria(acceptanceCriteria) {
   if (!Array.isArray(acceptanceCriteria) || acceptanceCriteria.length === 0) return null;
@@ -130,7 +132,13 @@ export function validateUiReviewLensResults(lensResults, acceptanceCriteria) {
   }
   const acResolved = resolveAcceptanceCriteria(acceptanceCriteria);
   if (!acResolved) {
-    return { ok: false, status: "blocked_missing_acceptance_criteria", reason: "acceptance_criteria_missing", missing: ["acceptanceCriteria"] };
+    // Distinguish a genuinely ABSENT list from a PRESENT-but-malformed one (empty
+    // array, a non-string/blank entry) so the fail-closed reason is diagnostically
+    // accurate — both still block, this only sharpens the "why".
+    const absent = acceptanceCriteria === undefined || acceptanceCriteria === null;
+    return absent
+      ? { ok: false, status: "blocked_missing_acceptance_criteria", reason: "acceptance_criteria_missing", missing: ["acceptanceCriteria"] }
+      : { ok: false, status: "blocked_malformed_acceptance_criteria", reason: "acceptance_criteria_malformed", missing: ["acceptanceCriteria"] };
   }
   const seen = new Map();
   const problems = [];

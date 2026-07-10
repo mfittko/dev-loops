@@ -204,11 +204,22 @@ test('validator rejects a finding that OMITS blocking fail-closed', () => {
   assert.ok(result.missing.some((m) => m.endsWith('.blocking')));
 });
 
-test('validator requires a non-empty acceptance-criteria list fail-closed', () => {
-  for (const badAc of [undefined, null, [], ['   '], 'not-an-array', [1, 2]]) {
+test('validator reports an ABSENT acceptance-criteria list as missing fail-closed', () => {
+  for (const badAc of [undefined, null]) {
     const result = validateUiReviewLensResults(lensSet({ a11y: [F()] }), badAc);
     assert.equal(result.ok, false, `acceptanceCriteria=${JSON.stringify(badAc)} must be rejected`);
     assert.equal(result.status, 'blocked_missing_acceptance_criteria');
+    assert.equal(result.reason, 'acceptance_criteria_missing');
+    assert.deepEqual(result.missing, ['acceptanceCriteria']);
+  }
+});
+
+test('validator reports a PRESENT-but-malformed acceptance-criteria list as malformed fail-closed', () => {
+  for (const badAc of [[], ['   '], 'not-an-array', [1, 2], ['ok', '']]) {
+    const result = validateUiReviewLensResults(lensSet({ a11y: [F()] }), badAc);
+    assert.equal(result.ok, false, `acceptanceCriteria=${JSON.stringify(badAc)} must be rejected`);
+    assert.equal(result.status, 'blocked_malformed_acceptance_criteria');
+    assert.equal(result.reason, 'acceptance_criteria_malformed');
     assert.deepEqual(result.missing, ['acceptanceCriteria']);
   }
 });
