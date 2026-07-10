@@ -48,10 +48,17 @@ const BUILTIN_ROLE_TIERS = Object.freeze({
 // A tier alias's per-harness concrete model. Either harness may be a concrete
 // model id or `null` (inherit / no-op on that harness). strictObject rejects
 // unknown harness keys.
-const ModelTierMapping = z.strictObject({
-  claude: z.string().trim().min(1).nullable().optional(),
-  pi: z.string().trim().min(1).nullable().optional(),
-});
+const ModelTierMapping = z
+  .strictObject({
+    claude: z.string().trim().min(1).nullable().optional(),
+    pi: z.string().trim().min(1).nullable().optional(),
+  })
+  // A tier mapping with both harnesses absent/null resolves to a null no-op on
+  // every harness — a silent dead alias that roleTiers could reference. Require
+  // at least one concrete harness model so an empty/all-null tier fails closed.
+  .refine((m) => typeof m.claude === "string" || typeof m.pi === "string", {
+    message: "tier mapping must set at least one of claude/pi to a non-null model id",
+  });
 
 /**
  * Reject `models.roleTiers` entries that reference a tier alias which is neither

@@ -3637,4 +3637,30 @@ describe("models.tiers / models.roleTiers schema validation", () => {
     assert.equal(FileConfigSchema.safeParse({ version: 1, models: { roleTiers: { quality: "high" } } }).success, true);
     assert.equal(FileConfigSchema.safeParse({ version: 1, models: { roleTiers: { quality: "bogus" } } }).success, false);
   });
+
+  test("rejects an empty/all-null tier mapping (silent no-op alias)", () => {
+    const empty = DevLoopConfigSchema.safeParse({
+      version: 1,
+      models: { tiers: { mid: {} } },
+    });
+    assert.equal(empty.success, false);
+    assert.match(empty.error.issues.map((i) => i.message).join(" "), /at least one of claude\/pi/);
+
+    const allNull = DevLoopConfigSchema.safeParse({
+      version: 1,
+      models: { tiers: { mid: { claude: null, pi: null } } },
+    });
+    assert.equal(allNull.success, false);
+  });
+
+  test("accepts a partial tier mapping with only one harness set", () => {
+    assert.equal(
+      DevLoopConfigSchema.safeParse({ version: 1, models: { tiers: { mid: { pi: "x" } } } }).success,
+      true,
+    );
+    assert.equal(
+      DevLoopConfigSchema.safeParse({ version: 1, models: { tiers: { mid: { claude: "y" } } } }).success,
+      true,
+    );
+  });
 });
