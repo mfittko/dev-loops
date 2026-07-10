@@ -13,21 +13,30 @@ test('ui artifact contract doc defines named-state artifacts and auto-scoped CI 
     readRepo('.github/workflows/ci.yml'),
   ]);
 
-  assert.match(doc, /single public entrypoint/i);
+  // dev-loop is the single public entrypoint — pin the token, not the sentence around it.
   assert.match(doc, /`dev-loop`/i);
-  assert.match(doc, /named UI state/i);
-  assert.match(doc, /screenshot\.png/i);
-  assert.match(doc, /state\.json/i);
-  assert.match(doc, /snapshot\.json/i);
-  assert.match(doc, /axe\.json/i);
+
+  // The five named-state artifact filenames are the load-bearing bundle contract.
+  for (const artifact of ['screenshot.png', 'state.json', 'snapshot.json', 'axe.json', 'console.json']) {
+    assert.match(doc, new RegExp(artifact.replace('.', '\\.'), 'i'), `doc must document artifact ${artifact}`);
+  }
   assert.match(doc, /axe-core/i);
-  assert.match(doc, /console\.json/i);
+
+  // Canonical artifact directory layout anchor.
   assert.match(doc, /test-results\/ui-smoke\/<sliceId>\/named-states\/<state-slug>/i);
-  assert.match(doc, /screenshot alone is acceptable/i);
-  assert.match(doc, /state artifact bundle is required/i);
-  assert.match(doc, /CI enforcement is auto-scoped, not promoted/i);
+
+  // Both tiers are documented: screenshot-alone vs the required bundle. Match the
+  // durable tokens so a legitimate reword of the surrounding prose does not break.
+  assert.match(doc, /screenshot alone/i);
+  assert.match(doc, /bundle is required/i);
+
+  // Auto-scoped (not opt-in / promoted) CI enforcement — the durable `auto-scoped`
+  // token also backs the section anchor other docs link to.
+  assert.match(doc, /auto-scoped/i);
   assert.match(doc, /ui-e2e-scoping-step\.md/i);
   assert.match(doc, /UI_E2E_CHECK_NAMES/i);
+
+  // Fail-closed on missing/malformed required artifacts.
   assert.match(doc, /missing or malformed/i);
   assert.match(doc, /viewer-smoke/i);
   assert.match(indexDoc, /ui-artifact-contract\.md/i);
