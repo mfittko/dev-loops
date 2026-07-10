@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -11,13 +11,32 @@ import {
   classifyFailures,
   driveUiReview,
   isErrorResponseStatus,
+  PAGE_ERROR_STACK_MAX_CHARS,
 } from "@dev-loops/core/loop/ui-review-drive";
 import { resolveUiReviewDriveRecipe, DEFAULT_SERVER_LOG_EXCEPTION_PATTERN } from "@dev-loops/core/config";
 import {
   parseUiReviewDriveCliArgs,
   attachPageListeners,
+  makeRunStep,
   openServerLogTail,
+  toPerStateConsolePayload,
 } from "../../scripts/loop/ui-review-drive.mjs";
+
+// A fake page for the real makeRunStep wiring: the emitter interface
+// (attachPageListeners) + the action/capture methods captureNamedUiState calls.
+// `click` fires a swallowed 500 DURING the step, so it lands in the slice
+// attributed to that state — exercising the production drain/attribute path.
+function fakeDrivePage() {
+  const handlers = {};
+  const page = {
+    on: (ev, cb) => ((handlers[ev] ??= []).push(cb), undefined),
+    emit: (ev, arg) => (handlers[ev] ?? []).forEach((cb) => cb(arg)),
+    goto: async () => {},
+    click: async () => page.emit("response", { status: () => 500, url: () => "http://app/save" }),
+    screenshot: async () => {},
+  };
+  return page;
+}
 
 const tempFiles = [];
 after(() => {
@@ -172,6 +191,59 @@ test("attachPageListeners: captures requestfailed and pageerror (with err.stack 
   assert.deepEqual(e.pageErrors, [{ message: "TypeError: boom", stack: "TypeError: boom\n    at app.js:42:9" }]);
 });
 
+test("sliceCapturedEvents: attributes a per-state window WITHOUT clearing, so the walk-level gate still sees the same classified error (AC2)", () => {
+  const page = fakePage();
+  const { getCapturedEvents, sliceCapturedEvents } = attachPageListeners(page);
+  page.emit("response", { status: () => 500, url: () => "http://app/save" });
+  page.emit("pageerror", { message: "TypeError: boom", stack: "TypeError: boom\n    at app.js:1" });
+
+  // The per-state capture slices its window (this becomes the state's console.json).
+  const slice = sliceCapturedEvents();
+  assert.deepEqual(slice.responses, [{ url: "http://app/save", status: 500 }]);
+  assert.equal(slice.pageErrors.length, 1);
+
+  // Slicing does NOT clear the buffer: the walk-level classifier still sees the
+  // SAME events, so a captured step-scoped error deterministically fails the drive
+  // closed (mechanical gate authoritative), keeping its source-line anchoring.
+  const whole = getCapturedEvents();
+  assert.deepEqual(whole.responses, [{ url: "http://app/save", status: 500 }]);
+  assert.equal(whole.pageErrors.length, 1);
+  const failures = classifyFailures(whole);
+  assert.ok(failures.some((f) => f.kind === "error-response"), "the sliced 500 still reaches the walk-level gate");
+  assert.ok(failures.some((f) => f.kind === "page-error" && /at app\.js:1/.test(f.stack)), "the sliced page error keeps its stack for anchoring");
+
+  // The cursor advances: a later event lands only in the NEXT slice, and the
+  // window is exactly the delta since the previous slice (no re-attribution).
+  assert.deepEqual(sliceCapturedEvents(), { responses: [], requestFailures: [], pageErrors: [] });
+  page.emit("requestfailed", { url: () => "http://app/img", failure: () => ({ errorText: "net::ERR" }) });
+  assert.deepEqual(sliceCapturedEvents().requestFailures, [{ url: "http://app/img", failure: "net::ERR" }]);
+  // ...and the whole buffer still carries everything for the mechanical gate.
+  assert.equal(getCapturedEvents().responses.length, 1);
+  assert.equal(getCapturedEvents().requestFailures.length, 1);
+});
+
+test("toPerStateConsolePayload: shapes a per-state slice into console/network findings; null when empty", () => {
+  assert.equal(toPerStateConsolePayload({ responses: [], requestFailures: [], pageErrors: [] }), null);
+  assert.equal(toPerStateConsolePayload({}), null);
+  const payload = toPerStateConsolePayload({
+    responses: [{ url: "http://app/save", status: 500 }],
+    requestFailures: [{ url: "http://app/img", failure: "net::ERR" }],
+    pageErrors: [{ message: "boom", stack: "boom\n    at app.js:1" }],
+  });
+  assert.deepEqual(payload.consoleErrors, [{ message: "boom", stack: "boom\n    at app.js:1" }]);
+  assert.deepEqual(payload.failedRequests, [
+    { kind: "error-response", url: "http://app/save", status: 500 },
+    { kind: "request-failed", url: "http://app/img", failure: "net::ERR" },
+  ]);
+});
+
+test("toPerStateConsolePayload: clamps a runaway pageerror stack to the SAME bound as the mechanical feed (bounded console.json)", () => {
+  const huge = "x".repeat(PAGE_ERROR_STACK_MAX_CHARS + 5000);
+  const payload = toPerStateConsolePayload({ pageErrors: [{ message: "boom", stack: huge }] });
+  assert.equal(payload.consoleErrors[0].stack.length, PAGE_ERROR_STACK_MAX_CHARS, "stack clamped to the shared classifyFailures bound");
+  assert.equal(payload.consoleErrors[0].stack, huge.slice(0, PAGE_ERROR_STACK_MAX_CHARS), "keeps the head — the throwing file:line");
+});
+
 test("openServerLogTail: absent path is a no-op; missing file reads once created", async () => {
   assert.equal(await openServerLogTail(null).read(), "");
   const p = path.join(tempDir(), "late.log");
@@ -318,6 +390,81 @@ test("driveUiReview: collates a swallowed error response from the injected liste
   assert.equal(r.ok, false);
   const kinds = r.failures.map((f) => f.kind).sort();
   assert.deepEqual(kinds, ["error-response", "server-log-exception"]);
+});
+
+// ── Production wiring: the REAL makeRunStep (drain/attribute + consolePath) ───
+// These substitute nothing for makeRunStep, so they fail if the wiring that
+// slices per state + threads consolePath is removed.
+
+test("driveUiReview + real makeRunStep: a step-scoped 500 is attributed to that state's console.json AND still fails the mechanical ok gate closed (AC1 + AC2)", async () => {
+  const outputDir = tempDir();
+  const page = fakeDrivePage();
+  const { getCapturedEvents, sliceCapturedEvents } = attachPageListeners(page);
+  const runStep = makeRunStep({ page, outputDir, sliceCapturedEvents });
+
+  const r = await driveUiReview(
+    { appUrl: "http://app", login: {}, flows: [{ name: "checkout", steps: [{ name: "save", action: "click" }] }] },
+    { authenticate: async () => ({ ok: true, detail: "ok" }), runStep, getCapturedEvents },
+  );
+
+  // AC2: the captured step-scoped 500 deterministically fails the drive closed
+  // through the mechanical gate — independent of any review mode or LLM.
+  assert.equal(r.ok, false, "a captured step-scoped 500 must fail the drive closed via the mechanical gate");
+  assert.ok(r.failures.some((f) => f.kind === "error-response"), "the classified error reaches drive.failures");
+
+  // AC1: the same 500 is ALSO attributed into THAT state's console.json (the slice
+  // did not remove it from the walk-level gate — two views of one classified error).
+  const state = JSON.parse(readFileSync(r.steps[0].statePath, "utf8"));
+  const consoleJson = JSON.parse(readFileSync(state.artifacts.console.path, "utf8"));
+  assert.deepEqual(consoleJson.failedRequests, [{ kind: "error-response", url: "http://app/save", status: 500 }]);
+});
+
+test("makeRunStep: threads consolePath into the runStep result and points state.json at it", async () => {
+  const outputDir = tempDir();
+  const page = fakeDrivePage();
+  const { sliceCapturedEvents } = attachPageListeners(page);
+  const runStep = makeRunStep({ page, outputDir, sliceCapturedEvents });
+
+  const outcome = await runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "save", action: "click" }, index: 0 });
+
+  // The runStep result carries consolePath (the field a bundle assembler threads
+  // into the review contract's namedStates) — deleting it fails here.
+  assert.ok(typeof outcome.consolePath === "string" && outcome.consolePath.endsWith("console.json"), "consolePath is threaded into the runStep result");
+  const state = JSON.parse(readFileSync(outcome.statePath, "utf8"));
+  assert.equal(state.artifacts.console.path, outcome.consolePath, "state.json back-references the same console.json");
+});
+
+test("makeRunStep: a capture failure still advances the attribution cursor — the next step's console.json does not inherit the prior step's events (no misattribution)", async () => {
+  const outputDir = tempDir();
+  const handlers = {};
+  let failScreenshot = false;
+  const page = {
+    on: (ev, cb) => ((handlers[ev] ??= []).push(cb), undefined),
+    emit: (ev, arg) => (handlers[ev] ?? []).forEach((cb) => cb(arg)),
+    goto: async () => {},
+    click: async () => page.emit("pageerror", { message: "boom", stack: "boom\n    at app.js:1" }),
+    screenshot: async () => { if (failScreenshot) throw new Error("screenshot failed"); },
+  };
+  const { getCapturedEvents, sliceCapturedEvents } = attachPageListeners(page);
+  const runStep = makeRunStep({ page, outputDir, sliceCapturedEvents });
+
+  // Step 1: fires a pageerror DURING the action, then its artifact capture throws.
+  failScreenshot = true;
+  await assert.rejects(
+    runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "s1", action: "click" }, index: 0 }),
+    /screenshot failed/,
+  );
+
+  // Step 2: a clean action (no events); its console.json MUST be null. If the
+  // cursor had not advanced past step 1 (capture threw), step 1's pageerror would
+  // misattribute forward into step 2 — this asserts it does not.
+  failScreenshot = false;
+  const out2 = await runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "s2", action: "goto", path: "/next" }, index: 1 });
+  const console2 = JSON.parse(readFileSync(out2.consolePath, "utf8"));
+  assert.equal(console2, null, "step 2 console.json is null — step 1's error was not misattributed forward");
+
+  // Slicing never clears: the walk-level mechanical fail-closed gate still sees step 1's error.
+  assert.equal(getCapturedEvents().pageErrors.length, 1, "the buffer retains step 1's error for the mechanical gate");
 });
 
 // ── Config resolver ──────────────────────────────────────────────────────────

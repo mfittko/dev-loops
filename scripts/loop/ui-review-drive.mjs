@@ -5,9 +5,15 @@
  * Launches one headless WebKit context, authenticates as the change's target
  * role via the project's dev-login recipe, dismisses config-declared
  * interstitials once, then walks the changed flows against the arbitrary
- * running-app URL from Stage 1 — capturing a step screenshot + state.json + snapshot.json + axe.json per
+ * running-app URL from Stage 1 — capturing a step screenshot + state.json + snapshot.json + axe.json + console.json per
  * step. Response/requestfailed/pageerror listeners plus a server-log tail run
- * throughout so a swallowed error response is still recorded.
+ * throughout so a swallowed error response is still recorded. The per-step
+ * capture SLICES the listener buffer (the events since the previous step) into
+ * that step's console.json for per-state attribution, WITHOUT clearing the
+ * buffer — so the same classified events still reach the drive's walk-level
+ * failure gate. The mechanical `ok`/`failures` gate stays authoritative: a
+ * captured step-scoped error deterministically fails the drive closed, and keeps
+ * its source-line anchoring, independent of the review mode or the LLM.
  *
  * This is a thin adapter: it wires the real IO seams (WebKit browser/page, the
  * page-event listeners, captureNamedUiState, the login form driving, the
@@ -23,7 +29,7 @@ import { webkit } from "@playwright/test";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
-import { driveUiReview, isErrorResponseStatus } from "@dev-loops/core/loop/ui-review-drive";
+import { driveUiReview, isErrorResponseStatus, PAGE_ERROR_STACK_MAX_CHARS } from "@dev-loops/core/loop/ui-review-drive";
 import { captureNamedUiState } from "../../test/playwright/harness/webkit-smoke-harness.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -34,7 +40,7 @@ capturing step screenshots + error-response/pageerror/server-log failures (Stage
 Required:
   --repo-root <p>      Absolute path to the (provisioned) worktree carrying the .devloops recipe.
   --app-url <url>      The running-app URL handed off by Stage 1.
-  --output-dir <p>     Directory for the ordered step screenshots + state.json + snapshot.json + axe.json artifacts.
+  --output-dir <p>     Directory for the ordered step screenshots + state.json + snapshot.json + axe.json + console.json artifacts.
 Optional:
   --changed-path <p>   A changed file path (repeatable); drives the changed-flow selection heuristic.
   -h, --help           Show this help.
@@ -105,7 +111,17 @@ export function parseUiReviewDriveCliArgs(argv) {
  * the shared threshold owner) are retained so the buffer stays bounded; the pure
  * classifier decides severity from the collected set.
  *
- * @returns {{ getCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]} }}
+ * `sliceCapturedEvents()` returns the events appended since the previous slice
+ * and advances an internal cursor — it does NOT clear the buffer. The per-step
+ * capture slices its window into that state's console.json (per-state
+ * attribution), while `getCapturedEvents()` still hands the walk-level classifier
+ * the WHOLE buffer at walk end. So attribution and the mechanical fail-closed
+ * gate are two views of the same classified events, not a hand-off: a
+ * step-scoped error lands in its state's console.json AND still drives the drive's
+ * `ok`/`failures` gate (keeping its source-line anchoring). The final human-facing
+ * report dedups so the same error is not posted twice.
+ *
+ * @returns {{ getCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]}, sliceCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]} }}
  */
 export function attachPageListeners(page) {
   const responses = [];
@@ -128,7 +144,42 @@ export function attachPageListeners(page) {
     // mapping needs); the classifier bounds it before it lands on the feed.
     pageErrors.push({ message: err?.message ?? String(err), stack: err?.stack ?? null });
   });
-  return { getCapturedEvents: () => ({ responses, requestFailures, pageErrors }) };
+  // Per-state attribution cursor: return the window appended since the previous
+  // slice and advance, WITHOUT clearing — so the walk-level classifier still sees
+  // every event and the mechanical fail-closed gate stays authoritative.
+  const cursor = { responses: 0, requestFailures: 0, pageErrors: 0 };
+  const sliceCapturedEvents = () => {
+    const slice = {
+      responses: responses.slice(cursor.responses),
+      requestFailures: requestFailures.slice(cursor.requestFailures),
+      pageErrors: pageErrors.slice(cursor.pageErrors),
+    };
+    cursor.responses = responses.length;
+    cursor.requestFailures = requestFailures.length;
+    cursor.pageErrors = pageErrors.length;
+    return slice;
+  };
+  return { getCapturedEvents: () => ({ responses, requestFailures, pageErrors }), sliceCapturedEvents };
+}
+
+/** Shape a per-state slice of listener events into the console.json
+ * review-input payload: JS `pageerror`s become `consoleErrors`, error responses
+ * and failed requests become `failedRequests`. Returns null when the slice is
+ * empty, so an errorless state emits a deterministic JSON null (mirroring the
+ * snapshot/axe best-effort policy) rather than an empty envelope. */
+export function toPerStateConsolePayload(events = {}) {
+  const consoleErrors = (events.pageErrors ?? []).map((e) => ({
+    message: e.message ?? null,
+    // Clamp to the SAME bound the mechanical feed uses (classifyFailures) so a
+    // runaway stack can't bloat console.json and the two views stay consistent.
+    stack: typeof e.stack === "string" && e.stack.length > 0 ? e.stack.slice(0, PAGE_ERROR_STACK_MAX_CHARS) : null,
+  }));
+  const failedRequests = [
+    ...(events.responses ?? []).map((r) => ({ kind: "error-response", url: r.url ?? null, status: r.status })),
+    ...(events.requestFailures ?? []).map((f) => ({ kind: "request-failed", url: f.url ?? null, failure: f.failure ?? null })),
+  ];
+  if (consoleErrors.length === 0 && failedRequests.length === 0) return null;
+  return { consoleErrors, failedRequests };
 }
 
 /** Cap the bytes a single tail read pulls into memory, so a huge log growth
@@ -227,8 +278,10 @@ async function dismissInterstitials({ page, interstitials, timeoutMs = 2000 }) {
   return { dismissed };
 }
 
-/** Map one declared step to its Playwright page call, then capture the state. */
-function makeRunStep({ page, outputDir }) {
+/** Map one declared step to its Playwright page call, then capture the state.
+ * Exported so the per-state attribution + consolePath threading has a regression
+ * test against the REAL production wiring (not a substitute fake runStep). */
+export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
   return async ({ appUrl, flow, step, index }) => {
     const sel = step.selector;
     switch (step.action) {
@@ -254,15 +307,25 @@ function makeRunStep({ page, outputDir }) {
         throw new Error(`unknown step action: ${step.action}`);
     }
     const stateName = step.name ?? `${flow.name} ${step.action} ${index + 1}`;
+    // Slice the walk-level listener window for THIS state IMMEDIATELY after the step
+    // action — BEFORE capturing artifacts — so the attribution cursor advances even if
+    // captureNamedUiState later throws (screenshot/file-write failure). Otherwise the
+    // next step's console.json would misattribute this step's events. Slicing never
+    // clears the buffer, so getCapturedEvents still feeds the whole set to the
+    // mechanical fail-closed gate.
+    const consolePayload = sliceCapturedEvents ? toPerStateConsolePayload(sliceCapturedEvents()) : undefined;
     const paths = await captureNamedUiState({
       page,
       sliceId: flow.name,
       stateName,
       fullPage: false,
       outputDir,
+      // Hand the already-sliced window to this state's console.json (same attribution
+      // as before when capture succeeds); the cursor already advanced above.
+      captureConsole: sliceCapturedEvents ? () => consolePayload : undefined,
       metadata: { fixture: null, route: step.path ?? null, reviewHint: `Drive step "${stateName}" for the "${flow.name}" flow.` },
     });
-    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath, axePath: paths.axePath };
+    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath, axePath: paths.axePath, consolePath: paths.consolePath };
   };
 }
 
@@ -299,7 +362,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    const { getCapturedEvents } = attachPageListeners(page);
+    const { getCapturedEvents, sliceCapturedEvents } = attachPageListeners(page);
     const result = await driveUiReview(
       {
         appUrl: options.appUrl,
@@ -313,7 +376,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       {
         authenticate: () => authenticate({ page, login: recipe.login }),
         dismissInterstitials: ({ interstitials }) => dismissInterstitials({ page, interstitials }),
-        runStep: makeRunStep({ page, outputDir: options.outputDir }),
+        runStep: makeRunStep({ page, outputDir: options.outputDir, sliceCapturedEvents }),
         getCapturedEvents,
         readServerLogTail: () => logTail.read(),
         log: (msg) => stderr.write(`[ui-review-drive] ${msg}\n`),

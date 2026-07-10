@@ -17,7 +17,7 @@ The harness is intentionally small:
 - Playwright
 - WebKit only
 - fixture-backed scenarios
-- named screenshot/state/snapshot/axe artifact capture
+- named screenshot/state/snapshot/axe/console artifact capture
 - deterministic local artifact/report locations
 
 It is not a general E2E framework and it does not make browser validation mandatory for non-UI slices.
@@ -73,6 +73,7 @@ Each named-state directory currently contains:
 - `state.json`
 - `snapshot.json`
 - `axe.json`
+- `console.json`
 
 These paths are the local proving ground for the reusable artifact contract in [UI Artifact Contract](./ui-artifact-contract.md) and for later designer-review-loop work.
 

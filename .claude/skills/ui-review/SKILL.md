@@ -59,18 +59,24 @@ one headless WebKit context, authenticates as the change's target role through a
 project-provided dev-login recipe, dismisses config-declared interstitials once
 per context, then walks the selected flows — rendering each page and exercising
 its declared create/edit/reorder/upload/toggle interactions — capturing a step
-screenshot + sibling `state.json` + `snapshot.json` + `axe.json` per step via `captureNamedUiState`. It fails
+screenshot + sibling `state.json` + `snapshot.json` + `axe.json` + `console.json` per step via `captureNamedUiState`. It fails
 closed to a stated stop reason when it cannot authenticate, and drives nothing.
 
 Throughout the walk, `response`, `requestfailed`, and `pageerror` listeners run
 and the project server log is tailed, so a swallowed error response (a 500 the UI
 hides behind a success state) is still recorded. An error response is a status
 <200 or >=400; 3xx redirects are normal navigation (login/canonical) and are not
-flagged. The stage emits an ordered set of step screenshots plus a structured
-captured-failures list (error responses, request failures, page errors,
-server-log exceptions) that
-feeds the next stage. Every bounded cap — max screenshots, screens skipped, and
-the fixed no-retry policy — is logged explicitly.
+flagged. Each per-step capture SLICES that listener buffer into the step's
+`console.json` (per-state attribution of console errors + failed requests)
+WITHOUT clearing it, so the same classified events still reach the walk-level
+failure gate — a captured step-scoped error deterministically fails the drive
+closed and keeps its source-line anchoring. The stage emits an ordered set of
+step screenshots plus a structured captured-failures list (error responses,
+request failures, page errors, server-log exceptions, and step failures) that
+feeds the next stage; the final report dedups per-state attribution against that
+list so the same error is not posted twice. Every bounded cap — max
+screenshots, screens skipped, and the fixed no-retry policy — is logged
+explicitly.
 
 Which flows are driven is a bounded heuristic over an explicit allowlist, never
 an unbounded crawl: each `uiReview.flows` entry declares `pathPatterns` matched

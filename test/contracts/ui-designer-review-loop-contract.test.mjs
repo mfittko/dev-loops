@@ -31,6 +31,9 @@ test('designer review loop doc remains the canonical bounded UI review handoff c
   // Accessibility findings are asserted from axe evidence, not eyeballed.
   assert.match(doc, /axe\.json/i);
   assert.match(doc, /mapAxeImpactToFindingSeverity/);
+  // Console/network errors are per-state review findings, never dropped.
+  assert.match(doc, /console\.json/i);
+  assert.match(doc, /consolePath/);
 
   await assert.rejects(
     stat(fromRepoRoot('skills/dev-loop/templates/ui-designer-review.md')),
@@ -46,6 +49,10 @@ test('designer review loop doc remains the canonical bounded UI review handoff c
   // Computable a11y facts come from axe.json, not pixel judgment.
   assert.match(visionTemplate, /axe\.json/i);
   assert.match(visionTemplate, /Do \*\*not\*\* eyeball computable accessibility facts/i);
+  // console.json errors are already mechanically-owned must-fix findings the
+  // reviewer reads as evidence (not re-filed): the template names that ownership.
+  assert.match(visionTemplate, /console\.json/i);
+  assert.match(visionTemplate, /must-fix finding/i);
   assert.match(indexDoc, /ui-designer-review-loop\.md/i);
   assert.match(localImplementationSkill, /\.\.\/\.\.\/docs\/ui-designer-review-loop\.md/i);
 });

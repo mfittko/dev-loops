@@ -47,12 +47,14 @@ For this level, a state artifact bundle is required:
 - `state.json`
 - `snapshot.json`
 - `axe.json`
+- `console.json`
 
-Why all four are required:
+Why all five are required:
 - the screenshot shows what rendered
 - `state.json` explains which named state it is, which slice produced it, and the minimum metadata needed for review or follow-up automation
 - `snapshot.json` is the semantic accessibility tree captured for the same state — the structured counterpart to the pixels, so a reviewer (or later automation) can reason about roles/names, not just what a screenshot happens to show
 - `axe.json` is the computed accessibility facts (axe-core results) for the same state, so contrast and other computable a11y issues are asserted from a tool, not eyeballed from pixels
+- `console.json` is the console errors and failed network requests attributed to the same state, so a swallowed error (a 500 hidden behind a success toast, an uncaught page error) is a review input rather than something only a live re-run would surface
 
 ### 3. CI-required artifacts
 
@@ -73,6 +75,7 @@ For a slice id of `<sliceId>` and a state slug of `<state-slug>`, the harness pa
 - structured state artifact: `test-results/ui-smoke/<sliceId>/named-states/<state-slug>/state.json`
 - semantic snapshot artifact: `test-results/ui-smoke/<sliceId>/named-states/<state-slug>/snapshot.json`
 - computed a11y artifact: `test-results/ui-smoke/<sliceId>/named-states/<state-slug>/axe.json`
+- console/network artifact: `test-results/ui-smoke/<sliceId>/named-states/<state-slug>/console.json`
 - HTML report root: `playwright-report/ui-smoke/<sliceId>/`
 
 The harness currently normalizes:
@@ -81,7 +84,7 @@ The harness currently normalizes:
 
 ## Minimum `state.json` contract
 
-The current reusable harness emits `state.json` with this minimum reviewer-facing metadata (current `schemaVersion`: `3`):
+The current reusable harness emits `state.json` with this minimum reviewer-facing metadata (current `schemaVersion`: `4`):
 - `schemaVersion`
 - `artifactType`
 - `validationLevel`
@@ -101,6 +104,8 @@ The current reusable harness emits `state.json` with this minimum reviewer-facin
 - `artifacts.snapshot.relativePath`
 - `artifacts.axe.fileName`
 - `artifacts.axe.relativePath`
+- `artifacts.console.fileName`
+- `artifacts.console.relativePath`
 - `metadata.fixture`
 - `metadata.route`
 - `metadata.reviewHint`
@@ -140,6 +145,29 @@ finding severity with this fixed mapping:
 - `minor` → `low`
 - unranked / unknown impact → `medium` (conservative default)
 
+## `console.json` contract
+
+`console.json` is the console errors and failed network requests attributed to
+the same named state. Its body is a `{ consoleErrors, failedRequests }` report —
+`consoleErrors` are uncaught page errors (each with `message` and a bounded
+`stack`), `failedRequests` are error responses (status `<200`/`>=400`) and failed
+requests — or JSON `null` when nothing was captured for the state. Like
+`snapshot.json` and `axe.json`, it is best-effort in content but always emitted
+for every named state (never skipped) at the deterministic path above, and
+`state.json` references it under `artifacts.console`.
+
+`console.json` is populated by **slicing the live drive's single walk-level
+listener buffer** into the state active when the events fired — it is per-state
+attribution of the console/network errors the drive already captures, not a new
+capture mechanism. The slice does **not** clear the buffer: the same classified
+events still reach the drive's walk-level failure gate, so a captured
+console/network error is a **mechanical, mode-independent fail-closed signal**
+(it flips the drive's `ok` to false and keeps its source-line anchoring), not
+merely a review hint. Attribution (`console.json`) and the mechanical failure gate
+are two views of the same classified events; the final report dedups so the same
+error is not posted twice. A captured console/network error is never silently
+dropped.
+
 ## When screenshot alone is acceptable
 
 Screenshot alone is acceptable only when the artifact is:
@@ -150,7 +178,7 @@ Screenshot alone is acceptable only when the artifact is:
 
 ## When the state artifact bundle is required
 
-The `screenshot.png` + `state.json` + `snapshot.json` + `axe.json` bundle is required when:
+The `screenshot.png` + `state.json` + `snapshot.json` + `axe.json` + `console.json` bundle is required when:
 - the artifact is part of the reusable deterministic smoke harness
 - the slice is handing named UI states to a later reviewer loop
 - the artifact needs to map back to a deterministic local run without guesswork
@@ -174,6 +202,7 @@ When a registered artifact's suite is required:
 - missing `screenshot.png` is a validation failure
 - missing or malformed `snapshot.json` is a validation failure
 - missing or malformed `axe.json` is a validation failure
+- missing or malformed `console.json` is a validation failure
 - mismatched state naming/path conventions are a validation failure
 - the PR should fail closed rather than silently downgrade to screenshot-only review
 
