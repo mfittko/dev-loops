@@ -17,7 +17,8 @@ Required:
   --verdict <clean|findings_present|blocked>
   --findings <json>              JSON array of finding objects with severity, disposition, angle, and summary
 Optional:
-  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model? }] }
+  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead? }] }
+                                 carriedFromHead (7-64 hex) marks an angle whose clean verdict was carried forward from that prior head (reviewer stays the prior reviewer)
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
@@ -138,6 +139,19 @@ export function parseProvenanceJson(raw) {
         }
         entry[key] = a[key].trim();
       }
+    }
+    // carriedFromHead marks an angle whose CLEAN verdict was CARRIED FORWARD from
+    // a prior head (the delta since that head provably did not touch this angle's
+    // review surface — see @dev-loops/core/loop/gate-carry-forward). It records
+    // the prior head SHA the verdict came from; the `reviewer` on this entry is
+    // that prior head's reviewer (honest attribution, NOT a fabricated fresh
+    // review). It does not relax the distinctReviewers consistency check below —
+    // a carried angle still names the real reviewer identity that reviewed it.
+    if ("carriedFromHead" in a) {
+      if (typeof a.carriedFromHead !== "string" || !/^[0-9a-f]{7,64}$/i.test(a.carriedFromHead.trim())) {
+        throw parseError(`--provenance.perAngle[${i}].carriedFromHead must be a 7-64 char hex SHA`);
+      }
+      entry.carriedFromHead = a.carriedFromHead.trim().toLowerCase();
     }
     return entry;
   });

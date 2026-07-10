@@ -32,7 +32,7 @@ export const ChangeCategory = Object.freeze({
  *
  * @type {Record<string, string[]>}
  */
-const CATEGORY_ANGLE_MAP = {
+export const CATEGORY_ANGLE_MAP = {
   [ChangeCategory.RENAME_ONLY]: [
     "scope", "correctness", "contract-surface", "docs", "link-check",
   ],
@@ -64,7 +64,7 @@ const CATEGORY_ANGLE_MAP = {
  *
  * @type {Set<string>}
  */
-const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr-description"]);
+export const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr-description"]);
 
 // ---------------------------------------------------------------------------
 // Resolution

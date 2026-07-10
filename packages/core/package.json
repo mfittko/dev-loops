@@ -28,6 +28,7 @@
     "./loop/copilot-ci-status": "./src/loop/copilot-ci-status.mjs",
     "./loop/copilot-loop-iterations": "./src/loop/copilot-loop-iterations.mjs",
     "./loop/copilot-loop-state": "./src/loop/copilot-loop-state.mjs",
+    "./loop/gate-carry-forward": "./src/loop/gate-carry-forward.mjs",
     "./loop/gate-fanin": "./src/loop/gate-fanin.mjs",
     "./loop/handoff-envelope": "./src/loop/handoff-envelope.mjs",
     "./loop/lifecycle-state": "./src/loop/lifecycle-state.mjs",
