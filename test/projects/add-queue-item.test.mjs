@@ -378,6 +378,26 @@ describe("add-queue-item", () => {
       assert.equal("requestedColumn" in result.item, false);
     });
 
+    it("omits the moved signal when the already-present item has no known Status", async () => {
+      // Unknown/absent Status must not emit a misleading moved:false + currentColumn:null.
+      const existingItem = makeItemNode("PVTI_existing", makeContent("Issue", 10), null);
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsByContentResponse([existingItem]) },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, column: "Next Up" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.item.alreadyPresent, true);
+      assert.equal(result.item.status, null);
+      assert.equal("moved" in result.item, false);
+      assert.equal("currentColumn" in result.item, false);
+      assert.equal("requestedColumn" in result.item, false);
+    });
+
     it("filters already-present check by repo", async () => {
       // Item from different repo should not match
       const otherRepoContent = { __typename: "Issue", number: 10, repository: { nameWithOwner: "other/repo" } };
