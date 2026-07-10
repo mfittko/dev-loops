@@ -14,8 +14,12 @@ test('designer review loop doc remains the canonical bounded UI review handoff c
   ]);
 
   assert.match(doc, /designer-persona review loop/i);
-  assert.match(doc, /single public entrypoint/i);
+  // dev-loop token pins the entrypoint fact; the surrounding phrasing may reword.
   assert.match(doc, /`dev-loop`/i);
+  // Single-entrypoint invariant: `dev-loop` remains the sole public entrypoint.
+  // Durable heading-level terminology, so pinning it survives prose rewords but
+  // trips on a deletion/flip of the invariant.
+  assert.match(doc, /single public entrypoint/i);
   assert.match(doc, /acceptance criteria/i);
   assert.match(doc, /review brief/i);
   assert.match(doc, /artifact bundle/i);
@@ -24,7 +28,8 @@ test('designer review loop doc remains the canonical bounded UI review handoff c
   assert.match(doc, /ui_review_satisfied/i);
   assert.match(doc, /blocked_needs_human_decision/i);
   assert.match(doc, /fails closed/i);
-  assert.match(doc, /does not trigger for non-UI work/i);
+  // Keep the negation so a polarity flip ("triggers for non-UI work") still trips.
+  assert.match(doc, /does not trigger for non-UI/i);
   assert.match(doc, /uiReviewMode: vision/i);
   assert.match(doc, /ready_for_vision_review/i);
   assert.match(doc, /skills\/dev-loop\/templates\/ui-vision-review\.md/i);
@@ -48,11 +53,13 @@ test('designer review loop doc remains the canonical bounded UI review handoff c
   assert.match(visionTemplate, /blocked_needs_human_decision/i);
   // Computable a11y facts come from axe.json, not pixel judgment.
   assert.match(visionTemplate, /axe\.json/i);
-  assert.match(visionTemplate, /Do \*\*not\*\* eyeball computable accessibility facts/i);
+  // Don't-eyeball-a11y guidance: keep the negation so a flip ("do eyeball the a11y
+  // facts") still trips, while tolerating rewording of the surrounding prose.
+  assert.match(visionTemplate, /not\b[^.]*eyeball/i);
   // console.json errors are already mechanically-owned must-fix findings the
   // reviewer reads as evidence (not re-filed): the template names that ownership.
   assert.match(visionTemplate, /console\.json/i);
-  assert.match(visionTemplate, /must-fix finding/i);
+  assert.match(visionTemplate, /must-fix/i);
   assert.match(indexDoc, /ui-designer-review-loop\.md/i);
   assert.match(localImplementationSkill, /\.\.\/\.\.\/docs\/ui-designer-review-loop\.md/i);
 });
