@@ -989,7 +989,8 @@ export async function readGateContext(input, { repoRoot = process.cwd() } = {}) 
  * @param {{ repoRoot: string }} opts
  */
 export function assertWorktreeAtHead(headSha, { repoRoot }) {
-  // Fail-closed self-guard: the bidirectional prefix-match below FALSE-ACCEPTS an
+  // Fail-closed self-guard: the abbreviation prefix-match below (declared must be a
+  // prefix of the full-length HEAD) FALSE-ACCEPTS an
   // empty/too-short `headSha` (an empty string is a prefix of every HEAD). The sole
   // caller (main) pre-validates via normalizeHeadSha, but re-validate here so this
   // exported boundary stays fail-closed for any future importer.
