@@ -55,15 +55,13 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   await mkdir(paths.artifactDir, { recursive: true });
   await page.screenshot({ path: paths.screenshotPath, fullPage });
 
-  // Semantic snapshot: the accessibility tree next to the pixels. A genuinely
-  // empty page returns null from `snapshot()` — a valid tree, still emitted
-  // deterministically (as JSON null) rather than skipped. But a MISSING
-  // accessibility API is an environment failure, not an empty tree — fail closed
-  // rather than write an ambiguous null indistinguishable from a real empty tree.
-  if (typeof page.accessibility?.snapshot !== 'function') {
-    throw new Error('page.accessibility.snapshot() is unavailable — cannot capture the required semantic snapshot');
-  }
-  const accessibilityTree = (await page.accessibility.snapshot()) ?? null;
+  // Semantic snapshot: the accessibility tree next to the pixels. Captured
+  // best-effort — Playwright's `page.accessibility` is a deprecated API that is
+  // genuinely unavailable in some deployed browser builds, so the optional chain
+  // is intentional (failing closed here would break real smokes). A working API
+  // that returns null for a page with no accessible tree is a valid tree, still
+  // emitted deterministically (as JSON null) rather than skipped.
+  const accessibilityTree = (await page.accessibility?.snapshot?.()) ?? null;
   await writeFile(paths.snapshotPath, `${JSON.stringify(accessibilityTree, null, 2)}\n`, 'utf8');
 
   const normalizedMetadata = {

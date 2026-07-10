@@ -102,7 +102,6 @@ test('captureNamedUiState normalizes undefined metadata contract keys to null', 
     const artifact = await captureNamedUiState({
       page: {
         async screenshot() {},
-        accessibility: { async snapshot() { return null; } },
       },
       outputDir: tempDir,
       sliceId: 'inspect-run-viewer',
@@ -133,7 +132,6 @@ test('captureNamedUiState accepts an explicit outputDir without testInfo metadat
     const artifact = await captureNamedUiState({
       page: {
         async screenshot() {},
-        accessibility: { async snapshot() { return null; } },
       },
       outputDir: tempDir,
       sliceId: 'inspect-run-viewer',
@@ -183,22 +181,20 @@ test('captureNamedUiState emits snapshot.json as JSON null when the page exposes
   }
 });
 
-test('captureNamedUiState fails closed when the accessibility API is unavailable', async () => {
+test('captureNamedUiState emits snapshot.json as JSON null when the accessibility API is unavailable', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-no-a11y-'));
 
   try {
-    // A page with NO accessibility API is an environment failure, not an empty
-    // tree: it must fail closed rather than emit an ambiguous JSON null that
-    // can't be told apart from a genuinely empty accessible tree.
-    await assert.rejects(
-      captureNamedUiState({
-        page: { async screenshot() {} },
-        outputDir: tempDir,
-        sliceId: 'inspect-run-viewer',
-        stateName: 'No accessibility API',
-      }),
-      /accessibility\.snapshot\(\) is unavailable/,
-    );
+    // `page.accessibility` is a deprecated Playwright API that can be genuinely
+    // absent in a deployed browser build; capture is best-effort and emits a
+    // deterministic JSON null rather than throwing (which would break real smokes).
+    const artifact = await captureNamedUiState({
+      page: { async screenshot() {} },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'No accessibility API',
+    });
+    assert.equal(await readFile(artifact.snapshotPath, 'utf8'), 'null\n');
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
