@@ -3631,10 +3631,14 @@ describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
   }
 
   test("explicit per-angle roleTiers override beats the review-tier default", () => {
-    const config = { models: { roleTiers: { docs: "high" } } };
+    // `low` is DISTINCT from the angle-path fallback (review → high → opus), so
+    // this fails if the override branch (`roleTiers[role] ?? review`) is removed.
+    const config = { models: { roleTiers: { docs: "low" } } };
     // roleTiers.docs is shared with the docs role; an explicit override applies
-    // to the angle path too.
-    assert.equal(resolveRoleModel(config, { role: "docs", harness: "claude", kind: "angle" }), "opus");
+    // to the angle path too, downgrading it below the review default.
+    assert.equal(resolveRoleModel(config, { role: "docs", harness: "claude", kind: "angle" }), "sonnet");
+    // The role path already resolves low; the override keeps it low.
+    assert.equal(resolveRoleModel(config, { role: "docs", harness: "claude", kind: "role" }), "sonnet");
   });
 });
 
