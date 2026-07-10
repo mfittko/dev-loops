@@ -266,3 +266,26 @@ test('the worse-severity representative keeps its own suggestedFix across a merg
   assert.equal(findings[0].severity, 'high');
   assert.equal(findings[0].suggestedFix, 'the real fix');
 });
+
+test('validator rejects a finding whose stateName/region/category contains the dedupe separator', () => {
+  const NUL = String.fromCharCode(0); // the U+0000 dedupe-key separator, kept out of the source as raw bytes
+  for (const field of ['stateName', 'region', 'category']) {
+    const result = validateUiReviewLensResults(lensSet({ a11y: [F({ [field]: `a${NUL}b` })] }));
+    assert.equal(result.ok, false, `${field} containing the separator must be rejected`);
+    assert.equal(result.reason, 'lens_finding_malformed');
+    assert.ok(result.missing.some((m) => m.endsWith(`.${field}`)));
+  }
+});
+
+test('a severity-tie representative is deterministic regardless of input lens order', () => {
+  const a11yFinding = F({ severity: 'medium', problem: 'a11y problem', suggestedFix: 'a11y fix' });
+  const visualFinding = F({ severity: 'medium', problem: 'visual problem', suggestedFix: 'visual fix' });
+  const set = lensSet({ a11y: [a11yFinding], visual: [visualFinding] });
+  const forward = convergeUiReviewLenses(set);
+  const reverse = convergeUiReviewLenses([...set].reverse());
+  assert.equal(forward.findings.length, 1);
+  assert.equal(reverse.findings.length, 1);
+  // The earlier canonical lens (a11y) supplies the descriptive fields, both orders.
+  assert.equal(forward.findings[0].problem, 'a11y problem');
+  assert.deepEqual(forward.findings[0], reverse.findings[0]);
+});

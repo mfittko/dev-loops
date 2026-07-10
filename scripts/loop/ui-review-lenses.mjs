@@ -31,8 +31,13 @@ export const UI_REVIEW_LENSES = Object.freeze([
 
 export const UI_REVIEW_LENS_NAMES = Object.freeze(UI_REVIEW_LENSES.map((lens) => lens.name));
 
-/** Combined severity ladder across both lens vocabularies (mechanical
- * `must-fix`/`note` from the interaction lens; `high`/`medium`/`low` from the
+/** Canonical lens index — the deterministic tie-break when two lenses report the
+ * SAME defect at EQUAL severity: the earlier lens supplies the representative's
+ * descriptive fields, so the merge result is independent of input lens order. */
+const LENS_ORDER = new Map(UI_REVIEW_LENS_NAMES.map((name, index) => [name, index]));
+
+/** Severity ladder — the SAME four values the vision template allows
+ * (`must-fix` from the interaction lens; `high`/`medium`/`low` from the
  * axe-impact and judgment lenses). Lower rank = higher severity = wins on a
  * cross-lens duplicate. */
 const SEVERITY_RANK = Object.freeze({
@@ -40,7 +45,6 @@ const SEVERITY_RANK = Object.freeze({
   high: 1,
   medium: 2,
   low: 3,
-  note: 4,
 });
 
 export const UI_REVIEW_FINDING_SEVERITIES = Object.freeze(Object.keys(SEVERITY_RANK));
@@ -57,6 +61,12 @@ export const UI_REVIEW_OUTCOMES = Object.freeze({
   BLOCKED: "blocked_needs_human_decision",
 });
 
+/** Dedupe-key field separator. The U+0000 NUL cannot appear in real
+ * stateName/region/category text, so joining the triple with it is unambiguous —
+ * and `validateUiReviewLensResults` rejects any finding that DOES contain it, so
+ * a crafted value can never forge a collision. */
+const DEDUPE_KEY_SEPARATOR = "\u0000";
+
 function normalizeKeyPart(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -64,11 +74,11 @@ function normalizeKeyPart(value) {
 /**
  * The dedupe key. Two findings — from any lenses — are the SAME defect when they
  * share a normalized (stateName, region/selector, category/rule) triple. The
- * U+0000 separator cannot appear in the normalized parts, so the join is
- * unambiguous.
+ * separator cannot appear in the normalized parts (the validator rejects any
+ * finding that contains it), so the join is unambiguous.
  */
 export function lensFindingDedupeKey(finding) {
-  return [normalizeKeyPart(finding?.stateName), normalizeKeyPart(finding?.region), normalizeKeyPart(finding?.category)].join("\u0000");
+  return [normalizeKeyPart(finding?.stateName), normalizeKeyPart(finding?.region), normalizeKeyPart(finding?.category)].join(DEDUPE_KEY_SEPARATOR);
 }
 
 function isNonEmptyString(value) {
@@ -118,6 +128,12 @@ export function validateUiReviewLensResults(lensResults) {
       if (!isNonEmptyString(finding.stateName)) problems.push(`${where}.stateName`);
       if (!isNonEmptyString(finding.region)) problems.push(`${where}.region`);
       if (!isNonEmptyString(finding.category)) problems.push(`${where}.category`);
+      // The dedupe key joins these three fields with DEDUPE_KEY_SEPARATOR and relies
+      // on it never appearing inside a field; a crafted value containing it could
+      // forge a key collision (distinct findings merging), so reject it fail-closed.
+      for (const field of ["stateName", "region", "category"]) {
+        if (typeof finding[field] === "string" && finding[field].includes(DEDUPE_KEY_SEPARATOR)) problems.push(`${where}.${field}`);
+      }
       // `includes` on own known keys, NOT `in` — `in` walks Object.prototype, so
       // `severity: "toString"`/"constructor"/"__proto__" would pass and then resolve
       // to a prototype fn in SEVERITY_RANK[...], silently downgrading a real defect.
@@ -141,6 +157,18 @@ export function validateUiReviewLensResults(lensResults) {
 /** A finding blocks "satisfied" when its severity is must-fix/high. */
 function isMustFixFinding(finding) {
   return MUST_FIX_SEVERITIES.has(finding.severity);
+}
+
+/**
+ * Pick the representative between a merge candidate and the incumbent: the worse
+ * severity wins; on a severity TIE the finding from the earlier canonical lens
+ * (`_srcLens`) wins, so the representative's descriptive fields are deterministic
+ * regardless of the order the lens results arrive in.
+ */
+function pickRepresentative(incoming, existing) {
+  const bySeverity = SEVERITY_RANK[incoming.severity] - SEVERITY_RANK[existing.severity];
+  if (bySeverity !== 0) return bySeverity < 0 ? incoming : existing;
+  return LENS_ORDER.get(incoming._srcLens) < LENS_ORDER.get(existing._srcLens) ? incoming : existing;
 }
 
 /**
@@ -194,6 +222,7 @@ export function convergeUiReviewLenses(lensResults) {
         suggestedFix: isNonEmptyString(raw.suggestedFix) ? raw.suggestedFix : null,
         evidence: raw.evidence && typeof raw.evidence === "object" ? raw.evidence : null,
         lenses: [lens],
+        _srcLens: lens,
       };
       const key = lensFindingDedupeKey(finding);
       const existing = byKey.get(key);
@@ -202,15 +231,17 @@ export function convergeUiReviewLenses(lensResults) {
         continue;
       }
       // Merge: keep the worse severity as the representative (its problem/
-      // suggestedFix follow via the `...winner` spread); a blocking signal from
-      // any contributing lens survives; union the contributing lenses.
+      // suggestedFix/evidence follow via the `...winner` spread); on a severity
+      // tie the earlier canonical lens wins (pickRepresentative) so the result is
+      // input-order-independent; a blocking signal from any contributing lens
+      // survives; union the contributing lenses.
       const lenses = [...new Set([...existing.lenses, lens])].sort();
-      const winner = SEVERITY_RANK[finding.severity] < SEVERITY_RANK[existing.severity] ? finding : existing;
+      const winner = pickRepresentative(finding, existing);
       byKey.set(key, { ...winner, blocking: existing.blocking || finding.blocking, lenses });
     }
   }
 
-  const findings = [...byKey.values()].sort((a, b) => {
+  const findings = [...byKey.values()].map(({ _srcLens, ...finding }) => finding).sort((a, b) => {
     return (
       a.stateName.localeCompare(b.stateName) ||
       SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||

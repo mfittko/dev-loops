@@ -103,8 +103,10 @@ harness-agnostic — no browser, no model.
   collapse to one representative and every contributing lens is recorded on
   `lenses`.
 - **Precedence.** When two lenses report the same defect the worse severity wins
-  (ladder: `must-fix` > `high` > `medium` > `low` > `note`); a `blocking` signal
-  from any contributing lens survives the merge.
+  (ladder: `must-fix` > `high` > `medium` > `low`); on a severity tie the earlier
+  canonical lens (`a11y` > `layout-geometry` > `visual` > `interaction`) supplies
+  the representative's descriptive fields, so the merge is independent of input
+  order. A `blocking` signal from any contributing lens survives the merge.
 - **Stable ordering.** Findings are ordered by `stateName`, then severity
   (worst first), then region, then category.
 - **Outcome mapping** (the existing enum, unchanged): any `blocking` finding ⇒
