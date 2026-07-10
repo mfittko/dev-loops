@@ -185,6 +185,37 @@ test('captureNamedUiState fails closed on a within-run duplicate slug instead of
   }
 });
 
+test('captureNamedUiState allows the SAME state name to re-capture the same statePath (Playwright retry)', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-retry-'));
+
+  try {
+    // A Playwright retry re-runs the test in the same reused worker process and,
+    // because resolvedOutputDir prefers the retry-STABLE testInfo.project.outputDir,
+    // re-captures the SAME stateName to the SAME statePath. That is a legitimate
+    // overwrite and must NOT trip the duplicate-slug guard.
+    const first = await captureNamedUiState({
+      page: { async screenshot() {} },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'Current PR dashboard',
+    });
+
+    const retried = await captureNamedUiState({
+      page: { async screenshot() {} },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'Current PR dashboard',
+    });
+
+    assert.equal(retried.statePath, first.statePath);
+    const stateJson = JSON.parse(await readFile(retried.statePath, 'utf8'));
+    assert.equal(stateJson.stateName, 'Current PR dashboard');
+    assert.equal(stateJson.stateSlug, 'current-pr-dashboard-default-none');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('captureNamedUiState normalizes undefined metadata contract keys to null', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-metadata-'));
 

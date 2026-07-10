@@ -56,15 +56,19 @@ export function normalizeInteractionSegment(interactionState) {
   return normalized;
 }
 
-// Per-process registry of claimed named-state artifact paths. The artifact path
-// is slice-scoped, not run-unique (the same sliceId re-renders to the same dir,
-// and runId is deterministic), so a raw existsSync would false-positive against a
-// prior run's on-disk leftovers. Scoping the guard to this process instead catches
-// the real hazard — two logically distinct states in the SAME walk normalizing to
-// one slug — and resets naturally on a fresh run.
-// ponytail: per-process Set. A Playwright retry in a reused worker gets a
-// retry-suffixed outputDir, so its statePath differs and does not trip this.
-const claimedStatePaths = new Set();
+// Per-process registry mapping each claimed named-state artifact path to the
+// stateName that claimed it. The artifact path is slice-scoped, not run-unique
+// (the same sliceId re-renders to the same dir, and runId is deterministic), so a
+// raw existsSync would false-positive against a prior run's on-disk leftovers.
+// Scoping the guard to this process instead catches the real hazard — two
+// logically distinct states in the SAME walk normalizing to one slug — and resets
+// naturally on a fresh run.
+// ponytail: keyed on stateName. `resolvedOutputDir` prefers
+// `testInfo.project.outputDir`, which is stable per project (NOT retry-suffixed),
+// so a Playwright retry in a reused worker re-captures the SAME statePath. Keying
+// on the claiming stateName lets a same-state retry re-claim/overwrite, while a
+// DIFFERENT state slug-colliding to that path is still rejected.
+const claimedStatePaths = new Map();
 
 function requireOutputDir(outputDir) {
   if (typeof outputDir !== 'string' || outputDir.trim().length === 0) {
@@ -138,14 +142,17 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   });
   const projectName = testInfo?.project?.name ?? null;
 
-  // Fail-closed capture-time collision guard: if a state already captured in this
-  // run resolves to the same on-disk artifacts, throw before writing anything so
-  // the second colliding slug can never silently overwrite the first. The bundle
-  // validator's blocked_duplicate_state_slug seam is defense-in-depth after this.
-  if (claimedStatePaths.has(paths.statePath)) {
+  // Fail-closed capture-time collision guard: if a DIFFERENT state already claimed
+  // these on-disk artifacts in this run, throw before writing anything so the
+  // second colliding slug can never silently overwrite the first. A re-capture by
+  // the SAME stateName (a Playwright retry hitting the same statePath) is a
+  // legitimate overwrite and is allowed. The bundle validator's
+  // blocked_duplicate_state_slug seam is defense-in-depth after this.
+  const claimedBy = claimedStatePaths.get(paths.statePath);
+  if (claimedBy !== undefined && claimedBy !== stateName) {
     throw new Error(`Duplicate named UI state slug "${paths.stateSlug}" for slice "${paths.sliceId}": a second state resolves to ${paths.statePath} and would overwrite the first. Give it a distinct state name, viewport, or interaction state.`);
   }
-  claimedStatePaths.add(paths.statePath);
+  claimedStatePaths.set(paths.statePath, stateName);
 
   await mkdir(paths.artifactDir, { recursive: true });
   await page.screenshot({ path: paths.screenshotPath, fullPage });
