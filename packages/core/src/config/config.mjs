@@ -659,16 +659,16 @@ export function resolveReviewerRole(config, angle) {
  * `null` (inherit → pass no model override).
  *
  * Precedence:
- *   1. `models.roles[name]` — concrete per-role/angle override (highest).
+ *   1. `models.roles[role]` — concrete per-role/angle override (highest).
  *   2. Tier alias, mapped through `models.tiers[tier][harness]` (or built-in
  *      tiers); `inherit`/absent/null → `null`. The alias depends on `kind`:
  *      - `kind: "angle"` (gate review dispatch): an explicit
- *        `models.roleTiers[name]` override, else the `review` tier. A gate
+ *        `models.roleTiers[role]` override, else the `review` tier. A gate
  *        review runs at review quality even when the angle's name collides with
  *        a routine role — e.g. the `docs` angle resolves via the `review` tier
  *        (high), not the `docs` writer role's low tier. (Its persona/agent still
  *        comes from `resolveReviewerRole`; only the tier is forced to review.)
- *      - `kind: "role"`/absent (routine subagent): `models.roleTiers[name]` (or
+ *      - `kind: "role"`/absent (routine subagent): `models.roleTiers[role]` (or
  *        the built-in role tier), else — when the name is not a named role — the
  *        tier for its review persona (so a non-colliding gate angle passed
  *        without `kind` still resolves high via `review`).

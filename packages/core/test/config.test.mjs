@@ -3630,6 +3630,24 @@ describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
     });
   }
 
+  test("on Pi with distinct tier ids, the docs ANGLE takes the high tier and the docs ROLE the low tier", () => {
+    // Zero-config maps both low and high to null on Pi, so a regression where
+    // the angle wrongly took the docs (low) tier would still pass (null===null).
+    // Distinct non-null Pi ids per tier make the provenance observable: the
+    // angle MUST resolve high and the role low, or this fails.
+    const config = { models: { tiers: { low: { pi: "pi-low-model" }, high: { pi: "pi-high-model" } } } };
+    assert.equal(
+      resolveRoleModel(config, { role: "docs", harness: "pi", kind: "angle" }),
+      "pi-high-model",
+      "docs angle must resolve via the review (high) tier on Pi",
+    );
+    assert.equal(
+      resolveRoleModel(config, { role: "docs", harness: "pi", kind: "role" }),
+      "pi-low-model",
+      "docs role must stay on the low tier on Pi",
+    );
+  });
+
   test("explicit per-angle roleTiers override beats the review-tier default", () => {
     // `low` is DISTINCT from the angle-path fallback (review → high → opus), so
     // this fails if the override branch (`roleTiers[role] ?? review`) is removed.
