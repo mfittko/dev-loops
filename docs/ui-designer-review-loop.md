@@ -91,10 +91,12 @@ A review pass judges ONE enriched named-state bundle through four parallel
 Lens **execution** stays in the review route (designer/vision): each lens is a
 named producer that takes the enriched bundle and returns a findings array. The
 vision template emits one FLAT `findings[]`, each finding tagged with its `lens`;
-the route hands that array to `convergeUiReviewRouteFindings(findings)`, which
-groups it by lens (seeding an empty bucket for each of the four canonical lenses,
-so an all-clean lens is still present) and calls the **pure converge seam**,
-`convergeUiReviewLenses(lensResults[]) -> { findings, outcome }`, in
+the route hands that array (with the acceptance-criteria list + `checkedCriteria`)
+to `convergeUiReviewRouteFindings(findings, { acceptanceCriteria, checkedCriteria })`,
+which groups it by lens (seeding an empty bucket for each of the four canonical
+lenses, so an all-clean lens is still present), passes the acceptance-criteria list
++ `checkedCriteria` through, and calls the **pure converge seam**,
+`convergeUiReviewLenses(lensResults, { acceptanceCriteria, checkedCriteria }) -> { findings, outcome, coverage }`, in
 `scripts/loop/ui-review-lenses.mjs`. The seam is deterministic and
 harness-agnostic — no browser, no model.
 
@@ -137,6 +139,15 @@ satisfaction is auditable from the emitted result.
   (`checkedCriteria[] = { acceptanceCriterionRef, stateName }`, the reviewer's
   affirmative "I checked this criterion and found no problem" pass). The full bar
   (`coverage.satisfiedBarMet`) is met only when EVERY criterion is covered.
+- **Merged defects attribute to their primary criterion.** Coverage runs on the
+  DEDUPED findings, and the dedupe key `(stateName, region, category)` excludes
+  `acceptanceCriterionRef` — so when two cross-lens findings share the triple but
+  map to DIFFERENT criteria, they collapse to one representative and only the
+  winner's (primary) criterion is credited. A co-flagged loser criterion on a
+  merged finding can therefore still read as an uncovered coverage gap and keep
+  the loop iterating (`continue_ui_fix_loop`). This is intentional fail-closed
+  behavior: it can only flip `satisfied → continue`, never the reverse, so a real
+  gap is never hidden. (Reworking the dedupe key is a non-goal.)
 - **The gate.** `ui_review_satisfied` is returned only when the coverage bar is
   met AND there are no must-fix/blocking findings. A criterion covered by neither
   a finding nor a check is an unaudited coverage GAP — not a human-decision

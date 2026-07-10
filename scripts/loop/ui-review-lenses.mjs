@@ -247,6 +247,13 @@ function validateCheckedCriteria(checkedCriteria, validRefs) {
  * is covered — the gate `ui_review_satisfied` sits behind. The audit is emitted on
  * the result so which AC each finding maps to and which ACs are covered vs
  * uncovered are readable straight from the structured output.
+ *
+ * Attribution note: this runs on the DEDUPED findings, and the dedupe key
+ * (stateName, region, category) excludes acceptanceCriterionRef — so a merged
+ * defect is credited to its primary (winning) criterion only. A co-flagged loser
+ * criterion on a merged finding may still read as an uncovered gap and keep the
+ * loop iterating (continue); that is intentional fail-closed behavior (it can only
+ * flip satisfied→continue, never the reverse). Reworking the dedupe key is a non-goal.
  */
 function computeCoverage(findings, criteria, checkedCriteria) {
   const perRef = new Map(criteria.map((criterion, i) => [`AC${i + 1}`, { ref: `AC${i + 1}`, criterion, findingCount: 0, checked: false }]));

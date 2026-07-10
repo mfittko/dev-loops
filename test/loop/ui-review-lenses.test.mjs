@@ -352,6 +352,44 @@ test('every converged finding carries the acceptanceCriterionRef it was tagged w
   assert.equal(findings[0].acceptanceCriterionRef, 'AC1');
 });
 
+test('acceptanceCriterionRef survives a cross-lens merge — the winning lens\'s ref is kept', () => {
+  const twoAc = ['first criterion', 'second criterion'];
+  // Same (stateName, region, category) triple across two lenses; a11y is the
+  // worse-severity winner, so ITS ref (AC1) propagates to the merged representative.
+  const bySeverity = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'high', acceptanceCriterionRef: 'AC1' })],
+    visual: [F({ severity: 'low', acceptanceCriterionRef: 'AC2' })],
+  }), opts({ acceptanceCriteria: twoAc }));
+  assert.equal(bySeverity.findings.length, 1);
+  assert.equal(bySeverity.findings[0].acceptanceCriterionRef, 'AC1');
+
+  // On a severity tie the earlier canonical lens (a11y) wins ⇒ its ref survives,
+  // independent of input lens order.
+  const byTie = convergeUiReviewLenses(lensSet({
+    visual: [F({ severity: 'medium', acceptanceCriterionRef: 'AC2' })],
+    a11y: [F({ severity: 'medium', acceptanceCriterionRef: 'AC1' })],
+  }), opts({ acceptanceCriteria: twoAc }));
+  assert.equal(byTie.findings.length, 1);
+  assert.equal(byTie.findings[0].acceptanceCriterionRef, 'AC1');
+});
+
+test('a merged defect is credited to its primary (winning) criterion; the loser AC reads uncovered', () => {
+  const twoAc = ['first criterion', 'second criterion'];
+  // Same triple, two lenses, different ACs: a11y (AC1) wins the severity tie over
+  // visual (AC2). Coverage credits only AC1; AC2 surfaces as an uncovered gap and
+  // downgrades to continue — intentional fail-closed behavior (dedupe excludes the ref).
+  const { findings, outcome, coverage } = convergeUiReviewLenses(lensSet({
+    a11y: [F({ severity: 'low', acceptanceCriterionRef: 'AC1' })],
+    visual: [F({ severity: 'low', acceptanceCriterionRef: 'AC2' })],
+  }), opts({ acceptanceCriteria: twoAc }));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].acceptanceCriterionRef, 'AC1');
+  assert.deepEqual(coverage.covered, ['AC1']);
+  assert.deepEqual(coverage.uncovered, ['AC2']);
+  assert.equal(coverage.satisfiedBarMet, false);
+  assert.equal(outcome, UI_REVIEW_OUTCOMES.CONTINUE);
+});
+
 test('coverage audit reports per-AC covered/uncovered and which findings map to each', () => {
   const twoAc = ['first criterion', 'second criterion'];
   const { coverage } = convergeUiReviewLenses(lensSet({
