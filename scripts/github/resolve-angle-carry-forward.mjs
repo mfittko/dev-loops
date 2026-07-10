@@ -257,7 +257,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // throws; it returns { config, ... }.
     const { config } = await loadDevLoopConfig({ repoRoot });
     const { mandatoryAngles } = resolveGateAngleContract(config, mapGateToConfigKey(options.gate));
-    // FAIL-CLOSED: the delta is computed against the CWD worktree HEAD (base...HEAD),
+    // FAIL-CLOSED: the delta is computed against the CWD worktree HEAD (base..HEAD),
     // but the plan is LABELED with --head-sha. If the worktree is checked out at a
     // different head than --head-sha, every carry-forward decision would be computed
     // against the WRONG head while claiming to be for --head-sha. Abort before
