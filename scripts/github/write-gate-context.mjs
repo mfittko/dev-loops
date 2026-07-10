@@ -970,6 +970,47 @@ export async function readGateContext(input, { repoRoot = process.cwd() } = {}) 
 }
 
 /**
+ * Fail-closed precondition for the CLI `--base` path: verify the CWD git
+ * worktree's HEAD equals the caller-declared `--head-sha` BEFORE we resolve a
+ * diff from that worktree. `--head-sha` is otherwise just metadata; the diff,
+ * changed-file set, and output path all come from whatever worktree the shell
+ * CWD happens to be in. Run from the WRONG worktree (a CWD persisted from a
+ * prior PR's build), `git diff <base>...HEAD` silently resolves the wrong diff
+ * and every fan-out reviewer only fails closed AFTER dispatch on the mislocated
+ * bundle. This turns the head SHA into an enforced precondition so the mistake
+ * is caught at build time (no artifact written) instead.
+ *
+ * `headSha` may be abbreviated (7-64 hex, per normalizeHeadSha); the worktree
+ * HEAD is the full 40-char rev-parse output, so match by prefix in either
+ * direction rather than requiring exact equality.
+ *
+ * @param {string} headSha — the declared --head-sha (already normalized lowercase)
+ * @param {{ repoRoot: string }} opts
+ */
+export function assertWorktreeAtHead(headSha, { repoRoot }) {
+  let actualHead;
+  try {
+    actualHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).trim().toLowerCase();
+  } catch (err) {
+    throw new Error(
+      `--base was given but the current working directory (${repoRoot}) is not inside a git worktree (git rev-parse HEAD failed: ${err?.message ?? err}). cd into the PR's worktree — the one checked out at --head-sha ${headSha} — before building its gate context.`,
+    );
+  }
+  const declared = String(headSha).trim().toLowerCase();
+  const matches = actualHead === declared
+    || actualHead.startsWith(declared)
+    || declared.startsWith(actualHead);
+  if (!matches) {
+    throw new Error(
+      `worktree HEAD ${actualHead} does not match --head-sha ${declared}: the current working directory is the WRONG worktree for this PR, so \`git diff <base>...HEAD\` would resolve the WRONG diff. cd into the worktree checked out at ${declared} and re-run.`,
+    );
+  }
+}
+
+/**
  * CLI entrypoint. Exported (argv + repoRoot both overridable) so tests can
  * drive the `--base` diff-capture path against a throwaway git repo fixture
  * without spawning a subprocess.
@@ -1001,11 +1042,25 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // git repo, etc.) DOES fail closed: the caller opted into the full bundle,
     // so a silent thin degrade there would be a worse surprise than an error.
     if (options.base) {
+      // Fail-closed precondition: the diff is resolved FROM the CWD worktree, so
+      // enforce that CWD is this PR's worktree at --head-sha before diffing.
+      // Otherwise a stale CWD silently yields the wrong diff (caught only after
+      // fan-out today). Throws → caught below → exit 1, no artifact written.
+      assertWorktreeAtHead(options.headSha, { repoRoot });
       const diff = captureDiffFromBase(options.base, { repoRoot });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
         { repoRoot },
       );
+      // A --base build that resolves an EMPTY change set is degenerate: the
+      // caller opted into a full bundle, so a zero-file diff (mis-set base,
+      // wrong worktree that slipped the HEAD guard, etc.) is a fail-closed
+      // error, not a silently-emitted stub with changedFiles:[].
+      if (scope.changedFiles.length === 0) {
+        throw new Error(
+          `--base ${JSON.stringify(options.base)} resolved an EMPTY change set (git diff ${options.base}...HEAD produced no changed files) — refusing to write a degenerate gate-context bundle. Verify --base and that the CWD worktree is checked out at --head-sha ${options.headSha}.`,
+        );
+      }
       options.changedFiles = scope.changedFiles;
       options.diffPath = scope.diffPath;
       options.adjacentCode = scope.adjacentCode;

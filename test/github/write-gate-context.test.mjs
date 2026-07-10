@@ -8,6 +8,7 @@ import test from "node:test";
 import { resolveGateAnglesDynamic } from "@dev-loops/core/config";
 
 import {
+  assertWorktreeAtHead,
   BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   buildGateBriefingPrefixPath,
   buildGateContext,
@@ -956,6 +957,103 @@ test("CLI --base <ref> that fails to resolve fails closed (no artifact written, 
     } finally {
       process.exitCode = priorExitCode;
     }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base fails closed when the CWD worktree HEAD does not match --head-sha (wrong worktree)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      // Declare a --head-sha (baseSha) that is NOT the worktree's HEAD (headSha):
+      // simulates building from a shell CWD left over from another PR's build.
+      await main([
+        "--repo", "owner/repo", "--pr", "46", "--gate", "draft_gate",
+        "--head-sha", baseSha,
+        "--angles", '["scope"]',
+        "--base", "HEAD~1",
+      ], { repoRoot });
+
+      assert.equal(process.exitCode, 1, "fails closed on a HEAD/--head-sha mismatch");
+      const artifact = await readGateContext({
+        repo: "owner/repo", pr: 46, gate: "draft_gate", headSha: baseSha,
+      }, { repoRoot });
+      assert.equal(artifact, null, "no artifact written when CWD is the wrong worktree");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base fails closed when CWD is not inside a git worktree", async () => {
+  // A bare temp dir with no `git init`: rev-parse HEAD must fail, so the --base
+  // build aborts before touching git diff.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-nogit-"));
+  try {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await main([
+        "--repo", "owner/repo", "--pr", "47", "--gate", "draft_gate",
+        "--head-sha", "abcdef1234567890abcdef1234567890abcdef12",
+        "--angles", '["scope"]',
+        "--base", "HEAD~1",
+      ], { repoRoot });
+
+      assert.equal(process.exitCode, 1, "fails closed when CWD is not a git worktree");
+      const artifact = await readGateContext({
+        repo: "owner/repo", pr: 47, gate: "draft_gate",
+        headSha: "abcdef1234567890abcdef1234567890abcdef12",
+      }, { repoRoot });
+      assert.equal(artifact, null, "no artifact written outside a git worktree");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base fails closed on a degenerate empty change set (no changedFiles)", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      // --base HEAD → range HEAD...HEAD is empty, so changedFiles resolves to [].
+      // HEAD matches --head-sha (guard passes), so this exercises the degenerate
+      // build guard specifically, not the worktree guard.
+      await main([
+        "--repo", "owner/repo", "--pr", "48", "--gate", "draft_gate",
+        "--head-sha", headSha,
+        "--angles", '["scope"]',
+        "--base", "HEAD",
+      ], { repoRoot });
+
+      assert.equal(process.exitCode, 1, "fails closed on an empty --base change set");
+      const artifact = await readGateContext({
+        repo: "owner/repo", pr: 48, gate: "draft_gate", headSha,
+      }, { repoRoot });
+      assert.equal(artifact, null, "no degenerate stub artifact written");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("assertWorktreeAtHead accepts an abbreviated --head-sha matching the full worktree HEAD", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    // A 12-char abbreviation of the real HEAD must validate by prefix match.
+    assert.doesNotThrow(() => assertWorktreeAtHead(headSha.slice(0, 12), { repoRoot }));
+    assert.throws(() => assertWorktreeAtHead("0".repeat(40), { repoRoot }), /does not match/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
