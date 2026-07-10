@@ -30,6 +30,27 @@ async function runMain(argv, { repoRoot }) {
   return JSON.parse(chunks.join(""));
 }
 
+// Run main() capturing stdout+stderr and the exit code, WITHOUT parsing — for the
+// fail-closed paths where main writes an error and sets process.exitCode = 1.
+async function runMainRaw(argv, { repoRoot }) {
+  const out = [];
+  const err = [];
+  const origOut = process.stdout.write;
+  const origErr = process.stderr.write;
+  const origExit = process.exitCode;
+  process.stdout.write = (chunk) => { out.push(String(chunk)); return true; };
+  process.stderr.write = (chunk) => { err.push(String(chunk)); return true; };
+  process.exitCode = 0;
+  try {
+    await main(argv, { repoRoot });
+    return { stdout: out.join(""), stderr: err.join(""), exitCode: process.exitCode };
+  } finally {
+    process.stdout.write = origOut;
+    process.stderr.write = origErr;
+    process.exitCode = origExit;
+  }
+}
+
 async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate }) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-cli-"));
   git(repoRoot, ["init", "-q"]);
@@ -94,6 +115,29 @@ test("buildCarryForwardPlan carries code angles on a doc-only delta, marks prove
   assert.equal(correctness.reviewer, "review-a");
   // docs angle's surface changed -> must re-run.
   assert.deepEqual(plan.mustRerun.map((m) => m.angle), ["docs"]);
+});
+
+test("buildCarryForwardPlan carries the FULL reviewer identity (dispatchId/model), not just reviewer", () => {
+  // Prior entry recorded its identity under dispatchId (no `reviewer`) — the
+  // provenance contract counts dispatchId as a reviewer identity, so the carried
+  // entry must preserve it or distinctReviewers breaks at the new head.
+  const log = {
+    headSha: "aaaaaaa",
+    verdict: "clean",
+    provenance: {
+      distinctReviewers: 2,
+      perAngle: [
+        { angle: "correctness", dispatchId: "dispatch-42", model: "opus" },
+        { angle: "docs", reviewer: "review-c" },
+      ],
+    },
+  };
+  const plan = buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] });
+  const correctness = plan.carried.find((c) => c.angle === "correctness");
+  assert.equal(correctness.carriedFromHead, "aaaaaaa");
+  assert.equal(correctness.dispatchId, "dispatch-42");
+  assert.equal(correctness.model, "opus");
+  assert.ok(!("reviewer" in correctness), "no fabricated reviewer when the prior entry had none");
 });
 
 test("buildCarryForwardPlan re-runs code angles but carries the docs angle on a code delta", () => {
@@ -178,6 +222,32 @@ test("CLI forces the RENAME_ONLY angles to re-run when the delta contains a rena
     assert.ok(rerun.includes("correctness"), "rename forces correctness");
     // coverage is not RENAME_ONLY-mapped and its surface (test/code) is untouched → carries.
     assert.ok(carried.includes("coverage"), "coverage carries (not a rename angle, surface untouched)");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI fails closed when --head-sha does not match the worktree HEAD (wrong worktree)", async () => {
+  const { repoRoot, prevHead } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    },
+  });
+  try {
+    // A syntactically valid SHA that is NOT the worktree HEAD → delta would resolve
+    // against the wrong head while the plan claims to be for this --head-sha.
+    const bogusHead = "0".repeat(40);
+    const { stdout, stderr, exitCode } = await runMainRaw([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", bogusHead,
+    ], { repoRoot });
+    assert.equal(exitCode, 1, "must fail closed");
+    assert.equal(stdout, "", "no carry-forward plan is emitted on mismatch");
+    // stderr may also carry ambient git warnings under the test env's GIT_CONFIG,
+    // so match the fail-closed error substring rather than JSON-parsing the stream.
+    assert.match(stderr, /"ok":false/);
+    assert.match(stderr, /does not match --head-sha/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

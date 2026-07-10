@@ -37,7 +37,7 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { hasRenameEntry, mapGateToConfigKey, parseChangedFiles } from "./write-gate-context.mjs";
+import { assertWorktreeAtHead, hasRenameEntry, mapGateToConfigKey, parseChangedFiles } from "./write-gate-context.mjs";
 
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 
@@ -132,8 +132,9 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  * Pure carry-forward plan from a prior gate findings-log + the delta A..B.
  * FAIL-CLOSED: throws when the prior log is missing or not a clean verdict —
  * carry-forward has no clean verdict to reuse. Carried angles are annotated with
- * the prior head's reviewer (from the log's provenance) and `carriedFromHead` so
- * the caller can write honest, non-fabricated carried provenance.
+ * the prior head's reviewer identity (every recorded reviewer/dispatchId/model
+ * field from the log's provenance) and `carriedFromHead` so the caller can write
+ * honest, non-fabricated carried provenance.
  *
  * @param {object} input
  * @param {object|null} input.log — the prior findings-log JSON (verdict must be "clean")
@@ -142,7 +143,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  *   forward regardless of the delta (the gate's configured mandatory angles, plus
  *   the RENAME_ONLY-mapped angles when the delta contains any rename). Each
  *   resolves to an always-rerun surface so it lands in `mustRerun`, not `carried`.
- * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
+ * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
 export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   if (!log || typeof log !== "object") {
@@ -155,11 +156,20 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   if (perAngle.length === 0) {
     throw new Error("prior gate findings-log has no provenance.perAngle reviewers to carry forward (fail-closed)");
   }
-  const reviewerByAngle = new Map();
+  // Preserve the FULL reviewer identity per angle. The provenance contract
+  // (write-gate-findings-log / gate-fanin.countDistinctReviewers) counts an angle's
+  // identity via `reviewer` OR `dispatchId`; carrying only `reviewer` would DROP the
+  // identity of a prior entry recorded under `dispatchId`, breaking distinctReviewers
+  // or the provenance-consistency check at the new head. Carry every recorded
+  // identity field (reviewer/dispatchId/model) so a carried entry stays attributable.
+  const identityByAngle = new Map();
   for (const entry of perAngle) {
-    if (entry && typeof entry.angle === "string" && typeof entry.reviewer === "string") {
-      reviewerByAngle.set(entry.angle, entry.reviewer);
+    if (!entry || typeof entry.angle !== "string") continue;
+    const identity = {};
+    for (const key of ["reviewer", "dispatchId", "model"]) {
+      if (typeof entry[key] === "string" && entry[key].length > 0) identity[key] = entry[key];
     }
+    identityByAngle.set(entry.angle, identity);
   }
   const prevAngles = perAngle.map((a) => a.angle).filter((a) => typeof a === "string" && a.length > 0);
   const { carried, mustRerun } = resolveCarryForwardAngles({
@@ -167,15 +177,12 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
     changedFiles,
     options: { alwaysRerun: [...alwaysRerun] },
   });
-  const carriedProvenance = carried.map(({ angle, reason }) => {
-    const reviewer = reviewerByAngle.get(angle);
-    return {
-      angle,
-      carriedFromHead: log.headSha,
-      ...(reviewer ? { reviewer } : {}),
-      reason,
-    };
-  });
+  const carriedProvenance = carried.map(({ angle, reason }) => ({
+    angle,
+    carriedFromHead: log.headSha,
+    ...(identityByAngle.get(angle) ?? {}),
+    reason,
+  }));
   return { prevHead: log.headSha, carried: carriedProvenance, mustRerun };
 }
 
@@ -237,6 +244,12 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // throws; it returns { config, ... }.
     const { config } = await loadDevLoopConfig({ repoRoot });
     const { mandatoryAngles } = resolveGateAngleContract(config, mapGateToConfigKey(options.gate));
+    // FAIL-CLOSED: the delta is computed against the CWD worktree HEAD (base...HEAD),
+    // but the plan is LABELED with --head-sha. If the worktree is checked out at a
+    // different head than --head-sha, every carry-forward decision would be computed
+    // against the WRONG head while claiming to be for --head-sha. Abort before
+    // capturing the delta so no mislabeled plan is ever emitted.
+    assertWorktreeAtHead(options.headSha, { repoRoot });
     const { changedFiles, hasRename } = captureDeltaChangedFiles({ base: options.prevHead, repoRoot });
     // A rename anywhere in the delta forces the RENAME_ONLY-mapped angles to
     // re-run: parseChangedFiles keeps only a rename's destination path, so
