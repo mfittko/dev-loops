@@ -1,71 +1,113 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { emitResult } from "../../scripts/lib/jq-output.mjs";
+import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
 
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
-  ...options,
-  env: {
-    ...process.env,
-    ...(options.env ?? {}),
-    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-  },
-});
+// Marker keys: the local writeGhStub/writeGitStub stash their gh `entries` and
+// git response on the returned env so runNode replays them IN-PROCESS (no gh/git/CLI
+// subprocess) via makeGhMock. This is the throughput lever (#1294): each former
+// PATH-stub test spawned one CLI node process plus one node process per gh/git call;
+// running the exported CLI logic in-process answers every gh/git call from the
+// stashed data with zero spawns.
+const GH_MOCK_ENTRIES = Symbol.for("dev-loops.ghMockEntries");
+const GIT_MOCK = Symbol.for("dev-loops.gitMock");
 
-async function writeGhStub(tempDir, entries) {
-  const { env } = await writeGhStubHelper(tempDir, entries);
-  // Hermetic guard (#1006): seed a clean local git stub on the same PATH dir so
-  // the subprocess CLI's fetchLocalConflictFiles never shells out to the real
-  // working tree. Without this, concurrent git activity under parallel
-  // `npm run verify` transiently reports unmerged entries and flips these
-  // gh-driven suites to conflict_resolution. Tests needing a specific git
-  // response (e.g. the conflict-resolution case) overwrite this stub afterward.
-  const gitEnv = await writeGitStub(tempDir, { stdout: "" });
-  return { ...env, ...gitEnv, DEVLOOPS_RUN_ID: "" };
+// Build the in-process runtime for detectPrGateCoordinationState from a stashed env:
+// gh calls are answered from GH_MOCK_ENTRIES in order via makeGhMock, git calls from
+// the stashed GIT_MOCK response (empty success by default; the conflict-resolution
+// case overrides it with porcelain output). `extra` merges in per-call runtime
+// overrides (e.g. gitCommand for the missing-git-binary boundary test — a non-gh,
+// non-git command is delegated to the real runChild so a genuinely-missing binary
+// produces a real ENOENT that fetchLocalConflictFiles tolerates exactly as before).
+// Used by both runNode and the direct-function tests; gh/git calls resolve in-process
+// via the mocks (no spawn), while that one missing-git boundary stays a real spawn.
+function buildMockRuntime(rawEnv = {}, extra = {}) {
+  const entries = rawEnv[GH_MOCK_ENTRIES] ?? [];
+  const gitMock = rawEnv[GIT_MOCK] ?? { stdout: "" };
+  const { runChild: ghRunChild } = makeGhMock(entries);
+  const runChild = async (cmd, cmdArgs = [], childEnv, stdinText = "") => {
+    if (cmd === "git") {
+      for (const expected of gitMock.assertArgs ?? []) {
+        if (!cmdArgs.includes(expected)) {
+          return { code: 98, stdout: "", stderr: `missing expected git arg: ${expected}\nactual: ${cmdArgs.join(" ")}\n` };
+        }
+      }
+      return { code: gitMock.exitCode ?? 0, stdout: gitMock.stdout ?? "", stderr: gitMock.stderr ?? "" };
+    }
+    if (cmd === "gh") {
+      return ghRunChild(cmd, cmdArgs, childEnv, stdinText);
+    }
+    // Any OTHER command — e.g. the deliberately-missing git binary in the
+    // git-boundary smoke — is a REAL spawn, so a genuinely-missing binary
+    // produces a real ENOENT that the script's tolerate-a-git-failure catch
+    // must handle. This is the one boundary that stays a real subprocess
+    // (a mock throw would not distinguish "git missing" from "git present").
+    return defaultRunChild(cmd, cmdArgs, childEnv, stdinText);
+  };
+  return { env: { ...process.env, ...rawEnv, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, ...extra };
 }
 
-async function writeGitStub(tempDir, { stdout = "", stderr = "", exitCode = 0, assertArgs = [] } = {}) {
-  const gitPath = path.join(tempDir, "git");
-  const stdoutPath = path.join(tempDir, "git-stdout.txt");
+// Run the CLI in-process when gh entries are stashed on the env, mirroring main()'s
+// output contract so the existing { code, stdout, stderr } assertions keep working:
+// stdout/stderr come from the real emitResult, the exit code follows result.ok. Falls
+// back to a real CLI spawn when no entries are stashed (help/parse smokes, direct-
+// function tests that build env via writeGhStubHelper).
+const runNode = async (args = [], options = {}) => {
+  const entries = options.env?.[GH_MOCK_ENTRIES];
+  const fallback = () => runNodeHelper(scriptPath, args, {
+    ...options,
+    env: {
+      ...process.env,
+      ...(options.env ?? {}),
+      DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
+    },
+  });
+  if (!entries) return fallback();
+  let opts;
+  try {
+    opts = parseDetectPrGateCoordinationCliArgs(args);
+  } catch {
+    return fallback();
+  }
+  if (opts.help) return fallback();
 
-  await writeFile(stdoutPath, stdout, "utf8");
-  await writeFile(
-    gitPath,
-    [
-      "#!/usr/bin/env node",
-      'import { readFileSync } from "node:fs";',
-      'const actual = process.argv.slice(2);',
-      'const assertArgs = JSON.parse(process.env.GIT_ASSERT_ARGS || "[]");',
-      'for (const expected of assertArgs) {',
-      '  if (!actual.includes(expected)) {',
-      '    process.stderr.write(`missing expected git arg: ${expected}\nactual: ${actual.join(" ")}\n`);',
-      '    process.exit(98);',
-      '  }',
-      '}',
-      'if (process.env.GIT_STDERR) process.stderr.write(process.env.GIT_STDERR);',
-      'if (process.env.GIT_STDOUT_PATH) process.stdout.write(readFileSync(process.env.GIT_STDOUT_PATH, "utf8"));',
-      'process.exit(Number(process.env.GIT_EXIT_CODE || "0"));',
-      '',
-    ].join("\n"),
-    "utf8",
-  );
-  await chmod(gitPath, 0o755);
+  const runtime = buildMockRuntime(options.env, { repoRoot: options.cwd ?? process.cwd() });
+  let out = "";
+  let err = "";
+  const stdout = { write: (chunk) => { out += String(chunk); return true; } };
+  const stderr = { write: (chunk) => { err += String(chunk); return true; } };
+  try {
+    const result = await detectPrGateCoordinationState(opts, runtime);
+    const code = emitResult(result, { jq: opts.jq, silent: opts.silent, stdout, stderr });
+    return { code, stdout: out, stderr: err };
+  } catch (error) {
+    return { code: 1, stdout: out, stderr: `${err}${formatCliError(error)}\n` };
+  }
+};
 
-  return {
-    GIT_ASSERT_ARGS: JSON.stringify(assertArgs),
-    GIT_STDOUT_PATH: stdoutPath,
-    GIT_STDERR: stderr,
-    GIT_EXIT_CODE: String(exitCode),
-  };
+// In-process gh stub: stash entries under GH_MOCK_ENTRIES plus an empty default git
+// response so runNode replays them via makeGhMock. Replaces the former PATH gh+git
+// stub scripts — the CLI never shells out, so no real working tree is inspected.
+function writeGhStub(_tempDir, entries) {
+  return { DEVLOOPS_RUN_ID: "", [GH_MOCK_ENTRIES]: entries, [GIT_MOCK]: { stdout: "" } };
+}
+
+// In-process git stub: stash a specific git response (porcelain conflict output for
+// the conflict-resolution case) under GIT_MOCK; spread after the gh env to override
+// the empty default.
+function writeGitStub(_tempDir, { stdout = "", stderr = "", exitCode = 0, assertArgs = [] } = {}) {
+  return { [GIT_MOCK]: { stdout, stderr, exitCode, assertArgs } };
 }
 
 function jsonLine(value) {
@@ -741,7 +783,7 @@ test("detectPrGateCoordinationState tolerates missing local git binary and falls
 
     const result = await detectPrGateCoordinationState(
       { repo: "owner/repo", pr: 266 },
-      { env, gitCommand: "definitely-missing-git" },
+      buildMockRuntime(env, { gitCommand: "definitely-missing-git" }),
     );
 
     assert.equal(result.ok, true);
@@ -1232,7 +1274,7 @@ test("detect-pr-gate-coordination-state surfaces linked-issue + refinement via g
 
     const result = await detectPrGateCoordinationState(
       { repo: "owner/repo", pr: 10 },
-      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+      buildMockRuntime(env),
     );
     assert.equal(result.ok, true);
     assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
@@ -1284,7 +1326,7 @@ test("detect-pr-gate-coordination-state leaves refinement=present when linked is
 
     const result = await detectPrGateCoordinationState(
       { repo: "owner/repo", pr: 10 },
-      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+      buildMockRuntime(env),
     );
     assert.equal(result.ok, true);
     assert.notEqual(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
@@ -1350,7 +1392,7 @@ test("detect-pr-gate-coordination-state: issue-less lightweight draft PR (PR-bod
 
     const result = await detectPrGateCoordinationState(
       { repo: "owner/repo", pr: 10 },
-      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+      buildMockRuntime(env),
     );
     assert.equal(result.ok, true);
     assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
@@ -1394,7 +1436,7 @@ test("detect-pr-gate-coordination-state: promoted plan-file draft PR reaches RUN
 
     const result = await detectPrGateCoordinationState(
       { repo: "owner/repo", pr: 10 },
-      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+      buildMockRuntime(env),
     );
     assert.equal(result.ok, true);
     assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
@@ -1440,7 +1482,7 @@ test("detect-pr-gate-coordination-state: spoofed plan-file marker (no AC/DoD) st
 
     const result = await detectPrGateCoordinationState(
       { repo: "owner/repo", pr: 10 },
-      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+      buildMockRuntime(env),
     );
     assert.equal(result.ok, true);
     assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
@@ -1562,7 +1604,7 @@ test("detect-pr-gate-coordination-state: issue-less draft PR whose body fails sp
 
     const result = await detectPrGateCoordinationState(
       { repo: "owner/repo", pr: 10 },
-      { env: { ...env, DEVLOOPS_RUN_ID: "" } },
+      buildMockRuntime(env),
     );
     assert.equal(result.ok, true);
     assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
