@@ -25,6 +25,10 @@ test('ui artifact contract doc defines named-state artifacts and auto-scoped CI 
   }
   assert.match(doc, /axe-core/i);
 
+  // The "named UI state" concept heading is the durable definitional anchor —
+  // guarded independently of the named-states path literal below.
+  assert.match(doc, /named UI state/i);
+
   // Canonical artifact directory layout anchor.
   assert.match(doc, /test-results\/ui-smoke\/<sliceId>\/named-states\/<state-slug>/i);
 
