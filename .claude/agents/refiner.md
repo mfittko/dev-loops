@@ -2,6 +2,7 @@
 name: "refiner"
 description: "Use for refining one approved implementation phase at a time into a complete, testable plan with acceptance criteria, definition of done, risks, non-goals, unresolved questions, and RFC escalation notes. Keywords: refiner, phase refinement, acceptance criteria, definition of done, RFC escalation, merged plan."
 tools: Read, Grep, Glob, Bash, Edit, Write
+model: "opus"
 ---
 <!-- GENERATED from agents/refiner.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 

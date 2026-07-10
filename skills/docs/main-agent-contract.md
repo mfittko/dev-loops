@@ -50,6 +50,22 @@ because "the user said yes," not because it is running from a worktree.
 - ALL PR lifecycle (create, draft, review, merge)
 - Sub-delegation to developer, fixer, review, quality agents
 
+## Model tier at dispatch (Pi)
+
+When dispatching a subagent, resolve its model with
+`resolveRoleModel(config, { role, harness: "pi" })` from `@dev-loops/core/config`
+(`role` = the subagent/angle name, e.g. `developer`, `refiner`, `review`, or a
+gate angle) and pass that model to the async dispatch **only when it is non-null**.
+The built-in policy runs routine subagents (`developer`/`docs`/`fixer`/`quality`)
+on the low tier, planning (`refiner`) and critical review (`review`, including gate
+fan-out angles via their `review` persona) on the high tier, and lets the conductor
+(`dev-loop`) inherit. Built-in Pi tiers are `null`, so with zero config every role
+resolves to `null` and dispatch passes no model override — a genuine no-op on Pi.
+Operators opt in by setting concrete Pi ids under `models.tiers.<alias>.pi` (and may
+retune `models.roleTiers` / `models.roles`) in `.devloops`. The same resolver drives
+the Claude harness, where the tier is baked into each agent's `model:` frontmatter at
+asset-generation time (`harness: "claude"`).
+
 ## Boundary examples
 
 | Operation | Verdict |

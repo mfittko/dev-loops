@@ -150,6 +150,30 @@ workflow:
   devModeDefault: true
 ```
 
+### Model tiers (`models.tiers` / `models.roleTiers`)
+
+Subagents run on a harness-neutral **tier** so a single policy expresses "high on both harnesses" even though the concrete model ids differ. A tier alias maps to a per-harness concrete model (or `null` = inherit / no-op on that harness); `models.roleTiers` maps each role/angle to an alias (or `inherit`).
+
+**Default policy (zero config):** routine subagents (`developer`, `docs`, `fixer`, `quality`) → `low`; planning (`refiner`) and critical review (`review`, including gate fan-out angles via their `review` persona) → `high`; the conductor (`dev-loop`) → `inherit`. Built-in tiers are `low: { claude: sonnet, pi: null }`, `high: { claude: opus, pi: null }`.
+
+**Per-harness resolution:** `resolveRoleModel(config, { role, harness })` from `@dev-loops/core/config` returns a concrete model id or `null`. Precedence: `models.roles[role]` (concrete, highest) > tier from `models.roleTiers[role]` (or the built-in role tier) mapped through `models.tiers[alias][harness]` > `null`. The committed `.claude/agents/*.md` tree bakes the built-in (zero-config) tier policy into each agent's `model:` frontmatter — asset generation does not read repo `.devloops` config, so per-repo config never regenerates that frontmatter. Per-repo/per-dispatch tuning happens at dispatch time: on Pi via `resolveRoleModel` (passed only when non-null), on Claude via the Task `model` param.
+
+**Zero-config no-op on Pi:** because built-in tiers ship `pi: null`, every role resolves to `null` on Pi — no model override is passed, a genuine no-op — until an operator sets concrete Pi ids. The same config drives both harnesses (cross-harness contract #1086).
+
+```yaml
+models:
+  tiers:
+    low:  { claude: sonnet, pi: claude-3-5-haiku }   # set pi ids to opt Pi in
+    high: { claude: opus,   pi: claude-3-5-sonnet }
+  roleTiers:
+    quality: high            # promote a routine role
+    developer: inherit       # opt a role out entirely
+  roles:
+    correctness: gpt-5       # concrete per-angle override (beats any tier)
+```
+
+Angles resolve through the same precedence as roles: `models.roles[angle]` (concrete) > `models.roleTiers[angle]` or a built-in role tier of the same name > the angle's `review`-persona tier > inherit. Genuinely distinct review angles (`correctness`, `renderer-security`, `acceptance-criteria`) have no matching role name, so they fall through to the `review` persona → `high`; an angle with no persona entry falls back to the default reviewer and inherits (no override). Because `roleTiers`/built-in role tiers are checked first, an angle whose **name** collides with a built-in role takes that role's tier — e.g. a `docs` review angle resolves `low` via the built-in `docs`→low role tier. That is the specified precedence, not a downgrade bug; retarget any angle explicitly through `models.roleTiers`. An unknown tier alias in `models.roleTiers` is rejected by the schema with a clear error.
+
 ### Available review angles
 
 The shipped defaults activate these angles. Additional angles are available as opt-in — add them to your `gates.draft.angles` or `gates.preApproval.angles` and they'll use the prompts defined in the personas registry. Opt-in prompts are generic and can be overridden in consumer repos through `personas.<angle>.prompt` without depending on this repository's audit examples.

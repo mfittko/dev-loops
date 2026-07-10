@@ -26,6 +26,8 @@
 
 import { parse as parseYaml } from "yaml";
 
+import { resolveRoleModel } from "../config/config.mjs";
+
 /** Pi→Claude tool-name map. A Pi name may expand to multiple Claude tools (search→Grep,Glob). */
 export const TOOL_NAME_MAP = Object.freeze({
   read: ["Read"],
@@ -176,13 +178,20 @@ function normalizeToolList(value) {
 
 /**
  * Transform a canonical `agents/*.agent.md` into a Claude `.claude/agents/*.md` document.
- * @param {{ source: string, raw: string, version?: string }} input
+ *
+ * Stamps the model-tier policy into `model:` frontmatter: the agent's role (its
+ * `name`) is resolved via `resolveRoleModel(config, { role, harness: "claude" })`;
+ * a concrete model is written, `inherit`/null omits the field. `config` defaults
+ * to `{}` so the committed tree bakes the zero-config built-in policy; pass a
+ * loaded config to tune the generated tree per repo.
+ * @param {{ source: string, raw: string, version?: string, config?: object }} input
  * @returns {string} Full generated file content.
  */
-export function transformAgent({ source, raw, version = "latest" }) {
+export function transformAgent({ source, raw, version = "latest", config = {} }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
   const body = rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
   const tools = mapTools(normalizeToolList(frontmatter.tools));
+  const model = resolveRoleModel(config, { role: String(frontmatter.name ?? ""), harness: "claude" });
 
   const lines = ["---"];
   lines.push(`name: ${JSON.stringify(String(frontmatter.name ?? ""))}`);
@@ -191,6 +200,12 @@ export function transformAgent({ source, raw, version = "latest" }) {
   }
   if (tools.length > 0) {
     lines.push(`tools: ${tools.join(", ")}`);
+  }
+  if (model != null) {
+    // Quote the stamped model id: resolveRoleModel can return any operator-provided
+    // id, and a value with YAML-significant chars would break frontmatter parsing.
+    // JSON string literals are valid YAML double-quoted scalars.
+    lines.push(`model: ${JSON.stringify(model)}`);
   }
   lines.push("---");
   lines.push(GENERATED_NOTE(source));
