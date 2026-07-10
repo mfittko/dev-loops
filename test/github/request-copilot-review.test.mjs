@@ -1210,6 +1210,12 @@ test("request-copilot-review --force-rerequest-review allows re-request when cap
         stdout: "[[]]\n",
       },
       {
+        // AC2 convergence carry-forward: delta since the last reviewed head (sha5)
+        // touches Copilot's review surface (a code file), so it re-opens the round.
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
+      },
+      {
         assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
@@ -1261,4 +1267,67 @@ test("request-copilot-review --force-rerequest-review refuses when cap reached a
       completedRounds: 5,
       maxRounds: 2,
     });
+});
+
+// AC2 (#1326): at the round cap, a post-convergence head bump whose delta since the
+// last Copilot-reviewed head is a PROVABLE pure doc/prose bump must NOT force a fresh
+// blocking Copilot round — even under --force-rerequest-review with new commits.
+const fiveCopilotReviewsAt = (headRefOid) =>
+  `{"headRefOid":"${headRefOid}","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha1"}},{"id":"r-2","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}},{"id":"r-3","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha3"}},{"id":"r-4","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha4"}},{"id":"r-5","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha5"}}]}\n`;
+
+test("request-copilot-review --force-rerequest-review suppresses a pure doc/prose post-convergence bump instead of forcing a fresh round (#1326)", async () => {
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      {
+        // Delta since the last reviewed head (sha5) is docs-only → provably outside
+        // Copilot's review surface → carry forward, no fresh round.
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { filename: "README.md", status: "modified" }] }) + "\n",
+      },
+    ]);
+
+  assert.equal(result.status, "suppressed_post_convergence_docs_only");
+  assert.equal(result.completedRounds, 5);
+  assert.equal(result.maxRounds, 2);
+  // No fresh blocking round was placed: `gh pr edit --add-reviewer` never ran.
+  assert.equal(calls.some((c) => c.args.includes("edit") && c.args.includes("--add-reviewer")), false);
+});
+
+test("request-copilot-review --force-rerequest-review re-opens the round when a doc bump also carries a code file (#1326 preserves the exception)", async () => {
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      {
+        // Mixed delta: a code file alongside a doc file → touches Copilot's surface → re-open.
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { filename: "src/foo.mjs", status: "modified" }] }) + "\n",
+      },
+      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+    ]);
+
+  assert.equal(result.status, "requested");
+});
+
+test("request-copilot-review --force-rerequest-review fails closed and re-opens when the delta is not a provable linear advance (#1326)", async () => {
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      {
+        // History was rewritten (rebase/amend): base is not a strict ancestor →
+        // status "diverged" → destination-path list is untrustworthy → fail closed → re-open.
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stdout: JSON.stringify({ status: "diverged", files: [{ filename: "docs/guide.md", status: "modified" }] }) + "\n",
+      },
+      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+    ]);
+
+  assert.equal(result.status, "requested");
 });

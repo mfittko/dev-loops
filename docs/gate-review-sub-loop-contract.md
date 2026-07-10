@@ -340,18 +340,21 @@ The post-convergence carve-out — significant post-convergence changes on a new
 a new Copilot cycle that requires another round before pre-approval — is owned by
 `COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md).
 
-**Convergence carry-forward decision seam (fail-closed, AC2 — not yet wired).** A pure
-doc/prose head bump after convergence should not need to re-open a blocking Copilot cycle.
-`resolveConvergenceCarryForward` (`@dev-loops/core/loop/gate-carry-forward`, surfaced as the
-`copilotConvergence` field of `resolve-angle-carry-forward.mjs`) computes that decision:
+**Convergence carry-forward decision seam (fail-closed, AC2).** A pure doc/prose head bump
+after convergence should not need to re-open a blocking Copilot cycle.
+`resolveConvergenceCarryForward` (`@dev-loops/core/loop/gate-carry-forward`, also surfaced as
+the `copilotConvergence` field of `resolve-angle-carry-forward.mjs`) computes that decision:
 `carryForward: true` when the delta since the converged head touches none of Copilot's
 review surface (every changed file classifies as `docs`), and fail-closed `false` on any
-code/test/config/CI file, an unclassifiable file, or an empty/unavailable delta. This is an
-**available decision seam only** — the Copilot round-cap owner
-(`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md))
-does not yet consume `copilotConvergence`, so convergence carry-forward does NOT yet change
-Copilot round behavior. Wiring the seam into the Copilot state machine is a tracked
-follow-up.
+code/test/config/CI file, an unclassifiable file, or an empty/unavailable delta. The Copilot
+round-cap path consumes it: at the cap, `request-copilot-review.mjs` fetches the delta since
+the last Copilot-reviewed head (via a single `gh api .../compare`) and, when it is a provable
+linear rename-free pure-doc bump, returns `suppressed_post_convergence_docs_only` instead of
+forcing a fresh blocking round — even under `--force-rerequest-review`. The guard is
+default-safe/fail-closed: a non-linear (rebased/amended) advance, any rename/copy, an
+unavailable compare, or any non-doc/unclassifiable file re-opens the round exactly as before,
+preserving the round cap and the significant-post-convergence-change exception
+(`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md)).
 
 ## Machine-parseable fields
 
