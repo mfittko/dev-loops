@@ -988,6 +988,16 @@ export async function readGateContext(input, { repoRoot = process.cwd() } = {}) 
  * @param {{ repoRoot: string }} opts
  */
 export function assertWorktreeAtHead(headSha, { repoRoot }) {
+  // Fail-closed self-guard: the bidirectional prefix-match below FALSE-ACCEPTS an
+  // empty/too-short `headSha` (an empty string is a prefix of every HEAD). The sole
+  // caller (main) pre-validates via normalizeHeadSha, but re-validate here so this
+  // exported boundary stays fail-closed for any future importer.
+  const declared = String(headSha).trim().toLowerCase();
+  if (!/^[0-9a-f]{7,64}$/.test(declared)) {
+    throw new Error(
+      `assertWorktreeAtHead: headSha ${JSON.stringify(headSha)} is not a 7-64 character hex SHA — refusing to prefix-match against the worktree HEAD (an empty/short value would false-accept).`,
+    );
+  }
   let actualHead;
   try {
     actualHead = execFileSync("git", ["rev-parse", "HEAD"], {
@@ -999,7 +1009,6 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
       `--base was given but the current working directory (${repoRoot}) is not inside a git worktree (git rev-parse HEAD failed: ${err?.message ?? err}). cd into the PR's worktree — the one checked out at --head-sha ${headSha} — before building its gate context.`,
     );
   }
-  const declared = String(headSha).trim().toLowerCase();
   const matches = actualHead === declared
     || actualHead.startsWith(declared)
     || declared.startsWith(actualHead);

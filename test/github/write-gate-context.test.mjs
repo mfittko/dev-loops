@@ -1059,6 +1059,32 @@ test("assertWorktreeAtHead accepts an abbreviated --head-sha matching the full w
   }
 });
 
+test("assertWorktreeAtHead throws directly when repoRoot is not a git worktree", async () => {
+  // Direct unit coverage for the non-git catch branch, independent of TMPDIR
+  // happening to sit outside a checkout (which the CLI-level test relies on).
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-nogit-unit-"));
+  try {
+    assert.throws(
+      () => assertWorktreeAtHead("abcdef1234567890abcdef1234567890abcdef12", { repoRoot }),
+      /not inside a git worktree/i,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("assertWorktreeAtHead rejects a non-hex/short headSha before touching git", async () => {
+  const { repoRoot } = await makeBaseDiffRepo();
+  try {
+    // Empty and too-short values would prefix-match every HEAD — the format guard
+    // must fail closed regardless of the caller.
+    assert.throws(() => assertWorktreeAtHead("", { repoRoot }), /hex SHA/);
+    assert.throws(() => assertWorktreeAtHead("abc", { repoRoot }), /hex SHA/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI --base accepts an ancestry ref (HEAD~1) and resolves it end-to-end", async () => {
   const { repoRoot, headSha } = await makeBaseDiffRepo();
   try {
