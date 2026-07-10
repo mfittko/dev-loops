@@ -430,6 +430,23 @@ test("parseProvenanceJson accepts a well-formed provenance object", () => {
   assert.deepEqual(prov.perAngle[1], { angle: "safety", reviewer: "review-b" });
 });
 
+test("parseProvenanceJson accepts and normalizes a carried-forward angle (carriedFromHead)", () => {
+  const prov = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 1,
+    perAngle: [
+      { angle: "correctness", reviewer: "review-a", carriedFromHead: "ABC1234" },
+    ],
+  }));
+  assert.deepEqual(prov.perAngle[0], { angle: "correctness", reviewer: "review-a", carriedFromHead: "abc1234" });
+});
+
+test("parseProvenanceJson rejects a malformed carriedFromHead (not a hex SHA)", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "correctness", reviewer: "review-a", carriedFromHead: "zzz" }] })),
+    /carriedFromHead must be a 7-64 char hex SHA/,
+  );
+});
+
 test("parseProvenanceJson rejects malformed provenance (invalid JSON, non-object, bad shape)", () => {
   assert.throws(() => parseProvenanceJson("{not json"), /must be valid JSON/);
   assert.throws(() => parseProvenanceJson("[]"), /must be a JSON object/);

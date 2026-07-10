@@ -199,9 +199,13 @@ rule that all of the round's sentinels share ONE identical hash. See
 (for example due to tooling or resource constraints), the fan-out MUST run all reviewers
 sequentially and MUST record why parallel execution was impractical.
 
-**Re-run rule:** In subsequent retry cycles (Phase 5), only re-run reviewers that
-produced `findings_present` in the previous pass. Reviewers that returned `clean`
-don't need re-review unless their angle's scope overlaps with the fix changes.
+**Re-run rule:** In subsequent retry cycles (Phase 5), re-running is governed by
+[GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed): re-run by
+default, carry a previously-clean angle forward ONLY on proof its review surface
+was not touched, and always re-run every mandatory / always-run angle. A clean
+angle is re-reviewed whenever the new head's delta touches its surface or it
+previously returned `findings_present`; it is spared only when the delta provably
+cannot affect it.
 
 #### Sentinel lifecycle
 
@@ -228,9 +232,10 @@ manual chore:
   re-entry still fails closed (`fresh: false`, exit 1) — that is genuine main-agent /
   cross-session state bleed.
 - The orchestrator **MUST NOT** need to manually clear sentinels between rounds, and
-  **MUST NOT** clear the sentinels of carried-forward clean angles (Phase 5's re-run rule
-  only re-invokes angles that produced `findings_present`; their new-head keys are distinct,
-  so no cleanup is required).
+  **MUST NOT** clear the sentinels of carried-forward clean angles (Phase 5's re-fan
+  re-invokes the surface-touched angles, every angle that produced `findings_present`, and
+  every mandatory / always-run angle; carried-forward clean angles are not re-invoked. Every
+  re-invoked angle gets a distinct new-head key, so no cleanup is required).
 - Stale pre-round sentinels (the old scope-only name) never collide with a head-keyed round
   and are simply ignored.
 
@@ -295,8 +300,27 @@ After applying fixes and advancing the head SHA:
 - <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean. The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule.
 - rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA)
 - continue the fix-then-retry cycle until the synthesis verdict is `clean`
-- on retry, only re-invoke reviewers that previously returned `findings_present`; the context-builder and consolidation always run fresh
+- on retry, re-invoke every reviewer whose review surface the new head's delta touched (always including any angle that previously returned `findings_present`), and re-invoke every mandatory / always-run angle; the context-builder and consolidation always run fresh. A previously-clean angle whose surface the delta provably did NOT touch MAY instead be **carried forward** per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed) below — never skipped by guesswork
 - a clean pass means all gate-specific review angles pass and no findings with a severity in `blockCleanOnFindingSeverities` remain
+
+#### Angle carry-forward (fail-closed) {#angle-carry-forward-fail-closed}
+
+<!-- rule: GATE-EXEC-ANGLE-CARRY-FORWARD --> `GATE-EXEC-ANGLE-CARRY-FORWARD`: On a head bump, a previously-**clean** angle verdict MAY be carried forward to the new head — reusing the prior reviewer's clean result instead of re-fanning that angle — ONLY when the delta between the prior reviewed head (A) and the new head (B) provably does not touch that angle's **review surface**. This is a narrow, fail-closed refinement of the re-fan step above, NOT an exemption from `GATE-EXEC-REGATE-MANDATORY`: the full gate chain still runs at head B (context-builder + consolidation always fresh, plus every angle whose surface changed and every mandatory angle); carry-forward only spares the reviewers that provably have nothing new to look at.
+
+The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B>` (run from the worktree at head B). It reads the prior CLEAN findings-log for head A, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
+
+**Review-surface mapping.** An angle's review surface is the set of file "surface kinds" whose change could implicate it, derived from the single source of truth for change-category → angle relevance (`CATEGORY_ANGLE_MAP`) via each file's `classifyFile` kind (`code` | `docs` | `config` | `test` | `ci`):
+
+- code-correctness angles whose surface excludes `docs` (`scope`, `correctness`, `coverage`, `determinism`, …) → their surfaces are derived per angle from `CATEGORY_ANGLE_MAP` and vary (e.g. `scope` → `code`/`config`/`ci`; `coverage`/`determinism` → `code`/`test`); across the group the surface kinds union to `code`/`test`/`config`/`ci` but exclude `docs`, so a pure doc delta touches none of them and they carry forward.
+- doc-inclusive angles (`docs`, `link-check`, `contract-surface`, `dry`) → surface includes `docs` (they are all in `CATEGORY_ANGLE_MAP[DOCS_ONLY]`); a pure doc delta re-runs them. `contract-surface` and `dry` therefore do NOT carry forward on a doc-only delta.
+- `config-drift` → `config`/`ci`; `ci-guard` → `ci`.
+- always-run angles (`gate-evidence`, `pr-description`, `renderer-security`, and any configured mandatory angle) → **never carried** (their surface includes inputs the file delta cannot bound, e.g. the PR body).
+
+**Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's `mandatoryAngles` and forces every one to re-run, never carried); or any changed file's kind is in the angle's surface.
+
+**Renames force the RENAME_ONLY angles to re-run.** A rename records only its destination path, so classifying that path alone would miss what the move itself implicates (a relocated doc breaking a link, a moved test/code file shifting scope/contract-surface). When the delta `git diff A..B` contains ANY rename/copy row, the CLI forces the RENAME_ONLY-mapped angles (`CATEGORY_ANGLE_MAP[RENAME_ONLY]`: `scope`, `correctness`, `contract-surface`, `docs`, `link-check`) to re-run for that run; the remaining angles still follow the surface rule above.
+
+**Provenance — carried, not fabricated.** A carried verdict preserves the fail-closed evidence contract. The new head's findings-log records the carried angle in `provenance.perAngle` with `carriedFromHead: <A>` and the SAME `reviewer` identity that reviewed it at head A (honest attribution — that reviewer genuinely reviewed this angle's surface, which the delta did not change). `distinctReviewers` still counts real reviewer identities and the mandatory-angle / distinct-reviewer consistency checks in `write-gate-findings-log.mjs` are unchanged; carry-forward never invents a reviewer or a fresh review.
 
 ## Exit conditions
 
@@ -315,6 +339,19 @@ The gate chain can complete cleanly at a head that was accepted via round-cap fa
 The post-convergence carve-out — significant post-convergence changes on a newer head open
 a new Copilot cycle that requires another round before pre-approval — is owned by
 `COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md).
+
+**Convergence carry-forward decision seam (fail-closed, AC2 — not yet wired).** A pure
+doc/prose head bump after convergence should not need to re-open a blocking Copilot cycle.
+`resolveConvergenceCarryForward` (`@dev-loops/core/loop/gate-carry-forward`, surfaced as the
+`copilotConvergence` field of `resolve-angle-carry-forward.mjs`) computes that decision:
+`carryForward: true` when the delta since the converged head touches none of Copilot's
+review surface (every changed file classifies as `docs`), and fail-closed `false` on any
+code/test/config/CI file, an unclassifiable file, or an empty/unavailable delta. This is an
+**available decision seam only** — the Copilot round-cap owner
+(`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md))
+does not yet consume `copilotConvergence`, so convergence carry-forward does NOT yet change
+Copilot round behavior. Wiring the seam into the Copilot state machine is a tracked
+follow-up.
 
 ## Machine-parseable fields
 

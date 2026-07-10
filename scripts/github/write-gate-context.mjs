@@ -612,6 +612,27 @@ export function parseChangedFiles(nameStatusOutput) {
 }
 
 /**
+ * True when `git diff --name-status` output contains ANY rename (Rxxx) or copy
+ * (Cxxx) row. The carry-forward CLI uses this to force the RENAME_ONLY-mapped
+ * angles to re-run: `parseChangedFiles` records only a rename's DESTINATION
+ * path, so classifying that path alone would miss what the rename itself
+ * implicates (a moved doc breaking a link, a moved test/code file shifting
+ * scope/contract-surface). Tolerates blank lines and malformed rows.
+ * @param {string} nameStatusOutput
+ * @returns {boolean}
+ */
+export function hasRenameEntry(nameStatusOutput) {
+  if (typeof nameStatusOutput !== "string" || nameStatusOutput.length === 0) {
+    return false;
+  }
+  for (const line of nameStatusOutput.split("\n")) {
+    const status = line.replace(/\r$/, "").split("\t")[0]?.trim() ?? "";
+    if (/^[RC]\d*$/i.test(status)) return true;
+  }
+  return false;
+}
+
+/**
  * Build the deterministic artifact object (no I/O). Exported for callers that
  * want the artifact shape without writing it.
  *
