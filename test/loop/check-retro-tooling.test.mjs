@@ -64,16 +64,23 @@ test("gh after && / | / ; separator is caught", () => {
   assert.match(violations[0], /gh pr view/);
 });
 
-test("allowed write-ops (gh pr merge / issue create) are recorded, not violations", () => {
+test("allowed write-ops (gh pr merge / pr ready) are recorded, not violations", () => {
   const transcript = [
     "gh pr merge 982 --squash",
-    "gh issue create --title x",
     "gh pr ready 982",
   ].join("\n");
   const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript(transcript);
   assert.deepEqual(violations, []);
-  assert.equal(allowedWriteOps.length, 3);
+  assert.equal(allowedWriteOps.length, 2);
   assert.equal(internalToolingOnly, true);
+});
+
+test("raw `gh issue create` is a violation now that create-issue.mjs wraps it", () => {
+  const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript("gh issue create --title x");
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /gh issue create/);
+  assert.deepEqual(allowedWriteOps, []);
+  assert.equal(internalToolingOnly, false);
 });
 
 test("representative mixed transcript classifies correctly", () => {

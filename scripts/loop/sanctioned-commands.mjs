@@ -39,6 +39,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "pr-body-title-assignee-milestone": "scripts/github/edit-pr.mjs",
     "issue-body-title-assignee-milestone": "scripts/github/edit-issue.mjs",
     "issue-comment": "scripts/github/comment-issue.mjs",
+    "issue-create": "scripts/github/create-issue.mjs",
   }),
 
   // Lifecycle mutations a subagent MAY perform (state transitions on the PR /
