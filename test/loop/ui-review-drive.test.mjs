@@ -11,6 +11,7 @@ import {
   classifyFailures,
   driveUiReview,
   isErrorResponseStatus,
+  PAGE_ERROR_STACK_MAX_CHARS,
 } from "@dev-loops/core/loop/ui-review-drive";
 import { resolveUiReviewDriveRecipe, DEFAULT_SERVER_LOG_EXCEPTION_PATTERN } from "@dev-loops/core/config";
 import {
@@ -236,6 +237,13 @@ test("toPerStateConsolePayload: shapes a per-state slice into console/network fi
   ]);
 });
 
+test("toPerStateConsolePayload: clamps a runaway pageerror stack to the SAME bound as the mechanical feed (bounded console.json)", () => {
+  const huge = "x".repeat(PAGE_ERROR_STACK_MAX_CHARS + 5000);
+  const payload = toPerStateConsolePayload({ pageErrors: [{ message: "boom", stack: huge }] });
+  assert.equal(payload.consoleErrors[0].stack.length, PAGE_ERROR_STACK_MAX_CHARS, "stack clamped to the shared classifyFailures bound");
+  assert.equal(payload.consoleErrors[0].stack, huge.slice(0, PAGE_ERROR_STACK_MAX_CHARS), "keeps the head — the throwing file:line");
+});
+
 test("openServerLogTail: absent path is a no-op; missing file reads once created", async () => {
   assert.equal(await openServerLogTail(null).read(), "");
   const p = path.join(tempDir(), "late.log");
@@ -424,6 +432,39 @@ test("makeRunStep: threads consolePath into the runStep result and points state.
   assert.ok(typeof outcome.consolePath === "string" && outcome.consolePath.endsWith("console.json"), "consolePath is threaded into the runStep result");
   const state = JSON.parse(readFileSync(outcome.statePath, "utf8"));
   assert.equal(state.artifacts.console.path, outcome.consolePath, "state.json back-references the same console.json");
+});
+
+test("makeRunStep: a capture failure still advances the attribution cursor — the next step's console.json does not inherit the prior step's events (no misattribution)", async () => {
+  const outputDir = tempDir();
+  const handlers = {};
+  let failScreenshot = false;
+  const page = {
+    on: (ev, cb) => ((handlers[ev] ??= []).push(cb), undefined),
+    emit: (ev, arg) => (handlers[ev] ?? []).forEach((cb) => cb(arg)),
+    goto: async () => {},
+    click: async () => page.emit("pageerror", { message: "boom", stack: "boom\n    at app.js:1" }),
+    screenshot: async () => { if (failScreenshot) throw new Error("screenshot failed"); },
+  };
+  const { getCapturedEvents, sliceCapturedEvents } = attachPageListeners(page);
+  const runStep = makeRunStep({ page, outputDir, sliceCapturedEvents });
+
+  // Step 1: fires a pageerror DURING the action, then its artifact capture throws.
+  failScreenshot = true;
+  await assert.rejects(
+    runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "s1", action: "click" }, index: 0 }),
+    /screenshot failed/,
+  );
+
+  // Step 2: a clean action (no events); its console.json MUST be null. If the
+  // cursor had not advanced past step 1 (capture threw), step 1's pageerror would
+  // misattribute forward into step 2 — this asserts it does not.
+  failScreenshot = false;
+  const out2 = await runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "s2", action: "goto", path: "/next" }, index: 1 });
+  const console2 = JSON.parse(readFileSync(out2.consolePath, "utf8"));
+  assert.equal(console2, null, "step 2 console.json is null — step 1's error was not misattributed forward");
+
+  // Slicing never clears: the walk-level mechanical fail-closed gate still sees step 1's error.
+  assert.equal(getCapturedEvents().pageErrors.length, 1, "the buffer retains step 1's error for the mechanical gate");
 });
 
 // ── Config resolver ──────────────────────────────────────────────────────────

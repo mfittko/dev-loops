@@ -29,7 +29,7 @@ import { webkit } from "@playwright/test";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
-import { driveUiReview, isErrorResponseStatus } from "@dev-loops/core/loop/ui-review-drive";
+import { driveUiReview, isErrorResponseStatus, PAGE_ERROR_STACK_MAX_CHARS } from "@dev-loops/core/loop/ui-review-drive";
 import { captureNamedUiState } from "../../test/playwright/harness/webkit-smoke-harness.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -168,7 +168,12 @@ export function attachPageListeners(page) {
  * empty, so an errorless state emits a deterministic JSON null (mirroring the
  * snapshot/axe best-effort policy) rather than an empty envelope. */
 export function toPerStateConsolePayload(events = {}) {
-  const consoleErrors = (events.pageErrors ?? []).map((e) => ({ message: e.message ?? null, stack: e.stack ?? null }));
+  const consoleErrors = (events.pageErrors ?? []).map((e) => ({
+    message: e.message ?? null,
+    // Clamp to the SAME bound the mechanical feed uses (classifyFailures) so a
+    // runaway stack can't bloat console.json and the two views stay consistent.
+    stack: typeof e.stack === "string" && e.stack.length > 0 ? e.stack.slice(0, PAGE_ERROR_STACK_MAX_CHARS) : null,
+  }));
   const failedRequests = [
     ...(events.responses ?? []).map((r) => ({ kind: "error-response", url: r.url ?? null, status: r.status })),
     ...(events.requestFailures ?? []).map((f) => ({ kind: "request-failed", url: f.url ?? null, failure: f.failure ?? null })),
@@ -302,16 +307,22 @@ export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
         throw new Error(`unknown step action: ${step.action}`);
     }
     const stateName = step.name ?? `${flow.name} ${step.action} ${index + 1}`;
+    // Slice the walk-level listener window for THIS state IMMEDIATELY after the step
+    // action — BEFORE capturing artifacts — so the attribution cursor advances even if
+    // captureNamedUiState later throws (screenshot/file-write failure). Otherwise the
+    // next step's console.json would misattribute this step's events. Slicing never
+    // clears the buffer, so getCapturedEvents still feeds the whole set to the
+    // mechanical fail-closed gate.
+    const consolePayload = sliceCapturedEvents ? toPerStateConsolePayload(sliceCapturedEvents()) : undefined;
     const paths = await captureNamedUiState({
       page,
       sliceId: flow.name,
       stateName,
       fullPage: false,
       outputDir,
-      // Slice the walk-level listener buffer into THIS state's console.json so its
-      // console/network errors are attributed here — WITHOUT clearing the buffer,
-      // so the same classified events still drive the walk-level fail-closed gate.
-      captureConsole: sliceCapturedEvents ? () => toPerStateConsolePayload(sliceCapturedEvents()) : undefined,
+      // Hand the already-sliced window to this state's console.json (same attribution
+      // as before when capture succeeds); the cursor already advanced above.
+      captureConsole: sliceCapturedEvents ? () => consolePayload : undefined,
       metadata: { fixture: null, route: step.path ?? null, reviewHint: `Drive step "${stateName}" for the "${flow.name}" flow.` },
     });
     return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath, axePath: paths.axePath, consolePath: paths.consolePath };

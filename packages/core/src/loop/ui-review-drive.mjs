@@ -36,8 +36,9 @@ export function isErrorResponseStatus(status) {
 
 /** Bound the stack text carried onto a page-error failure so a runaway stack
  * (or a synthetic error with a huge stack) can't bloat the feed envelope. Keeps
- * the head — the top frames, where the throwing file:line sits. */
-const PAGE_ERROR_STACK_MAX_CHARS = 4000;
+ * the head — the top frames, where the throwing file:line sits. Exported so the
+ * per-state console.json shaping clamps to the SAME bound as the mechanical feed. */
+export const PAGE_ERROR_STACK_MAX_CHARS = 4000;
 
 /** Lines of context to preserve on each side of a matching server-log line, so
  * the traceback frames that carry file:line (often on adjacent, non-matching
