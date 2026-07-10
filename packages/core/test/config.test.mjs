@@ -3594,6 +3594,50 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
   });
 });
 
+describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
+  // The `docs` name is BOTH a registered gate angle (persona `docs`) and a
+  // routine role (→ low). Without a discriminator the angle silently inherited
+  // the `docs` writer role's low tier; kind:"angle" forces review quality.
+  for (const harness of ["claude", "pi"]) {
+    test(`docs ANGLE resolves via the review tier (high), not the docs role — ${harness}`, () => {
+      const angle = resolveRoleModel({}, { role: "docs", harness, kind: "angle" });
+      const reviewTier = resolveRoleModel({}, { role: "review", harness });
+      const docsRole = resolveRoleModel({}, { role: "docs", harness });
+      assert.equal(angle, reviewTier, "docs angle must match the review (high) tier");
+      // Claude: opus (high) not sonnet (low); Pi: null high-tier no-op, still
+      // distinct in provenance from the docs role which is also null on Pi.
+      if (harness === "claude") assert.notEqual(angle, docsRole);
+    });
+
+    test(`docs ROLE still resolves low (unchanged) — ${harness}`, () => {
+      assert.equal(
+        resolveRoleModel({}, { role: "docs", harness }),
+        harness === "claude" ? "sonnet" : null,
+      );
+    });
+
+    test(`correctness stays high whether dispatched as angle or auto — ${harness}`, () => {
+      const expected = harness === "claude" ? "opus" : null;
+      assert.equal(resolveRoleModel({}, { role: "correctness", harness, kind: "angle" }), expected);
+      assert.equal(resolveRoleModel({}, { role: "correctness", harness }), expected);
+    });
+
+    test(`developer ROLE stays low — ${harness}`, () => {
+      assert.equal(
+        resolveRoleModel({}, { role: "developer", harness }),
+        harness === "claude" ? "sonnet" : null,
+      );
+    });
+  }
+
+  test("explicit per-angle roleTiers override beats the review-tier default", () => {
+    const config = { models: { roleTiers: { docs: "high" } } };
+    // roleTiers.docs is shared with the docs role; an explicit override applies
+    // to the angle path too.
+    assert.equal(resolveRoleModel(config, { role: "docs", harness: "claude", kind: "angle" }), "opus");
+  });
+});
+
 describe("models.tiers / models.roleTiers schema validation", () => {
   test("accepts tiers + roleTiers alongside roles + conductor", () => {
     const ok = DevLoopConfigSchema.safeParse({

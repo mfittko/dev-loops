@@ -56,6 +56,12 @@ When dispatching a subagent, resolve its model with
 `resolveRoleModel(config, { role, harness: "pi" })` from `@dev-loops/core/config`
 (`role` = the subagent/angle name, e.g. `developer`, `refiner`, `review`, or a
 gate angle) and pass that model to the async dispatch **only when it is non-null**.
+Pass `kind: "angle"` when resolving a **gate fan-out review angle** (a review
+activity — e.g. `correctness`, `docs`, `acceptance-criteria`) so it always gets the
+review (high) tier even when the angle name collides with a routine role; leave
+`kind` unset (or `kind: "role"`) for a routine **subagent role** dispatch. This
+matters for `docs`: the `docs` angle must resolve high via `review`, not the `docs`
+writer role's low tier.
 The built-in policy runs routine subagents (`developer`/`docs`/`fixer`/`quality`)
 on the low tier, planning (`refiner`) and critical review (`review`, including gate
 fan-out angles via their `review` persona) on the high tier, and lets the conductor

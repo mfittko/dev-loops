@@ -659,25 +659,36 @@ export function resolveReviewerRole(config, angle) {
  * `null` (inherit → pass no model override).
  *
  * Precedence:
- *   1. `models.roles[role]` — concrete per-role/angle override (highest).
- *   2. Tier: `models.roleTiers[role]` (or the built-in role tier), else — when
- *      the role is a gate angle rather than a named role — the tier for the
- *      angle's review persona (so critical angles inherit `review`'s high tier).
- *      The alias is mapped through `models.tiers[tier][harness]` (or built-in
- *      tiers). `inherit`/absent/null → `null`.
+ *   1. `models.roles[name]` — concrete per-role/angle override (highest).
+ *   2. Tier alias, mapped through `models.tiers[tier][harness]` (or built-in
+ *      tiers); `inherit`/absent/null → `null`. The alias depends on `kind`:
+ *      - `kind: "angle"` (gate review dispatch): an explicit
+ *        `models.roleTiers[name]` override, else the `review` tier. A gate
+ *        review runs at review quality even when the angle's name collides with
+ *        a routine role — e.g. the `docs` angle resolves via the `review` tier
+ *        (high), not the `docs` writer role's low tier. (Its persona/agent still
+ *        comes from `resolveReviewerRole`; only the tier is forced to review.)
+ *      - `kind: "role"`/absent (routine subagent): `models.roleTiers[name]` (or
+ *        the built-in role tier), else — when the name is not a named role — the
+ *        tier for its review persona (so a non-colliding gate angle passed
+ *        without `kind` still resolves high via `review`).
+ *
+ * Callers dispatching a gate review angle whose name may collide with a routine
+ * role (only `docs` today) MUST pass `kind: "angle"` to avoid the silent
+ * downgrade; role dispatch leaves `kind` unset.
  *
  * Zero-config is a genuine no-op on Pi (built-in tiers are null for pi) and
  * reproduces the standing policy on Claude (routine=low, refiner/review=high,
  * dev-loop=inherit).
  *
  * @param {DevLoopConfig} config
- * @param {{ role: string, harness: "claude"|"pi" }} params
+ * @param {{ role: string, harness: "claude"|"pi", kind?: "role"|"angle" }} params
  * @returns {string|null}
  */
-export function resolveRoleModel(config, { role, harness } = {}) {
+export function resolveRoleModel(config, { role, harness, kind } = {}) {
   if (!role || (harness !== "claude" && harness !== "pi")) return null;
 
-  // 1. Concrete per-role override wins outright (over any tier).
+  // 1. Concrete per-role/angle override wins outright (over any tier).
   const concrete = config?.models?.roles?.[role];
   if (typeof concrete === "string" && concrete.trim().length > 0) {
     return concrete.trim();
@@ -685,12 +696,20 @@ export function resolveRoleModel(config, { role, harness } = {}) {
 
   // 2. Resolve a tier alias for this role/angle.
   const roleTiers = { ...BUILTIN_ROLE_TIERS, ...(config?.models?.roleTiers ?? {}) };
-  let tierAlias = roleTiers[role];
-  if (tierAlias === undefined) {
-    // Not a named role — treat as a gate angle and inherit its review persona's
-    // tier (critical angles resolve high via the `review` persona).
-    const { persona } = resolveReviewerRole(config, role);
-    tierAlias = roleTiers[persona];
+  let tierAlias;
+  if (kind === "angle") {
+    // Gate review angle: an explicit per-angle override wins, else the review
+    // tier — a gate review is review-quality regardless of a coincidental
+    // routine-role persona name (the `docs` angle must not inherit `docs`→low).
+    tierAlias = config?.models?.roleTiers?.[role] ?? roleTiers.review;
+  } else {
+    tierAlias = roleTiers[role];
+    if (tierAlias === undefined) {
+      // Not a named role — treat as a gate angle and inherit its review
+      // persona's tier (critical angles resolve high via the `review` persona).
+      const { persona } = resolveReviewerRole(config, role);
+      tierAlias = roleTiers[persona];
+    }
   }
   if (!tierAlias || tierAlias === "inherit") return null;
 
