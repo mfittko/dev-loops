@@ -58,10 +58,16 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   // Semantic snapshot: the accessibility tree next to the pixels. Captured
   // best-effort — Playwright's `page.accessibility` is a deprecated API that is
   // genuinely unavailable in some deployed browser builds, so the optional chain
-  // is intentional (failing closed here would break real smokes). A working API
-  // that returns null for a page with no accessible tree is a valid tree, still
-  // emitted deterministically (as JSON null) rather than skipped.
-  const accessibilityTree = (await page.accessibility?.snapshot?.()) ?? null;
+  // (and the try/catch around a present-but-throwing `snapshot()`) is intentional:
+  // failing here would break real smokes. A working API that returns null for a
+  // page with no accessible tree is a valid tree; either way a deterministic JSON
+  // null is emitted rather than skipped.
+  let accessibilityTree = null;
+  try {
+    accessibilityTree = (await page.accessibility?.snapshot?.()) ?? null;
+  } catch {
+    accessibilityTree = null;
+  }
   await writeFile(paths.snapshotPath, `${JSON.stringify(accessibilityTree, null, 2)}\n`, 'utf8');
 
   const normalizedMetadata = {

@@ -199,3 +199,24 @@ test('captureNamedUiState emits snapshot.json as JSON null when the accessibilit
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test('captureNamedUiState emits snapshot.json as JSON null when the accessibility API throws', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-a11y-throw-'));
+
+  try {
+    // A present-but-throwing accessibility API stays best-effort: fall back to a
+    // deterministic JSON null rather than crashing the whole capture.
+    const artifact = await captureNamedUiState({
+      page: {
+        async screenshot() {},
+        accessibility: { async snapshot() { throw new Error('accessibility unsupported'); } },
+      },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'Throwing accessibility API',
+    });
+    assert.equal(await readFile(artifact.snapshotPath, 'utf8'), 'null\n');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

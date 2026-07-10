@@ -106,8 +106,9 @@ This is intentionally minimal. The contract is not trying to describe every poss
 
 `snapshot.json` is the semantic counterpart to `screenshot.png`: the page's
 accessibility tree as captured by the harness for the same named state. Its
-body is the raw accessibility-tree JSON (an object tree, or JSON `null` for a
-page that exposes no accessible tree — still emitted, never skipped). It is
+body is the raw accessibility-tree JSON (an object tree, or JSON `null` when no
+accessibility tree is available — the page exposes none, or the accessibility API
+is unavailable — still emitted, never skipped). It is
 emitted for every named state at the deterministic path above, and `state.json`
 references it under `artifacts.snapshot`.
 
