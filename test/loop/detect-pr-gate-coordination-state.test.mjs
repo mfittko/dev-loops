@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
 import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
@@ -43,7 +44,15 @@ function buildMockRuntime(rawEnv = {}, extra = {}) {
       }
       return { code: gitMock.exitCode ?? 0, stdout: gitMock.stdout ?? "", stderr: gitMock.stderr ?? "" };
     }
-    return ghRunChild(cmd, cmdArgs, childEnv, stdinText);
+    if (cmd === "gh") {
+      return ghRunChild(cmd, cmdArgs, childEnv, stdinText);
+    }
+    // Any OTHER command — e.g. the deliberately-missing git binary in the
+    // git-boundary smoke — is a REAL spawn, so a genuinely-missing binary
+    // produces a real ENOENT that the script's tolerate-a-git-failure catch
+    // must handle. This is the one boundary that stays a real subprocess
+    // (a mock throw would not distinguish "git missing" from "git present").
+    return defaultRunChild(cmd, cmdArgs, childEnv, stdinText);
   };
   return { env: { ...process.env, ...rawEnv, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, ...extra };
 }
