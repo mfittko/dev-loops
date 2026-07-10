@@ -24,7 +24,7 @@
  *   - dev-loops subcommands and `node scripts/....mjs` invocations. Those scripts
  *     legitimately call gh/GraphQL/etc. internally — that IS the tooling.
  *   - A small explicit allowlist of write-ops that have no internal wrapper today:
- *     `gh pr merge`, `gh pr ready`, `gh issue create`. Plus belt-and-suspenders
+ *     `gh pr merge`, `gh pr ready`. Plus belt-and-suspenders
  *     entries that DO have wrappers — `gh issue edit` (scripts/github/edit-issue.mjs)
  *     and `gh label create` (scripts/github/create-label.mjs) — kept so a bare
  *     invocation surfaced from the wrapper's own subprocess is not a false violation.
@@ -87,7 +87,6 @@ Exit codes:
 const ALLOWED_WRITE_OPS = Object.freeze([
   /^gh\s+pr\s+merge\b/,
   /^gh\s+pr\s+ready\b/,
-  /^gh\s+issue\s+create\b/,
   // `gh issue edit` (scripts/github/edit-issue.mjs) and `gh label create`
   // (scripts/github/create-label.mjs) both HAVE wrappers; these entries are
   // belt-and-suspenders so a bare invocation (e.g. surfaced from the wrapper's
