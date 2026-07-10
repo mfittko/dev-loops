@@ -81,7 +81,7 @@ The harness currently normalizes:
 
 ## Minimum `state.json` contract
 
-The current reusable harness emits `state.json` with this minimum reviewer-facing metadata (current `schemaVersion`: `2`):
+The current reusable harness emits `state.json` with this minimum reviewer-facing metadata (current `schemaVersion`: `3`):
 - `schemaVersion`
 - `artifactType`
 - `validationLevel`

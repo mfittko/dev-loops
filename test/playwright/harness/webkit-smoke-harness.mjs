@@ -105,7 +105,7 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   };
 
   const stateArtifact = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     artifactType: 'named-ui-state',
     validationLevel: 'deterministic-smoke',
     sliceId: paths.sliceId,

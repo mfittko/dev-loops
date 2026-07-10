@@ -72,7 +72,7 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
     await stat(artifact.artifactDir);
 
     const stateJson = JSON.parse(await readFile(artifact.statePath, 'utf8'));
-    assert.equal(stateJson.schemaVersion, 2);
+    assert.equal(stateJson.schemaVersion, 3);
     assert.equal(stateJson.artifactType, 'named-ui-state');
     assert.equal(stateJson.validationLevel, 'deterministic-smoke');
     assert.equal(stateJson.sliceId, 'inspect-run-viewer');
