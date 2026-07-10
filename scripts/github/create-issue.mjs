@@ -14,7 +14,7 @@ Required:
   --title <t>                   Issue title
 Body (exactly one):
   --body <b>                    Issue body as a single argument
-  --body-file <path>            Read the body from a file (- reads stdin, handled by gh)
+  --body-file <path>            Read the body from a file (- is rejected; stdin is not supported)
 Optional:
   --milestone <m>               Milestone to set
   --label <l>                   Label to add (repeatable)
@@ -98,6 +98,11 @@ export function parseCreateIssueCliArgs(argv) {
       if (rawPath.length === 0) {
         throw parseError("--body-file must be a non-empty path");
       }
+      // gh is spawned with stdin ignored, so `--body-file -` would read /dev/null
+      // and silently create an empty-body issue; reject it fail-closed instead.
+      if (rawPath === "-") {
+        throw parseError("--body-file '-' (stdin) is not supported");
+      }
       options.bodyFile = rawPath;
       continue;
     }
@@ -140,7 +145,7 @@ export function parseCreateIssueCliArgs(argv) {
 }
 
 // Build the `gh issue create` args. A --body-file path is forwarded straight to
-// gh (so large bodies avoid command-length limits and `-` reads stdin natively).
+// gh so large bodies avoid command-length limits.
 export function buildCreateArgs(options) {
   const args = ["issue", "create", "--repo", options.repo, "--title", options.title];
   if (options.body !== undefined) {

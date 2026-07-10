@@ -42,6 +42,13 @@ test("parseCreateIssueCliArgs: rejects whitespace-only --title / --body", () => 
   assert.throws(() => parseCreateIssueCliArgs(["--repo", "o/n", "--title", "t", "--body", "\t\n"]), /--body must not be empty/);
 });
 
+test("parseCreateIssueCliArgs: rejects --body-file - (stdin) fail-closed", () => {
+  assert.throws(
+    () => parseCreateIssueCliArgs(["--repo", "o/n", "--title", "t", "--body-file", "-"]),
+    /--body-file '-' \(stdin\) is not supported/,
+  );
+});
+
 test("parseCreateIssueCliArgs: collects repeated --label / --assignee", () => {
   const out = parseCreateIssueCliArgs([
     "--repo", "o/n", "--title", "t", "--body", "b",
@@ -96,6 +103,19 @@ test("runCli: --jq extracts issueNumber; --silent maps to exit code", async () =
   const { run: run2 } = stubGh();
   const code2 = await runCli(["--repo", "o/n", "--title", "T", "--body", "b", "--silent"], { run: run2, stdout: captureStream() });
   assert.equal(code2, 0);
+});
+
+test("runCli: fails closed (exit 1) with {ok:false,error} JSON on gh failure", async () => {
+  const { run } = stubGh({ code: 1, stderr: "forbidden" });
+  const stderr = captureStream();
+  const code = await runCli(
+    ["--repo", "o/n", "--title", "T", "--body", "b"],
+    { run, stdout: captureStream(), stderr },
+  );
+  assert.equal(code, 1);
+  const parsed = JSON.parse(stderr.get().trim());
+  assert.equal(parsed.ok, false);
+  assert.match(parsed.error, /gh issue create failed: forbidden/);
 });
 
 test("runCli: fails closed (exit 1) on missing required args", async () => {
