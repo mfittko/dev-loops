@@ -112,6 +112,11 @@ export function rewriteGeneratedRepoDocLinks(body) {
   return String(body).replace(/(\]\(<?)(\.\.\/docs\/)/g, "$1../$2");
 }
 
+// Back-compat alias for the pre-generalization name. This module is a public
+// `@dev-loops/core/claude/asset-generation` export, so the old export name keeps
+// forwarding to avoid breaking any downstream importer.
+export const rewriteCommandRepoLinks = rewriteGeneratedRepoDocLinks;
+
 /**
  * Map a single Pi tool name to its Claude tool name(s).
  * @param {string} name
