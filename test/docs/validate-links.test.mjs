@@ -50,6 +50,48 @@ test("validateMarkdownLinks scans root docs surfaces, strips fragments, accepts 
   }
 });
 
+test("validateMarkdownLinks scans .claude/agents + .claude/commands but excludes .claude/skills", async () => {
+  const repoRoot = await createRepo({
+    "docs/guide.md": "# Guide\n",
+    // Generated agent/command wrappers sit one level under .claude/ and their
+    // repo-doc links are depth-shifted to `../../docs/…` — these MUST resolve.
+    ".claude/agents/review.md": "See [Guide](../../docs/guide.md).\n",
+    ".claude/commands/loop-info.md": "See [Guide](../../docs/guide.md).\n",
+    // Generated skills carry consumer-project `../../…` refs that target the
+    // INSTALLED repo, not this source tree — excluded from the scan by design.
+    ".claude/skills/dev-loop/SKILL.md": "See [Consumer plan](../../PLAN.md).\n",
+  });
+
+  try {
+    const result = await validateMarkdownLinks({ repoRoot });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.brokenLinks, []);
+    assert.ok(result.scannedFiles.includes(".claude/agents/review.md"));
+    assert.ok(result.scannedFiles.includes(".claude/commands/loop-info.md"));
+    assert.ok(!result.scannedFiles.includes(".claude/skills/dev-loop/SKILL.md"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("validateMarkdownLinks catches a broken repo-doc link under .claude/agents (scan is meaningful)", async () => {
+  const repoRoot = await createRepo({
+    "docs/guide.md": "# Guide\n",
+    ".claude/agents/review.md": "See [Guide](../../docs/guid.md).\n", // typo → broken
+  });
+
+  try {
+    const result = await validateMarkdownLinks({ repoRoot });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.brokenLinks.length, 1);
+    assert.equal(result.brokenLinks[0].sourcePath, ".claude/agents/review.md");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("validateMarkdownLinks ignores external links, mailto links, fragment-only links, image links, and fenced-code examples", async () => {
   const repoRoot = await createRepo({
     "README.md": [
