@@ -15,6 +15,9 @@ test('ui artifact contract doc defines named-state artifacts and auto-scoped CI 
 
   // dev-loop is the single public entrypoint — pin the token, not the sentence around it.
   assert.match(doc, /`dev-loop`/i);
+  // Single-entrypoint invariant: durable heading-level terminology, so pinning it
+  // survives prose rewords but trips on a deletion/flip of the invariant.
+  assert.match(doc, /single public entrypoint/i);
 
   // The five named-state artifact filenames are the load-bearing bundle contract.
   for (const artifact of ['screenshot.png', 'state.json', 'snapshot.json', 'axe.json', 'console.json']) {
@@ -31,8 +34,9 @@ test('ui artifact contract doc defines named-state artifacts and auto-scoped CI 
   assert.match(doc, /bundle is required/i);
 
   // Auto-scoped (not opt-in / promoted) CI enforcement — the durable `auto-scoped`
-  // token also backs the section anchor other docs link to.
-  assert.match(doc, /auto-scoped/i);
+  // token also backs the section anchor other docs link to. Keep the negation so a
+  // polarity flip ("auto-scoped and promoted") still trips the guard.
+  assert.match(doc, /auto-scoped[^.]*not promoted/i);
   assert.match(doc, /ui-e2e-scoping-step\.md/i);
   assert.match(doc, /UI_E2E_CHECK_NAMES/i);
 

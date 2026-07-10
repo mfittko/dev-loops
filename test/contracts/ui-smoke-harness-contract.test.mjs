@@ -34,7 +34,9 @@ test('ui smoke harness doc defines the bounded reusable local Playwright/WebKit 
   // Scope boundary: a bounded seam, not a general E2E framework, not mandatory for non-UI slices.
   assert.doesNotMatch(doc, /later bounded decision/i);
   assert.match(doc, /not a general E2E framework/i);
-  assert.match(doc, /non-UI slices/i);
+  // Keep the negation so a flip ("makes browser validation mandatory for non-UI
+  // slices") still trips, while tolerating rewording of the middle clause.
+  assert.match(doc, /not\b[^.]*mandatory[^.]*non-UI slices/i);
   assert.match(indexDoc, /ui-smoke-harness\.md/i);
   assert.match(localImplementationSkill, /\.\.\/\.\.\/docs\/ui-smoke-harness\.md/i);
 });
