@@ -42,7 +42,7 @@ These are screenshots or demo captures created for human discussion only.
 
 These are the reusable harness artifacts emitted for named UI states.
 
-For this level, a paired state artifact is required:
+For this level, a state artifact bundle is required:
 - `screenshot.png`
 - `state.json`
 - `snapshot.json`
@@ -119,7 +119,7 @@ Screenshot alone is acceptable only when the artifact is:
 - not being presented as deterministic smoke-validation evidence
 - not a registered rendered artifact whose suite is auto-scoped into CI (see [CI enforcement is auto-scoped, not promoted](#ci-enforcement-is-auto-scoped-not-promoted))
 
-## When the paired state artifact is required
+## When the state artifact bundle is required
 
 The `screenshot.png` + `state.json` + `snapshot.json` bundle is required when:
 - the artifact is part of the reusable deterministic smoke harness
