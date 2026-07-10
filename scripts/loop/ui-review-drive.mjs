@@ -5,7 +5,7 @@
  * Launches one headless WebKit context, authenticates as the change's target
  * role via the project's dev-login recipe, dismisses config-declared
  * interstitials once, then walks the changed flows against the arbitrary
- * running-app URL from Stage 1 — capturing a step screenshot + state.json per
+ * running-app URL from Stage 1 — capturing a step screenshot + state.json + snapshot.json per
  * step. Response/requestfailed/pageerror listeners plus a server-log tail run
  * throughout so a swallowed error response is still recorded.
  *
@@ -34,7 +34,7 @@ capturing step screenshots + error-response/pageerror/server-log failures (Stage
 Required:
   --repo-root <p>      Absolute path to the (provisioned) worktree carrying the .devloops recipe.
   --app-url <url>      The running-app URL handed off by Stage 1.
-  --output-dir <p>     Directory for the ordered step screenshots + state.json artifacts.
+  --output-dir <p>     Directory for the ordered step screenshots + state.json + snapshot.json artifacts.
 Optional:
   --changed-path <p>   A changed file path (repeatable); drives the changed-flow selection heuristic.
   -h, --help           Show this help.
@@ -262,7 +262,7 @@ function makeRunStep({ page, outputDir }) {
       outputDir,
       metadata: { fixture: null, route: step.path ?? null, reviewHint: `Drive step "${stateName}" for the "${flow.name}" flow.` },
     });
-    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath };
+    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath };
   };
 }
 

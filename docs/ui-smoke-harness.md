@@ -17,7 +17,7 @@ The harness is intentionally small:
 - Playwright
 - WebKit only
 - fixture-backed scenarios
-- named screenshot/state artifact capture
+- named screenshot/state/snapshot artifact capture
 - deterministic local artifact/report locations
 
 It is not a general E2E framework and it does not make browser validation mandatory for non-UI slices.
@@ -71,6 +71,7 @@ Given a `sliceId` of `inspect-run-viewer`, the baseline paths are:
 Each named-state directory currently contains:
 - `screenshot.png`
 - `state.json`
+- `snapshot.json`
 
 These paths are the local proving ground for the reusable artifact contract in [UI Artifact Contract](./ui-artifact-contract.md) and for later designer-review-loop work.
 

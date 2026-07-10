@@ -39,6 +39,7 @@ export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName }
     artifactDir,
     screenshotPath: path.join(artifactDir, 'screenshot.png'),
     statePath: path.join(artifactDir, 'state.json'),
+    snapshotPath: path.join(artifactDir, 'snapshot.json'),
   };
 }
 
@@ -54,6 +55,21 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   await mkdir(paths.artifactDir, { recursive: true });
   await page.screenshot({ path: paths.screenshotPath, fullPage });
 
+  // Semantic snapshot: the accessibility tree next to the pixels. Captured
+  // best-effort — Playwright's `page.accessibility` is a deprecated API that is
+  // genuinely unavailable in some deployed browser builds, so the optional chain
+  // (and the try/catch around a present-but-throwing `snapshot()`) is intentional:
+  // failing here would break real smokes. A working API that returns null for a
+  // page with no accessible tree is a valid tree; either way a deterministic JSON
+  // null is emitted rather than skipped.
+  let accessibilityTree = null;
+  try {
+    accessibilityTree = (await page.accessibility?.snapshot?.()) ?? null;
+  } catch {
+    accessibilityTree = null;
+  }
+  await writeFile(paths.snapshotPath, `${JSON.stringify(accessibilityTree, null, 2)}\n`, 'utf8');
+
   const normalizedMetadata = {
     ...metadata,
     fixture: metadata.fixture ?? null,
@@ -62,7 +78,7 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   };
 
   const stateArtifact = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     artifactType: 'named-ui-state',
     validationLevel: 'deterministic-smoke',
     sliceId: paths.sliceId,
@@ -83,6 +99,11 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
         fileName: path.basename(paths.statePath),
         relativePath: path.basename(paths.statePath),
         path: paths.statePath,
+      },
+      snapshot: {
+        fileName: path.basename(paths.snapshotPath),
+        relativePath: path.basename(paths.snapshotPath),
+        path: paths.snapshotPath,
       },
     },
     metadata: normalizedMetadata,

@@ -13,6 +13,7 @@ You are a vision-capable UI reviewer (model: `gpt-5.4`) reviewing deterministic 
   - `stateName`
   - `screenshotPath` (must point to `screenshot.png`)
   - `statePath` (must point to `state.json`)
+  - `snapshotPath` (must point to `snapshot.json`)
 
 ## Review policy
 
