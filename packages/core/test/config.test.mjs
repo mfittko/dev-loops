@@ -3594,6 +3594,72 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
   });
 });
 
+describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
+  // The `docs` name is BOTH a registered gate angle (persona `docs`) and a
+  // routine role (→ low). Without a discriminator the angle silently inherited
+  // the `docs` writer role's low tier; kind:"angle" forces review quality.
+  for (const harness of ["claude", "pi"]) {
+    test(`docs ANGLE resolves via the review tier (high), not the docs role — ${harness}`, () => {
+      const angle = resolveRoleModel({}, { role: "docs", harness, kind: "angle" });
+      const reviewTier = resolveRoleModel({}, { role: "review", harness });
+      const docsRole = resolveRoleModel({}, { role: "docs", harness });
+      assert.equal(angle, reviewTier, "docs angle must match the review (high) tier");
+      // Claude: opus (high) not sonnet (low); Pi: null high-tier no-op, still
+      // distinct in provenance from the docs role which is also null on Pi.
+      if (harness === "claude") assert.notEqual(angle, docsRole);
+    });
+
+    test(`docs ROLE still resolves low (unchanged) — ${harness}`, () => {
+      assert.equal(
+        resolveRoleModel({}, { role: "docs", harness }),
+        harness === "claude" ? "sonnet" : null,
+      );
+    });
+
+    test(`correctness stays high whether dispatched as angle or auto — ${harness}`, () => {
+      const expected = harness === "claude" ? "opus" : null;
+      assert.equal(resolveRoleModel({}, { role: "correctness", harness, kind: "angle" }), expected);
+      assert.equal(resolveRoleModel({}, { role: "correctness", harness }), expected);
+    });
+
+    test(`developer ROLE stays low — ${harness}`, () => {
+      assert.equal(
+        resolveRoleModel({}, { role: "developer", harness }),
+        harness === "claude" ? "sonnet" : null,
+      );
+    });
+  }
+
+  test("on Pi with distinct tier ids, the docs ANGLE takes the high tier and the docs ROLE the low tier", () => {
+    // Zero-config maps both low and high to null on Pi, so a regression where
+    // the angle wrongly took the docs (low) tier would still pass (null===null).
+    // Distinct non-null Pi ids per tier make the provenance observable: the
+    // angle MUST resolve high and the role low, or this fails.
+    const config = { models: { tiers: { low: { pi: "pi-low-model" }, high: { pi: "pi-high-model" } } } };
+    assert.equal(
+      resolveRoleModel(config, { role: "docs", harness: "pi", kind: "angle" }),
+      "pi-high-model",
+      "docs angle must resolve via the review (high) tier on Pi",
+    );
+    assert.equal(
+      resolveRoleModel(config, { role: "docs", harness: "pi", kind: "role" }),
+      "pi-low-model",
+      "docs role must stay on the low tier on Pi",
+    );
+  });
+
+  test("explicit per-angle roleTiers override beats the review-tier default", () => {
+    // `low` is DISTINCT from the angle-path fallback (review → high → opus), so
+    // this fails if the override branch (`roleTiers[role] ?? review`) is removed.
+    const config = { models: { roleTiers: { docs: "low" } } };
+    // roleTiers.docs is shared with the docs role; an explicit override applies
+    // to the angle path too, downgrading it below the review default.
+    assert.equal(resolveRoleModel(config, { role: "docs", harness: "claude", kind: "angle" }), "sonnet");
+    // The role path already resolves low; the override keeps it low.
+    assert.equal(resolveRoleModel(config, { role: "docs", harness: "claude", kind: "role" }), "sonnet");
+  });
+});
+
 describe("models.tiers / models.roleTiers schema validation", () => {
   test("accepts tiers + roleTiers alongside roles + conductor", () => {
     const ok = DevLoopConfigSchema.safeParse({
