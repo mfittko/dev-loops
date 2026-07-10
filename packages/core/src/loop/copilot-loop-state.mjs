@@ -149,7 +149,7 @@ export const VALID_REVIEW_REQUEST_STATUSES = new Set(["requested", "already-requ
  * request-status enum. Unrecognized statuses (round cap / suppression
  * diagnostics) map to "none" so they never leak into the shared contract.
  *
- * @param {string} status
+ * @param {string|undefined} status
  * @returns {string} a member of VALID_REVIEW_REQUEST_STATUSES
  */
 export function toSharedRequestStatus(status) {
