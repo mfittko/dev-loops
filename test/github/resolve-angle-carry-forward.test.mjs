@@ -159,6 +159,16 @@ test("buildCarryForwardPlan fails closed on a non-clean or missing prior log", (
   );
 });
 
+test("buildCarryForwardPlan fails closed on a malformed prior-log headSha (no bad carriedFromHead stamp)", () => {
+  for (const badHead of [undefined, null, "", "not-a-sha", "zzzz", "aaa", 1234567]) {
+    assert.throws(
+      () => buildCarryForwardPlan({ log: { ...cleanLog, headSha: badHead }, changedFiles: ["docs/guide.md"] }),
+      /headSha .* not a 7-64 char hex SHA/,
+      `headSha=${JSON.stringify(badHead)} must fail closed`,
+    );
+  }
+});
+
 test("buildCarryForwardPlan never carries an alwaysRerun angle even when the delta is outside its surface", () => {
   // `docs` surface is `docs`; a code-only delta does not touch it, so it would
   // carry — but passing it in alwaysRerun (a configured mandatory angle) forces

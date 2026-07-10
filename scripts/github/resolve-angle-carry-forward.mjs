@@ -152,6 +152,14 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   if (log.verdict !== "clean") {
     throw new Error(`prior gate findings-log verdict is ${JSON.stringify(log.verdict ?? null)}, not "clean" — nothing to carry forward (fail-closed)`);
   }
+  // FAIL-CLOSED: a carried entry stamps `carriedFromHead`/`prevHead` with the prior
+  // log's headSha; downstream write-gate-findings-log requires a 7-64 hex SHA there.
+  // A malformed prior log (missing/non-string/non-hex headSha) must NOT yield a plan
+  // with a bad provenance stamp — reject it here so every angle re-runs from scratch.
+  const headSha = typeof log.headSha === "string" ? normalizeHeadSha(log.headSha) : null;
+  if (!headSha) {
+    throw new Error(`prior gate findings-log headSha is ${JSON.stringify(log.headSha ?? null)}, not a 7-64 char hex SHA — cannot carry forward (fail-closed)`);
+  }
   const perAngle = Array.isArray(log.provenance?.perAngle) ? log.provenance.perAngle : [];
   if (perAngle.length === 0) {
     throw new Error("prior gate findings-log has no provenance.perAngle reviewers to carry forward (fail-closed)");
@@ -179,11 +187,11 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   });
   const carriedProvenance = carried.map(({ angle, reason }) => ({
     angle,
-    carriedFromHead: log.headSha,
+    carriedFromHead: headSha,
     ...(identityByAngle.get(angle) ?? {}),
     reason,
   }));
-  return { prevHead: log.headSha, carried: carriedProvenance, mustRerun };
+  return { prevHead: headSha, carried: carriedProvenance, mustRerun };
 }
 
 // git-diff isolation flags (subset of write-gate-context's captureDiffFromBase):
