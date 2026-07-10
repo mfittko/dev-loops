@@ -52,6 +52,7 @@ test('validateUiDesignerReviewInput rejects incomplete named-state artifacts', (
           screenshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/screenshot.png',
           snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/snapshot.json',
           axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.json',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.json',
         },
       ],
     },
@@ -78,6 +79,7 @@ test('validateUiDesignerReviewInput accepts the artifact bundle from the reusabl
           statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/state.json',
           snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/snapshot.json',
           axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.json',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.json',
         },
       ],
     },
@@ -108,6 +110,7 @@ test('validateUiDesignerReviewInput routes opted-in UI slices to vision review',
           statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/state.json',
           snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/snapshot.json',
           axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.json',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.json',
         },
       ],
     },
@@ -137,6 +140,7 @@ test('validateUiDesignerReviewInput fails closed when vision review lacks screen
           statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/state.json',
           snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/snapshot.json',
           axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.json',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.json',
         },
       ],
     },
@@ -178,6 +182,7 @@ test('validateUiDesignerReviewInput fails closed when vision review lacks state.
           statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/meta.txt',
           snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/snapshot.json',
           axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.json',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.json',
         },
       ],
     },
@@ -202,6 +207,7 @@ test('validateUiDesignerReviewInput fails closed when a named state is missing s
           screenshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/screenshot.png',
           statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/state.json',
           axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.json',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.json',
         },
       ],
     },
@@ -228,6 +234,7 @@ test('validateUiDesignerReviewInput fails closed when vision review has a malfor
           statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/state.json',
           snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/a11y.txt',
           axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.json',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.json',
         },
       ],
     },
@@ -252,6 +259,7 @@ test('validateUiDesignerReviewInput fails closed when a named state is missing a
           screenshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/screenshot.png',
           statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/state.json',
           snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/snapshot.json',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.json',
         },
       ],
     },
@@ -278,6 +286,7 @@ test('validateUiDesignerReviewInput fails closed when vision review has a malfor
           statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/state.json',
           snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/snapshot.json',
           axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.txt',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.json',
         },
       ],
     },
@@ -286,6 +295,58 @@ test('validateUiDesignerReviewInput fails closed when vision review has a malfor
   assert.equal(result.ok, false);
   assert.equal(result.status, 'blocked_incomplete_artifact_bundle');
   assert.deepEqual(result.missing, ['artifactBundle.namedStates[0].axePath']);
+});
+
+test('validateUiDesignerReviewInput fails closed when a named state is missing console.json', () => {
+  const result = validateUiDesignerReviewInput({
+    workType: 'ui',
+    uiReviewRequested: true,
+    acceptanceCriteria: ['named dashboard state renders'],
+    reviewBrief: 'Check layout and visual hierarchy.',
+    artifactBundle: {
+      sliceId: 'inspect-run-viewer',
+      namedStates: [
+        {
+          stateName: 'Current PR dashboard',
+          screenshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/screenshot.png',
+          statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/state.json',
+          snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/snapshot.json',
+          axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.json',
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'blocked_incomplete_artifact_bundle');
+  assert.deepEqual(result.missing, ['artifactBundle.namedStates[0].consolePath']);
+});
+
+test('validateUiDesignerReviewInput fails closed when vision review has a malformed console path', () => {
+  const result = validateUiDesignerReviewInput({
+    workType: 'ui',
+    uiReviewRequested: true,
+    uiReviewMode: 'vision',
+    acceptanceCriteria: ['named dashboard state renders'],
+    reviewBrief: 'Check layout and visual hierarchy.',
+    artifactBundle: {
+      sliceId: 'inspect-run-viewer',
+      namedStates: [
+        {
+          stateName: 'Current PR dashboard',
+          screenshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/screenshot.png',
+          statePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/state.json',
+          snapshotPath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/snapshot.json',
+          axePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/axe.json',
+          consolePath: 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard/console.txt',
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'blocked_incomplete_artifact_bundle');
+  assert.deepEqual(result.missing, ['artifactBundle.namedStates[0].consolePath']);
 });
 
 test('mapAxeImpactToFindingSeverity maps axe impact ranks to finding severities', () => {

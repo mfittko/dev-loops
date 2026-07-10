@@ -75,6 +75,9 @@ export function validateUiDesignerReviewInput(input = {}) {
     if (typeof state.axePath !== 'string' || state.axePath.trim().length === 0) {
       incompleteArtifacts.push(`artifactBundle.namedStates[${index}].axePath`);
     }
+    if (typeof state.consolePath !== 'string' || state.consolePath.trim().length === 0) {
+      incompleteArtifacts.push(`artifactBundle.namedStates[${index}].consolePath`);
+    }
     if (reviewMode === 'vision' && typeof state.screenshotPath === 'string' && state.screenshotPath.trim().length > 0 && !state.screenshotPath.trim().endsWith('screenshot.png')) {
       incompleteArtifacts.push(`artifactBundle.namedStates[${index}].screenshotPath`);
     }
@@ -86,6 +89,9 @@ export function validateUiDesignerReviewInput(input = {}) {
     }
     if (reviewMode === 'vision' && typeof state.axePath === 'string' && state.axePath.trim().length > 0 && !state.axePath.trim().endsWith('axe.json')) {
       incompleteArtifacts.push(`artifactBundle.namedStates[${index}].axePath`);
+    }
+    if (reviewMode === 'vision' && typeof state.consolePath === 'string' && state.consolePath.trim().length > 0 && !state.consolePath.trim().endsWith('console.json')) {
+      incompleteArtifacts.push(`artifactBundle.namedStates[${index}].consolePath`);
     }
   });
   if (incompleteArtifacts.length > 0) {

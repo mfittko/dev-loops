@@ -42,6 +42,7 @@ The loop requires all of the following inputs before it may run:
      - `statePath`
      - `snapshotPath`
      - `axePath`
+     - `consolePath`
 
 If any required part of this bundle is missing, incomplete, or ambiguous, the loop fails closed instead of guessing.
 
@@ -63,6 +64,16 @@ severity with a fixed mapping:
 This mapping is codified and tested in `scripts/loop/ui-designer-review-contract.mjs`
 (`mapAxeImpactToFindingSeverity`); the vision template no longer instructs the
 reviewer to eyeball contrast.
+
+## Console and network errors are review findings
+
+Each named state also carries a `console.json` (raw console errors and failed
+network requests attributed to that state, or JSON `null` when none were
+captured). A captured console error or failed network request — a swallowed 500,
+an uncaught page error — is a **must-fix finding**, never silently dropped: the
+reviewer grounds the finding in `consolePath` and hands it back for a fix. These
+errors are drained from the live drive's walk-level capture per state, so the
+same error is attributed to exactly one place and never double-reported.
 
 ## Review modes behind `dev-loop`
 
@@ -126,11 +137,12 @@ The loop fails closed when:
 - the review brief is missing or empty
 - the artifact bundle is missing
 - the artifact bundle has no named states
-- a named state lacks `screenshotPath`, `statePath`, `snapshotPath`, or `axePath`
+- a named state lacks `screenshotPath`, `statePath`, `snapshotPath`, `axePath`, or `consolePath`
 - vision mode is requested but a named state screenshot path does not end with `screenshot.png`
 - vision mode is requested but a named-state `statePath` does not end with `state.json`
 - vision mode is requested but a named-state `snapshotPath` does not end with `snapshot.json`
 - vision mode is requested but a named-state `axePath` does not end with `axe.json`
+- vision mode is requested but a named-state `consolePath` does not end with `console.json`
 - the work is not actually a UI slice \(the loop returns a skip outcome rather than failing closed\)
 - an unsupported `uiReviewMode` value (anything other than `designer` or `vision`) fails closed with `blocked_unsupported_review_mode`
 

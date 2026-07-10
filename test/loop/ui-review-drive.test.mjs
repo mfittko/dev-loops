@@ -17,6 +17,7 @@ import {
   parseUiReviewDriveCliArgs,
   attachPageListeners,
   openServerLogTail,
+  toPerStateConsolePayload,
 } from "../../scripts/loop/ui-review-drive.mjs";
 
 const tempFiles = [];
@@ -170,6 +171,45 @@ test("attachPageListeners: captures requestfailed and pageerror (with err.stack 
   assert.deepEqual(e.requestFailures, [{ url: "http://x/img", failure: "net::ERR" }]);
   // The file:line signal Stage 3 needs is captured off err.stack, not discarded.
   assert.deepEqual(e.pageErrors, [{ message: "TypeError: boom", stack: "TypeError: boom\n    at app.js:42:9" }]);
+});
+
+test("drainCapturedEvents: attributes a per-state slice and clears it so the walk-level classifier can't double-report the same event", () => {
+  const page = fakePage();
+  const { getCapturedEvents, drainCapturedEvents } = attachPageListeners(page);
+  page.emit("response", { status: () => 500, url: () => "http://app/save" });
+  page.emit("pageerror", { message: "TypeError: boom", stack: "TypeError: boom\n    at app.js:1" });
+
+  // The per-state capture drains its slice (this becomes the state's console.json).
+  const drained = drainCapturedEvents();
+  assert.deepEqual(drained.responses, [{ url: "http://app/save", status: 500 }]);
+  assert.equal(drained.pageErrors.length, 1);
+
+  // Draining clears the buffer, so the walk-level classifier sees nothing to
+  // re-report — the same error is counted once, never twice.
+  const leftover = getCapturedEvents();
+  assert.deepEqual(leftover.responses, []);
+  assert.deepEqual(leftover.requestFailures, []);
+  assert.deepEqual(leftover.pageErrors, []);
+  assert.equal(classifyFailures(leftover).length, 0);
+
+  // A later event lands only in the next drain, never retroactively in the first.
+  page.emit("requestfailed", { url: () => "http://app/img", failure: () => ({ errorText: "net::ERR" }) });
+  assert.deepEqual(drainCapturedEvents().requestFailures, [{ url: "http://app/img", failure: "net::ERR" }]);
+});
+
+test("toPerStateConsolePayload: shapes a drained slice into console/network findings; null when empty", () => {
+  assert.equal(toPerStateConsolePayload({ responses: [], requestFailures: [], pageErrors: [] }), null);
+  assert.equal(toPerStateConsolePayload({}), null);
+  const payload = toPerStateConsolePayload({
+    responses: [{ url: "http://app/save", status: 500 }],
+    requestFailures: [{ url: "http://app/img", failure: "net::ERR" }],
+    pageErrors: [{ message: "boom", stack: "boom\n    at app.js:1" }],
+  });
+  assert.deepEqual(payload.consoleErrors, [{ message: "boom", stack: "boom\n    at app.js:1" }]);
+  assert.deepEqual(payload.failedRequests, [
+    { kind: "error-response", url: "http://app/save", status: 500 },
+    { kind: "request-failed", url: "http://app/img", failure: "net::ERR" },
+  ]);
 });
 
 test("openServerLogTail: absent path is a no-op; missing file reads once created", async () => {

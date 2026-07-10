@@ -5,9 +5,12 @@
  * Launches one headless WebKit context, authenticates as the change's target
  * role via the project's dev-login recipe, dismisses config-declared
  * interstitials once, then walks the changed flows against the arbitrary
- * running-app URL from Stage 1 — capturing a step screenshot + state.json + snapshot.json + axe.json per
+ * running-app URL from Stage 1 — capturing a step screenshot + state.json + snapshot.json + axe.json + console.json per
  * step. Response/requestfailed/pageerror listeners plus a server-log tail run
- * throughout so a swallowed error response is still recorded.
+ * throughout so a swallowed error response is still recorded. The per-step
+ * capture DRAINS the listener buffer into that step's console.json (per-state
+ * attribution), so an event attributed to a state is not ALSO re-reported by the
+ * walk-level classifier — the same error is never counted twice.
  *
  * This is a thin adapter: it wires the real IO seams (WebKit browser/page, the
  * page-event listeners, captureNamedUiState, the login form driving, the
@@ -34,7 +37,7 @@ capturing step screenshots + error-response/pageerror/server-log failures (Stage
 Required:
   --repo-root <p>      Absolute path to the (provisioned) worktree carrying the .devloops recipe.
   --app-url <url>      The running-app URL handed off by Stage 1.
-  --output-dir <p>     Directory for the ordered step screenshots + state.json + snapshot.json + axe.json artifacts.
+  --output-dir <p>     Directory for the ordered step screenshots + state.json + snapshot.json + axe.json + console.json artifacts.
 Optional:
   --changed-path <p>   A changed file path (repeatable); drives the changed-flow selection heuristic.
   -h, --help           Show this help.
@@ -105,7 +108,14 @@ export function parseUiReviewDriveCliArgs(argv) {
  * the shared threshold owner) are retained so the buffer stays bounded; the pure
  * classifier decides severity from the collected set.
  *
- * @returns {{ getCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]} }}
+ * `drainCapturedEvents()` returns a snapshot of the events collected since the
+ * last drain and CLEARS the buffer. The per-step capture drains its slice into
+ * that state's console.json (per-state attribution); whatever is left when the
+ * walk ends is what `getCapturedEvents()` hands the walk-level classifier — so an
+ * event attributed to a named state is never ALSO classified at walk level (no
+ * double-report between the per-state capture and the walk-level classifier).
+ *
+ * @returns {{ getCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]}, drainCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]} }}
  */
 export function attachPageListeners(page) {
   const responses = [];
@@ -128,7 +138,29 @@ export function attachPageListeners(page) {
     // mapping needs); the classifier bounds it before it lands on the feed.
     pageErrors.push({ message: err?.message ?? String(err), stack: err?.stack ?? null });
   });
-  return { getCapturedEvents: () => ({ responses, requestFailures, pageErrors }) };
+  const drainCapturedEvents = () => {
+    const drained = { responses: [...responses], requestFailures: [...requestFailures], pageErrors: [...pageErrors] };
+    responses.length = 0;
+    requestFailures.length = 0;
+    pageErrors.length = 0;
+    return drained;
+  };
+  return { getCapturedEvents: () => ({ responses, requestFailures, pageErrors }), drainCapturedEvents };
+}
+
+/** Shape a drained per-state slice of listener events into the console.json
+ * review-input payload: JS `pageerror`s become `consoleErrors`, error responses
+ * and failed requests become `failedRequests`. Returns null when the slice is
+ * empty, so an errorless state emits a deterministic JSON null (mirroring the
+ * snapshot/axe best-effort policy) rather than an empty envelope. */
+export function toPerStateConsolePayload(events = {}) {
+  const consoleErrors = (events.pageErrors ?? []).map((e) => ({ message: e.message ?? null, stack: e.stack ?? null }));
+  const failedRequests = [
+    ...(events.responses ?? []).map((r) => ({ kind: "error-response", url: r.url ?? null, status: r.status })),
+    ...(events.requestFailures ?? []).map((f) => ({ kind: "request-failed", url: f.url ?? null, failure: f.failure ?? null })),
+  ];
+  if (consoleErrors.length === 0 && failedRequests.length === 0) return null;
+  return { consoleErrors, failedRequests };
 }
 
 /** Cap the bytes a single tail read pulls into memory, so a huge log growth
@@ -228,7 +260,7 @@ async function dismissInterstitials({ page, interstitials, timeoutMs = 2000 }) {
 }
 
 /** Map one declared step to its Playwright page call, then capture the state. */
-function makeRunStep({ page, outputDir }) {
+function makeRunStep({ page, outputDir, drainCapturedEvents }) {
   return async ({ appUrl, flow, step, index }) => {
     const sel = step.selector;
     switch (step.action) {
@@ -260,9 +292,13 @@ function makeRunStep({ page, outputDir }) {
       stateName,
       fullPage: false,
       outputDir,
+      // Drain the walk-level listener buffer into THIS state's console.json, so
+      // its console/network errors are attributed here and not re-reported by the
+      // walk-level classifier (single capture source, counted once).
+      captureConsole: drainCapturedEvents ? () => toPerStateConsolePayload(drainCapturedEvents()) : undefined,
       metadata: { fixture: null, route: step.path ?? null, reviewHint: `Drive step "${stateName}" for the "${flow.name}" flow.` },
     });
-    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath, axePath: paths.axePath };
+    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath, axePath: paths.axePath, consolePath: paths.consolePath };
   };
 }
 
@@ -299,7 +335,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    const { getCapturedEvents } = attachPageListeners(page);
+    const { getCapturedEvents, drainCapturedEvents } = attachPageListeners(page);
     const result = await driveUiReview(
       {
         appUrl: options.appUrl,
@@ -313,7 +349,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       {
         authenticate: () => authenticate({ page, login: recipe.login }),
         dismissInterstitials: ({ interstitials }) => dismissInterstitials({ page, interstitials }),
-        runStep: makeRunStep({ page, outputDir: options.outputDir }),
+        runStep: makeRunStep({ page, outputDir: options.outputDir, drainCapturedEvents }),
         getCapturedEvents,
         readServerLogTail: () => logTail.read(),
         log: (msg) => stderr.write(`[ui-review-drive] ${msg}\n`),
