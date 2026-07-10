@@ -150,6 +150,30 @@ workflow:
   devModeDefault: true
 ```
 
+### Model tiers (`models.tiers` / `models.roleTiers`)
+
+Subagents run on a harness-neutral **tier** so a single policy expresses "high on both harnesses" even though the concrete model ids differ. A tier alias maps to a per-harness concrete model (or `null` = inherit / no-op on that harness); `models.roleTiers` maps each role/angle to an alias (or `inherit`).
+
+**Default policy (zero config):** routine subagents (`developer`, `docs`, `fixer`, `quality`) → `low`; planning (`refiner`) and critical review (`review`, including gate fan-out angles via their `review` persona) → `high`; the conductor (`dev-loop`) → `inherit`. Built-in tiers are `low: { claude: sonnet, pi: null }`, `high: { claude: opus, pi: null }`.
+
+**Per-harness resolution:** `resolveRoleModel(config, { role, harness })` from `@dev-loops/core/config` returns a concrete model id or `null`. Precedence: `models.roles[role]` (concrete, highest) > tier from `models.roleTiers[role]` (or the built-in role tier) mapped through `models.tiers[alias][harness]` > `null`. On Claude the resolved tier is baked into each agent's `model:` frontmatter at asset-generation time; on Pi it is resolved at dispatch and passed only when non-null.
+
+**Zero-config no-op on Pi:** because built-in tiers ship `pi: null`, every role resolves to `null` on Pi — no model override is passed, a genuine no-op — until an operator sets concrete Pi ids. The same config drives both harnesses (cross-harness contract #1086).
+
+```yaml
+models:
+  tiers:
+    low:  { claude: sonnet, pi: claude-3-5-haiku }   # set pi ids to opt Pi in
+    high: { claude: opus,   pi: claude-3-5-sonnet }
+  roleTiers:
+    quality: high            # promote a routine role
+    developer: inherit       # opt a role out entirely
+  roles:
+    security: gpt-5          # concrete per-angle override (beats any tier)
+```
+
+Critical review angles always resolve `high` via their `review` persona; a routine angle drops to `low` only by explicit `models.roleTiers` config (no silent downgrade). An unknown tier alias in `models.roleTiers` is rejected by the schema with a clear error.
+
 ### Available review angles
 
 The shipped defaults activate these angles. Additional angles are available as opt-in — add them to your `gates.draft.angles` or `gates.preApproval.angles` and they'll use the prompts defined in the personas registry. Opt-in prompts are generic and can be overridden in consumer repos through `personas.<angle>.prompt` without depending on this repository's audit examples.

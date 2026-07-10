@@ -33,6 +33,7 @@ import {
   resolveRequireFanoutProvenance,
   FANOUT_PROVENANCE_MIN_REVIEWERS,
   resolveGatePostFindingsComments,
+  resolveRoleModel,
 } from "../src/config/config.mjs";
 // ============================================================================
 // Schema validation tests (S1–S26)
@@ -3507,5 +3508,125 @@ describe("gates.postFindingsComments", () => {
   test("rejects non-boolean postFindingsComments", () => {
     const bad = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: "yes" } });
     assert.equal(bad.success, false);
+  });
+});
+
+// ============================================================================
+// Model-tier resolution — resolveRoleModel (both harnesses)
+// ============================================================================
+
+describe("resolveRoleModel — built-in policy, both harnesses", () => {
+  // Zero-config resolution table: 7 roles + a critical angle, on claude and pi.
+  const cases = [
+    // [role, claude, pi]
+    ["developer", "sonnet", null],
+    ["docs", "sonnet", null],
+    ["fixer", "sonnet", null],
+    ["quality", "sonnet", null],
+    ["refiner", "opus", null],
+    ["review", "opus", null],
+    ["dev-loop", null, null], // inherit
+    // A critical gate angle resolves high via its `review` persona.
+    ["correctness", "opus", null],
+    ["renderer-security", "opus", null],
+  ];
+  for (const [role, claude, pi] of cases) {
+    test(`${role}: claude=${claude} pi=${pi} (zero config)`, () => {
+      assert.equal(resolveRoleModel({}, { role, harness: "claude" }), claude);
+      assert.equal(resolveRoleModel({}, { role, harness: "pi" }), pi);
+    });
+  }
+
+  test("zero-config on Pi is a genuine no-op for every role", () => {
+    for (const [role] of cases) {
+      assert.equal(resolveRoleModel({}, { role, harness: "pi" }), null, `${role} must be null on pi`);
+    }
+  });
+
+  test("null/unknown harness and empty role resolve null (fail closed)", () => {
+    assert.equal(resolveRoleModel({}, { role: "developer", harness: "openai" }), null);
+    assert.equal(resolveRoleModel({}, { role: "developer" }), null);
+    assert.equal(resolveRoleModel({}, { role: "", harness: "claude" }), null);
+    assert.equal(resolveRoleModel({}), null);
+  });
+
+  test("models.roles concrete override beats the tier on both harnesses", () => {
+    const config = { models: { roles: { developer: "gpt-5" } } };
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "gpt-5");
+    // Precedence holds on Pi even though the built-in Pi tier is null.
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "pi" }), "gpt-5");
+  });
+
+  test("models.roleTiers override retargets a role's tier", () => {
+    const config = { models: { roleTiers: { developer: "high", review: "low" } } };
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "opus");
+    assert.equal(resolveRoleModel(config, { role: "review", harness: "claude" }), "sonnet");
+  });
+
+  test("explicit roleTiers can downgrade a critical angle (no silent downgrade otherwise)", () => {
+    // Default: correctness stays high.
+    assert.equal(resolveRoleModel({}, { role: "correctness", harness: "claude" }), "opus");
+    // Explicit opt-in only.
+    const config = { models: { roleTiers: { correctness: "low" } } };
+    assert.equal(resolveRoleModel(config, { role: "correctness", harness: "claude" }), "sonnet");
+  });
+
+  test("operator-set Pi tier ids make Pi resolve concretely", () => {
+    const config = { models: { tiers: { low: { claude: "sonnet", pi: "haiku" }, high: { claude: "opus", pi: "sonnet" } } } };
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "pi" }), "haiku");
+    assert.equal(resolveRoleModel(config, { role: "review", harness: "pi" }), "sonnet");
+    // Claude side unchanged.
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "sonnet");
+  });
+
+  test("inherit tier resolves null on both harnesses", () => {
+    const config = { models: { roleTiers: { developer: "inherit" } } };
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), null);
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "pi" }), null);
+  });
+});
+
+describe("models.tiers / models.roleTiers schema validation", () => {
+  test("accepts tiers + roleTiers alongside roles + conductor", () => {
+    const ok = DevLoopConfigSchema.safeParse({
+      version: 1,
+      models: {
+        conductor: "gpt-5",
+        roles: { security: "gpt-5" },
+        tiers: { low: { claude: "sonnet", pi: null }, high: { claude: "opus", pi: "sonnet" } },
+        roleTiers: { developer: "low", review: "high", "dev-loop": "inherit" },
+      },
+    });
+    assert.equal(ok.success, true, ok.success ? "" : JSON.stringify(ok.error?.issues));
+  });
+
+  test("rejects an unknown tier alias referenced by roleTiers", () => {
+    const bad = DevLoopConfigSchema.safeParse({
+      version: 1,
+      models: { roleTiers: { developer: "mid" } },
+    });
+    assert.equal(bad.success, false);
+    assert.match(bad.error.issues.map((i) => i.message).join(" "), /unknown model tier alias "mid"/);
+  });
+
+  test("accepts a custom tier alias when defined under models.tiers", () => {
+    const ok = DevLoopConfigSchema.safeParse({
+      version: 1,
+      models: { tiers: { mid: { claude: "sonnet" } }, roleTiers: { developer: "mid" } },
+    });
+    assert.equal(ok.success, true, ok.success ? "" : JSON.stringify(ok.error?.issues));
+  });
+
+  test("rejects an unknown harness key inside a tier mapping", () => {
+    const bad = DevLoopConfigSchema.safeParse({
+      version: 1,
+      models: { tiers: { low: { claude: "sonnet", openai: "gpt-5" } } },
+    });
+    assert.equal(bad.success, false);
+  });
+
+  test("FileConfigSchema validates a partial models.tiers/roleTiers block and rejects bad aliases", () => {
+    assert.equal(FileConfigSchema.safeParse({ version: 1, models: { roleTiers: { quality: "high" } } }).success, true);
+    assert.equal(FileConfigSchema.safeParse({ version: 1, models: { roleTiers: { quality: "bogus" } } }).success, false);
   });
 });

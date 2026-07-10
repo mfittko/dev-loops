@@ -20,10 +20,70 @@ const InputSourceConfig = z.strictObject({
   default: z.enum(["tracker", "phase-docs"]),
 });
 
-const ModelsConfig = z.strictObject({
+// Built-in tier aliases shipped with zero config. A tier alias maps a
+// harness-neutral name (low/high) to a concrete per-harness model id; `null`
+// means "inherit" (pass no model override → genuine no-op on that harness).
+// Pi ships null on every built-in tier, so zero-config resolution is a no-op on
+// Pi until an operator sets concrete Pi ids.
+export const BUILTIN_TIER_ALIASES = Object.freeze(["low", "high"]);
+
+const BUILTIN_TIERS = Object.freeze({
+  low: Object.freeze({ claude: "sonnet", pi: null }),
+  high: Object.freeze({ claude: "opus", pi: null }),
+});
+
+// Built-in role→tier policy: routine subagents run on the low tier, planning
+// (refiner) and critical review (review, incl. gate fan-out angles via their
+// review persona) run high, and the conductor (dev-loop) inherits (no override).
+const BUILTIN_ROLE_TIERS = Object.freeze({
+  developer: "low",
+  docs: "low",
+  fixer: "low",
+  quality: "low",
+  refiner: "high",
+  review: "high",
+  "dev-loop": "inherit",
+});
+
+// A tier alias's per-harness concrete model. Either harness may be a concrete
+// model id or `null` (inherit / no-op on that harness). strictObject rejects
+// unknown harness keys.
+const ModelTierMapping = z.strictObject({
+  claude: z.string().trim().min(1).nullable().optional(),
+  pi: z.string().trim().min(1).nullable().optional(),
+});
+
+/**
+ * Reject `models.roleTiers` entries that reference a tier alias which is neither
+ * a built-in alias (low/high), the literal "inherit", nor defined in this
+ * config's own `models.tiers`. Applied to both the merged and file-level
+ * ModelsConfig so a typo'd alias fails closed with a clear message.
+ * @param {Record<string, unknown>|undefined} models
+ * @param {z.RefinementCtx} ctx
+ */
+function refineRoleTiers(models, ctx) {
+  const known = new Set([...BUILTIN_TIER_ALIASES, ...Object.keys(models?.tiers ?? {})]);
+  for (const [role, tier] of Object.entries(models?.roleTiers ?? {})) {
+    if (tier !== "inherit" && !known.has(tier)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["roleTiers", role],
+        message: `unknown model tier alias "${tier}" — define it under models.tiers, use a built-in alias (${BUILTIN_TIER_ALIASES.join(", ")}), or "inherit"`,
+      });
+    }
+  }
+}
+
+const ModelsConfigBase = z.strictObject({
   conductor: z.string().trim().min(1).optional(),
   roles: z.record(z.string(), z.string().trim().min(1)).optional(),
+  // Tier alias → per-harness concrete model (null = inherit / no-op).
+  tiers: z.record(z.string().min(1), ModelTierMapping).optional(),
+  // Role / angle → tier alias (a built-in/custom alias or "inherit").
+  roleTiers: z.record(z.string().min(1), z.string().trim().min(1)).optional(),
 });
+
+const ModelsConfig = ModelsConfigBase.superRefine(refineRoleTiers);
 
 const RefinementConfig = z.strictObject({
   fanOut: z.number().int().min(1).max(10),
@@ -467,7 +527,7 @@ export const FileConfigSchema = z.strictObject({
   version: z.literal(1),
   strategy: StrategyConfig.partial().optional(),
   inputSource: InputSourceConfig.partial().optional(),
-  models: ModelsConfig.partial().optional(),
+  models: ModelsConfigBase.partial().superRefine(refineRoleTiers).optional(),
   refinement: RefinementConfig.partial().optional(),
   gates: FileGatesConfig.optional(),
   autonomy: AutonomyConfig.partial().optional(),
@@ -585,6 +645,53 @@ export function resolveReviewerRole(config, angle) {
     prompt: null,
     fallback: true,
   };
+}
+
+/**
+ * Resolve the concrete model for a subagent role/angle on a given harness, or
+ * `null` (inherit → pass no model override).
+ *
+ * Precedence:
+ *   1. `models.roles[role]` — concrete per-role/angle override (highest).
+ *   2. Tier: `models.roleTiers[role]` (or the built-in role tier), else — when
+ *      the role is a gate angle rather than a named role — the tier for the
+ *      angle's review persona (so critical angles inherit `review`'s high tier).
+ *      The alias is mapped through `models.tiers[tier][harness]` (or built-in
+ *      tiers). `inherit`/absent/null → `null`.
+ *
+ * Zero-config is a genuine no-op on Pi (built-in tiers are null for pi) and
+ * reproduces the standing policy on Claude (routine=low, refiner/review=high,
+ * dev-loop=inherit).
+ *
+ * @param {DevLoopConfig} config
+ * @param {{ role: string, harness: "claude"|"pi" }} params
+ * @returns {string|null}
+ */
+export function resolveRoleModel(config, { role, harness } = {}) {
+  if (!role || (harness !== "claude" && harness !== "pi")) return null;
+
+  // 1. Concrete per-role override wins outright (over any tier).
+  const concrete = config?.models?.roles?.[role];
+  if (typeof concrete === "string" && concrete.trim().length > 0) {
+    return concrete.trim();
+  }
+
+  // 2. Resolve a tier alias for this role/angle.
+  const roleTiers = { ...BUILTIN_ROLE_TIERS, ...(config?.models?.roleTiers ?? {}) };
+  let tierAlias = roleTiers[role];
+  if (tierAlias === undefined) {
+    // Not a named role — treat as a gate angle and inherit its review persona's
+    // tier (critical angles resolve high via the `review` persona).
+    const { persona } = resolveReviewerRole(config, role);
+    tierAlias = roleTiers[persona];
+  }
+  if (!tierAlias || tierAlias === "inherit") return null;
+
+  const tiers = { ...BUILTIN_TIERS, ...(config?.models?.tiers ?? {}) };
+  const mapping = tiers[tierAlias];
+  if (!mapping) return null;
+  const model = mapping[harness];
+  return typeof model === "string" && model.trim().length > 0 ? model.trim() : null;
 }
 
 // ============================================================================

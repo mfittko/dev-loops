@@ -411,6 +411,9 @@ For each delegated task:
 - tell the subagent whether it should implement, verify, or review
 - require the subagent to report blockers, verification results, and changed files
 - avoid circular delegation and overlapping scopes
+<!-- pi-only -->
+- resolve the subagent's model via `resolveRoleModel(config, { role, harness: "pi" })` (`role` = the delegate name, e.g. `developer`/`quality`/`docs`/`fixer`/`refiner`) and pass it at dispatch **only when non-null**; built-in Pi tiers are `null`, so this is a no-op until an operator sets `models.tiers.<alias>.pi`. See [Main-agent delegation contract](../docs/main-agent-contract.md). (Under Claude the tier is baked into the agent's `model:` frontmatter, so no dispatch-time model param is needed.)
+<!-- /pi-only -->
 
 ### Status monitoring
 
@@ -498,6 +501,9 @@ After the phase plan passes review:
    - run the resolved angle-focused passes in parallel with fresh context when practical
    - the sequential-fallback rule is owned by `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK` in [Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md); when it applies, record the fallback in `Phase Review` (`tmp/phases/phase-x/review.md`) (or the equivalent merged review artifact)
    - for each angle, resolve its persona and prompt via `resolveReviewerRole(config, angle)` — start each reviewer in fresh context with a concise briefing including the angle-specific prompt, the branch/phase, intended behavior, acceptance criteria, relevant files or artifacts, and current validation status
+<!-- pi-only -->
+   - resolve each reviewer's model via `resolveRoleModel(config, { role: angle, harness: "pi" })` (critical angles resolve to the high tier via their `review` persona) and pass it at dispatch **only when non-null**
+<!-- /pi-only -->
    - run the mandatory chain defined in [Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md). Retry rule: in subsequent cycles, only re-run reviewers that produced findings in the previous pass. Do not fork the parent session for parallel reviewers; write a compact handoff artifact under `tmp/` and point the reviewer at it.
    - when reviewer subagents stumble on raw source-tree reads (for example unresolved build artifacts or import assumptions), generate a deterministic diff/review artifact under `tmp/` and have reviewers inspect that artifact instead of the raw file set
    - synthesize actionable findings

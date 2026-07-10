@@ -2,6 +2,7 @@
 name: "fixer"
 description: "Use for addressing active pull request review comments and threads: inspect unresolved feedback, make the narrow fix, verify it, push the fixing commit, reply with the resolving commit, and resolve the thread. Keywords: fixer, PR comments, address review feedback, resolve review threads, push fix commit."
 tools: Read, Grep, Glob, Bash, Edit, Write
+model: sonnet
 ---
 <!-- GENERATED from agents/fixer.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 
