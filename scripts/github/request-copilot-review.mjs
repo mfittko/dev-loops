@@ -353,8 +353,13 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
 //     so the destination-path file list cannot be trusted as the exact delta
 //   - any rename/copy entry, whose destination-path classification could misread a
 //     code file moved to a doc path as pure-doc
-// Only a provably linear, rename-free delta yields the destination paths, which the
-// path-based resolveConvergenceCarryForward can then classify.
+//   - the compare API caps `files` at 300 entries per page, so a returned list AT
+//     that cap may be truncated — a code/test/config/CI file beyond position 300
+//     would be invisible and a real code change wrongly suppressed; a >=300-file
+//     delta is never "provably pure-doc" from one page
+// Only a provably linear, rename-free, non-truncated delta yields the destination
+// paths, which the path-based resolveConvergenceCarryForward can then classify.
+const COMPARE_FILES_PAGE_CAP = 300;
 async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   let result;
   try {
@@ -375,6 +380,11 @@ async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env,
     return null;
   }
   const files = Array.isArray(payload.files) ? payload.files : [];
+  // Fail closed on a possibly-truncated page: a >=300-file delta cannot be
+  // trusted as the exact, complete file list (see COMPARE_FILES_PAGE_CAP above).
+  if (files.length >= COMPARE_FILES_PAGE_CAP) {
+    return null;
+  }
   const changed = [];
   for (const file of files) {
     if (file?.status === "renamed" || file?.status === "copied") {

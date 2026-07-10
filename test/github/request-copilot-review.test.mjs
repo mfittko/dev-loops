@@ -1313,6 +1313,70 @@ test("request-copilot-review --force-rerequest-review re-opens the round when a 
   assert.equal(result.status, "requested");
 });
 
+test("request-copilot-review --force-rerequest-review fails closed and re-opens when the compare page is at the 300-file cap (possibly truncated) (#1326)", async () => {
+  // GitHub's compare API caps `files` at 300 per page. A list AT the cap may be
+  // truncated: a code/test/config/CI file beyond position 300 would be invisible.
+  // Here the first 300 entries are all docs — trusting this page would wrongly
+  // suppress an unreviewed code change past the cap. The guard fails closed → re-open.
+  const threeHundredDocs = Array.from({ length: 300 }, (_, i) => ({
+    filename: `docs/page-${i}.md`,
+    status: "modified",
+  }));
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: threeHundredDocs }) + "\n",
+      },
+      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+    ]);
+
+  assert.equal(result.status, "requested");
+});
+
+test("request-copilot-review --force-rerequest-review fails closed and re-opens when the delta contains a rename into a doc path (#1326)", async () => {
+  // A code file renamed into a docs/-shaped destination path must NOT be misread as
+  // pure-doc from its destination alone. Any rename/copy row fails the delta closed → re-open.
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/x.md", status: "renamed" }] }) + "\n",
+      },
+      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+    ]);
+
+  assert.equal(result.status, "requested");
+});
+
+test("request-copilot-review --force-rerequest-review fails closed and re-opens when the compare call fails (#1326)", async () => {
+  // A non-zero gh compare exit leaves the delta unknown — it must never be trusted
+  // as pure-doc. The delta lookup returns null → re-open the round.
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stderr: "gh: Not Found\n",
+        exitCode: 1,
+      },
+      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+    ]);
+
+  assert.equal(result.status, "requested");
+});
+
 test("request-copilot-review --force-rerequest-review fails closed and re-opens when the delta is not a provable linear advance (#1326)", async () => {
   const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
