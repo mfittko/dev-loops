@@ -336,6 +336,68 @@ describe("add-queue-item", () => {
       assert.equal(result.item.alreadyPresent, true);
     });
 
+    it("signals moved:false when already present in a DIFFERENT column (#1306)", async () => {
+      // Item sits in "Backlog" but the caller requests "Next Up" — stay a no-op
+      // (no resolve/add/update calls) yet surface the ignored column request.
+      const existingItem = makeItemNode("PVTI_existing", makeContent("Issue", 10), "Backlog");
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsByContentResponse([existingItem]) },
+        // No resolve, add, or update calls expected — still an idempotent no-op.
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, column: "Next Up" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.alreadyPresent, true);
+      assert.equal(result.item.status, "Backlog");
+      assert.equal(result.item.moved, false);
+      assert.equal(result.item.currentColumn, "Backlog");
+      assert.equal(result.item.requestedColumn, "Next Up");
+    });
+
+    it("omits the moved signal when already present in the SAME column", async () => {
+      const existingItem = makeItemNode("PVTI_existing", makeContent("Issue", 10), "Backlog");
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsByContentResponse([existingItem]) },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, column: "Backlog" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.item.alreadyPresent, true);
+      assert.equal(result.item.status, "Backlog");
+      assert.equal("moved" in result.item, false);
+      assert.equal("currentColumn" in result.item, false);
+      assert.equal("requestedColumn" in result.item, false);
+    });
+
+    it("omits the moved signal when the already-present item has no known Status", async () => {
+      // Unknown/absent Status must not emit a misleading moved:false + currentColumn:null.
+      const existingItem = makeItemNode("PVTI_existing", makeContent("Issue", 10), null);
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsByContentResponse([existingItem]) },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: 10, column: "Next Up" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.item.alreadyPresent, true);
+      assert.equal(result.item.status, null);
+      assert.equal("moved" in result.item, false);
+      assert.equal("currentColumn" in result.item, false);
+      assert.equal("requestedColumn" in result.item, false);
+    });
+
     it("filters already-present check by repo", async () => {
       // Item from different repo should not match
       const otherRepoContent = { __typename: "Issue", number: 10, repository: { nameWithOwner: "other/repo" } };

@@ -36,6 +36,9 @@ Options:
 Output (stdout):
   JSON: { ok: true, item: { itemId, issueNumber, prNumber, status, alreadyPresent },
           refinement? }
+  When already present in a DIFFERENT column than requested, item also carries
+  { moved: false, currentColumn, requestedColumn } — the add stays an idempotent
+  no-op (use "queue move" to relocate), but signals the ignored column request.
   refinement (present only when the pickup-column gate ran): either
     { refined: true } or, on a headless --auto divert,
     { refined: false, diverted: true, requestedColumn, parkedColumn, reason, missing }.
@@ -492,6 +495,11 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
       if (existing.content.__typename === "Issue") issueNumber = existing.content.number;
       else prNumber = existing.content.number;
     }
+    // Stay an idempotent no-op (never move an already-present item — that is
+    // `queue move`'s job), but when the requested column differs from where the
+    // item actually sits, surface an explicit moved:false signal so callers
+    // detect the ignored request instead of silently assuming placement (#1306).
+    const differentColumn = existingStatus !== null && existingStatus !== targetStatus;
     return {
       ok: true,
       item: {
@@ -500,6 +508,9 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
         prNumber,
         status: existingStatus,
         alreadyPresent: true,
+        ...(differentColumn
+          ? { moved: false, currentColumn: existingStatus, requestedColumn: targetStatus }
+          : {}),
       },
     };
   }
