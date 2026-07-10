@@ -237,6 +237,63 @@ test("CLI forces the RENAME_ONLY angles to re-run when the delta contains a rena
   }
 });
 
+test("CLI re-runs code angles on a DIVERGENT advance where the file equals the merge-base (two-dot delta, not three-dot)", async () => {
+  // Divergent history: A reviews src/foo.mjs=v2; B is a SIBLING of the merge-base
+  // where foo.mjs is back at v1 (== merge-base) plus a new doc. A three-dot diff
+  // (base...HEAD == merge-base..B) would OMIT foo.mjs and wrongly carry the code
+  // angles; the two-dot diff (base..HEAD) sees foo.mjs differs A vs B → re-run.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-divergent-"));
+  try {
+    git(repoRoot, ["init", "-q"]);
+    git(repoRoot, ["config", "user.email", "test@example.com"]);
+    git(repoRoot, ["config", "user.name", "Test"]);
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft:\n    mandatoryAngles: []\n", "utf8");
+    await mkdir(path.join(repoRoot, "src"), { recursive: true });
+    await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+    // merge-base M: foo.mjs = v1
+    await writeFile(path.join(repoRoot, "src/foo.mjs"), "export function foo() { return 1; }\n", "utf8");
+    await writeFile(path.join(repoRoot, "docs/guide.md"), "# Guide\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "merge-base"]);
+    const mergeBase = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    // Head A (reviewed): foo.mjs = v2
+    git(repoRoot, ["checkout", "-q", "-b", "headA"]);
+    await writeFile(path.join(repoRoot, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "head A reviews foo=v2"]);
+    const prevHead = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+    // Head B: sibling of the merge-base — foo.mjs stays v1 (== merge-base), add a doc.
+    git(repoRoot, ["checkout", "-q", "-b", "headB", mergeBase]);
+    await writeFile(path.join(repoRoot, "docs/new.md"), "# New\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "head B reverts foo, adds doc"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+
+    const perAngle = [
+      { angle: "correctness", reviewer: "review-a" },
+      { angle: "coverage", reviewer: "review-b" },
+      { angle: "docs", reviewer: "review-c" },
+    ];
+    const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(logPath), { recursive: true });
+    await writeFile(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: perAngle.length, perAngle } }), "utf8");
+
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    // Two-dot delta MUST contain foo.mjs even though it equals the merge-base on B's side.
+    assert.ok(result.deltaChangedFiles.includes("src/foo.mjs"), "two-dot delta must include the file that differs A vs B");
+    const rerun = result.mustRerun.map((m) => m.angle);
+    const carried = result.carried.map((c) => c.angle);
+    assert.ok(rerun.includes("correctness"), "correctness surface changed A→B → must re-run (would wrongly carry under three-dot)");
+    assert.ok(rerun.includes("coverage"), "coverage surface changed A→B → must re-run");
+    assert.ok(!carried.includes("correctness"), "correctness must NOT be carried on a divergent code change");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI fails closed when --head-sha does not match the worktree HEAD (wrong worktree)", async () => {
   const { repoRoot, prevHead } = await makeCarryForwardRepo({
     mandatoryAngles: [],

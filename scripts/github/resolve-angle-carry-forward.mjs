@@ -205,7 +205,12 @@ const GIT_ISOLATION = [
 ];
 
 function captureDeltaChangedFiles({ base, repoRoot }) {
-  const range = `${base}...HEAD`;
+  // TWO-dot: the direct tree diff between the reviewed head A (base) and HEAD (B).
+  // NOT three-dot (`base...HEAD`), which diffs merge-base(A,B)..B and would OMIT a
+  // file that differs between A and B but happens to equal their merge-base — under
+  // a non-fast-forward advance (rebase/amend/revert) that would carry an angle whose
+  // review surface actually changed since A. Two-dot never omits such a file.
+  const range = `${base}..HEAD`;
   const out = execFileSync("git", [...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", range], {
     cwd: repoRoot,
     encoding: "utf8",

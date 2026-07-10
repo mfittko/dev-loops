@@ -218,8 +218,9 @@ const COPILOT_REVIEW_SURFACE_KINDS = new Set(["code", "test", "config", "ci"]);
  * AC2, fail-closed: decide whether a post-convergence head bump may carry forward
  * a settled clean Copilot convergence instead of forcing a fresh BLOCKING Copilot
  * round. Carries forward ONLY when the delta since the converged head is provably
- * outside Copilot's review surface — a pure doc/comment-only bump (every changed
- * file classifies as `docs`). Any code/test/config/CI file, an unclassifiable
+ * outside Copilot's review surface — a pure doc/prose-only bump (every changed
+ * file classifies as `docs`; a code comment-only change classifies as `code` and
+ * re-runs, since classifyFile is path-based). Any code/test/config/CI file, an unclassifiable
  * file, or an empty/unavailable delta -> re-run (fresh blocking round required).
  *
  * @param {object} input
