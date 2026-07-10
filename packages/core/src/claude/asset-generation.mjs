@@ -89,26 +89,33 @@ export function rewriteCliInvocation(body, version) {
 }
 
 /**
- * Rewrite repo-root `../docs/…` *inline* markdown links `](../docs/…)` in a generated *command*
- * body so they resolve from the generated file's deeper location. Only the inline `](…)` link form
- * is rewritten (reference-style `[label]: …` and HTML `<a href>` links are left as-is) — command
- * bodies only use inline links, so that is the sole form that occurs. Source commands live at
- * `commands/<name>.command.md`, so `../docs/x` resolves to repo-root `docs/x`; the generated
- * wrapper lives one level deeper at `.claude/commands/<name>.md`, where `../docs/x` would wrongly
- * resolve to `.claude/docs/x` (there is no such dir). Repo-root `docs/` is NOT mirrored into
- * `.claude/`, so the link must gain one `../` to reach repo-root: `../docs/x` → `../../docs/x`.
+ * Rewrite repo-root `../docs/…` *inline* markdown links `](../docs/…)` in a generated *command* or
+ * *agent* body so they resolve from the generated file's deeper location. Only the inline `](…)`
+ * link form is rewritten (reference-style `[label]: …` and HTML `<a href>` links are left as-is) —
+ * command/agent bodies only use inline links, so that is the sole form that occurs. Source
+ * commands/agents live at `commands/<name>.command.md` / `agents/<name>.agent.md`, so `../docs/x`
+ * resolves to repo-root `docs/x`; the generated wrapper lives one level deeper at
+ * `.claude/commands/<name>.md` / `.claude/agents/<name>.md`, where `../docs/x` would wrongly resolve
+ * to `.claude/docs/x` (there is no such dir). Repo-root `docs/` is NOT mirrored into `.claude/`, so
+ * the link must gain one `../` to reach repo-root: `../docs/x` → `../../docs/x`. Both trees sit one
+ * level under `.claude/`, so the same single-level shift applies to each.
  *
- * Scoped to `../docs/` on purpose. Other `../…` command links point at subtrees the generator
- * mirrors under `.claude/` (e.g. `../skills/docs/x` → the bundled `.claude/skills/docs/x`), whose
- * relative depth is preserved verbatim — shifting those would break them. Skills need no rewrite
- * at all for the same reason (their `../docs/x` targets the bundled `.claude/skills/docs/x`).
+ * Scoped to `../docs/` on purpose. Other `../…` links point at subtrees the generator mirrors under
+ * `.claude/` (e.g. `../skills/docs/x` → the bundled `.claude/skills/docs/x`), whose relative depth
+ * is preserved verbatim — shifting those would break them. Skills need no rewrite at all for the
+ * same reason (their `../docs/x` targets the bundled `.claude/skills/docs/x`).
  *
  * @param {string} body
  * @returns {string}
  */
-export function rewriteCommandRepoLinks(body) {
+export function rewriteGeneratedRepoDocLinks(body) {
   return String(body).replace(/(\]\(<?)(\.\.\/docs\/)/g, "$1../$2");
 }
+
+// Back-compat alias for the pre-generalization name. This module is a public
+// `@dev-loops/core/claude/asset-generation` export, so the old export name keeps
+// forwarding to avoid breaking any downstream importer.
+export const rewriteCommandRepoLinks = rewriteGeneratedRepoDocLinks;
 
 /**
  * Map a single Pi tool name to its Claude tool name(s).
@@ -174,7 +181,7 @@ function normalizeToolList(value) {
  */
 export function transformAgent({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version);
+  const body = rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
   const tools = mapTools(normalizeToolList(frontmatter.tools));
 
   const lines = ["---"];
@@ -202,7 +209,7 @@ export function transformAgent({ source, raw, version = "latest" }) {
  */
 export function transformCommand({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteCommandRepoLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
+  const body = rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
 
   const lines = ["---"];
   if (frontmatter.description != null) {
