@@ -63,8 +63,9 @@ async function defaultRunAxe(page) {
 // Per-state console errors + failed network requests. Best-effort, and by
 // default a no-op that degrades to JSON null: this harness captures NO events on
 // its own — the drive owns the single walk-level listener buffer and injects a
-// `captureConsole` seam that DRAINS its per-state slice (so nothing is captured
-// twice). A plain smoke or a mock-page test with no seam emits a deterministic
+// `captureConsole` seam that SLICES its per-state window (without clearing the
+// buffer, so the same events still drive the drive's walk-level fail-closed
+// gate). A plain smoke or a mock-page test with no seam emits a deterministic
 // JSON null, mirroring the snapshot/axe best-effort policy.
 function defaultCaptureConsole() {
   return null;
@@ -108,12 +109,12 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   }
   await writeFile(paths.axePath, `${JSON.stringify(axeResults, null, 2)}\n`, 'utf8');
 
-  // Per-state console/network errors: the drive's `captureConsole` seam drains
-  // the slice of walk-level events attributed to this state. Best-effort for the
+  // Per-state console/network errors: the drive's `captureConsole` seam slices
+  // the window of walk-level events attributed to this state. Best-effort for the
   // same reason as snapshot/axe (see defaultCaptureConsole); either way a
   // deterministic JSON payload (a {consoleErrors,failedRequests} report, or null
   // when nothing was captured) is emitted last — after the pixels/tree/axe — so
-  // draining events can never pollute the earlier artifacts.
+  // slicing events can never pollute the earlier artifacts.
   let consoleReport = null;
   try {
     consoleReport = (await captureConsole(page)) ?? null;

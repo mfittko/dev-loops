@@ -156,13 +156,17 @@ requests — or JSON `null` when nothing was captured for the state. Like
 for every named state (never skipped) at the deterministic path above, and
 `state.json` references it under `artifacts.console`.
 
-`console.json` is populated by **draining the live drive's single walk-level
+`console.json` is populated by **slicing the live drive's single walk-level
 listener buffer** into the state active when the events fired — it is per-state
 attribution of the console/network errors the drive already captures, not a new
-capture mechanism. Because the per-state capture drains that slice, an error
-attributed to a state is not ALSO re-reported by the drive's walk-level failure
-classifier: the same error is captured once and counted once. A captured
-console/network error is a fail-closed review input, never silently dropped.
+capture mechanism. The slice does **not** clear the buffer: the same classified
+events still reach the drive's walk-level failure gate, so a captured
+console/network error is a **mechanical, mode-independent fail-closed signal**
+(it flips the drive's `ok` to false and keeps its source-line anchoring), not
+merely a review hint. Attribution (`console.json`) and the mechanical failure gate
+are two views of the same classified events; the final report dedups so the same
+error is not posted twice. A captured console/network error is never silently
+dropped.
 
 ## When screenshot alone is acceptable
 

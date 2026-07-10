@@ -66,13 +66,15 @@ Throughout the walk, `response`, `requestfailed`, and `pageerror` listeners run
 and the project server log is tailed, so a swallowed error response (a 500 the UI
 hides behind a success state) is still recorded. An error response is a status
 <200 or >=400; 3xx redirects are normal navigation (login/canonical) and are not
-flagged. Each per-step capture DRAINS that listener buffer into the step's
-`console.json` (per-state attribution of console errors + failed requests), so an
-error attributed to a named state is not ALSO re-reported by the walk-level
-classifier — the same error is captured once and counted once. The stage emits an
-ordered set of step screenshots plus a structured captured-failures list (the
-walk-level remainder: server-log exceptions, step failures, and any events
-outside a captured state) that feeds the next stage. Every bounded cap — max
+flagged. Each per-step capture SLICES that listener buffer into the step's
+`console.json` (per-state attribution of console errors + failed requests)
+WITHOUT clearing it, so the same classified events still reach the walk-level
+failure gate — a captured step-scoped error deterministically fails the drive
+closed and keeps its source-line anchoring. The stage emits an ordered set of
+step screenshots plus a structured captured-failures list (error responses,
+request failures, page errors, server-log exceptions, and step failures) that
+feeds the next stage; the final report dedups per-state attribution against that
+list so the same error is not posted twice. Every bounded cap — max
 screenshots, screens skipped, and the fixed no-retry policy — is logged
 explicitly.
 

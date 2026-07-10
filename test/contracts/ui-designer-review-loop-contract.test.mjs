@@ -49,7 +49,8 @@ test('designer review loop doc remains the canonical bounded UI review handoff c
   // Computable a11y facts come from axe.json, not pixel judgment.
   assert.match(visionTemplate, /axe\.json/i);
   assert.match(visionTemplate, /Do \*\*not\*\* eyeball computable accessibility facts/i);
-  // Console/network errors in console.json are must-fix findings, never dropped.
+  // console.json errors are already mechanically-owned must-fix findings the
+  // reviewer reads as evidence (not re-filed): the template names that ownership.
   assert.match(visionTemplate, /console\.json/i);
   assert.match(visionTemplate, /must-fix finding/i);
   assert.match(indexDoc, /ui-designer-review-loop\.md/i);

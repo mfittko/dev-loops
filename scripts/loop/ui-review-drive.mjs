@@ -8,9 +8,12 @@
  * running-app URL from Stage 1 — capturing a step screenshot + state.json + snapshot.json + axe.json + console.json per
  * step. Response/requestfailed/pageerror listeners plus a server-log tail run
  * throughout so a swallowed error response is still recorded. The per-step
- * capture DRAINS the listener buffer into that step's console.json (per-state
- * attribution), so an event attributed to a state is not ALSO re-reported by the
- * walk-level classifier — the same error is never counted twice.
+ * capture SLICES the listener buffer (the events since the previous step) into
+ * that step's console.json for per-state attribution, WITHOUT clearing the
+ * buffer — so the same classified events still reach the drive's walk-level
+ * failure gate. The mechanical `ok`/`failures` gate stays authoritative: a
+ * captured step-scoped error deterministically fails the drive closed, and keeps
+ * its source-line anchoring, independent of the review mode or the LLM.
  *
  * This is a thin adapter: it wires the real IO seams (WebKit browser/page, the
  * page-event listeners, captureNamedUiState, the login form driving, the
@@ -108,14 +111,17 @@ export function parseUiReviewDriveCliArgs(argv) {
  * the shared threshold owner) are retained so the buffer stays bounded; the pure
  * classifier decides severity from the collected set.
  *
- * `drainCapturedEvents()` returns a snapshot of the events collected since the
- * last drain and CLEARS the buffer. The per-step capture drains its slice into
- * that state's console.json (per-state attribution); whatever is left when the
- * walk ends is what `getCapturedEvents()` hands the walk-level classifier — so an
- * event attributed to a named state is never ALSO classified at walk level (no
- * double-report between the per-state capture and the walk-level classifier).
+ * `sliceCapturedEvents()` returns the events appended since the previous slice
+ * and advances an internal cursor — it does NOT clear the buffer. The per-step
+ * capture slices its window into that state's console.json (per-state
+ * attribution), while `getCapturedEvents()` still hands the walk-level classifier
+ * the WHOLE buffer at walk end. So attribution and the mechanical fail-closed
+ * gate are two views of the same classified events, not a hand-off: a
+ * step-scoped error lands in its state's console.json AND still drives the drive's
+ * `ok`/`failures` gate (keeping its source-line anchoring). The final human-facing
+ * report dedups so the same error is not posted twice.
  *
- * @returns {{ getCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]}, drainCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]} }}
+ * @returns {{ getCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]}, sliceCapturedEvents: () => {responses:object[],requestFailures:object[],pageErrors:object[]} }}
  */
 export function attachPageListeners(page) {
   const responses = [];
@@ -138,17 +144,25 @@ export function attachPageListeners(page) {
     // mapping needs); the classifier bounds it before it lands on the feed.
     pageErrors.push({ message: err?.message ?? String(err), stack: err?.stack ?? null });
   });
-  const drainCapturedEvents = () => {
-    const drained = { responses: [...responses], requestFailures: [...requestFailures], pageErrors: [...pageErrors] };
-    responses.length = 0;
-    requestFailures.length = 0;
-    pageErrors.length = 0;
-    return drained;
+  // Per-state attribution cursor: return the window appended since the previous
+  // slice and advance, WITHOUT clearing — so the walk-level classifier still sees
+  // every event and the mechanical fail-closed gate stays authoritative.
+  const cursor = { responses: 0, requestFailures: 0, pageErrors: 0 };
+  const sliceCapturedEvents = () => {
+    const slice = {
+      responses: responses.slice(cursor.responses),
+      requestFailures: requestFailures.slice(cursor.requestFailures),
+      pageErrors: pageErrors.slice(cursor.pageErrors),
+    };
+    cursor.responses = responses.length;
+    cursor.requestFailures = requestFailures.length;
+    cursor.pageErrors = pageErrors.length;
+    return slice;
   };
-  return { getCapturedEvents: () => ({ responses, requestFailures, pageErrors }), drainCapturedEvents };
+  return { getCapturedEvents: () => ({ responses, requestFailures, pageErrors }), sliceCapturedEvents };
 }
 
-/** Shape a drained per-state slice of listener events into the console.json
+/** Shape a per-state slice of listener events into the console.json
  * review-input payload: JS `pageerror`s become `consoleErrors`, error responses
  * and failed requests become `failedRequests`. Returns null when the slice is
  * empty, so an errorless state emits a deterministic JSON null (mirroring the
@@ -259,8 +273,10 @@ async function dismissInterstitials({ page, interstitials, timeoutMs = 2000 }) {
   return { dismissed };
 }
 
-/** Map one declared step to its Playwright page call, then capture the state. */
-function makeRunStep({ page, outputDir, drainCapturedEvents }) {
+/** Map one declared step to its Playwright page call, then capture the state.
+ * Exported so the per-state attribution + consolePath threading has a regression
+ * test against the REAL production wiring (not a substitute fake runStep). */
+export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
   return async ({ appUrl, flow, step, index }) => {
     const sel = step.selector;
     switch (step.action) {
@@ -292,10 +308,10 @@ function makeRunStep({ page, outputDir, drainCapturedEvents }) {
       stateName,
       fullPage: false,
       outputDir,
-      // Drain the walk-level listener buffer into THIS state's console.json, so
-      // its console/network errors are attributed here and not re-reported by the
-      // walk-level classifier (single capture source, counted once).
-      captureConsole: drainCapturedEvents ? () => toPerStateConsolePayload(drainCapturedEvents()) : undefined,
+      // Slice the walk-level listener buffer into THIS state's console.json so its
+      // console/network errors are attributed here — WITHOUT clearing the buffer,
+      // so the same classified events still drive the walk-level fail-closed gate.
+      captureConsole: sliceCapturedEvents ? () => toPerStateConsolePayload(sliceCapturedEvents()) : undefined,
       metadata: { fixture: null, route: step.path ?? null, reviewHint: `Drive step "${stateName}" for the "${flow.name}" flow.` },
     });
     return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath, axePath: paths.axePath, consolePath: paths.consolePath };
@@ -335,7 +351,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    const { getCapturedEvents, drainCapturedEvents } = attachPageListeners(page);
+    const { getCapturedEvents, sliceCapturedEvents } = attachPageListeners(page);
     const result = await driveUiReview(
       {
         appUrl: options.appUrl,
@@ -349,7 +365,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       {
         authenticate: () => authenticate({ page, login: recipe.login }),
         dismissInterstitials: ({ interstitials }) => dismissInterstitials({ page, interstitials }),
-        runStep: makeRunStep({ page, outputDir: options.outputDir, drainCapturedEvents }),
+        runStep: makeRunStep({ page, outputDir: options.outputDir, sliceCapturedEvents }),
         getCapturedEvents,
         readServerLogTail: () => logTail.read(),
         log: (msg) => stderr.write(`[ui-review-drive] ${msg}\n`),

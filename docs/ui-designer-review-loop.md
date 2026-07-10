@@ -70,10 +70,13 @@ reviewer to eyeball contrast.
 Each named state also carries a `console.json` (raw console errors and failed
 network requests attributed to that state, or JSON `null` when none were
 captured). A captured console error or failed network request — a swallowed 500,
-an uncaught page error — is a **must-fix finding**, never silently dropped: the
-reviewer grounds the finding in `consolePath` and hands it back for a fix. These
-errors are drained from the live drive's walk-level capture per state, so the
-same error is attributed to exactly one place and never double-reported.
+an uncaught page error — is a **mechanical fail-closed signal**, never silently
+dropped: it flips the drive's `ok` to false and is anchored to its source line by
+the diagnose stage, independent of the review mode or the LLM. These errors are
+sliced from the live drive's walk-level capture per state for attribution WITHOUT
+being removed from that walk-level gate, so `console.json` and the mechanical
+failure set are two views of the same error; the final report dedups so it is
+never posted twice.
 
 ## Review modes behind `dev-loop`
 

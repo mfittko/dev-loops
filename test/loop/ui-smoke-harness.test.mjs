@@ -284,7 +284,7 @@ test('captureNamedUiState emits console.json as JSON null when the injected capt
       outputDir: tempDir,
       sliceId: 'inspect-run-viewer',
       stateName: 'Throwing console capture',
-      captureConsole: async () => { throw new Error('drain failed'); },
+      captureConsole: async () => { throw new Error('slice failed'); },
     });
     assert.equal(await readFile(artifact.consolePath, 'utf8'), 'null\n');
   } finally {
