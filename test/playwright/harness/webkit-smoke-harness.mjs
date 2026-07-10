@@ -56,6 +56,16 @@ export function normalizeInteractionSegment(interactionState) {
   return normalized;
 }
 
+// Per-process registry of claimed named-state artifact paths. The artifact path
+// is slice-scoped, not run-unique (the same sliceId re-renders to the same dir,
+// and runId is deterministic), so a raw existsSync would false-positive against a
+// prior run's on-disk leftovers. Scoping the guard to this process instead catches
+// the real hazard — two logically distinct states in the SAME walk normalizing to
+// one slug — and resets naturally on a fresh run.
+// ponytail: per-process Set. A Playwright retry in a reused worker gets a
+// retry-suffixed outputDir, so its statePath differs and does not trip this.
+const claimedStatePaths = new Set();
+
 function requireOutputDir(outputDir) {
   if (typeof outputDir !== 'string' || outputDir.trim().length === 0) {
     throw new Error('A deterministic outputDir is required for named UI state artifacts');
@@ -127,6 +137,15 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
     interactionState,
   });
   const projectName = testInfo?.project?.name ?? null;
+
+  // Fail-closed capture-time collision guard: if a state already captured in this
+  // run resolves to the same on-disk artifacts, throw before writing anything so
+  // the second colliding slug can never silently overwrite the first. The bundle
+  // validator's blocked_duplicate_state_slug seam is defense-in-depth after this.
+  if (claimedStatePaths.has(paths.statePath)) {
+    throw new Error(`Duplicate named UI state slug "${paths.stateSlug}" for slice "${paths.sliceId}": a second state resolves to ${paths.statePath} and would overwrite the first. Give it a distinct state name, viewport, or interaction state.`);
+  }
+  claimedStatePaths.add(paths.statePath);
 
   await mkdir(paths.artifactDir, { recursive: true });
   await page.screenshot({ path: paths.screenshotPath, fullPage });

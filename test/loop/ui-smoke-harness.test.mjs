@@ -153,6 +153,38 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
   }
 });
 
+test('captureNamedUiState fails closed on a within-run duplicate slug instead of overwriting', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-dup-'));
+
+  try {
+    const first = await captureNamedUiState({
+      page: { async screenshot() {} },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'Current PR dashboard',
+    });
+
+    // A second, logically distinct state that normalizes to the same slug must
+    // fail closed at capture time — before it can overwrite the first on disk.
+    await assert.rejects(
+      captureNamedUiState({
+        page: { async screenshot() {} },
+        outputDir: tempDir,
+        sliceId: 'inspect-run-viewer',
+        stateName: 'Current PR / Dashboard',
+      }),
+      /duplicate named ui state slug/i,
+    );
+
+    // The first state's artifacts are intact (not clobbered by the rejected capture).
+    const stateJson = JSON.parse(await readFile(first.statePath, 'utf8'));
+    assert.equal(stateJson.stateName, 'Current PR dashboard');
+    assert.equal(stateJson.stateSlug, 'current-pr-dashboard-default-none');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('captureNamedUiState normalizes undefined metadata contract keys to null', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-metadata-'));
 

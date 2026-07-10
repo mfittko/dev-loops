@@ -98,8 +98,21 @@ interaction into the slug means two states differing **only** by viewport (a
 mobile vs desktop render) or **only** by interaction-state (a default vs error
 render) get **distinct** directories and never collide/overwrite. A malformed
 viewport (non-positive/non-integer dimensions) or an unknown interaction-state is
-rejected fail-closed, and two named states that collide to the same slug are
-rejected rather than silently overwriting each other.
+rejected fail-closed.
+
+Two logically distinct named states that still collide to the **same** slug are
+kept from overwriting each other by two layers:
+- **Capture-time prevention (primary).** `captureNamedUiState` records the
+  artifact paths it has claimed in the current run and throws on a colliding slug
+  **before it writes any artifacts**, so the second state fails closed instead of
+  clobbering the first state's on-disk artifacts. The registry is per-run (scoped
+  to the process, not the on-disk path, which is slice-scoped rather than
+  run-unique), so a legitimate re-run does not false-positive on its own prior
+  output.
+- **Bundle-validation seam (defense-in-depth).** `validateUiDesignerReviewInput`
+  additionally rejects any reviewed bundle that still contains two named states
+  sharing one `statePath` (`blocked_duplicate_state_slug`), catching a collision
+  assembled outside the capture path.
 
 ## Minimum `state.json` contract
 
