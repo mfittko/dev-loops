@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
