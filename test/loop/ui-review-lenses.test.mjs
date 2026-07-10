@@ -15,6 +15,7 @@ const F = (over = {}) => ({
   region: '#main .card',
   category: 'color-contrast',
   severity: 'medium',
+  blocking: false,
   ...over,
 });
 
@@ -171,6 +172,15 @@ test('validator rejects a finding missing region fail-closed', () => {
 
 test('validator rejects a non-boolean blocking field fail-closed', () => {
   const result = validateUiReviewLensResults(lensSet({ a11y: [F({ blocking: 'yes' })] }));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lens_finding_malformed');
+  assert.ok(result.missing.some((m) => m.endsWith('.blocking')));
+});
+
+test('validator rejects a finding that OMITS blocking fail-closed', () => {
+  // `blocking` is required — a finding missing it must not read as non-blocking.
+  const { blocking, ...noBlocking } = F();
+  const result = validateUiReviewLensResults(lensSet({ a11y: [noBlocking] }));
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'lens_finding_malformed');
   assert.ok(result.missing.some((m) => m.endsWith('.blocking')));

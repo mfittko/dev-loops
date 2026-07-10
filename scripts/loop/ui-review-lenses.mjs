@@ -138,7 +138,11 @@ export function validateUiReviewLensResults(lensResults) {
       // `severity: "toString"`/"constructor"/"__proto__" would pass and then resolve
       // to a prototype fn in SEVERITY_RANK[...], silently downgrading a real defect.
       if (!isNonEmptyString(finding.severity) || !UI_REVIEW_FINDING_SEVERITIES.includes(finding.severity.trim())) problems.push(`${where}.severity`);
-      if (finding.blocking !== undefined && typeof finding.blocking !== "boolean") problems.push(`${where}.blocking`);
+      // `blocking` is REQUIRED (a boolean on every finding): the seam derives
+      // blocked_needs_human_decision solely from `blocking: true`, so a finding
+      // that OMITS it would silently read as non-blocking and hide a human-decision
+      // signal — reject a missing/non-boolean `blocking` fail-closed.
+      if (typeof finding.blocking !== "boolean") problems.push(`${where}.blocking`);
     });
   });
   const missingLenses = UI_REVIEW_LENS_NAMES.filter((name) => !seen.has(name)).map((name) => `lens:${name}`);
