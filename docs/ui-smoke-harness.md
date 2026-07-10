@@ -67,6 +67,8 @@ Given a `sliceId` of `inspect-run-viewer`, the baseline paths are:
 - Playwright output directory: `test-results/ui-smoke/inspect-run-viewer`
 - HTML report directory: `playwright-report/ui-smoke/inspect-run-viewer`
 - named-state artifacts: `test-results/ui-smoke/inspect-run-viewer/named-states/<state-slug>/`
+  where `<state-slug>` bakes the state name, viewport, and interaction-state into
+  one deterministic segment (see [UI Artifact Contract](./ui-artifact-contract.md))
 
 Each named-state directory currently contains:
 - `screenshot.png`

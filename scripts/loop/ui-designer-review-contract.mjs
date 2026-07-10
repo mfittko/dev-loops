@@ -102,6 +102,28 @@ export function validateUiDesignerReviewInput(input = {}) {
       missing: incompleteArtifacts,
     };
   }
+  // The slug bakes viewport + interaction into the per-state directory, so two
+  // logically distinct states that collide to the same slug share one statePath and
+  // would silently overwrite each other. Reject the collision fail-closed rather than
+  // review a bundle where one state's artifacts have clobbered another's.
+  const seenStatePaths = new Set();
+  const collidingStates = [];
+  namedStates.forEach((state, index) => {
+    const key = state.statePath.trim();
+    if (seenStatePaths.has(key)) {
+      collidingStates.push(`artifactBundle.namedStates[${index}].statePath`);
+      return;
+    }
+    seenStatePaths.add(key);
+  });
+  if (collidingStates.length > 0) {
+    return {
+      ok: false,
+      status: 'blocked_duplicate_state_slug',
+      reason: 'duplicate_state_slug',
+      missing: collidingStates,
+    };
+  }
   return {
     ok: true,
     status: reviewMode === 'vision' ? 'ready_for_vision_review' : 'ready_for_designer_review',

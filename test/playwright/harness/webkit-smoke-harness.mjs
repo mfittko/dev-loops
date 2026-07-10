@@ -17,6 +17,59 @@ export function normalizeUiStateSegment(value) {
   return normalized;
 }
 
+// The interaction states the slug can encode. `none` is the default render state;
+// the others are the stateful renders reviewers care about distinguishing.
+const UI_INTERACTION_STATES = new Set(['none', 'focus', 'hover', 'error']);
+
+// Normalize a viewport descriptor into a stable slug segment. A `{ width, height }`
+// object becomes `w<width>h<height>`; a named breakpoint string is normalized like
+// any other segment; an unspecified viewport defaults to `default`. A malformed
+// viewport (non-positive/non-integer dimensions, or a non-object/non-string) is
+// rejected — a bad descriptor must fail closed, never collapse to a silent default.
+export function normalizeViewportSegment(viewport) {
+  if (viewport === undefined || viewport === null) {
+    return 'default';
+  }
+  if (typeof viewport === 'string') {
+    return normalizeUiStateSegment(viewport);
+  }
+  if (typeof viewport === 'object') {
+    const { width, height } = viewport;
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+      throw new Error('UI state viewport must provide positive integer width and height');
+    }
+    return `w${width}h${height}`;
+  }
+  throw new Error('UI state viewport must be a { width, height } object or a named breakpoint string');
+}
+
+// Normalize an interaction state into a stable slug segment. Unspecified defaults to
+// `none`; anything outside the known set is rejected (fail closed, not silently kept).
+export function normalizeInteractionSegment(interactionState) {
+  if (interactionState === undefined || interactionState === null) {
+    return 'none';
+  }
+  const normalized = String(interactionState).trim().toLowerCase();
+  if (!UI_INTERACTION_STATES.has(normalized)) {
+    throw new Error(`UI state interaction must be one of ${[...UI_INTERACTION_STATES].join(', ')}`);
+  }
+  return normalized;
+}
+
+// Per-process registry mapping each claimed named-state artifact path to the
+// stateName that claimed it. The artifact path is slice-scoped, not run-unique
+// (the same sliceId re-renders to the same dir, and runId is deterministic), so a
+// raw existsSync would false-positive against a prior run's on-disk leftovers.
+// Scoping the guard to this process instead catches the real hazard — two
+// logically distinct states in the SAME walk normalizing to one slug — and resets
+// naturally on a fresh run.
+// ponytail: keyed on stateName. `resolvedOutputDir` prefers
+// `testInfo.project.outputDir`, which is stable per project (NOT retry-suffixed),
+// so a Playwright retry in a reused worker re-captures the SAME statePath. Keying
+// on the claiming stateName lets a same-state retry re-claim/overwrite, while a
+// DIFFERENT state slug-colliding to that path is still rejected.
+const claimedStatePaths = new Map();
+
 function requireOutputDir(outputDir) {
   if (typeof outputDir !== 'string' || outputDir.trim().length === 0) {
     throw new Error('A deterministic outputDir is required for named UI state artifacts');
@@ -28,14 +81,21 @@ function buildRunId({ sliceId, stateSlug, projectName }) {
   return [sliceId, stateSlug, projectName ?? 'unknown'].map((part) => normalizeUiStateSegment(part)).join('-');
 }
 
-export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName }) {
+export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName, viewport, interactionState }) {
   const normalizedSliceId = normalizeUiStateSegment(sliceId);
-  const stateSlug = normalizeUiStateSegment(stateName);
+  // The slug bakes viewport + interaction into the directory so a mobile vs desktop
+  // render, or a default vs error state, are distinct reviewable dirs that never
+  // collide/overwrite. Each part is normalized independently, then joined with `-`.
+  const viewportSlug = normalizeViewportSegment(viewport);
+  const interactionSlug = normalizeInteractionSegment(interactionState);
+  const stateSlug = `${normalizeUiStateSegment(stateName)}-${viewportSlug}-${interactionSlug}`;
   const artifactDir = path.join(requireOutputDir(outputDir), 'named-states', stateSlug);
 
   return {
     sliceId: normalizedSliceId,
     stateSlug,
+    viewport: viewportSlug,
+    interactionState: interactionSlug,
     artifactDir,
     screenshotPath: path.join(artifactDir, 'screenshot.png'),
     statePath: path.join(artifactDir, 'state.json'),
@@ -71,14 +131,28 @@ function defaultCaptureConsole() {
   return null;
 }
 
-export async function captureNamedUiState({ page, testInfo, sliceId, stateName, metadata = {}, fullPage = true, outputDir, runAxe = defaultRunAxe, captureConsole = defaultCaptureConsole } = {}) {
+export async function captureNamedUiState({ page, testInfo, sliceId, stateName, viewport, interactionState, metadata = {}, fullPage = true, outputDir, runAxe = defaultRunAxe, captureConsole = defaultCaptureConsole } = {}) {
   const resolvedOutputDir = outputDir ?? testInfo?.project?.outputDir ?? testInfo?.config?.outputDir ?? testInfo?.outputDir;
   const paths = buildNamedUiStateArtifactPaths({
     outputDir: resolvedOutputDir,
     sliceId,
     stateName,
+    viewport,
+    interactionState,
   });
   const projectName = testInfo?.project?.name ?? null;
+
+  // Fail-closed capture-time collision guard: if a DIFFERENT state already claimed
+  // these on-disk artifacts in this run, throw before writing anything so the
+  // second colliding slug can never silently overwrite the first. A re-capture by
+  // the SAME stateName (a Playwright retry hitting the same statePath) is a
+  // legitimate overwrite and is allowed. The bundle validator's
+  // blocked_duplicate_state_slug seam is defense-in-depth after this.
+  const claimedBy = claimedStatePaths.get(paths.statePath);
+  if (claimedBy !== undefined && claimedBy !== stateName) {
+    throw new Error(`Duplicate named UI state slug "${paths.stateSlug}" for slice "${paths.sliceId}": a second state resolves to ${paths.statePath} and would overwrite the first. Give it a distinct state name, viewport, or interaction state.`);
+  }
+  claimedStatePaths.set(paths.statePath, stateName);
 
   await mkdir(paths.artifactDir, { recursive: true });
   await page.screenshot({ path: paths.screenshotPath, fullPage });
@@ -131,12 +205,14 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   };
 
   const stateArtifact = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     artifactType: 'named-ui-state',
     validationLevel: 'deterministic-smoke',
     sliceId: paths.sliceId,
     stateName,
     stateSlug: paths.stateSlug,
+    viewport: paths.viewport,
+    interactionState: paths.interactionState,
     runId: buildRunId({ sliceId: paths.sliceId, stateSlug: paths.stateSlug, projectName }),
     capturedAt: new Date().toISOString(),
     projectName,
