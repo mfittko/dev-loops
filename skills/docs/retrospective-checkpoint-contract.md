@@ -134,14 +134,16 @@ violations):** dev-loops subcommands and `node scripts/*.mjs` invocations — th
 scripts legitimately call `gh`/GraphQL internally; that is the tooling. The rule
 targets the agent's own top-level shell calls, not a script's internals.
 
-**Write-op allowlist (verifier only):** `gh pr merge`, `gh pr ready`,
-`gh issue create` have no internal wrapper today. `gh issue edit` now has one
-(`scripts/github/edit-issue.mjs`) and stays as a belt-and-suspenders entry — like
-`gh label create` (`scripts/github/create-label.mjs`) — so a bare invocation
-surfaced from the wrapper's own subprocess is not miscounted as a breach. The
-deterministic verifier records all of these as `allowedWriteOps` rather than
-violations so they are surfaced distinctly, not as breaches. Close the gap with a
-wrapper to remove or reframe a no-wrapper entry. None of these block anything.
+**Write-op allowlist (verifier only):** only `gh pr merge` and `gh pr ready` have
+no internal wrapper today; the verifier records those as `allowedWriteOps` rather
+than violations so the gap is surfaced distinctly, not as a breach. Ops that DO
+have a sanctioned wrapper — `gh issue create` (`scripts/github/create-issue.mjs`),
+`gh issue edit` (`scripts/github/edit-issue.mjs`), `gh label create`
+(`scripts/github/create-label.mjs`) — are NOT allowlisted, so a raw agent-level
+call is flagged as a violation. The verifier only ever classifies the agent's own
+top-level shell commands, never a wrapper's internal subprocess, so removing a
+wrapped op from the allowlist produces no false positives. Close a remaining gap
+with a wrapper to remove its allowlist entry. None of these block anything.
 
 **Inline-interpreter check item:** the raw-call scan below mechanically catches
 `node -e`/`python3 -c`/heredoc calls as a `rawCallViolations` entry — the same

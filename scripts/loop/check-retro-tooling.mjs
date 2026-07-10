@@ -24,13 +24,11 @@
  *   - dev-loops subcommands and `node scripts/....mjs` invocations. Those scripts
  *     legitimately call gh/GraphQL/etc. internally — that IS the tooling.
  *   - A small explicit allowlist of write-ops that have no internal wrapper today:
- *     `gh pr merge`, `gh pr ready`. Plus belt-and-suspenders
- *     entries that DO have wrappers — `gh issue edit` (scripts/github/edit-issue.mjs)
- *     and `gh label create` (scripts/github/create-label.mjs) — kept so a bare
- *     invocation surfaced from the wrapper's own subprocess is not a false violation.
- *     All are recorded as `allowedWriteOps` rather than violations so the gate is not
- *     blocked forever on an unavoidable gap. Document/close the gap with a wrapper
- *     to remove the no-wrapper entries from the allowlist.
+ *     `gh pr merge`, `gh pr ready`. These are recorded as `allowedWriteOps` rather
+ *     than violations so the gate is not blocked forever on an unavoidable gap.
+ *     Once an op gains a sanctioned wrapper it is removed from this allowlist so a
+ *     raw agent-level call is flagged (the analyzer only ever sees agent Bash-tool
+ *     commands, never a wrapper's internal subprocess, so no false positive results).
  *
  * VIOLATION (agent-level raw call):
  *   - `gh ...` at the start of a command segment (start of line, or after
@@ -79,20 +77,15 @@ Exit codes:
 
 /**
  * Write-ops recorded distinctly (as allowedWriteOps, not violations) so the gate
- * is not blocked forever on an unavoidable gap. Most have no internal wrapper yet;
- * a couple DO have wrappers and are kept belt-and-suspenders (see below).
- * Keep this set SMALL and explicit; remove a no-wrapper entry once a wrapper exists.
+ * is not blocked forever on an unavoidable gap. These have no internal wrapper yet.
+ * Keep this set SMALL and explicit; remove an entry once a wrapper exists so a raw
+ * agent-level call is flagged (as `gh issue create`/`edit`, `gh label create` now
+ * are — their wrappers live under scripts/github/).
  * @type {ReadonlyArray<RegExp>}
  */
 const ALLOWED_WRITE_OPS = Object.freeze([
   /^gh\s+pr\s+merge\b/,
   /^gh\s+pr\s+ready\b/,
-  // `gh issue edit` (scripts/github/edit-issue.mjs) and `gh label create`
-  // (scripts/github/create-label.mjs) both HAVE wrappers; these entries are
-  // belt-and-suspenders so a bare invocation (e.g. surfaced from the wrapper's
-  // own subprocess) classifies as an allowed write-op, not a violation.
-  /^gh\s+issue\s+edit\b/,
-  /^gh\s+label\s+create\b/,
 ]);
 
 /** Split a command line into top-level segments on &&, ||, |, ;. */
