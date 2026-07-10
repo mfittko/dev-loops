@@ -1054,6 +1054,10 @@ test("assertWorktreeAtHead accepts an abbreviated --head-sha matching the full w
     // A 12-char abbreviation of the real HEAD must validate by prefix match.
     assert.doesNotThrow(() => assertWorktreeAtHead(headSha.slice(0, 12), { repoRoot }));
     assert.throws(() => assertWorktreeAtHead("0".repeat(40), { repoRoot }), /does not match/);
+    // A --head-sha LONGER than the full HEAD (but sharing it as a prefix) is NOT
+    // a valid abbreviation — rev-parse HEAD is always full-length — and must be
+    // rejected rather than false-accepted by a reverse prefix match.
+    assert.throws(() => assertWorktreeAtHead(`${headSha}0`, { repoRoot }), /does not match/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

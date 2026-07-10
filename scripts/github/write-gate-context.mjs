@@ -981,8 +981,9 @@ export async function readGateContext(input, { repoRoot = process.cwd() } = {}) 
  * is caught at build time (no artifact written) instead.
  *
  * `headSha` may be abbreviated (7-64 hex, per normalizeHeadSha); the worktree
- * HEAD is the full 40-char rev-parse output, so match by prefix in either
- * direction rather than requiring exact equality.
+ * HEAD is the full-length rev-parse output (40 hex for SHA-1, 64 for SHA-256),
+ * so accept `headSha` when it is a prefix of that HEAD rather than requiring
+ * exact equality.
  *
  * @param {string} headSha — the declared --head-sha (already normalized lowercase)
  * @param {{ repoRoot: string }} opts
@@ -1009,9 +1010,11 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
       `--base was given but the current working directory (${repoRoot}) is not inside a git worktree (git rev-parse HEAD failed: ${err?.message ?? err}). cd into the PR's worktree — the one checked out at --head-sha ${headSha} — before building its gate context.`,
     );
   }
-  const matches = actualHead === declared
-    || actualHead.startsWith(declared)
-    || declared.startsWith(actualHead);
+  // `git rev-parse HEAD` always returns the full-length SHA, so the only valid
+  // match is `declared` being a prefix of it. Accepting the reverse direction
+  // (declared longer than HEAD) would false-accept a --head-sha whose first
+  // chars merely happen to equal HEAD (e.g. a 64-char value vs a SHA-1 HEAD).
+  const matches = actualHead.startsWith(declared);
   if (!matches) {
     throw new Error(
       `worktree HEAD ${actualHead} does not match --head-sha ${declared}: the current working directory is the WRONG worktree for this PR, so \`git diff <base>...HEAD\` would resolve the WRONG diff. cd into the worktree checked out at ${declared} and re-run.`,
