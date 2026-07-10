@@ -28,17 +28,24 @@ test('buildNamedUiStateArtifactPaths derives deterministic screenshot and state 
   assert.equal(paths.artifactDir, path.join('test-results/ui-smoke/inspect-run-viewer', 'named-states', 'current-pr-dashboard'));
   assert.equal(paths.screenshotPath, path.join(paths.artifactDir, 'screenshot.png'));
   assert.equal(paths.statePath, path.join(paths.artifactDir, 'state.json'));
+  assert.equal(paths.snapshotPath, path.join(paths.artifactDir, 'snapshot.json'));
 });
 
 test('captureNamedUiState writes the deterministic screenshot and state artifact bundle', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-'));
   const screenshots = [];
+  const accessibilityTree = { role: 'WebArea', name: 'Current PR dashboard', children: [{ role: 'heading', name: 'Runs' }] };
 
   try {
     const artifact = await captureNamedUiState({
       page: {
         async screenshot(options) {
           screenshots.push(options);
+        },
+        accessibility: {
+          async snapshot() {
+            return accessibilityTree;
+          },
         },
       },
       testInfo: {
@@ -62,7 +69,7 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
     await stat(artifact.artifactDir);
 
     const stateJson = JSON.parse(await readFile(artifact.statePath, 'utf8'));
-    assert.equal(stateJson.schemaVersion, 1);
+    assert.equal(stateJson.schemaVersion, 2);
     assert.equal(stateJson.artifactType, 'named-ui-state');
     assert.equal(stateJson.validationLevel, 'deterministic-smoke');
     assert.equal(stateJson.sliceId, 'inspect-run-viewer');
@@ -74,9 +81,15 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
     assert.equal(stateJson.artifacts.screenshot.relativePath, 'screenshot.png');
     assert.equal(stateJson.artifacts.state.fileName, 'state.json');
     assert.equal(stateJson.artifacts.state.relativePath, 'state.json');
+    assert.equal(stateJson.artifacts.snapshot.fileName, 'snapshot.json');
+    assert.equal(stateJson.artifacts.snapshot.relativePath, 'snapshot.json');
     assert.equal(stateJson.metadata.fixture, 'makeInspectionSnapshot');
     assert.equal(stateJson.metadata.route, '/');
     assert.match(stateJson.capturedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+    assert.equal(artifact.snapshotPath, path.join(artifact.artifactDir, 'snapshot.json'));
+    const snapshotJson = JSON.parse(await readFile(artifact.snapshotPath, 'utf8'));
+    assert.deepEqual(snapshotJson, accessibilityTree);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -133,6 +146,36 @@ test('captureNamedUiState accepts an explicit outputDir without testInfo metadat
     assert.equal(stateJson.metadata.fixture, null);
     assert.equal(stateJson.metadata.route, null);
     assert.equal(stateJson.metadata.reviewHint, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('captureNamedUiState emits snapshot.json as JSON null when the page exposes no accessible tree', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-null-tree-'));
+
+  try {
+    const artifact = await captureNamedUiState({
+      page: {
+        async screenshot() {},
+        accessibility: {
+          async snapshot() {
+            return null;
+          },
+        },
+      },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'No accessible tree',
+    });
+
+    // Deterministic emit: still written (never skipped), as JSON null.
+    const raw = await readFile(artifact.snapshotPath, 'utf8');
+    assert.equal(raw, 'null\n');
+
+    const stateJson = JSON.parse(await readFile(artifact.statePath, 'utf8'));
+    assert.equal(stateJson.artifacts.snapshot.fileName, 'snapshot.json');
+    assert.equal(stateJson.artifacts.snapshot.relativePath, 'snapshot.json');
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

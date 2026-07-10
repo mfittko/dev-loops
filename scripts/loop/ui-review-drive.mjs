@@ -262,7 +262,7 @@ function makeRunStep({ page, outputDir }) {
       outputDir,
       metadata: { fixture: null, route: step.path ?? null, reviewHint: `Drive step "${stateName}" for the "${flow.name}" flow.` },
     });
-    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath };
+    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath };
   };
 }
 

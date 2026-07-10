@@ -45,10 +45,12 @@ These are the reusable harness artifacts emitted for named UI states.
 For this level, a paired state artifact is required:
 - `screenshot.png`
 - `state.json`
+- `snapshot.json`
 
-Why both are required:
+Why all three are required:
 - the screenshot shows what rendered
 - `state.json` explains which named state it is, which slice produced it, and the minimum metadata needed for review or follow-up automation
+- `snapshot.json` is the semantic accessibility tree captured for the same state — the structured counterpart to the pixels, so a reviewer (or later automation) can reason about roles/names, not just what a screenshot happens to show
 
 ### 3. CI-required artifacts
 
@@ -67,6 +69,7 @@ For a slice id of `<sliceId>` and a state slug of `<state-slug>`, the harness pa
 - state directory: `test-results/ui-smoke/<sliceId>/named-states/<state-slug>/`
 - screenshot artifact: `test-results/ui-smoke/<sliceId>/named-states/<state-slug>/screenshot.png`
 - structured state artifact: `test-results/ui-smoke/<sliceId>/named-states/<state-slug>/state.json`
+- semantic snapshot artifact: `test-results/ui-smoke/<sliceId>/named-states/<state-slug>/snapshot.json`
 - HTML report root: `playwright-report/ui-smoke/<sliceId>/`
 
 The harness currently normalizes:
@@ -75,7 +78,7 @@ The harness currently normalizes:
 
 ## Minimum `state.json` contract
 
-The current reusable harness emits `state.json` with this minimum reviewer-facing metadata:
+The current reusable harness emits `state.json` with this minimum reviewer-facing metadata (current `schemaVersion`: `2`):
 - `schemaVersion`
 - `artifactType`
 - `validationLevel`
@@ -91,11 +94,22 @@ The current reusable harness emits `state.json` with this minimum reviewer-facin
 - `artifacts.screenshot.relativePath`
 - `artifacts.state.fileName`
 - `artifacts.state.relativePath`
+- `artifacts.snapshot.fileName`
+- `artifacts.snapshot.relativePath`
 - `metadata.fixture`
 - `metadata.route`
 - `metadata.reviewHint`
 
 This is intentionally minimal. The contract is not trying to describe every possible UI surface; it is only making the current reusable review inputs explicit.
+
+## `snapshot.json` contract
+
+`snapshot.json` is the semantic counterpart to `screenshot.png`: the page's
+accessibility tree as captured by the harness for the same named state. Its
+body is the raw accessibility-tree JSON (an object tree, or JSON `null` for a
+page that exposes no accessible tree — still emitted, never skipped). It is
+emitted for every named state at the deterministic path above, and `state.json`
+references it under `artifacts.snapshot`.
 
 ## When screenshot alone is acceptable
 
@@ -107,7 +121,7 @@ Screenshot alone is acceptable only when the artifact is:
 
 ## When the paired state artifact is required
 
-The `screenshot.png` + `state.json` pair is required when:
+The `screenshot.png` + `state.json` + `snapshot.json` bundle is required when:
 - the artifact is part of the reusable deterministic smoke harness
 - the slice is handing named UI states to a later reviewer loop
 - the artifact needs to map back to a deterministic local run without guesswork
@@ -129,6 +143,7 @@ path/diff-conditioned jobs live in `.github/workflows/ci.yml`.
 When a registered artifact's suite is required:
 - missing or malformed `state.json` is a validation failure
 - missing `screenshot.png` is a validation failure
+- missing or malformed `snapshot.json` is a validation failure
 - mismatched state naming/path conventions are a validation failure
 - the PR should fail closed rather than silently downgrade to screenshot-only review
 

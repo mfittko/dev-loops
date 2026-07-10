@@ -39,6 +39,7 @@ export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName }
     artifactDir,
     screenshotPath: path.join(artifactDir, 'screenshot.png'),
     statePath: path.join(artifactDir, 'state.json'),
+    snapshotPath: path.join(artifactDir, 'snapshot.json'),
   };
 }
 
@@ -54,6 +55,12 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   await mkdir(paths.artifactDir, { recursive: true });
   await page.screenshot({ path: paths.screenshotPath, fullPage });
 
+  // Semantic snapshot: the accessibility tree next to the pixels. `snapshot()`
+  // returns null for a page with no accessible tree — that is a valid tree, so
+  // it is still emitted deterministically (as JSON null) rather than skipped.
+  const accessibilityTree = (await page.accessibility?.snapshot?.()) ?? null;
+  await writeFile(paths.snapshotPath, `${JSON.stringify(accessibilityTree, null, 2)}\n`, 'utf8');
+
   const normalizedMetadata = {
     ...metadata,
     fixture: metadata.fixture ?? null,
@@ -62,7 +69,7 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   };
 
   const stateArtifact = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     artifactType: 'named-ui-state',
     validationLevel: 'deterministic-smoke',
     sliceId: paths.sliceId,
@@ -83,6 +90,11 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
         fileName: path.basename(paths.statePath),
         relativePath: path.basename(paths.statePath),
         path: paths.statePath,
+      },
+      snapshot: {
+        fileName: path.basename(paths.snapshotPath),
+        relativePath: path.basename(paths.snapshotPath),
+        path: paths.snapshotPath,
       },
     },
     metadata: normalizedMetadata,

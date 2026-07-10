@@ -52,11 +52,17 @@ export function validateUiDesignerReviewInput(input = {}) {
     if (typeof state.statePath !== 'string' || state.statePath.trim().length === 0) {
       incompleteArtifacts.push(`artifactBundle.namedStates[${index}].statePath`);
     }
+    if (typeof state.snapshotPath !== 'string' || state.snapshotPath.trim().length === 0) {
+      incompleteArtifacts.push(`artifactBundle.namedStates[${index}].snapshotPath`);
+    }
     if (reviewMode === 'vision' && typeof state.screenshotPath === 'string' && state.screenshotPath.trim().length > 0 && !state.screenshotPath.trim().endsWith('screenshot.png')) {
       incompleteArtifacts.push(`artifactBundle.namedStates[${index}].screenshotPath`);
     }
     if (reviewMode === 'vision' && typeof state.statePath === 'string' && state.statePath.trim().length > 0 && !state.statePath.trim().endsWith('state.json')) {
       incompleteArtifacts.push(`artifactBundle.namedStates[${index}].statePath`);
+    }
+    if (reviewMode === 'vision' && typeof state.snapshotPath === 'string' && state.snapshotPath.trim().length > 0 && !state.snapshotPath.trim().endsWith('snapshot.json')) {
+      incompleteArtifacts.push(`artifactBundle.namedStates[${index}].snapshotPath`);
     }
   });
   if (incompleteArtifacts.length > 0) {
