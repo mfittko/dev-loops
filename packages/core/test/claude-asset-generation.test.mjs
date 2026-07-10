@@ -123,8 +123,8 @@ You are a focused implementation agent.
 
 test("transformAgent maps tools (comma), drops Pi-only fields, keeps the body + generated note", () => {
   const out = transformAgent({ source: "agents/developer.agent.md", raw: AGENT_SRC });
-  // `developer` is a low-tier role, so `model: sonnet` is stamped after tools (#1134).
-  assert.match(out, /^---\nname: "developer"\ndescription: "Implements code\."\ntools: Read, Grep, Glob, Bash, Edit, Write\nmodel: sonnet\n---\n/);
+  // `developer` is a low-tier role, so `model: "sonnet"` is stamped after tools (#1134).
+  assert.match(out, /^---\nname: "developer"\ndescription: "Implements code\."\ntools: Read, Grep, Glob, Bash, Edit, Write\nmodel: "sonnet"\n---\n/);
   // Pi-only fields must be gone.
   for (const dropped of ["argument-hint", "systemPromptMode", "inheritProjectContext", "user-invocable", "maxSubagentDepth"]) {
     assert.equal(out.includes(`${dropped}:`), false, `${dropped} should be dropped`);
@@ -197,14 +197,14 @@ const agentSrcFor = (name) =>
 test("transformAgent stamps the low tier (sonnet) for routine roles", () => {
   for (const role of ["developer", "docs", "fixer", "quality"]) {
     const out = transformAgent({ source: `agents/${role}.agent.md`, raw: agentSrcFor(role) });
-    assert.match(out, /\nmodel: sonnet\n/, `${role} should carry model: sonnet`);
+    assert.match(out, /\nmodel: "sonnet"\n/, `${role} should carry model: "sonnet"`);
   }
 });
 
 test("transformAgent stamps the high tier (opus) for refiner and review", () => {
   for (const role of ["refiner", "review"]) {
     const out = transformAgent({ source: `agents/${role}.agent.md`, raw: agentSrcFor(role) });
-    assert.match(out, /\nmodel: opus\n/, `${role} should carry model: opus`);
+    assert.match(out, /\nmodel: "opus"\n/, `${role} should carry model: "opus"`);
   }
 });
 
@@ -216,7 +216,7 @@ test("transformAgent omits model: for the inherit role (dev-loop)", () => {
 test("transformAgent honors a config override for the generated model frontmatter", () => {
   const config = { models: { roles: { developer: "gpt-5" }, roleTiers: { review: "inherit" } } };
   const dev = transformAgent({ source: "agents/developer.agent.md", raw: agentSrcFor("developer"), config });
-  assert.match(dev, /\nmodel: gpt-5\n/);
+  assert.match(dev, /\nmodel: "gpt-5"\n/);
   const review = transformAgent({ source: "agents/review.agent.md", raw: agentSrcFor("review"), config });
   assert.equal(review.includes("model:"), false, "review demoted to inherit omits the field");
 });

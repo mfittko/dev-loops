@@ -2,7 +2,7 @@
 name: "docs"
 description: "Use for README updates, plan docs, architecture notes, agent docs, migration notes, narrow documentation changes that must stay aligned with implementation work, and documentation-correctness review for the current change. Keywords: docs, README, plans, documentation, agent docs, rollout notes, changelog-style summary, docs review."
 tools: Read, Grep, Glob, Bash, Edit, Write
-model: sonnet
+model: "sonnet"
 ---
 <!-- GENERATED from agents/docs.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 

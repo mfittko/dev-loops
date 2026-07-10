@@ -202,7 +202,10 @@ export function transformAgent({ source, raw, version = "latest", config = {} })
     lines.push(`tools: ${tools.join(", ")}`);
   }
   if (model != null) {
-    lines.push(`model: ${model}`);
+    // Quote the stamped model id: resolveRoleModel can return any operator-provided
+    // id, and a value with YAML-significant chars would break frontmatter parsing.
+    // JSON string literals are valid YAML double-quoted scalars.
+    lines.push(`model: ${JSON.stringify(model)}`);
   }
   lines.push("---");
   lines.push(GENERATED_NOTE(source));

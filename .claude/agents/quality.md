@@ -2,7 +2,7 @@
 name: "quality"
 description: "Use for build systems, test runners, type-checking, linting, package scripts, GitHub Actions workflows, caches, release verification, and quality gates. Keywords: CI, workflow, GitHub Actions, build, test, cache, typecheck, package scripts, branch protection."
 tools: Read, Grep, Glob, Bash, Edit, Write
-model: sonnet
+model: "sonnet"
 ---
 <!-- GENERATED from agents/quality.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 

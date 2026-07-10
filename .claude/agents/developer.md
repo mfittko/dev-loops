@@ -2,7 +2,7 @@
 name: "developer"
 description: "Use for direct product implementation in this repository: focused code changes, refactors, tests, bug fixes, and feature work within an already-scoped task. Keywords: implement feature, write code, refactor module, add tests, fix bug, update source."
 tools: Read, Grep, Glob, Bash, Edit, Write
-model: sonnet
+model: "sonnet"
 ---
 <!-- GENERATED from agents/developer.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 

@@ -3579,6 +3579,14 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "sonnet");
   });
 
+  test("a partial tier override (pi only) preserves the built-in Claude mapping", () => {
+    // Setting only the Pi id for a tier must not erase the built-in Claude id
+    // for that tier — the two harness keys are deep-merged per alias.
+    const config = { models: { tiers: { low: { pi: "somePiId" } } } };
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "pi" }), "somePiId");
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "sonnet");
+  });
+
   test("inherit tier resolves null on both harnesses", () => {
     const config = { models: { roleTiers: { developer: "inherit" } } };
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), null);

@@ -687,9 +687,13 @@ export function resolveRoleModel(config, { role, harness } = {}) {
   }
   if (!tierAlias || tierAlias === "inherit") return null;
 
-  const tiers = { ...BUILTIN_TIERS, ...(config?.models?.tiers ?? {}) };
-  const mapping = tiers[tierAlias];
-  if (!mapping) return null;
+  // Deep-merge the alias mapping so a partial override (e.g. `{ pi: "..." }`,
+  // which the schema allows) preserves the untouched built-in harness key rather
+  // than erasing the whole {claude,pi} mapping and resolving null for that harness.
+  const builtinMapping = BUILTIN_TIERS[tierAlias];
+  const configMapping = config?.models?.tiers?.[tierAlias];
+  if (!builtinMapping && !configMapping) return null;
+  const mapping = { ...builtinMapping, ...configMapping };
   const model = mapping[harness];
   return typeof model === "string" && model.trim().length > 0 ? model.trim() : null;
 }

@@ -2,7 +2,7 @@
 name: "review"
 description: "Use for pull request review from a product and engineering perspective: check the implementation against the PR description, relevant plan, acceptance criteria, definition of done, non-goals, coding best practices, security expectations, and merge readiness. Keywords: review, PR review, acceptance criteria review, DoD review, security review, plan compliance."
 tools: Read, Grep, Glob, Bash, Edit, Write
-model: opus
+model: "opus"
 ---
 <!-- GENERATED from agents/review.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 
