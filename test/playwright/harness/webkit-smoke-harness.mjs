@@ -17,6 +17,45 @@ export function normalizeUiStateSegment(value) {
   return normalized;
 }
 
+// The interaction states the slug can encode. `none` is the default render state;
+// the others are the stateful renders reviewers care about distinguishing.
+const UI_INTERACTION_STATES = new Set(['none', 'focus', 'hover', 'error']);
+
+// Normalize a viewport descriptor into a stable slug segment. A `{ width, height }`
+// object becomes `w<width>h<height>`; a named breakpoint string is normalized like
+// any other segment; an unspecified viewport defaults to `default`. A malformed
+// viewport (non-positive/non-integer dimensions, or a non-object/non-string) is
+// rejected — a bad descriptor must fail closed, never collapse to a silent default.
+export function normalizeViewportSegment(viewport) {
+  if (viewport === undefined || viewport === null) {
+    return 'default';
+  }
+  if (typeof viewport === 'string') {
+    return normalizeUiStateSegment(viewport);
+  }
+  if (typeof viewport === 'object') {
+    const { width, height } = viewport;
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+      throw new Error('UI state viewport must provide positive integer width and height');
+    }
+    return `w${width}h${height}`;
+  }
+  throw new Error('UI state viewport must be a { width, height } object or a named breakpoint string');
+}
+
+// Normalize an interaction state into a stable slug segment. Unspecified defaults to
+// `none`; anything outside the known set is rejected (fail closed, not silently kept).
+export function normalizeInteractionSegment(interactionState) {
+  if (interactionState === undefined || interactionState === null) {
+    return 'none';
+  }
+  const normalized = String(interactionState).trim().toLowerCase();
+  if (!UI_INTERACTION_STATES.has(normalized)) {
+    throw new Error(`UI state interaction must be one of ${[...UI_INTERACTION_STATES].join(', ')}`);
+  }
+  return normalized;
+}
+
 function requireOutputDir(outputDir) {
   if (typeof outputDir !== 'string' || outputDir.trim().length === 0) {
     throw new Error('A deterministic outputDir is required for named UI state artifacts');
@@ -28,14 +67,21 @@ function buildRunId({ sliceId, stateSlug, projectName }) {
   return [sliceId, stateSlug, projectName ?? 'unknown'].map((part) => normalizeUiStateSegment(part)).join('-');
 }
 
-export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName }) {
+export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName, viewport, interactionState }) {
   const normalizedSliceId = normalizeUiStateSegment(sliceId);
-  const stateSlug = normalizeUiStateSegment(stateName);
+  // The slug bakes viewport + interaction into the directory so a mobile vs desktop
+  // render, or a default vs error state, are distinct reviewable dirs that never
+  // collide/overwrite. Each part is normalized independently, then joined with `-`.
+  const viewportSlug = normalizeViewportSegment(viewport);
+  const interactionSlug = normalizeInteractionSegment(interactionState);
+  const stateSlug = `${normalizeUiStateSegment(stateName)}-${viewportSlug}-${interactionSlug}`;
   const artifactDir = path.join(requireOutputDir(outputDir), 'named-states', stateSlug);
 
   return {
     sliceId: normalizedSliceId,
     stateSlug,
+    viewport: viewportSlug,
+    interactionState: interactionSlug,
     artifactDir,
     screenshotPath: path.join(artifactDir, 'screenshot.png'),
     statePath: path.join(artifactDir, 'state.json'),
@@ -71,12 +117,14 @@ function defaultCaptureConsole() {
   return null;
 }
 
-export async function captureNamedUiState({ page, testInfo, sliceId, stateName, metadata = {}, fullPage = true, outputDir, runAxe = defaultRunAxe, captureConsole = defaultCaptureConsole } = {}) {
+export async function captureNamedUiState({ page, testInfo, sliceId, stateName, viewport, interactionState, metadata = {}, fullPage = true, outputDir, runAxe = defaultRunAxe, captureConsole = defaultCaptureConsole } = {}) {
   const resolvedOutputDir = outputDir ?? testInfo?.project?.outputDir ?? testInfo?.config?.outputDir ?? testInfo?.outputDir;
   const paths = buildNamedUiStateArtifactPaths({
     outputDir: resolvedOutputDir,
     sliceId,
     stateName,
+    viewport,
+    interactionState,
   });
   const projectName = testInfo?.project?.name ?? null;
 
@@ -131,12 +179,14 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   };
 
   const stateArtifact = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     artifactType: 'named-ui-state',
     validationLevel: 'deterministic-smoke',
     sliceId: paths.sliceId,
     stateName,
     stateSlug: paths.stateSlug,
+    viewport: paths.viewport,
+    interactionState: paths.interactionState,
     runId: buildRunId({ sliceId: paths.sliceId, stateSlug: paths.stateSlug, projectName }),
     capturedAt: new Date().toISOString(),
     projectName,

@@ -8,6 +8,8 @@ import {
   buildNamedUiStateArtifactPaths,
   captureNamedUiState,
   normalizeUiStateSegment,
+  normalizeViewportSegment,
+  normalizeInteractionSegment,
 } from '../playwright/harness/webkit-smoke-harness.mjs';
 
 test('normalizeUiStateSegment collapses UI state names into stable path segments', () => {
@@ -17,6 +19,24 @@ test('normalizeUiStateSegment collapses UI state names into stable path segments
   assert.throws(() => normalizeUiStateSegment('!!!'), /must contain at least one/i);
 });
 
+test('normalizeViewportSegment encodes dimensions/breakpoints and rejects malformed descriptors', () => {
+  assert.equal(normalizeViewportSegment(undefined), 'default');
+  assert.equal(normalizeViewportSegment(null), 'default');
+  assert.equal(normalizeViewportSegment({ width: 1280, height: 800 }), 'w1280h800');
+  assert.equal(normalizeViewportSegment('Mobile Small'), 'mobile-small');
+  assert.throws(() => normalizeViewportSegment({ width: 0, height: 800 }), /positive integer/i);
+  assert.throws(() => normalizeViewportSegment({ width: 1280.5, height: 800 }), /positive integer/i);
+  assert.throws(() => normalizeViewportSegment(1280), /object or a named breakpoint/i);
+});
+
+test('normalizeInteractionSegment defaults to none and rejects unknown interaction states', () => {
+  assert.equal(normalizeInteractionSegment(undefined), 'none');
+  assert.equal(normalizeInteractionSegment('Focus'), 'focus');
+  assert.equal(normalizeInteractionSegment(' hover '), 'hover');
+  assert.equal(normalizeInteractionSegment('error'), 'error');
+  assert.throws(() => normalizeInteractionSegment('pressed'), /must be one of/i);
+});
+
 test('buildNamedUiStateArtifactPaths derives deterministic screenshot and state paths', () => {
   const paths = buildNamedUiStateArtifactPaths({
     outputDir: 'test-results/ui-smoke/inspect-run-viewer',
@@ -24,13 +44,29 @@ test('buildNamedUiStateArtifactPaths derives deterministic screenshot and state 
     stateName: 'Current PR dashboard',
   });
 
-  assert.equal(paths.stateSlug, 'current-pr-dashboard');
-  assert.equal(paths.artifactDir, path.join('test-results/ui-smoke/inspect-run-viewer', 'named-states', 'current-pr-dashboard'));
+  assert.equal(paths.stateSlug, 'current-pr-dashboard-default-none');
+  assert.equal(paths.viewport, 'default');
+  assert.equal(paths.interactionState, 'none');
+  assert.equal(paths.artifactDir, path.join('test-results/ui-smoke/inspect-run-viewer', 'named-states', 'current-pr-dashboard-default-none'));
   assert.equal(paths.screenshotPath, path.join(paths.artifactDir, 'screenshot.png'));
   assert.equal(paths.statePath, path.join(paths.artifactDir, 'state.json'));
   assert.equal(paths.snapshotPath, path.join(paths.artifactDir, 'snapshot.json'));
   assert.equal(paths.axePath, path.join(paths.artifactDir, 'axe.json'));
   assert.equal(paths.consolePath, path.join(paths.artifactDir, 'console.json'));
+});
+
+test('buildNamedUiStateArtifactPaths gives distinct dirs for viewport- or interaction-only differences', () => {
+  const base = { outputDir: 'out', sliceId: 'inspect-run-viewer', stateName: 'Current PR dashboard' };
+  const desktop = buildNamedUiStateArtifactPaths({ ...base, viewport: { width: 1280, height: 800 } });
+  const mobile = buildNamedUiStateArtifactPaths({ ...base, viewport: { width: 375, height: 667 } });
+  const error = buildNamedUiStateArtifactPaths({ ...base, viewport: { width: 1280, height: 800 }, interactionState: 'error' });
+
+  assert.equal(desktop.stateSlug, 'current-pr-dashboard-w1280h800-none');
+  assert.equal(mobile.stateSlug, 'current-pr-dashboard-w375h667-none');
+  assert.equal(error.stateSlug, 'current-pr-dashboard-w1280h800-error');
+  // Differ only by viewport → distinct dirs. Differ only by interaction → distinct dirs.
+  assert.notEqual(desktop.artifactDir, mobile.artifactDir);
+  assert.notEqual(desktop.artifactDir, error.artifactDir);
 });
 
 test('captureNamedUiState writes the deterministic screenshot and state artifact bundle', async () => {
@@ -62,6 +98,8 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
       },
       sliceId: 'inspect-run-viewer',
       stateName: 'Current PR dashboard',
+      viewport: { width: 1280, height: 800 },
+      interactionState: 'error',
       metadata: {
         reviewHint: 'Use this state for the initial dashboard pass.',
         fixture: 'makeInspectionSnapshot',
@@ -75,13 +113,15 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
     await stat(artifact.artifactDir);
 
     const stateJson = JSON.parse(await readFile(artifact.statePath, 'utf8'));
-    assert.equal(stateJson.schemaVersion, 4);
+    assert.equal(stateJson.schemaVersion, 5);
     assert.equal(stateJson.artifactType, 'named-ui-state');
     assert.equal(stateJson.validationLevel, 'deterministic-smoke');
     assert.equal(stateJson.sliceId, 'inspect-run-viewer');
     assert.equal(stateJson.stateName, 'Current PR dashboard');
-    assert.equal(stateJson.stateSlug, 'current-pr-dashboard');
-    assert.equal(stateJson.runId, 'inspect-run-viewer-current-pr-dashboard-webkit');
+    assert.equal(stateJson.stateSlug, 'current-pr-dashboard-w1280h800-error');
+    assert.equal(stateJson.viewport, 'w1280h800');
+    assert.equal(stateJson.interactionState, 'error');
+    assert.equal(stateJson.runId, 'inspect-run-viewer-current-pr-dashboard-w1280h800-error-webkit');
     assert.equal(stateJson.projectName, 'webkit');
     assert.equal(stateJson.artifacts.screenshot.fileName, 'screenshot.png');
     assert.equal(stateJson.artifacts.screenshot.relativePath, 'screenshot.png');

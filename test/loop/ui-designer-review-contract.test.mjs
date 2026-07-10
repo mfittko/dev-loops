@@ -349,6 +349,33 @@ test('validateUiDesignerReviewInput fails closed when vision review has a malfor
   assert.deepEqual(result.missing, ['artifactBundle.namedStates[0].consolePath']);
 });
 
+test('validateUiDesignerReviewInput fails closed when two named states collide to the same slug', () => {
+  const dir = 'test-results/ui-smoke/inspect-run-viewer/named-states/current-pr-dashboard-default-none';
+  const collidingState = {
+    stateName: 'Current PR dashboard',
+    screenshotPath: `${dir}/screenshot.png`,
+    statePath: `${dir}/state.json`,
+    snapshotPath: `${dir}/snapshot.json`,
+    axePath: `${dir}/axe.json`,
+    consolePath: `${dir}/console.json`,
+  };
+  const result = validateUiDesignerReviewInput({
+    workType: 'ui',
+    uiReviewRequested: true,
+    acceptanceCriteria: ['named dashboard state renders'],
+    reviewBrief: 'Check layout and visual hierarchy.',
+    artifactBundle: {
+      sliceId: 'inspect-run-viewer',
+      namedStates: [collidingState, { ...collidingState, stateName: 'Current PR dashboard (again)' }],
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'blocked_duplicate_state_slug');
+  assert.equal(result.reason, 'duplicate_state_slug');
+  assert.deepEqual(result.missing, ['artifactBundle.namedStates[1].statePath']);
+});
+
 test('mapAxeImpactToFindingSeverity maps axe impact ranks to finding severities', () => {
   assert.equal(mapAxeImpactToFindingSeverity('critical'), 'high');
   assert.equal(mapAxeImpactToFindingSeverity('serious'), 'high');

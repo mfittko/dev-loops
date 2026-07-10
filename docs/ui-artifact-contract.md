@@ -80,17 +80,38 @@ For a slice id of `<sliceId>` and a state slug of `<state-slug>`, the harness pa
 
 The harness currently normalizes:
 - `sliceId` into a stable path segment
-- the human-readable state name into `<state-slug>`
+- the human-readable state name, a **viewport descriptor**, and an
+  **interaction-state** into `<state-slug>`
+
+`<state-slug>` is `<state-name>-<viewport>-<interaction>`, each part normalized
+independently and joined with `-`:
+- `<viewport>` is `w<width>h<height>` for a `{ width, height }` viewport (for
+  example `w1280h800`), a normalized named breakpoint string, or `default` when no
+  viewport is given.
+- `<interaction>` is one of `focus`, `hover`, `error`, or `none` (the default
+  render state when no interaction is given).
+
+So `Current PR dashboard` at the default viewport with no interaction is
+`current-pr-dashboard-default-none`, while the same state at a mobile viewport in
+its error render is `current-pr-dashboard-w375h667-error`. Baking viewport +
+interaction into the slug means two states differing **only** by viewport (a
+mobile vs desktop render) or **only** by interaction-state (a default vs error
+render) get **distinct** directories and never collide/overwrite. A malformed
+viewport (non-positive/non-integer dimensions) or an unknown interaction-state is
+rejected fail-closed, and two named states that collide to the same slug are
+rejected rather than silently overwriting each other.
 
 ## Minimum `state.json` contract
 
-The current reusable harness emits `state.json` with this minimum reviewer-facing metadata (current `schemaVersion`: `4`):
+The current reusable harness emits `state.json` with this minimum reviewer-facing metadata (current `schemaVersion`: `5`):
 - `schemaVersion`
 - `artifactType`
 - `validationLevel`
 - `sliceId`
 - `stateName`
 - `stateSlug`
+- `viewport`
+- `interactionState`
 - `runId`
 - `capturedAt`
 - `projectName`
