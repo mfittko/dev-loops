@@ -26,7 +26,7 @@ Judge each named state through four **lenses**, each grounded in one artifact, a
 - `visual` — grounded in `screenshotPath` (the pixels)
 - `interaction` — grounded in `consolePath` (`console.json`) and interaction state
 
-The four lenses' findings are merged deterministically by the pure `convergeUiReviewLenses` seam (`scripts/loop/ui-review-lenses.mjs`): findings sharing a normalized `(stateName, region, category)` triple are deduped, the worse severity wins, and the outcome enum is derived (a must-fix finding ⇒ not satisfied; a `blocking` design conflict ⇒ blocked). Emit raw per-lens findings; do not dedupe or pick the outcome yourself.
+The four lenses' findings are merged deterministically by the pure converge seam (`scripts/loop/ui-review-lenses.mjs`): the route hands your flat `findings[]` to `convergeUiReviewRouteFindings(findings)`, which groups them by `lens` and calls `convergeUiReviewLenses`. Findings sharing a normalized `(stateName, region, category)` triple are deduped, the worse severity wins, and the outcome enum is derived (a must-fix finding ⇒ not satisfied; a `blocking` design conflict ⇒ blocked). Emit raw per-lens findings; do not dedupe or pick the outcome yourself.
 
 1. Fail closed when required inputs are missing, ambiguous, or unreadable.
 2. Ground every finding in one or more `screenshotPath` and `statePath` references. Ground accessibility findings in `axePath`.
@@ -36,25 +36,35 @@ The four lenses' findings are merged deterministically by the pure `convergeUiRe
 
 ## Required output format
 
-Allowed enum values:
-- `outcome`: `"continue_ui_fix_loop"` | `"ui_review_satisfied"` | `"blocked_needs_human_decision"`
-- `severity`: `"high"` | `"medium"` | `"low"`
+Emit RAW PER-LENS FINDINGS ONLY. The `convergeUiReviewLenses` seam owns the
+outcome: do **not** dedupe, do **not** pick `outcome`/`blockedReason`, and do
+**not** emit a summary verdict — anything beyond the fields below is ignored.
+The seam derives `continue_ui_fix_loop` / `ui_review_satisfied` /
+`blocked_needs_human_decision` from the findings you return.
 
-`blockedReason` must always be present in the output. Set it to `null` unless `outcome` is `"blocked_needs_human_decision"`, in which case provide a non-empty string explaining the block reason.
+Each finding carries:
+- `lens`: `"a11y"` | `"layout-geometry"` | `"visual"` | `"interaction"` (the lens that produced it)
+- `stateName`: the named state the finding is about (matches `artifactBundle.namedStates[].stateName`)
+- `region`: the selector/area the defect is in
+- `category`: the rule/class of defect (for `a11y`, the axe rule `id`)
+- `severity`: `"must-fix"` | `"high"` | `"medium"` | `"low"` — a `must-fix` or `high` finding means the review is NOT satisfied and the fix loop continues. (Map an axe impact to severity per the "Review policy" mapping; a mechanical, non-negotiable defect is `must-fix`.)
+- `blocking`: boolean — set `true` ONLY for a genuine design/product conflict that no normal UI-fix iteration can resolve (a fail-closed, human-decision signal); otherwise `false`. Any `blocking: true` finding routes the whole review to `blocked_needs_human_decision`.
+- `evidence`: object with the artifact path(s) that ground the finding (for `a11y`, include `axeRuleId`)
+- `problem`: what is visually or interaction-wise wrong or unclear
+- `suggestedFix`: the specific corrective action
 
 Return strict JSON with this shape (example uses concrete values):
 
 ```json
 {
-  "outcome": "ui_review_satisfied",
-  "summary": "short overall verdict",
   "findings": [
     {
       "lens": "a11y",
+      "stateName": "named state label",
       "region": "#main .card",
       "category": "color-contrast",
-      "severity": "medium",
-      "stateName": "named state label",
+      "severity": "high",
+      "blocking": false,
       "evidence": {
         "screenshotPath": "test-results/ui-smoke/<sliceId>/named-states/<state-slug>/screenshot.png",
         "statePath": "test-results/ui-smoke/<sliceId>/named-states/<state-slug>/state.json",
@@ -64,10 +74,9 @@ Return strict JSON with this shape (example uses concrete values):
       "problem": "what is visually wrong or unclear",
       "suggestedFix": "specific corrective action"
     }
-  ],
-  "nextIterationFocus": [
-    "small, actionable UI fix target"
-  ],
-  "blockedReason": null
+  ]
 }
 ```
+
+An all-clean review emits `{ "findings": [] }` — the seam maps an empty set to
+`ui_review_satisfied`.

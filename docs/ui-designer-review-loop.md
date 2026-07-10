@@ -90,19 +90,22 @@ A review pass judges ONE enriched named-state bundle through four parallel
 
 Lens **execution** stays in the review route (designer/vision): each lens is a
 named producer that takes the enriched bundle and returns a findings array. The
-route feeds those raw per-lens findings into a **pure converge seam**,
+vision template emits one FLAT `findings[]`, each finding tagged with its `lens`;
+the route hands that array to `convergeUiReviewRouteFindings(findings)`, which
+groups it by lens (seeding an empty bucket for each of the four canonical lenses,
+so an all-clean lens is still present) and calls the **pure converge seam**,
 `convergeUiReviewLenses(lensResults[]) -> { findings, outcome }`, in
 `scripts/loop/ui-review-lenses.mjs`. The seam is deterministic and
 harness-agnostic — no browser, no model.
 
 - **Dedupe key.** Two findings from any lenses are the same defect when they
-  share a normalized `(namedState, region/selector, category/rule)` triple; they
+  share a normalized `(stateName, region/selector, category/rule)` triple; they
   collapse to one representative and every contributing lens is recorded on
   `lenses`.
 - **Precedence.** When two lenses report the same defect the worse severity wins
   (ladder: `must-fix` > `high` > `medium` > `low` > `note`); a `blocking` signal
   from any contributing lens survives the merge.
-- **Stable ordering.** Findings are ordered by `namedState`, then severity
+- **Stable ordering.** Findings are ordered by `stateName`, then severity
   (worst first), then region, then category.
 - **Outcome mapping** (the existing enum, unchanged): any `blocking` finding ⇒
   `blocked_needs_human_decision`; else any must-fix finding (severity `must-fix`
@@ -212,3 +215,4 @@ deterministic tail:
 - `UI_REVIEW_LENSES` names the four lenses and the artifact each is grounded in
 - `validateUiReviewLensResults` rejects a missing/unknown/duplicate lens or a malformed finding fail-closed
 - `convergeUiReviewLenses` merges the four findings arrays into one deduped set and maps it to the unchanged outcome enum
+- `convergeUiReviewRouteFindings` is the route's entrypoint: it groups the vision template's flat `findings[]` (each tagged with its `lens`) into the four-lens result set and calls `convergeUiReviewLenses`, so the template output and the seam meet at one documented, fail-closed boundary
