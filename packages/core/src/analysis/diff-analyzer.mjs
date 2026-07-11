@@ -68,9 +68,10 @@ export function analyzeT0(nameStatusOutput) {
   }
 
   const renameOnly = lines.length > 0 && renameCount === lines.length;
-  const allDocs = lines.length > 0 && files.every(
-    (f) => normalizeSep(f).startsWith("docs/") || f.endsWith(".md") || f === "README.md",
-  );
+  // Derive from the shared classifier so this predicate can't drift from it: a
+  // code/config/test file hosted under docs/ is not prose, so a mixed diff that
+  // includes one is not docs-only (it still gets the code-review surface).
+  const allDocs = lines.length > 0 && files.every((f) => classifyFile(f) === "docs");
 
   return {
     files,
@@ -96,9 +97,9 @@ export function classifyFile(filePath) {
   if (fp.startsWith(".github/")) {
     return "ci";
   }
-  if (fp.startsWith("docs/") || fp.endsWith(".md") || fp === "README.md") {
-    return "docs";
-  }
+  // A known code/config/test extension wins over the docs/ directory-prefix
+  // fallback: a code/config/test file hosted under docs/ is still that surface,
+  // not prose. Extension checks run before the prefix fallbacks below.
   if (
     fp.endsWith(".yml") || fp.endsWith(".yaml") ||
     fp.endsWith(".json") || fp === "package.json"
@@ -113,6 +114,9 @@ export function classifyFile(filePath) {
     fp.endsWith(".ts") || fp.endsWith(".mts")
   ) {
     return "code";
+  }
+  if (fp.startsWith("docs/") || fp.endsWith(".md") || fp === "README.md") {
+    return "docs";
   }
   return "unknown";
 }

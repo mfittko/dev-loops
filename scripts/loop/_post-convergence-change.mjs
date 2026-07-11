@@ -7,6 +7,7 @@
 //
 // It lives in scripts/loop/ (not packages/core) because significance is derived
 // from a `gh api .../compare` diff — gh I/O that does not belong in core.
+import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { extractReviewCommitSha, isCopilotLogin, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 
@@ -42,7 +43,12 @@ export function isTrivialDocumentationOnlyPath(filePath) {
   if (typeof filePath !== "string") return true;
   const normalized = filePath.trim().toLowerCase();
   if (normalized.length === 0) return true;
-  if (normalized.startsWith("docs/")) return true;
+  // Route the docs/ judgment through the shared classifier so a code/config/test
+  // file hosted under docs/ is NOT treated as trivial documentation — such a
+  // change must re-open a post-convergence Copilot round, not be suppressed.
+  // Pass the SAME trim+lowercased value the prefix check used: classifyFile is
+  // case/whitespace-sensitive, so classifying the raw input could disagree.
+  if (normalized.startsWith("docs/")) return classifyFile(normalized) === "docs";
   return normalized.endsWith(".md")
     || normalized.endsWith(".mdx")
     || normalized.endsWith(".txt")

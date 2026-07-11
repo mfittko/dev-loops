@@ -43,6 +43,18 @@ test("classifyFile: ci for .github/ paths", () => {
   assert.equal(classifyFile(".github/workflows/verify.yml"), "ci");
 });
 
+test("classifyFile: code/config/test extension under docs/ wins over docs prefix", () => {
+  assert.equal(classifyFile("docs/example.mjs"), "code");
+  assert.equal(classifyFile("docs/fixture.json"), "config");
+  assert.equal(classifyFile("docs/x.test.mjs"), "test");
+});
+
+test("classifyFile: prose extensions under docs/ stay docs", () => {
+  assert.equal(classifyFile("docs/foo.md"), "docs");
+  assert.equal(classifyFile("docs/foo.html"), "docs");
+  assert.equal(classifyFile("docs/foo.css"), "docs");
+});
+
 test("classifyFile: unknown for unrecognized", () => {
   assert.equal(classifyFile("assets/logo.png"), "unknown");
 });
@@ -152,6 +164,17 @@ test("analyzeDiff: T0 unambiguous → no T1, not ambiguous", () => {
   assert.ok(result.t0.allDocs);
   assert.deepEqual(result.t1.changeCategories, ["DOCS_ONLY"]);
   assert.equal(result.ambiguous, false);
+});
+
+test("analyzeDiff: a docs/-hosted code file in a mixed diff is NOT docs-only", () => {
+  // allDocs must track classifyFile: a code file under docs/ keeps the code
+  // review surface even alongside a real prose doc — not suppressed as DOCS_ONLY.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tdocs/example.mjs\nM\tdocs/guide.md",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = 1;\n",
+  });
+  assert.equal(result.t0.allDocs, false);
+  assert.ok(!(result.t1.changeCategories.length === 1 && result.t1.changeCategories[0] === "DOCS_ONLY"));
 });
 
 test("analyzeDiff: T0 ambiguous with diff + logic change → classified, not ambiguous", () => {
