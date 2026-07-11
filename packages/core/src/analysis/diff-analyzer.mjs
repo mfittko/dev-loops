@@ -187,12 +187,15 @@ function isSecuritySensitiveSeamLine(content) {
 
 /**
  * Scan a unified diff for a security-sensitive seam (#1336) on any added/removed
- * LOGIC line. Gated on `!isNonLogicLine` so a comment/docstring/prose line that
- * merely names a primitive (e.g. `child_process` in a doc, `shell: true` in a
- * yaml prompt) does not falsely trigger — a real seam is always executable code.
- * Runs independently of the T0/T1 category path so it also covers a pure-code
- * diff (all files classify as `code`), which is the MOST concentrated seam case
- * (e.g. editing a Playwright/child_process driver) and the one #1336 targets.
+ * LOGIC line of a CODE file. Two gates keep it precise: (1) file-gate — only a
+ * file that `classifyFile()` calls `code` is scanned, so a yaml/markdown/json
+ * line that merely names a primitive (e.g. `shell: true` in a persona prompt, or
+ * `child_process` in a doc) never triggers; (2) `!isNonLogicLine` — within a code
+ * file, a comment/blank line that names a primitive (e.g. `// spawn( a child`)
+ * does not trigger either. Runs independently of the T0/T1 category path so it
+ * also covers a pure-code diff (all files classify as `code`), which is the MOST
+ * concentrated seam case (e.g. editing a Playwright/child_process driver) and the
+ * one #1336 targets.
  *
  * @param {string} diffOutput — raw unified diff output
  * @returns {boolean}

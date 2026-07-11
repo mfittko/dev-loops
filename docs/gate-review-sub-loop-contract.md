@@ -90,7 +90,8 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   always-include addition. This additive path is off by default, so existing configured angle pools
   are unaffected unless a gate explicitly opts in.
 - **Security-sensitive-seam trigger (`threat-model`).** When the change categories include
-  `SECURITY_SENSITIVE_SEAM` — the diff touches browser automation, `child_process`/shell
+  `SECURITY_SENSITIVE_SEAM` — a **code** file's diff (config/doc/markdown lines that merely
+  name a primitive are file-gated out) touches browser automation, `child_process`/shell
   execution, untrusted network fetch, or destructive filesystem / local-file-upload ops — the
   resolver selects the `threat-model` angle (recommended when configured; added from the pool in
   additive mode). It is never dropped for such a diff, regardless of change size. `threat-model` is
