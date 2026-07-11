@@ -1284,7 +1284,13 @@ export function resolveRefinement(config) {
   const stopOnLowSignal = /** @type {boolean} */ (resolveRefinementConfig(config, "stopOnLowSignal"));
   const lowSignalRoundThreshold = /** @type {number} */ (resolveRefinementConfig(config, "lowSignalRoundThreshold"));
   const lowSignalMaxComments = /** @type {number} */ (resolveRefinementConfig(config, "lowSignalMaxComments"));
-  return { fanOut, mode, roles, maxCopilotRounds, stopOnLowSignal, lowSignalRoundThreshold, lowSignalMaxComments };
+  // #1337: centralize the pre-approval CI opt-out here so every caller that
+  // builds its interpreter refinement config from `resolveRefinement(config)`
+  // (detect-copilot-loop-state, copilot-pr-handoff, gate coordination, etc.)
+  // reliably honors `gates.preApproval.requireCi: false` — otherwise a CI-less
+  // repo would still be interpreted as waiting_for_ci / blocked in those tools.
+  const preApprovalRequireCi = resolveGateConfig(config, "preApproval").requireCi;
+  return { fanOut, mode, roles, maxCopilotRounds, stopOnLowSignal, lowSignalRoundThreshold, lowSignalMaxComments, preApprovalRequireCi };
 }
 
 /**

@@ -264,7 +264,7 @@ async function fetchCopilotReviewState(options, runtime) {
     completedCopilotReviewRounds: reviews.completedCopilotReviewRounds,
   };
 }
-async function detectSameHeadCleanConvergence(options, runtime, priorReviewState = {}) {
+async function detectSameHeadCleanConvergence(options, runtime, priorReviewState = {}, refinementConfig = {}) {
   const {
     requested = false,
     prData = null,
@@ -294,7 +294,7 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
       actionableThreadCount: parsedThreads.summary.actionableThreads,
       copilotReviewRoundCount: priorReviewState.completedCopilotReviewRounds ?? 0,
     });
-    const interpretation = interpretLoopState(snapshot);
+    const interpretation = interpretLoopState(snapshot, refinementConfig);
     return interpretation.sameHeadCleanConverged;
   } catch (error) {
     if (runtime?.env?.DEVLOOPS_DEBUG === "1") {
@@ -706,6 +706,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
     options,
     runtime,
     before,
+    refinementConfig,
   );
   if (sameHeadCleanConverged) {
     return withConfigWarning({
