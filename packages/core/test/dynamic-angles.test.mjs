@@ -104,7 +104,8 @@ test("resolveDynamicAngles: LOGIC_CHANGE resolves to core subset, not all angles
 });
 
 // #1336: security-sensitive seam → up-front threat-model angle.
-const SEAM_DRAFT_ANGLES = [...DRAFT_ANGLES, "threat-model"];
+// De-duped so it stays correct if DRAFT_ANGLES is later updated to include threat-model.
+const SEAM_DRAFT_ANGLES = [...new Set([...DRAFT_ANGLES, "threat-model"])];
 
 test("resolveDynamicAngles: SECURITY_SENSITIVE_SEAM selects threat-model (configured)", () => {
   const result = resolveDynamicAngles({
@@ -119,7 +120,9 @@ test("resolveDynamicAngles: SECURITY_SENSITIVE_SEAM selects threat-model (config
 
 test("resolveDynamicAngles: SECURITY_SENSITIVE_SEAM adds threat-model from the pool (additive mode)", () => {
   const result = resolveDynamicAngles({
-    configuredAngles: DRAFT_ANGLES, // threat-model NOT configured
+    // Explicitly exclude threat-model so the additive path is exercised even if
+    // DRAFT_ANGLES is later updated to include it.
+    configuredAngles: DRAFT_ANGLES.filter((a) => a !== "threat-model"),
     changeCategories: [ChangeCategory.SECURITY_SENSITIVE_SEAM],
     anglePool: ["threat-model"],
   });

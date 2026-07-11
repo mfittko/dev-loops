@@ -427,7 +427,7 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   // pure-code diff (single `code` category, T1 skipped) editing a browser/exec/
   // fetch/fs-mutation driver still triggers the up-front threat-model angle — the
   // most concentrated seam case, and the one this feature targets.
-  if (diffHasSecuritySeam(diffOutput) && !t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM")) {
+  if (!t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM") && diffHasSecuritySeam(diffOutput)) {
     t1.changeCategories.push("SECURITY_SENSITIVE_SEAM");
   }
 
