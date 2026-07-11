@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.0.0 - 2026-07-11
+
+**1.0 marks the public surface as stable.** From this release, `dev-loops` follows [semantic versioning](https://semver.org/) for its public API — breaking changes to it bump the major version. See the [Stability section in the README](./README.md#stability) for the full statement.
+
+### Stability
+
+- **The `.devloops` configuration surface is now a semver-stable public API**, as defined by `schemas/dev-loop-config.schema.json`: gate angles, personas, `gates.*` (including each gate's `requireCi` toggle and `gates.preApproval.requireCi`), `refinement.*`, the `uiReview.*` route config, `autonomy.*`, and `workflow.*`. New keys and gate angles are additive (minor); removing or repurposing an existing one is breaking (major).
+- **The public `dev-loop` command/skill surface and the [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md) routing contract** are likewise stable. Internal strategy names, script internals, and undocumented helpers are not part of the stable surface.
+
+### Added
+
+- **`/loop-review-ui` matured to a full running-app review route (ui_review Stages 1–6).** Per-state semantic snapshot (`snapshot.json`, #1297), computed a11y facts via axe-core (`axe.json`, #1298), per-state console + network capture (`console.json`, #1299), viewport + interaction-state encoded in the state slug (#1300, #1331), a lens fan-out with a pure converge/dedupe seam (#1322), and acceptance-criterion traceability with a coverage gate (#1323). Drive-session row tagging so teardown drops exactly the drive-created rows (#1333), plus a GitHub-native gist fallback for artifact hosting (#1332).
+- **CI opt-out at the pre-approval gate (#1337).** `gates.preApproval.requireCi: false` is now honored (default stays `true`), so a repo with no CI can run the loop end-to-end instead of blocking forever at the pre-approval gate — mirroring the draft gate's `requireCi` knob. When false, the CI verdict is ignored entirely at that boundary (including a real failure).
+- **Visual grilling in the loop-grill external-resources step (#1034).** A design gap can reference a screenshot (path or URL) or a Playwright navigation descriptor, captured via a bounded wrapper over the existing ui_review harness — surfaced before the Q&A, fail-closed to `unresolved` on an inaccessible resource.
+- **Harness-aware model-tier policy on the existing models config (#1134)** and a sanctioned `create-issue.mjs` wrapper (#1309).
+
+### Changed
+
+- **Convergence carry-forward (#1326).** A doc/comment-only post-convergence head bump no longer forces a fresh Copilot round; a fail-closed angle carry-forward also skips gate re-review when a head delta doesn't touch the reviewed surface (#1308).
+- **Change-classifier soundness (#1330).** A `docs/`-hosted code/config/test file is now classified by its extension before the `docs/` prefix fallback, so it is never mis-treated as documentation-only.
+
+### Fixed
+
+- **Model-tier role-name collision (#1314)** — gate review angles resolve at the high tier despite a routine-role name collision.
+- **Gate-context build fails closed on a wrong-worktree/degenerate build (#1318);** queue `add` signals `moved: false` when it leaves an already-present item in a different column (#1306); generated `../docs` links shift correctly for `.claude/agents` and `validate-links` scans `.claude/**` (#1290).
+
 ## 0.9.0 - 2026-07-09
 
 The v0.9 headline is the **`/loop-review-ui` epic (#1114)** — a UI-review dev-loop route that proves a change in the running app — plus a batch of loop-hardening and dev-loop self-convention fixes.
