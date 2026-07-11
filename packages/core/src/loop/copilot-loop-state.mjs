@@ -359,6 +359,9 @@ export function applyConfirmedReviewRequest(snapshot, reviewRequestStatus) {
  * @param {number} [refinementConfig.lowSignalRoundThreshold]
  * @param {number} [refinementConfig.lowSignalMaxComments]
  * @param {number} [refinementConfig.maxCopilotRounds]
+ * @param {boolean} [refinementConfig.preApprovalRequireCi] - #1337: default true. When false,
+ *   the pre-approval CI precondition is opted out, so a non-draft PR with a pending/none/failure
+ *   CI verdict is not routed to waiting_for_ci / blocked_needs_user_decision (it is past the draft gate).
  * @returns {{
  *   state: string,
  *   allowedTransitions: string[],

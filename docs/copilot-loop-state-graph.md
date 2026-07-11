@@ -136,6 +136,8 @@ The interpreter applies rules in priority order. The first matching rule wins.
 13. `ciStatus === "pending" || ciStatus === "none"` → `waiting_for_ci`
 14. Default → `pr_ready_no_feedback`
 
+> **Pre-approval CI opt-out (#1337).** Rules 9/10/12/13 above are gated by `refinementConfig.preApprovalRequireCi` (default `true`). When a repo sets `gates.preApproval.requireCi: false`, a non-draft PR (already past the draft gate) treats a `failure`/`pending`/`none` CI verdict as non-blocking, so those four rules are skipped and routing falls through to `ready_to_rerequest_review` (rule 11) / `pr_ready_no_feedback` (rule 14). The draft-gate CI path is unaffected (a draft PR short-circuits to `pr_draft` before these rules).
+
 When rule 11 yields `ready_to_rerequest_review`, the interpreter also emits two behavioral indicators:
 
 - Automatic re-request eligibility — available only when a meaningful remediation event has occurred since the last Copilot review basis (deterministically: there is no submitted Copilot review on the current head).
