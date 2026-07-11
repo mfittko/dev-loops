@@ -115,7 +115,7 @@ gates:
 |---|---|---|---|
 | `angles` | `scope`, `docs` | the full production angle set | A findings doc needs a scope check and a docs check, so the angle set is small and docs-first |
 | `required` | `false` | `true` | The spike's record is the findings doc, so the gate is advisory and the loop proceeds without a passing verdict |
-| `requireCi` | `false` | `true` (pre-approval always requires CI) | A spike produces no production code to run CI against |
+| `requireCi` | `false` | `true` (CI required by default; both gates honor an opt-out via `requireCi: false`) | A spike produces no production code to run CI against |
 
 `gates.spike` resolves through the same config-merge layering and the same `resolveGateConfig(config, "spike")` path as `draft` and `preApproval` (`packages/core/src/config/config.mjs`) — no new strategy→knob resolver. It is `optional()` in the schema (`packages/core/src/config/config.mjs`, `schemas/dev-loop-config.schema.json`) and absent for non-spike work, so production gates are unaffected. A repo `.devloops` can override any of these knobs.
 
