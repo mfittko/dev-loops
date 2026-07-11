@@ -573,6 +573,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const interpreterRepoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   const interpreterConfigResult = await loadDevLoopConfig({ repoRoot: interpreterRepoRoot });
   const interpreterConfigHasErrors = Array.isArray(interpreterConfigResult.errors) && interpreterConfigResult.errors.length > 0;
+  // preApprovalRequireCi (#1337) is resolved centrally inside resolveRefinement,
+  // so the interpreter honors gates.preApproval.requireCi:false here (shared by
+  // detect and upsert via this context builder) without a separate threading step.
   const interpreterRefinementConfig = interpreterConfigHasErrors
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(interpreterConfigResult.config ?? { version: 1 });
@@ -640,6 +643,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const hasConfigErrors = Array.isArray(configLoadResult.errors) && configLoadResult.errors.length > 0;
   const config = hasConfigErrors ? {} : (configLoadResult.config ?? {});
   const draftGateConfig = resolveGateConfig(config, "draft");
+  const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared with interpreterRefinementConfig.maxCopilotRounds in
   // loadPrGateCoordinationContext (#1126: the two must never disagree at the
   // cap boundary) — the same lightweight composition (#1210) is applied here.
@@ -691,6 +695,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
     copilotReviewRequestStatus: context.snapshot?.copilotReviewRequestStatus ?? "none",
     draftGateRequireCi: draftGateConfig.requireCi,
+    preApprovalRequireCi: preApprovalGateConfig.requireCi,
     draftGate: context.gateEvidence.draftGate,
     draftGateMarker: context.gateEvidence.draftGateMarker,
     preApprovalGate: context.gateEvidence.preApprovalGate,

@@ -718,10 +718,12 @@ export function getEffectiveConstraints(steeringState) {
  *
  * @param {object} snapshot - raw or normalized loop snapshot
  * @param {object} steeringState - current steering state for this run
+ * @param {object} [refinementConfig] - interpreter refinement config; pass a config-derived
+ *   `resolveRefinement(config)` so the base interpretation honors gates.preApproval.requireCi:false (#1337).
  * @returns {{ state: string, allowedTransitions: string[], nextAction: string, steeringApplied: boolean, pendingStopAtNextSafeGate: boolean, terminalStopAtNextSafeGate: boolean, effectiveConstraints: object }}
  */
-export function resolveEffectiveLoopState(snapshot, steeringState) {
-  const base = interpretLoopState(snapshot);
+export function resolveEffectiveLoopState(snapshot, steeringState, refinementConfig) {
+  const base = interpretLoopState(snapshot, refinementConfig);
   const constraints = getEffectiveConstraints(steeringState);
   const category = classifySafePoint(base.state);
 

@@ -124,8 +124,11 @@ const GateConfig = z.strictObject({
 
 const GatesConfig = z.strictObject({
   draft: GateConfig.optional(),
-  // `requireCi` is only behaviorally configurable for the draft gate.
-  // preApproval always requires CI even if config repeats `requireCi`.
+  // `requireCi` is honored on both gates: default true keeps CI a precondition,
+  // false is an opt-out escape hatch so a repo with no CI is not held at the
+  // gate. The pre-approval gate mirrors the draft gate's `requireCi` semantics —
+  // when false the CI verdict is ignored entirely at that boundary, including a
+  // real failure (not merely "green optional").
   preApproval: GateConfig.optional(),
   // Relaxed spike gate profile (#965). A spike's deliverable is a findings doc,
   // not production code, so it should not carry the full draft → pre-approval →
@@ -1283,7 +1286,13 @@ export function resolveRefinement(config) {
   const stopOnLowSignal = /** @type {boolean} */ (resolveRefinementConfig(config, "stopOnLowSignal"));
   const lowSignalRoundThreshold = /** @type {number} */ (resolveRefinementConfig(config, "lowSignalRoundThreshold"));
   const lowSignalMaxComments = /** @type {number} */ (resolveRefinementConfig(config, "lowSignalMaxComments"));
-  return { fanOut, mode, roles, maxCopilotRounds, stopOnLowSignal, lowSignalRoundThreshold, lowSignalMaxComments };
+  // #1337: centralize the pre-approval CI opt-out here so every caller that
+  // builds its interpreter refinement config from `resolveRefinement(config)`
+  // (detect-copilot-loop-state, copilot-pr-handoff, gate coordination, etc.)
+  // reliably honors `gates.preApproval.requireCi: false` — otherwise a CI-less
+  // repo would still be interpreted as waiting_for_ci / blocked in those tools.
+  const preApprovalRequireCi = resolveGateConfig(config, "preApproval").requireCi;
+  return { fanOut, mode, roles, maxCopilotRounds, stopOnLowSignal, lowSignalRoundThreshold, lowSignalMaxComments, preApprovalRequireCi };
 }
 
 /**

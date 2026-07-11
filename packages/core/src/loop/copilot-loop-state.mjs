@@ -359,6 +359,9 @@ export function applyConfirmedReviewRequest(snapshot, reviewRequestStatus) {
  * @param {number} [refinementConfig.lowSignalRoundThreshold]
  * @param {number} [refinementConfig.lowSignalMaxComments]
  * @param {number} [refinementConfig.maxCopilotRounds]
+ * @param {boolean} [refinementConfig.preApprovalRequireCi] - #1337: default true. When false,
+ *   the pre-approval CI precondition is opted out, so a non-draft PR with a pending/none/failure
+ *   CI verdict is not routed to waiting_for_ci / blocked_needs_user_decision (it is past the draft gate).
  * @returns {{
  *   state: string,
  *   allowedTransitions: string[],
@@ -370,6 +373,17 @@ export function applyConfirmedReviewRequest(snapshot, reviewRequestStatus) {
  */
 export function interpretLoopState(snapshot, refinementConfig) {
   const s = normalizeSnapshot(snapshot);
+
+  // Pre-approval CI opt-out (#1337): when `gates.preApproval.requireCi` is false,
+  // the CI verdict must not gate progression at the pre-approval boundary. A
+  // non-draft PR is past the draft gate, so this is the applicable knob — treat
+  // pending/none/failure CI as non-blocking here so a repo with no CI is not
+  // routed to WAITING_FOR_CI / BLOCKED_NEEDS_USER_DECISION before the downstream
+  // gate-coordination guards (which already honor this flag) are ever reached.
+  // Default true preserves current behavior for every caller that does not thread it.
+  const preApprovalRequireCi = refinementConfig?.preApprovalRequireCi !== false;
+  const ciBlocks = preApprovalRequireCi && isBlockedCiStatus(s.ciStatus);
+  const ciWaits = preApprovalRequireCi && isWaitingCiStatus(s.ciStatus);
 
   let state;
 
@@ -421,7 +435,7 @@ export function interpretLoopState(snapshot, refinementConfig) {
       && state !== STATE.NO_PR && state !== STATE.DONE
       && state !== STATE.PR_DRAFT && state !== STATE.REVIEW_REQUEST_UNAVAILABLE
       && state !== STATE.BLOCKED_NEEDS_USER_DECISION) {
-    const ciClean = s.ciStatus === "success" || s.ciStatus === "crediblyGreen";
+    const ciClean = s.ciStatus === "success" || s.ciStatus === "crediblyGreen" || !preApprovalRequireCi;
     const cleanThreads = s.unresolvedThreadCount === 0;
     if (cleanThreads && ciClean) {
       // Clean PR at the cap: proceed to the pre_approval_gate fallback regardless of a
@@ -448,18 +462,18 @@ export function interpretLoopState(snapshot, refinementConfig) {
       state = STATE.WAITING_FOR_COPILOT_REVIEW;
     } else if (s.copilotReviewPresent) {
       // Copilot has reviewed at least once; all threads resolved
-      if (isBlockedCiStatus(s.ciStatus)) {
+      if (ciBlocks) {
         state = STATE.BLOCKED_NEEDS_USER_DECISION;
-      } else if (isWaitingCiStatus(s.ciStatus)) {
+      } else if (ciWaits) {
         state = STATE.WAITING_FOR_CI;
       } else {
         state = STATE.READY_TO_REREQUEST_REVIEW;
       }
     } else {
       // No Copilot review yet; not currently requested
-      if (isBlockedCiStatus(s.ciStatus)) {
+      if (ciBlocks) {
         state = STATE.BLOCKED_NEEDS_USER_DECISION;
-      } else if (isWaitingCiStatus(s.ciStatus)) {
+      } else if (ciWaits) {
         state = STATE.WAITING_FOR_CI;
       } else {
         state = STATE.PR_READY_NO_FEEDBACK;

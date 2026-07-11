@@ -10,6 +10,8 @@ import {
   interpretReviewerLoopState,
   normalizeReviewerSnapshot,
 } from "@dev-loops/core/loop/reviewer-loop-state";
+import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
+import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 export async function loadCopilotEvidence({ repo, pr, copilotInputPath }, { env = process.env, ghCommand = "gh" } = {}) {
   let snapshot;
   if (copilotInputPath !== undefined) {
@@ -18,7 +20,19 @@ export async function loadCopilotEvidence({ repo, pr, copilotInputPath }, { env 
   } else {
     snapshot = await autoDetectCopilotSnapshot({ repo, pr }, { env, ghCommand });
   }
-  return { snapshot, interpretation: interpretLoopState(snapshot) };
+  // Resolve the interpreter refinement config so the loop-state interpretation
+  // honors gates.preApproval.requireCi:false (#1337) — outer-loop routes the
+  // conductor on this interpretation, so a CI-less repo must not be read as
+  // waiting_for_ci here. Fail soft to defaults if config cannot be loaded.
+  let refinementConfig;
+  try {
+    const loaded = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
+    const config = Array.isArray(loaded?.errors) && loaded.errors.length > 0 ? { version: 1 } : (loaded?.config ?? { version: 1 });
+    refinementConfig = resolveRefinement(config);
+  } catch {
+    refinementConfig = undefined;
+  }
+  return { snapshot, interpretation: interpretLoopState(snapshot, refinementConfig) };
 }
 export async function loadReviewerEvidence({ repo, pr, reviewerLogin, reviewerInputPath }, { env = process.env, ghCommand = "gh" } = {}) {
   let snapshot;

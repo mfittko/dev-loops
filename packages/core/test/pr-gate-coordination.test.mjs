@@ -2443,3 +2443,62 @@ test("UI e2e fail-closed: registered artifact without passing coverage blocks", 
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE);
   assert.match(result.reason, /not passed for this head/);
 });
+
+test("preApproval requireCi:false + zero-check CI (none) reaches the pre_approval boundary instead of waiting", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1337,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "none",
+    preApprovalRequireCi: false,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.WAIT_FOR_CI));
+});
+
+test("preApproval requireCi default + zero-check CI (none) still waits on CI", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1337,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "none",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.lifecycleState, STATE.WAITING_FOR_CI);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.WAIT_FOR_CI));
+});
+
+test("preApproval requireCi:false ignores a real CI failure at the pre_approval boundary", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1337,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "failure",
+    preApprovalRequireCi: false,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.notEqual(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+});

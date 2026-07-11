@@ -1845,6 +1845,21 @@ describe("role resolution", () => {
       assert.equal(result.stopOnLowSignal, false);
       assert.equal(result.lowSignalRoundThreshold, 3);
       assert.equal(result.lowSignalMaxComments, 2);
+      assert.equal(result.preApprovalRequireCi, true);
+    });
+
+    test("resolveRefinement centralizes preApprovalRequireCi (#1337) from gates.preApproval.requireCi", () => {
+      // Default true; explicit false is surfaced so every interpretLoopState caller
+      // that builds refinement from resolveRefinement(config) honors the opt-out.
+      assert.equal(resolveRefinement({ version: 1 }).preApprovalRequireCi, true);
+      assert.equal(
+        resolveRefinement({ version: 1, gates: { preApproval: { requireCi: false } } }).preApprovalRequireCi,
+        false,
+      );
+      assert.equal(
+        resolveRefinement({ version: 1, gates: { preApproval: { requireCi: true } } }).preApprovalRequireCi,
+        true,
+      );
     });
 
     test("resolveRefinement returns configured values", () => {

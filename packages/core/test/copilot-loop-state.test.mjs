@@ -225,6 +225,46 @@ test("interpretLoopState routes into unresolved_feedback_present when threads ex
     "must not include waiting_for_copilot_review when unresolved threads exist");
 });
 
+// ---------------------------------------------------------------------------
+// Pre-approval CI opt-out (#1337): the interpreter — the state selector the real
+// gate-coordination path uses — must honor preApprovalRequireCi so a non-draft
+// converged zero-CI/failing-CI PR is not dead-ended at WAITING_FOR_CI / BLOCKED
+// before the (already flag-gated) downstream guards are reached.
+// ---------------------------------------------------------------------------
+
+const convergedZeroCiSnapshot = (ciStatus) => ({
+  prExists: true,
+  prNumber: 1337,
+  prDraft: false,
+  copilotReviewRequestStatus: "none",
+  copilotReviewPresent: true,
+  unresolvedThreadCount: 0,
+  actionableThreadCount: 0,
+  ciStatus,
+});
+
+test("interpretLoopState with preApprovalRequireCi:false routes zero-check CI (none) to ready, not waiting_for_ci", () => {
+  const result = interpretLoopState(convergedZeroCiSnapshot("none"), { preApprovalRequireCi: false });
+  assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
+  assert.notEqual(result.state, STATE.WAITING_FOR_CI);
+});
+
+test("interpretLoopState default (no flag) still routes zero-check CI (none) to waiting_for_ci", () => {
+  const result = interpretLoopState(convergedZeroCiSnapshot("none"));
+  assert.equal(result.state, STATE.WAITING_FOR_CI);
+});
+
+test("interpretLoopState with preApprovalRequireCi:false ignores a real CI failure (not blocked)", () => {
+  const result = interpretLoopState(convergedZeroCiSnapshot("failure"), { preApprovalRequireCi: false });
+  assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
+  assert.notEqual(result.state, STATE.BLOCKED_NEEDS_USER_DECISION);
+});
+
+test("interpretLoopState default (no flag) still blocks on a real CI failure", () => {
+  const result = interpretLoopState(convergedZeroCiSnapshot("failure"));
+  assert.equal(result.state, STATE.BLOCKED_NEEDS_USER_DECISION);
+});
+
 test("interpretLoopState routes into unresolved_feedback_present when threads exist regardless of request status", () => {
   for (const status of ["requested", "already-requested", "none"]) {
     const result = interpretLoopState({

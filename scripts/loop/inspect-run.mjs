@@ -22,6 +22,8 @@ import {
   STEERING_KIND,
 } from "@dev-loops/core/loop/steering";
 import { validateSteeringStateTarget } from "./_steering-state-file.mjs";
+import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
+import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: inspect-run.mjs --repo <owner/name> --pr <number>
@@ -243,6 +245,16 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
     copilot: copilotInputPath !== undefined ? "input" : "live",
     reviewer: reviewerInputPath !== undefined ? "input" : "live",
   };
+  // Resolve interpreter refinement so the steering re-interpretation below honors
+  // gates.preApproval.requireCi:false (#1337) for a CI-less repo; fail soft to defaults.
+  let refinementConfig;
+  try {
+    const loaded = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
+    const config = Array.isArray(loaded?.errors) && loaded.errors.length > 0 ? { version: 1 } : (loaded?.config ?? { version: 1 });
+    refinementConfig = resolveRefinement(config);
+  } catch {
+    refinementConfig = undefined;
+  }
   let copilotEvidence = null;
   let copilotLiveStatus = "failed";
   try {
@@ -332,7 +344,7 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
       } else {
         const steeringStatus = getSteeringStatus(steeringEvidence);
         const resolved = copilotEvidence !== null
-          ? resolveEffectiveLoopState(copilotEvidence.snapshot, steeringEvidence)
+          ? resolveEffectiveLoopState(copilotEvidence.snapshot, steeringEvidence, refinementConfig)
           : null;
         const queuedStopAtNextSafeGate = steeringEvidence.queuedEvents.some(
           (event) => event.kind === STEERING_KIND.STOP_AT_NEXT_SAFE_GATE,

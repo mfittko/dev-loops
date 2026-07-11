@@ -1009,6 +1009,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
     copilotReviewRequestStatus: coordinationContext.snapshot?.copilotReviewRequestStatus ?? "none",
     draftGateRequireCi: draftGateConfig.requireCi,
+    preApprovalRequireCi: preApprovalGateConfig.requireCi,
     draftGate: coordinationContext.gateEvidence.draftGate,
     draftGateMarker: coordinationContext.gateEvidence.draftGateMarker,
     refinementArtifact: coordinationContext.refinementArtifact,
