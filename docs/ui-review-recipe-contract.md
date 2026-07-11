@@ -183,8 +183,9 @@ allowlisted flow. The selection is capped and any overflow logged.
   own reviewable directory. The viewport is **sticky**: it persists to later steps
   until another step sets one, and an omitted `viewport` inherits the last set size
   rather than resetting to default — so a later step's slug faithfully reflects the
-  size the page is actually at. Set `viewport` explicitly on the first step that
-  should return to the default dimensions.
+  size the page is actually at. There is no reset sentinel: to render a later step
+  at a different size (or back at the original one), give that step an explicit
+  `viewport` with the exact dimensions you want.
 - `uiReview.flows[].steps[].interactionState` — optional `none`/`focus`/`hover`/`error`;
   labels a stateful render the route names, slugged into its own directory.
 
