@@ -56,6 +56,27 @@ export const MAX_DESCRIPTOR_STEPS = 50;
 // rejected along with any unknown/missing action.
 export const SAFE_STEP_ACTIONS = new Set(["goto", "click", "fill", "select", "dispatch"]);
 
+// The safety rules for a descriptor's steps: a non-empty array within the cap, and
+// only allowlisted actions. Returns a reason on violation or null when safe. This
+// is the single source of the rules, enforced BOTH at the parse entry (throws) and
+// at the exported capture entry (fail-closed envelope), so a programmatic caller
+// that bypasses parseDescriptor still cannot drive an unsafe action or launch on a
+// malformed descriptor.
+export function validateDescriptorSteps(steps) {
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return "descriptor must carry a non-empty `steps` array";
+  }
+  if (steps.length > MAX_DESCRIPTOR_STEPS) {
+    return `descriptor exceeds the ${MAX_DESCRIPTOR_STEPS}-step cap (${steps.length} steps)`;
+  }
+  for (const step of steps) {
+    if (!SAFE_STEP_ACTIONS.has(step?.action)) {
+      return `unsupported step action "${String(step?.action)}" (allowed: ${[...SAFE_STEP_ACTIONS].join(", ")})`;
+    }
+  }
+  return null;
+}
+
 // Only http/https navigation is allowed. A goto `path` that is absolute overrides
 // the app base, so validate the RESOLVED URL, not the raw path: this rejects
 // file:/data:/javascript:/about: (which could screenshot local file contents into
@@ -161,16 +182,9 @@ export function parseDescriptor(raw, { readFileSync } = {}) {
   if (!descriptor || typeof descriptor.name !== "string" || descriptor.name.trim().length === 0) {
     throw new Error("descriptor must carry a non-empty string `name`");
   }
-  if (!Array.isArray(descriptor.steps) || descriptor.steps.length === 0) {
-    throw new Error("descriptor must carry a non-empty `steps` array");
-  }
-  if (descriptor.steps.length > MAX_DESCRIPTOR_STEPS) {
-    throw new Error(`descriptor exceeds the ${MAX_DESCRIPTOR_STEPS}-step cap (${descriptor.steps.length} steps)`);
-  }
-  for (const step of descriptor.steps) {
-    if (!SAFE_STEP_ACTIONS.has(step?.action)) {
-      throw new Error(`unsupported step action "${String(step?.action)}" (allowed: ${[...SAFE_STEP_ACTIONS].join(", ")})`);
-    }
+  const stepsReason = validateDescriptorSteps(descriptor.steps);
+  if (stepsReason) {
+    throw new Error(stepsReason);
   }
   return descriptor;
 }
@@ -206,6 +220,14 @@ export async function captureDescriptorScreen(
   // can prune a half-walked intermediate too.
   let last = null;
   try {
+    // Self-validate the steps even though runCli parses first: this entry is
+    // exported, so a programmatic caller could bypass parseDescriptor. Reject an
+    // unsafe/malformed descriptor (non-array steps, over cap, `upload`/unknown
+    // action) BEFORE launching a browser.
+    const stepsReason = validateDescriptorSteps(descriptor?.steps);
+    if (stepsReason) {
+      return { ok: false, screenshotPath: null, statePath: null, stopReason: stepsReason };
+    }
     // Validate navigation BEFORE launching a browser, so a file:// / cross-origin
     // goto is rejected without ever opening a page.
     const nav = validateNavigation({ appUrl, steps: descriptor.steps });

@@ -113,6 +113,27 @@ test("captureDescriptorScreen: a throwing browser.close() teardown does not reje
   assert.equal(result.stopReason, null);
 });
 
+test("captureDescriptorScreen: self-validates steps (bypassed parseDescriptor) and rejects upload/non-array before any launch", async () => {
+  let launched = false;
+  const launchBrowser = () => { launched = true; return fakeBrowser(fakePage()); };
+  const base = { repoRoot: "/r", appUrl: "http://app.test", outputDir: tempDir() };
+  // A programmatic caller bypassing parseDescriptor passes an `upload` action.
+  const uploadResult = await captureDescriptorScreen(
+    { ...base, descriptor: { name: "x", steps: [{ action: "upload", selector: "#f", value: "/etc/passwd" }] } },
+    { loadConfig: async () => ({ config: {} }), launchBrowser },
+  );
+  assert.equal(uploadResult.ok, false);
+  assert.match(uploadResult.stopReason, /unsupported step action "upload"/);
+  // A non-array steps must also fail closed before launch.
+  const badShape = await captureDescriptorScreen(
+    { ...base, descriptor: { name: "x", steps: "nope" } },
+    { loadConfig: async () => ({ config: {} }), launchBrowser },
+  );
+  assert.equal(badShape.ok, false);
+  assert.match(badShape.stopReason, /non-empty `steps` array/);
+  assert.equal(launched, false, "no browser is launched for an unsafe/malformed descriptor");
+});
+
 test("captureDescriptorScreen: a browser launch failure (runner unavailable) fails closed with a reason", async () => {
   const result = await captureDescriptorScreen(
     { repoRoot: "/r", appUrl: "http://app.test", outputDir: tempDir(), descriptor: { name: "s", steps: [{ action: "goto", path: "/" }] } },
