@@ -180,7 +180,11 @@ allowlisted flow. The selection is capped and any overflow logged.
 - `uiReview.flows[].steps[].event` — optional event name for `dispatch`.
 - `uiReview.flows[].steps[].viewport` — optional `{ width, height }`; resizes the
   page before the step and slugs the capture so a responsive render lands in its
-  own reviewable directory.
+  own reviewable directory. The viewport is **sticky**: it persists to later steps
+  until another step sets one, and an omitted `viewport` inherits the last set size
+  rather than resetting to default — so a later step's slug faithfully reflects the
+  size the page is actually at. Set `viewport` explicitly on the first step that
+  should return to the default dimensions.
 - `uiReview.flows[].steps[].interactionState` — optional `none`/`focus`/`hover`/`error`;
   labels a stateful render the route names, slugged into its own directory.
 
