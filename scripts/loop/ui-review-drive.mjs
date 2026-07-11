@@ -246,7 +246,7 @@ export function openServerLogTail(logPath, { maxBytes = SERVER_LOG_TAIL_MAX_BYTE
 /** Drive the dev-login recipe in the browser and confirm the session by waiting
  * for `successSelector`. Fail closed: any timeout/throw => {ok:false} with a
  * stated reason, so the core STOPS rather than driving an unauthenticated app. */
-async function authenticate({ page, login, timeoutMs = 15000 }) {
+export async function authenticate({ page, login, timeoutMs = 15000 }) {
   try {
     await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
     if (login.usernameSelector && login.usernameValue != null) {
@@ -266,7 +266,7 @@ async function authenticate({ page, login, timeoutMs = 15000 }) {
 /** Dismiss config-declared interstitials once, best-effort: an interstitial that
  * never appears or is not clickable is skipped silently so one stubborn overlay
  * can't abort the walk. */
-async function dismissInterstitials({ page, interstitials, timeoutMs = 2000 }) {
+export async function dismissInterstitials({ page, interstitials, timeoutMs = 2000 }) {
   const dismissed = [];
   for (const it of interstitials ?? []) {
     try {
