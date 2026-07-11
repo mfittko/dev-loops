@@ -240,7 +240,7 @@
         "requireCi": {
           "type": "boolean",
           "default": true,
-          "description": "Draft gate CI prerequisite toggle. preApproval remains CI-gated regardless of this flag."
+          "description": "Per-gate CI prerequisite toggle (default true). When true the gate requires green current-head CI; set false to opt that gate out of the CI precondition. Honored on both the draft and pre-approval gates — on the pre-approval gate a false value ignores the CI verdict entirely (including a real failure)."
         },
         "blockCleanOnFindingSeverities": {
           "type": "array",

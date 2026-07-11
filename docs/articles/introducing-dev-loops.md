@@ -92,7 +92,7 @@ autonomy:
   humanMergeOnly: true    # the loop prepares and reports ready; a person merges
 ```
 
-Three choices shape the experience. Work can start **local-first** — you write a short plan in the repository and the loop opens a pull request straight from it, with no issue to file — or **github-first**, where a tracked issue is the starting point. The review round can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; out of the box, it stops and hands the merge to you. Begin with the defaults and dial each setting toward the autonomy your team is comfortable with.
+Three choices shape the experience. Work can start **local-first** — you write a short plan in the repository and the loop opens a pull request straight from it, with no issue to file — or **github-first**, where a tracked issue is the starting point. The review round can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; out of the box, it stops and hands the merge to you. Begin with the defaults and dial each setting toward the autonomy your team is comfortable with. As of 1.0 this configuration surface is stable — it follows semantic versioning, so a `.devloops` file you write today keeps working across minor upgrades.
 
 ## Where to go deeper
 
