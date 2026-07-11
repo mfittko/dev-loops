@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 
 ### Stability
 
-- **The `.devloops` configuration surface is now a semver-stable public API**, as defined by `schemas/dev-loop-config.schema.json`: gate angles, personas, `gates.*` (including each gate's `requireCi` toggle and `gates.preApproval.requireCi`), `refinement.*`, the `uiReview.*` route config, `autonomy.*`, and `workflow.*`. New keys and gate angles are additive (minor); removing or repurposing an existing one is breaking (major).
+- **The `.devloops` configuration surface is now a semver-stable public API** (validated by the config loader in `packages/core/src/config/config.mjs`; `schemas/dev-loop-config.schema.json` documents the common keys): gate angles, personas, `gates.*` (including each gate's `requireCi` toggle and `gates.preApproval.requireCi`), `refinement.*`, the `uiReview.*` route config, `autonomy.*`, and `workflow.*`. New keys and gate angles are additive (minor); removing or repurposing an existing one is breaking (major).
 - **The public `dev-loop` command/skill surface and the [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md) routing contract** are likewise stable. Internal strategy names, script internals, and undocumented helpers are not part of the stable surface.
 
 ### Added
