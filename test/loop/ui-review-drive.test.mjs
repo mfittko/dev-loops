@@ -20,6 +20,7 @@ import {
   makeRunStep,
   openServerLogTail,
   toPerStateConsolePayload,
+  runCli,
 } from "../../scripts/loop/ui-review-drive.mjs";
 
 // A fake page for the real makeRunStep wiring: the emitter interface
@@ -410,6 +411,28 @@ test("driveUiReview: no driveSession => driveSession null and an empty manifest 
     { appUrl: "http://app", login: {}, flows: [{ name: "f", steps: [{ name: "save", action: "click", selector: "#s" }] }] },
     baseSeams(),
   );
+  assert.equal(r.driveSession, null);
+  assert.deepEqual(r.rowManifest, []);
+});
+
+test("runCli: no uiReview.login recipe still emits the stable envelope shape (driveSession null, empty manifest)", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "drive-norecipe-"));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(
+    path.join(dir, ".devloops.json"),
+    JSON.stringify({ version: 1, uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz" } } }),
+  );
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  await runCli(["--repo-root", dir, "--app-url", "http://127.0.0.1:4000", "--output-dir", path.join(dir, "out")], { stdout, stderr });
+  process.exitCode = 0;
+
+  const r = JSON.parse(out);
+  assert.equal(r.ok, false);
+  assert.equal(r.stopped, true);
+  // The documented envelope keys are present on the fail-closed early return too,
+  // so a downstream consumer sees a stable shape regardless of failure mode.
   assert.equal(r.driveSession, null);
   assert.deepEqual(r.rowManifest, []);
 });

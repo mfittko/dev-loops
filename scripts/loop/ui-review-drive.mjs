@@ -365,6 +365,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       failures: [{ kind: "drive-recipe-missing", severity: "must-fix", message: "declare uiReview.login (loginUrl + submitSelector + successSelector) in .devloops" }],
       caps: {},
       appUrl: options.appUrl ?? null,
+      // Keep the envelope shape stable across every return path: no drive ran, so
+      // there is no session and nothing to tag.
+      driveSession: null,
+      rowManifest: [],
       logs: [],
     };
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
