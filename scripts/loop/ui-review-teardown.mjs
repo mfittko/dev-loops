@@ -19,6 +19,7 @@ import { readFileSync, statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { loadDevLoopConfig, resolveUiReviewRunRecipe } from "@dev-loops/core/config";
 import { teardown } from "@dev-loops/core/loop/ui-review-teardown";
 import { cleanupWorktree } from "./cleanup-worktree.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -229,6 +230,54 @@ async function deleteGist({ id }, { run = runChild } = {}) {
   return { ok: false, detail: `gh gist delete exit ${res.code}: ${res.stderr?.trim() || "no stderr"}` };
 }
 
+/** The single drive-session id every manifest row shares, or null. Fails closed
+ * on an absent OR mixed session — the delete targets one session, so an ambiguous
+ * or untagged manifest must never drop (better a "may remain" than a wrong scope). */
+function sessionFromManifest(rows) {
+  const ids = new Set();
+  for (const r of rows ?? []) {
+    const s = typeof r?.session === "string" ? r.session.trim() : "";
+    if (s.length > 0) ids.add(s);
+  }
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
+/** Drop the dev-DB rows a drive tagged with its session, via the project's
+ * `uiReview.run.rowTeardown.deleteCommand`. The shared session id is passed in
+ * UI_REVIEW_DRIVE_SESSION and the command runs in the provisioned worktree (dev
+ * DB). Fail closed: no delete recipe, or a manifest with no single session, drops
+ * nothing and says why — the core maps that to a drop failure, never a silent
+ * no-op or a wrong-scope delete. */
+async function dropRows({ rows }, { deleteCommand, cwd, run = runChild }) {
+  if (!deleteCommand) {
+    return { ok: false, dropped: 0, detail: "no uiReview.run.rowTeardown.deleteCommand configured; cannot drop tagged rows" };
+  }
+  const session = sessionFromManifest(rows);
+  if (!session) {
+    return { ok: false, dropped: 0, detail: "manifest rows carry no single drive-session tag; refusing to drop (ambiguous target)" };
+  }
+  const env = { ...process.env, UI_REVIEW_DRIVE_SESSION: session };
+  // POSIX single-quote the cwd — it is interpolated into a shell `cd`, and a
+  // git-branch-derived worktree path may carry `$()`/backtick command-
+  // substitution chars that would otherwise execute during a confirmed teardown.
+  const quotedCwd = `'${cwd.replace(/'/g, "'\\''")}'`;
+  const res = await run("sh", ["-c", `cd ${quotedCwd} && ${deleteCommand}`], env);
+  if (res.code === 0) {
+    // `dropped` is the number of manifested mutating steps requested for deletion,
+    // not a confirmed DB-row count — the by-session deleteCommand returns none.
+    return { ok: true, dropped: rows.length, detail: `requested deletion of rows tagged ${session} (${rows.length} manifested step(s)) via rowTeardown.deleteCommand` };
+  }
+  return { ok: false, dropped: 0, detail: `rowTeardown.deleteCommand exit ${res.code}: ${res.stderr?.trim() || "no stderr"}` };
+}
+
+/** Resolve the project's row-delete command from the (worktree) config. Loaded
+ * lazily — only when a confirmed manifest actually needs dropping — so a teardown
+ * with no rows never reads config. */
+async function resolveDeleteCommand(repoRoot) {
+  const { config } = await loadDevLoopConfig({ repoRoot });
+  return resolveUiReviewRunRecipe(config)?.rowTeardown?.deleteCommand ?? null;
+}
+
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, run = runChild } = {}) {
   const options = parseUiReviewTeardownCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return; }
@@ -237,6 +286,12 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const driveResult = readResultJson(options.driveResult);
   const reportResult = readResultJson(options.reportResult);
   const rowManifest = readRowManifest(options.rowManifest);
+
+  // The row-delete command lives in the branch's (worktree) config; fall back to
+  // the primary checkout when no worktree path was captured. The dev DB the
+  // command targets is the worktree's, so the command runs there.
+  const rawWorktreePath = provisionResult?.worktreePath;
+  const dropCwd = typeof rawWorktreePath === "string" && rawWorktreePath.trim().length > 0 ? rawWorktreePath : options.repoRoot;
 
   const result = await teardown(
     {
@@ -250,12 +305,11 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     {
       killProcess,
       deleteGist: (a) => deleteGist(a, { run }),
-      // No real drop seam yet: Stage 2 does not tag rows, so an actual manifest
-      // never arrives today and the ledger reports "may remain (untagged)". A
-      // manifest handed in is dropped by whatever project mechanism supplies it;
-      // until one exists, a confirmed manifest is a hard fail-closed error rather
-      // than a silent no-op, so a caller can never think rows were dropped.
-      dropRows: () => Promise.resolve({ ok: false, dropped: 0, detail: "no row-drop mechanism wired: dev-DB rows are untagged (Stage 2 does not tag rows); cannot drop a manifest safely" }),
+      // The Stage-2 drive stamps each mutating step with its drive-session id and
+      // emits a manifest; this seam deletes exactly the rows the app tagged with
+      // that session via the project's rowTeardown.deleteCommand. The delete
+      // command is resolved lazily (only a confirmed manifest reaches this seam).
+      dropRows: async (a) => dropRows(a, { deleteCommand: await resolveDeleteCommand(dropCwd), cwd: dropCwd, run }),
       removeWorktree: (a) => removeWorktree(options.repoRoot, a),
       log: (msg) => stderr.write(`[ui-review-teardown] ${msg}\n`),
     },

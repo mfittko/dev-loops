@@ -379,6 +379,41 @@ test("driveUiReview: caps a flow at maxStepsPerFlow and logs the truncation", as
   assert.ok(logs.some((m) => /maxStepsPerFlow cap \(2\)/.test(m)), "the step truncation is logged");
 });
 
+test("driveUiReview: emits a session-stamped row manifest for the mutating steps it drove (goto/fill excluded)", async () => {
+  const r = await driveUiReview(
+    {
+      appUrl: "http://app",
+      login: {},
+      driveSession: "sess-abc",
+      flows: [{
+        name: "create widget",
+        steps: [
+          { name: "open", action: "goto", path: "/widgets/new" },   // navigation — not a mutation
+          { name: "name", action: "fill", selector: "#name" },        // typing — not a mutation
+          { name: "save", action: "click", selector: "button[type=submit]" }, // create
+          { name: "logo", action: "upload", selector: "#logo", value: "/f.png" }, // upload
+        ],
+      }],
+    },
+    baseSeams(),
+  );
+  assert.equal(r.driveSession, "sess-abc");
+  // Exactly the two mutating steps are manifested, each stamped with the session.
+  assert.deepEqual(r.rowManifest, [
+    { session: "sess-abc", flow: "create widget", step: "save", action: "click" },
+    { session: "sess-abc", flow: "create widget", step: "logo", action: "upload" },
+  ]);
+});
+
+test("driveUiReview: no driveSession => driveSession null and an empty manifest (nothing to drop)", async () => {
+  const r = await driveUiReview(
+    { appUrl: "http://app", login: {}, flows: [{ name: "f", steps: [{ name: "save", action: "click", selector: "#s" }] }] },
+    baseSeams(),
+  );
+  assert.equal(r.driveSession, null);
+  assert.deepEqual(r.rowManifest, []);
+});
+
 test("driveUiReview: collates a swallowed error response from the injected listener + log tail", async () => {
   const r = await driveUiReview(
     { appUrl: "http://app", login: {}, flows: [{ name: "f", steps: [{ name: "save", action: "click" }] }], serverLogExceptionPattern: DEFAULT_SERVER_LOG_EXCEPTION_PATTERN },

@@ -282,6 +282,18 @@ const UiReviewMigrateConfig = z.strictObject({
 });
 
 /**
+ * Per-project dev-DB row-teardown recipe (Stage 5). The drive stamps each
+ * mutating step it drives with a drive-session id (advertised to the app on the
+ * DRIVE_SESSION_HEADER request header); this `deleteCommand` deletes exactly the
+ * rows the app tagged with that session — the id is passed in the
+ * UI_REVIEW_DRIVE_SESSION env var and the command runs in the provisioned
+ * worktree (dev DB only). Teardown runs it only on explicit confirmation.
+ */
+const UiReviewRowTeardownConfig = z.strictObject({
+  deleteCommand: z.string().trim().min(1),
+});
+
+/**
  * Per-project boot recipe: a shell `command` that starts the branch's app and a
  * `readyUrl` an HTTP readiness probe polls until the app is up (never a fixed
  * sleep). No app is hard-coded — a project declares its own recipe. `cwd` is an
@@ -305,6 +317,7 @@ const UiReviewRunConfig = z.strictObject({
   readyIntervalMs: z.number().int().min(1).max(60000).default(1000),
   cwd: z.string().trim().min(1).optional(),
   migrate: UiReviewMigrateConfig.optional(),
+  rowTeardown: UiReviewRowTeardownConfig.optional(),
 });
 
 /**
@@ -1729,7 +1742,8 @@ export const DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN =
  * @param {DevLoopConfig} config
  * @returns {null | { command: string, readyUrl: string, readyTimeoutMs: number,
  *   readyIntervalMs: number, cwd: string|null,
- *   migrate: null | { statusCommand: string, applyCommand: string, destructivePattern: string } }}
+ *   migrate: null | { statusCommand: string, applyCommand: string, destructivePattern: string },
+ *   rowTeardown: null | { deleteCommand: string } }}
  */
 export function resolveUiReviewRunRecipe(config) {
   const run = config?.uiReview?.run;
@@ -1742,6 +1756,10 @@ export function resolveUiReviewRunRecipe(config) {
         destructivePattern: run.migrate.destructivePattern ?? DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN,
       }
     : null;
+  const rowTeardown =
+    run.rowTeardown && typeof run.rowTeardown.deleteCommand === "string" && run.rowTeardown.deleteCommand.trim().length > 0
+      ? { deleteCommand: run.rowTeardown.deleteCommand.trim() }
+      : null;
   return {
     command: run.command.trim(),
     readyUrl: run.readyUrl.trim(),
@@ -1749,6 +1767,7 @@ export function resolveUiReviewRunRecipe(config) {
     readyIntervalMs: Number.isInteger(run.readyIntervalMs) ? run.readyIntervalMs : 1000,
     cwd: typeof run.cwd === "string" && run.cwd.trim().length > 0 ? run.cwd.trim() : null,
     migrate,
+    rowTeardown,
   };
 }
 

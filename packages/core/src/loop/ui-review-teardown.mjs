@@ -2,7 +2,7 @@
  * Teardown + side-effect ledger orchestrator for the ui_review route (Stage 5).
  *
  * Terminal cleanup for a running-app review: stop the app booted in Stage 1,
- * drop the dev-DB rows the Stage-2 drive created, and remove the provisioned
+ * drop the dev-DB rows the Stage-2 drive tagged, and remove the provisioned
  * worktree. The core safety property of this stage is that a side-effect ledger
  * is ALWAYS emitted — enumerating every migration applied, row created/dropped,
  * the worktree path, and any process left running — so nothing the loop touched
@@ -28,11 +28,12 @@
  */
 
 /**
- * The honest row-drop reality: Stage 2 does NOT tag the dev-DB rows it creates
- * with a session id or row manifest. So unless an explicit row manifest is
- * handed in (and confirmed), this stage CANNOT know which rows to drop and MUST
- * NOT guess. When the drive ran mutating flows without a manifest, the ledger
- * reports rows "may remain (untagged)" rather than dropping anything.
+ * Row-drop model: Stage 2 stamps each mutating step with a drive-session id and
+ * emits a session-tagged row manifest. Given that manifest (and confirmation),
+ * this stage drops exactly the rows tagged with that session. Only the fallback
+ * case — a drive that mutated but handed in no manifest — CANNOT know which rows
+ * to drop and MUST NOT guess: the ledger reports rows "may remain (untagged)"
+ * rather than dropping anything.
  */
 
 const ROW_STATUS = Object.freeze({

@@ -26,6 +26,16 @@
 
 const MUST_FIX = "must-fix";
 
+/** Request header the drive advertises its drive-session id on, so a cooperating
+ * app can tag the dev-DB rows a create/edit/upload persists during the walk.
+ * Stage-5 teardown deletes exactly those tagged rows from an emitted manifest. */
+export const DRIVE_SESSION_HEADER = "X-UI-Review-Drive-Session";
+
+/** Step actions that can persist dev-DB state (a create/edit/reorder/upload/
+ * toggle). `goto` is navigation and `fill` only types into a field before a
+ * submit, so neither is recorded as a row-creating mutation in the manifest. */
+const MUTATING_ACTIONS = new Set(["click", "select", "upload", "dispatch"]);
+
 /** The one owner of the error-response threshold: an error response is anything
  * outside 2xx/3xx. 3xx redirects are normal navigation (login/canonical), not
  * errors, so they are not flagged. Shared by the CLI listener's pre-filter (for
@@ -212,6 +222,9 @@ export function classifyFailures({
  * @param {object} input
  * @param {string} input.appUrl - The arbitrary running-app URL from Stage 1.
  * @param {object} input.login - Resolved dev-login recipe (loginUrl + selectors).
+ * @param {string|null} [input.driveSession] - Unique id advertised to the app on
+ *   DRIVE_SESSION_HEADER; stamps the emitted row manifest so Stage-5 teardown can
+ *   drop exactly the rows a mutating step created. Null => no manifest is emitted.
  * @param {object[]} [input.flows] - Allowlisted changed-flow definitions.
  * @param {object[]} [input.interstitials] - Config-declared dismiss selectors.
  * @param {string[]} [input.changedPaths] - Changed file paths (drives selection).
@@ -227,7 +240,7 @@ export function classifyFailures({
  * @returns {Promise<object>} Result envelope (steps, captures, failures, caps, logs).
  */
 export async function driveUiReview(
-  { appUrl, login, flows = [], interstitials = [], changedPaths = [], serverLogExceptionPattern, caps = {} },
+  { appUrl, login, flows = [], interstitials = [], changedPaths = [], serverLogExceptionPattern, caps = {}, driveSession = null },
   {
     authenticate,
     dismissInterstitials = async () => ({ dismissed: [] }),
@@ -246,7 +259,8 @@ export async function driveUiReview(
   // No-retry is a fixed policy — log it every run so the bound is never implicit.
   record(`caps: maxScreenshots=${resolvedCaps.maxScreenshots}, maxFlows=${resolvedCaps.maxFlows}, maxStepsPerFlow=${resolvedCaps.maxStepsPerFlow}, retries=${resolvedCaps.retries} (no-retry)`);
 
-  const base = () => ({ appUrl: appUrl ?? null, logs });
+  const session = typeof driveSession === "string" && driveSession.trim().length > 0 ? driveSession.trim() : null;
+  const base = () => ({ appUrl: appUrl ?? null, logs, driveSession: session });
 
   // 1. Authenticate as the target role. Fail closed: no session -> STOP, drive
   //    nothing (a review that never reached the app is worthless, not empty).
@@ -262,6 +276,7 @@ export async function driveUiReview(
       captures: [],
       failures: [{ kind: "auth-failed", severity: MUST_FIX, message: stopReason }],
       caps: resolvedCaps,
+      rowManifest: [],
       ...base(),
     };
   }
@@ -281,6 +296,10 @@ export async function driveUiReview(
   //    moves on — deterministic, bounded, never re-run.
   const steps = [];
   const captures = [];
+  // Row manifest: one session-tagged record per mutating step driven, so Stage-5
+  // teardown can drop exactly the dev-DB rows this walk created. Only built when a
+  // session is present (no session => nothing to tag => no manifest to drop).
+  const rowManifest = [];
   let screenshots = 0;
   let screensSkipped = 0;
   for (const flow of selected) {
@@ -314,6 +333,9 @@ export async function driveUiReview(
       };
       steps.push(entry);
       if (entry.screenshotPath) captures.push({ flow: flow.name, step: entry.step, screenshotPath: entry.screenshotPath, statePath: entry.statePath });
+      if (session && MUTATING_ACTIONS.has(step.action)) {
+        rowManifest.push({ session, flow: flow.name, step: entry.step, action: step.action });
+      }
       if (!ok) record(`step failed (no retry): ${flow.name} / ${entry.step}: ${entry.detail ?? "unknown"}`);
     }
   }
@@ -344,6 +366,7 @@ export async function driveUiReview(
     failures,
     caps: resolvedCaps,
     screensSkipped,
+    rowManifest,
     ...base(),
   };
 }
