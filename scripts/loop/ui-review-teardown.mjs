@@ -234,10 +234,16 @@ async function deleteGist({ id }, { run = runChild } = {}) {
  * on an absent OR mixed session — the delete targets one session, so an ambiguous
  * or untagged manifest must never drop (better a "may remain" than a wrong scope). */
 function sessionFromManifest(rows) {
+  const list = rows ?? [];
+  if (list.length === 0) return null;
   const ids = new Set();
-  for (const r of rows ?? []) {
+  for (const r of list) {
     const s = typeof r?.session === "string" ? r.session.trim() : "";
-    if (s.length > 0) ids.add(s);
+    // Any untagged row means part of the manifest can't be scoped to a session:
+    // refuse rather than delete only the tagged subset and misreport the rest as
+    // dropped. Every row must carry the same non-empty session.
+    if (s.length === 0) return null;
+    ids.add(s);
   }
   return ids.size === 1 ? [...ids][0] : null;
 }

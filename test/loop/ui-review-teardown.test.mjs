@@ -573,6 +573,39 @@ test("runCli: configured recipe but ambiguous manifest session fails closed (DRO
   assert.match(result.ledger.rows.detail, /no single drive-session tag|ambiguous/i);
 });
 
+// A PARTIALLY-untagged manifest (some rows tagged, some untagged) must also refuse:
+// deleting only the tagged subset would leave the untagged rows while reporting
+// DROPPED. Any untagged row => refuse, runner never invoked.
+test("runCli: partially-untagged manifest fails closed (DROP_FAILED, runner never invoked)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-partial-"));
+  writeFileSync(join(dir, ".devloops.json"), JSON.stringify({
+    version: 1,
+    uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz", rowTeardown: { deleteCommand: "bin/cleanup-rows" } } },
+  }));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify({ ...PROVISION, worktreePath: dir, boot: {} }));
+  const manifestPath = join(dir, "manifest.json");
+  writeFileSync(manifestPath, JSON.stringify([
+    { session: "sess-a", step: "save", action: "click" },
+    { session: "", step: "logo", action: "upload" }, // untagged row => can't be scoped
+  ]));
+
+  const runCalls = [];
+  const run = async (...a) => { runCalls.push(a); return { code: 0, stdout: "", stderr: "" }; };
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const argv = ["--repo-root", dir, "--provision-result", provisionPath, "--row-manifest", manifestPath, "--confirm", "--no-stop-app"];
+  await runCli(argv, { stdout, stderr, run });
+  process.exitCode = 0;
+
+  assert.equal(runCalls.length, 0, "a partially-untagged manifest => the runner is never invoked");
+  const result = JSON.parse(out);
+  assert.equal(result.ledger.rows.status, ROW_STATUS.DROP_FAILED);
+  assert.equal(result.ledger.rows.dropped, 0);
+  assert.match(result.ledger.rows.detail, /no single drive-session tag|ambiguous/i);
+});
+
 // A real non-zero exit from the delete command is a drop failure, not a silent
 // success — guards the exit-code check in the real dropRows seam.
 test("runCli: rowTeardown.deleteCommand non-zero exit => DROP_FAILED (ok:false), exit surfaced in the ledger detail", async () => {
