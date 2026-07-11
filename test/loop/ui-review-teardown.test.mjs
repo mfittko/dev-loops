@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { teardown, ROW_STATUS, WORKTREE_STATUS, PROCESS_STATUS, GIST_STATUS } from "@dev-loops/core/loop/ui-review-teardown";
+import { driveUiReview } from "@dev-loops/core/loop/ui-review-drive";
 import { parseUiReviewTeardownCliArgs, killProcess, runCli } from "../../scripts/loop/ui-review-teardown.mjs";
 
 // A Stage-1 provision result: a booted app (pid), applied migrations, a worktree.
@@ -427,6 +428,240 @@ test("runCli: prunes the report-result gist via gh gist delete (confirmed), no l
 
   // The gist id from the report result is deleted via gh gist delete (mock, no live API).
   assert.deepEqual(ghCalls[0], ["gh", "gist", "delete", "abc123def456"]);
+});
+
+// AC end-to-end: a drive that creates rows emits a session-stamped manifest, and
+// teardown drops EXACTLY those rows on confirm — no real DB (the drop seam is
+// mocked to record the rows it was handed).
+test("drive-emitted manifest drops exactly the drive-created rows on confirm (ledger reports dropped with the count)", async () => {
+  const drive = await driveUiReview(
+    {
+      appUrl: "http://app",
+      login: {},
+      driveSession: "sess-42",
+      flows: [{
+        name: "create widget",
+        steps: [
+          { name: "open", action: "goto", path: "/widgets/new" },
+          { name: "save", action: "click", selector: "button[type=submit]" },
+          { name: "logo", action: "upload", selector: "#logo", value: "/f.png" },
+        ],
+      }],
+    },
+    {
+      authenticate: async () => ({ ok: true, detail: "ok" }),
+      runStep: async ({ step }) => ({ ok: true, screenshotPath: `/o/${step.name}.png` }),
+      getCapturedEvents: () => ({ responses: [], requestFailures: [], pageErrors: [] }),
+    },
+  );
+  // The drive emitted a manifest for exactly the two mutating steps.
+  assert.equal(drive.rowManifest.length, 2);
+
+  let droppedRows = null;
+  const { seams } = makeSeams({
+    dropRows: async ({ rows }) => { droppedRows = rows; return { ok: true, dropped: rows.length, detail: "dropped" }; },
+  });
+  const res = await teardown(
+    { provisionResult: PROVISION, driveResult: drive, rowManifest: drive.rowManifest, confirm: true },
+    seams,
+  );
+
+  // Teardown dropped EXACTLY the manifested rows the drive created.
+  assert.deepEqual(droppedRows, drive.rowManifest);
+  assert.equal(res.ledger.rows.status, ROW_STATUS.DROPPED);
+  assert.equal(res.ledger.rows.dropped, 2, "ledger reports the count, not may-remain-untagged");
+  assert.notEqual(res.ledger.rows.status, ROW_STATUS.MAY_REMAIN_UNTAGGED);
+});
+
+// The CLI drop seam is real: it deletes by drive-session via the project's
+// rowTeardown.deleteCommand, in the worktree, with the session in the env — no
+// live DB (the command runner is mocked).
+test("runCli: confirmed manifest deletes by session via rowTeardown.deleteCommand (mocked runner, dropped count in the ledger)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-rowdrop-"));
+  writeFileSync(join(dir, ".devloops.json"), JSON.stringify({
+    version: 1,
+    uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz", rowTeardown: { deleteCommand: "bin/cleanup-rows" } } },
+  }));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify({ ...PROVISION, worktreePath: dir, boot: {} }));
+  const manifestPath = join(dir, "manifest.json");
+  writeFileSync(manifestPath, JSON.stringify([
+    { session: "sess-xyz", flow: "create widget", step: "save", action: "click" },
+    { session: "sess-xyz", flow: "create widget", step: "logo", action: "upload" },
+  ]));
+
+  const runCalls = [];
+  const run = async (cmd, args, env) => { runCalls.push({ cmd, args, env }); return { code: 0, stdout: "", stderr: "" }; };
+
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const argv = ["--repo-root", dir, "--provision-result", provisionPath, "--row-manifest", manifestPath, "--confirm", "--no-stop-app"];
+  await runCli(argv, { stdout, stderr, run });
+
+  // The delete command ran in the worktree with the drive session in the env.
+  assert.equal(runCalls.length, 1);
+  assert.equal(runCalls[0].cmd, "sh");
+  assert.match(runCalls[0].args[1], /bin\/cleanup-rows/);
+  assert.match(runCalls[0].args[1], new RegExp(dir));
+  assert.equal(runCalls[0].env.UI_REVIEW_DRIVE_SESSION, "sess-xyz");
+  // The ledger reports the drop with its count.
+  const result = JSON.parse(out);
+  assert.equal(result.ledger.rows.status, ROW_STATUS.DROPPED);
+  assert.equal(result.ledger.rows.dropped, 2);
+});
+
+// Fail closed: a confirmed manifest with no rowTeardown recipe drops nothing and
+// is recorded as a drop failure — never a silent no-op or a wrong-scope delete.
+test("runCli: confirmed manifest but no rowTeardown recipe fails closed (DROP_FAILED, ok:false), runner never invoked", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-norecipe-"));
+  writeFileSync(join(dir, ".devloops.json"), JSON.stringify({
+    version: 1,
+    uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz" } },
+  }));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify({ ...PROVISION, worktreePath: dir, boot: {} }));
+  const manifestPath = join(dir, "manifest.json");
+  writeFileSync(manifestPath, JSON.stringify([{ session: "sess-xyz", step: "save", action: "click" }]));
+
+  const runCalls = [];
+  const run = async (...a) => { runCalls.push(a); return { code: 0, stdout: "", stderr: "" }; };
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const argv = ["--repo-root", dir, "--provision-result", provisionPath, "--row-manifest", manifestPath, "--confirm", "--no-stop-app"];
+  await runCli(argv, { stdout, stderr, run });
+  process.exitCode = 0; // runCli sets exitCode=1 on the (expected) fail-closed drop; don't leak it to the runner
+
+  assert.equal(runCalls.length, 0, "no delete recipe => the runner is never invoked");
+  const result = JSON.parse(out);
+  assert.equal(result.ledger.rows.status, ROW_STATUS.DROP_FAILED);
+  assert.match(result.ledger.rows.detail, /no uiReview\.run\.rowTeardown\.deleteCommand/i);
+  assert.equal(result.ok, false);
+});
+
+// Fail closed: a configured recipe + a manifest with no single shared session
+// (mixed sessions here) must refuse — the delete targets one session, so an
+// ambiguous manifest never runs the command (guards a wrong-scope delete).
+test("runCli: configured recipe but ambiguous manifest session fails closed (DROP_FAILED, runner never invoked)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-ambig-"));
+  writeFileSync(join(dir, ".devloops.json"), JSON.stringify({
+    version: 1,
+    uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz", rowTeardown: { deleteCommand: "bin/cleanup-rows" } } },
+  }));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify({ ...PROVISION, worktreePath: dir, boot: {} }));
+  const manifestPath = join(dir, "manifest.json");
+  writeFileSync(manifestPath, JSON.stringify([
+    { session: "sess-a", step: "save", action: "click" },
+    { session: "sess-b", step: "logo", action: "upload" }, // different session => ambiguous target
+  ]));
+
+  const runCalls = [];
+  const run = async (...a) => { runCalls.push(a); return { code: 0, stdout: "", stderr: "" }; };
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const argv = ["--repo-root", dir, "--provision-result", provisionPath, "--row-manifest", manifestPath, "--confirm", "--no-stop-app"];
+  await runCli(argv, { stdout, stderr, run });
+  process.exitCode = 0; // fail-closed drop sets exitCode=1; don't leak it to the runner
+
+  assert.equal(runCalls.length, 0, "ambiguous session => the runner is never invoked");
+  const result = JSON.parse(out);
+  assert.equal(result.ledger.rows.status, ROW_STATUS.DROP_FAILED);
+  assert.equal(result.ledger.rows.dropped, 0);
+  assert.match(result.ledger.rows.detail, /no single drive-session tag|ambiguous/i);
+});
+
+// A PARTIALLY-untagged manifest (some rows tagged, some untagged) must also refuse:
+// deleting only the tagged subset would leave the untagged rows while reporting
+// DROPPED. Any untagged row => refuse, runner never invoked.
+test("runCli: partially-untagged manifest fails closed (DROP_FAILED, runner never invoked)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-partial-"));
+  writeFileSync(join(dir, ".devloops.json"), JSON.stringify({
+    version: 1,
+    uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz", rowTeardown: { deleteCommand: "bin/cleanup-rows" } } },
+  }));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify({ ...PROVISION, worktreePath: dir, boot: {} }));
+  const manifestPath = join(dir, "manifest.json");
+  writeFileSync(manifestPath, JSON.stringify([
+    { session: "sess-a", step: "save", action: "click" },
+    { session: "", step: "logo", action: "upload" }, // untagged row => can't be scoped
+  ]));
+
+  const runCalls = [];
+  const run = async (...a) => { runCalls.push(a); return { code: 0, stdout: "", stderr: "" }; };
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const argv = ["--repo-root", dir, "--provision-result", provisionPath, "--row-manifest", manifestPath, "--confirm", "--no-stop-app"];
+  await runCli(argv, { stdout, stderr, run });
+  process.exitCode = 0;
+
+  assert.equal(runCalls.length, 0, "a partially-untagged manifest => the runner is never invoked");
+  const result = JSON.parse(out);
+  assert.equal(result.ledger.rows.status, ROW_STATUS.DROP_FAILED);
+  assert.equal(result.ledger.rows.dropped, 0);
+  assert.match(result.ledger.rows.detail, /no single drive-session tag|ambiguous/i);
+});
+
+// A real non-zero exit from the delete command is a drop failure, not a silent
+// success — guards the exit-code check in the real dropRows seam.
+test("runCli: rowTeardown.deleteCommand non-zero exit => DROP_FAILED (ok:false), exit surfaced in the ledger detail", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-exit1-"));
+  writeFileSync(join(dir, ".devloops.json"), JSON.stringify({
+    version: 1,
+    uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz", rowTeardown: { deleteCommand: "bin/cleanup-rows" } } },
+  }));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify({ ...PROVISION, worktreePath: dir, boot: {} }));
+  const manifestPath = join(dir, "manifest.json");
+  writeFileSync(manifestPath, JSON.stringify([{ session: "sess-xyz", step: "save", action: "click" }]));
+
+  const run = async () => ({ code: 1, stdout: "", stderr: "connection refused" });
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const argv = ["--repo-root", dir, "--provision-result", provisionPath, "--row-manifest", manifestPath, "--confirm", "--no-stop-app"];
+  await runCli(argv, { stdout, stderr, run });
+  process.exitCode = 0; // fail-closed drop sets exitCode=1; don't leak it to the runner
+
+  const result = JSON.parse(out);
+  assert.equal(result.ledger.rows.status, ROW_STATUS.DROP_FAILED);
+  assert.equal(result.ledger.rows.dropped, 0);
+  assert.match(result.ledger.rows.detail, /rowTeardown\.deleteCommand exit 1/);
+  assert.equal(result.ok, false);
+});
+
+// A present-but-malformed (non-string) worktreePath is a corrupted provision
+// result — the destructive delete must NOT silently fall back to the primary
+// checkout scope. Refuse (runner never invoked), distinct from an absent path.
+test("runCli: malformed (non-string) provision worktreePath fails closed (DROP_FAILED, runner never invoked)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-badwt-"));
+  writeFileSync(join(dir, ".devloops.json"), JSON.stringify({
+    version: 1,
+    uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz", rowTeardown: { deleteCommand: "bin/cleanup-rows" } } },
+  }));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify({ ...PROVISION, worktreePath: { bad: true }, boot: {} }));
+  const manifestPath = join(dir, "manifest.json");
+  writeFileSync(manifestPath, JSON.stringify([{ session: "sess-xyz", step: "save", action: "click" }]));
+
+  const runCalls = [];
+  const run = async (...a) => { runCalls.push(a); return { code: 0, stdout: "", stderr: "" }; };
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const argv = ["--repo-root", dir, "--provision-result", provisionPath, "--row-manifest", manifestPath, "--confirm", "--no-stop-app"];
+  await runCli(argv, { stdout, stderr, run });
+  process.exitCode = 0;
+
+  assert.equal(runCalls.length, 0, "a malformed worktreePath => the runner is never invoked");
+  const result = JSON.parse(out);
+  assert.equal(result.ledger.rows.status, ROW_STATUS.DROP_FAILED);
+  assert.equal(result.ledger.rows.dropped, 0);
+  assert.match(result.ledger.rows.detail, /malformed provision worktreePath|unverified scope/i);
 });
 
 test("parseUiReviewTeardownCliArgs: requires --repo-root and --provision-result", () => {

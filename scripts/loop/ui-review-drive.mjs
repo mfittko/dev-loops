@@ -21,6 +21,7 @@
  * (packages/core/src/loop/ui-review-drive.mjs). The decision logic (flow
  * selection, cap enforcement, failure classification) lives in core.
  */
+import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import path from "node:path";
@@ -29,7 +30,7 @@ import { webkit } from "@playwright/test";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
-import { driveUiReview, isErrorResponseStatus, PAGE_ERROR_STACK_MAX_CHARS } from "@dev-loops/core/loop/ui-review-drive";
+import { driveUiReview, isErrorResponseStatus, PAGE_ERROR_STACK_MAX_CHARS, DRIVE_SESSION_HEADER } from "@dev-loops/core/loop/ui-review-drive";
 import { captureNamedUiState } from "../../test/playwright/harness/webkit-smoke-harness.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -47,7 +48,9 @@ Optional:
 Output (stdout, JSON):
   { "ok": bool, "stopped": bool, "stopReason": string|null,
     "steps": [...], "captures": [...], "failures": [...], "caps": {...},
-    "appUrl": string|null, "logs": [...] }
+    "appUrl": string|null, "driveSession": string|null, "rowManifest": [...], "logs": [...] }
+  driveSession is advertised to the app on the ${DRIVE_SESSION_HEADER} header and stamps
+  each rowManifest record (a mutating step), so Stage-5 teardown can drop exactly those rows.
   On the walk (non-stopped) path the envelope also carries "screensSkipped": number
   (steps dropped past the maxScreenshots cap).
 
@@ -362,6 +365,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       failures: [{ kind: "drive-recipe-missing", severity: "must-fix", message: "declare uiReview.login (loginUrl + submitSelector + successSelector) in .devloops" }],
       caps: {},
       appUrl: options.appUrl ?? null,
+      // Keep the envelope shape stable across every return path: no drive ran, so
+      // there is no session and nothing to tag.
+      driveSession: null,
+      rowManifest: [],
       logs: [],
     };
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
@@ -371,9 +378,14 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const serverLogPath = recipe.serverLogPath ? path.resolve(options.repoRoot, recipe.serverLogPath) : null;
   const logTail = openServerLogTail(serverLogPath, { log: (msg) => stderr.write(`[ui-review-drive] ${msg}\n`) });
 
+  // One id per drive run: advertised to the app on every request via the session
+  // header so a cooperating app can tag the dev-DB rows a mutating step persists,
+  // and stamped onto the emitted row manifest so teardown drops exactly those.
+  const driveSession = randomUUID();
+
   const browser = await webkit.launch({ headless: true });
   try {
-    const context = await browser.newContext();
+    const context = await browser.newContext({ extraHTTPHeaders: { [DRIVE_SESSION_HEADER]: driveSession } });
     const page = await context.newPage();
     const { getCapturedEvents, sliceCapturedEvents } = attachPageListeners(page);
     const result = await driveUiReview(
@@ -385,6 +397,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
         changedPaths: options.changedPaths,
         serverLogExceptionPattern: recipe.serverLogExceptionPattern,
         caps: recipe.caps,
+        driveSession,
       },
       {
         authenticate: () => authenticate({ page, login: recipe.login }),

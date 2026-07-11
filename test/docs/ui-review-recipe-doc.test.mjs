@@ -114,7 +114,7 @@ test("recipe doc config keys match the shipped uiReview/worktree schema", async 
 
   // Anchor the count so a wrapped-then-dropped key (see below) can't pass by
   // matching a doc that dropped the same key.
-  assert.equal(schema.size, 34, "expected 34 uiReview/worktree schema leaves");
+  assert.equal(schema.size, 35, "expected 35 uiReview/worktree schema leaves");
 });
 
 test("collectKeys descends through effects/preprocess wrappers at nested levels", () => {

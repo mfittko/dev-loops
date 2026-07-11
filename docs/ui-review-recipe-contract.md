@@ -39,17 +39,22 @@ drive your app.
 2. **Auth + drive** — launches one headless WebKit context, authenticates
    through your dev-login recipe, dismisses declared interstitials once, then
    walks the changed UI flows, capturing a screenshot + `state.json` + `snapshot.json` + `axe.json` + `console.json` per step.
+   Each run carries a unique **drive-session id** on the
+   `X-UI-Review-Drive-Session` request header and emits a **row manifest** — one
+   session-stamped record per mutating step — so teardown can drop exactly the
+   dev-DB rows the walk created (see `uiReview.run.rowTeardown`).
 3. **Diagnose** — maps each captured failure to a source line and then to a PR
    diff line so a finding can anchor on a real changed line.
 4. **Report** — posts a head-pinned **pending** PR review and produces a
    self-contained HTML artifact.
 5. **Teardown** — stops the booted app and, only with explicit confirmation,
-   removes the worktree (the working destructive step) and prunes the Stage-4
-   hosting gist (`gh gist delete`, when a gist id is recorded in the report
-   result). Dev-DB row-drop currently **fails closed** — the tagged-drop seam is
-   not wired, so a confirmed manifest is recorded as a drop failure and untagged
-   rows may remain (a real tagged drop is a tracked follow-up). A side-effect
-   ledger is ALWAYS emitted, enumerating what was done vs. left behind.
+   drops the drive-tagged dev-DB rows (`uiReview.run.rowTeardown.deleteCommand`,
+   dev DB only), removes the worktree, and prunes the Stage-4 hosting gist
+   (`gh gist delete`, when a gist id is recorded in the report result). Row-drop
+   consumes the drive's emitted manifest and deletes exactly the rows tagged with
+   that run's drive-session id; an absent manifest, an untagged one, or a missing
+   `rowTeardown` recipe **fails closed** (rows may remain) rather than guessing. A
+   side-effect ledger is ALWAYS emitted, enumerating what was done vs. left behind.
 
 ## Guardrails (non-negotiable)
 
@@ -107,6 +112,14 @@ worktree:
     destructive guard is inert — set a `destructivePattern` matching your own
     status format (e.g. a `destructive`/`down` marker), or make `statusCommand`
     emit the destructive SQL/marker.
+- `uiReview.run.rowTeardown` — optional dev-DB row-teardown sub-recipe. The drive
+  advertises a per-run drive-session id on the `X-UI-Review-Drive-Session` request
+  header; instrument your create/edit/upload paths to tag the rows they persist
+  with that header value so teardown can remove exactly them.
+  - `uiReview.run.rowTeardown.deleteCommand` — shell command that deletes the rows
+    tagged with a drive session. Teardown runs it in the provisioned worktree (dev
+    DB) with the session id in the `UI_REVIEW_DRIVE_SESSION` env var, only on
+    `--confirm`. Absent recipe means row-drop fails closed (rows may remain).
 
 ```yaml
 uiReview:
@@ -119,6 +132,8 @@ uiReview:
     migrate:
       statusCommand: "bin/example-migrate status"    # example
       applyCommand: "bin/example-migrate up"         # example
+    rowTeardown:
+      deleteCommand: "bin/example-cleanup --session \"$UI_REVIEW_DRIVE_SESSION\""  # example
 ```
 
 ## `uiReview.login` — dev-login recipe
@@ -278,6 +293,7 @@ from the schema or if the schema gains a key not listed here.
 - `uiReview.run.migrate.statusCommand`
 - `uiReview.run.migrate.applyCommand`
 - `uiReview.run.migrate.destructivePattern`
+- `uiReview.run.rowTeardown.deleteCommand`
 - `uiReview.login.loginUrl`
 - `uiReview.login.usernameSelector`
 - `uiReview.login.usernameValue`
