@@ -23,14 +23,24 @@ function tempDir() {
 
 // A fake page exposing the emitter + action/screenshot surface makeRunStep ->
 // captureNamedUiState touches, so the real wiring runs without a browser.
-function fakePage({ url = "http://app.test/" } = {}) {
+// `url()` is read once by the pre-loop app-origin anchor check, then once per step
+// by the runtime origin guard. Pass `urls` to script that sequence (clamped to the
+// last), or a constant `url`. Only the wrapper reads page.url(); the harness reads
+// res.url()/req.url() on event objects, not the page — so the sequence is stable.
+function fakePage({ url = "http://app.test/", urls } = {}) {
+  let i = 0;
   return {
     on: () => {},
     goto: async () => {},
     click: async () => {},
     fill: async () => {},
     screenshot: async () => {},
-    url: () => url,
+    url: () => {
+      if (!urls) return url;
+      const u = urls[Math.min(i, urls.length - 1)];
+      i += 1;
+      return u;
+    },
   };
 }
 
@@ -144,7 +154,7 @@ test("captureDescriptorScreen: a fail-closed path clears the WHOLE capture subtr
   // Trigger a fail-closed path: the walk lands off-origin.
   const result = await captureDescriptorScreen(
     { repoRoot: "/r", appUrl: "http://app.test", outputDir, descriptor: { name: "x", steps: [{ action: "goto", path: "/settings", name: "settings" }] } },
-    { loadConfig: async () => ({ config: {} }), launchBrowser: () => fakeBrowser(fakePage({ url: "http://evil.test/landed" })) },
+    { loadConfig: async () => ({ config: {} }), launchBrowser: () => fakeBrowser(fakePage({ urls: ["http://app.test/", "http://evil.test/landed"] })) },
   );
   assert.equal(result.ok, false);
   // The untracked partial bundle is gone — fail-closed clears the whole subtree,
@@ -222,7 +232,7 @@ test("captureDescriptorScreen: a declared login recipe that authenticates drives
 test("captureDescriptorScreen: a goto that redirects cross-origin at runtime fails closed (no off-origin screenshot)", async () => {
   // Pre-launch validation passes (path is same-origin), but the page ends up on
   // another origin — a server redirect. The runtime guard must catch it.
-  const page = fakePage({ url: "http://evil.test/landed" });
+  const page = fakePage({ urls: ["http://app.test/", "http://evil.test/landed"] });
   const outputDir = tempDir();
   const result = await captureDescriptorScreen(
     { repoRoot: "/r", appUrl: "http://app.test", outputDir, descriptor: { name: "s", steps: [{ action: "goto", path: "/redirector" }] } },
@@ -237,7 +247,7 @@ test("captureDescriptorScreen: a goto that redirects cross-origin at runtime fai
 });
 
 test("captureDescriptorScreen: a click that navigates to another origin fails closed", async () => {
-  const page = fakePage({ url: "http://external.test/oauth" });
+  const page = fakePage({ urls: ["http://app.test/", "http://external.test/oauth"] });
   const result = await captureDescriptorScreen(
     { repoRoot: "/r", appUrl: "http://app.test", outputDir: tempDir(), descriptor: { name: "s", steps: [{ action: "click", selector: "a.external" }] } },
     { loadConfig: async () => ({ config: {} }), launchBrowser: () => fakeBrowser(page) },
@@ -245,6 +255,20 @@ test("captureDescriptorScreen: a click that navigates to another origin fails cl
   assert.equal(result.ok, false);
   assert.equal(result.screenshotPath, null);
   assert.match(result.stopReason, /left the app origin/);
+});
+
+test("captureDescriptorScreen: fails closed if the walk can't start on the app origin (auth left it off-origin)", async () => {
+  const outputDir = tempDir();
+  // The pre-loop anchor navigates to appUrl but the page is still off-origin (e.g.
+  // auth redirected to a separate origin). The first step must not run off-origin.
+  const page = fakePage({ urls: ["http://idp.example/callback"] });
+  const result = await captureDescriptorScreen(
+    { repoRoot: "/r", appUrl: "http://app.test", outputDir, descriptor: { name: "s", steps: [{ action: "click", selector: "a.x" }] } },
+    { loadConfig: async () => ({ config: {} }), launchBrowser: () => fakeBrowser(page) },
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.stopReason, /could not reach the app origin/);
+  assert.equal(existsSync(path.join(outputDir, "named-states")) && readdirSync(path.join(outputDir, "named-states")).length > 0, false);
 });
 
 test("captureDescriptorScreen: a same-origin walk is not false-tripped by the runtime guard", async () => {

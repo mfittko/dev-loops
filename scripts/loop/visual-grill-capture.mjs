@@ -262,6 +262,16 @@ export async function captureDescriptorScreen(
       await dismissInterstitials({ page, interstitials: recipe.interstitials });
     }
     const appOrigin = new URL(appUrl).origin;
+    // Start the walk ON the app origin: authentication may have left the page on a
+    // separate login origin, and a non-`goto` first step would otherwise run against
+    // whatever page is currently open. Navigate to appUrl (validated http/https) and
+    // verify the origin before the first step, so every step — goto or not — runs on
+    // the app. A redirect that lands off-origin fails closed.
+    await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+    if (new URL(page.url()).origin !== appOrigin) {
+      await removeAllCaptures(outputDir);
+      return { ok: false, screenshotPath: null, statePath: null, stopReason: `could not reach the app origin (landed on ${page.url()})` };
+    }
     const runStep = makeRunStep({ page, outputDir });
     const flow = { name: descriptor.name };
     for (let index = 0; index < descriptor.steps.length; index += 1) {
