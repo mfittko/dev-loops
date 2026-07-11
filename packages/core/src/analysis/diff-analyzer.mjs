@@ -200,9 +200,30 @@ function isSecuritySensitiveSeamLine(content) {
 export function diffHasSecuritySeam(diffOutput) {
   if (!diffOutput) return false;
   let inHunk = false;
+  // Only CODE files can carry an executable seam — a YAML/markdown/JSON line that
+  // merely names a primitive (e.g. `shell: true` in a persona prompt) is not a
+  // seam. Track the current file from the unified-diff `--- a/`/`+++ b/` headers
+  // and gate the scan on `classifyFile(...) === "code"`. Bare-hunk input (no file
+  // header — used in tests / direct hunk analysis) defaults to code so it still
+  // scans; a real `git diff` always carries headers, so it is gated per file.
+  let currentFileIsCode = true;
+  let fromPath = null;
   for (const line of diffOutput.split("\n")) {
+    if (line.startsWith("--- ")) {
+      const p = line.slice(4).trim().replace(/^a\//, "");
+      fromPath = p === "/dev/null" ? null : p;
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      const p = line.slice(4).trim().replace(/^b\//, "");
+      const effective = p === "/dev/null" ? fromPath : p;
+      currentFileIsCode = effective != null && classifyFile(effective) === "code";
+      inHunk = false;
+      continue;
+    }
     if (line.startsWith("@@")) { inHunk = true; continue; }
-    if (!inHunk) continue;
+    if (!inHunk || !currentFileIsCode) continue;
     const isAdd = line.startsWith("+") && !line.startsWith("+++");
     const isDel = line.startsWith("-") && !line.startsWith("---");
     if (!isAdd && !isDel) continue;

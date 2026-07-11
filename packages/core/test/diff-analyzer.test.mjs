@@ -6,6 +6,7 @@ import {
   classifyFile,
   analyzeT1,
   analyzeDiff,
+  diffHasSecuritySeam,
 } from "../src/analysis/diff-analyzer.mjs";
 import { resolveDynamicAngles } from "../src/analysis/change-classifier.mjs";
 
@@ -166,6 +167,24 @@ test("analyzeDiff: pure-code NON-seam diff does not get SECURITY_SENSITIVE_SEAM"
     diffOutput: "@@ -1,2 +1,3 @@\n const y = 1;\n+  const total = a + b;\n",
   });
   assert.ok(!result.t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
+test("seam: a config/docs FILE hunk naming a primitive is NOT a seam; a code file IS (file-gated via diff headers)", () => {
+  // #1336: a real git diff carries `+++ b/<path>` headers; only code files can
+  // carry an executable seam. A yaml persona line with `shell: true` must not flag.
+  const yamlSeamMention =
+    "diff --git a/packages/core/src/config/extension-defaults.yaml b/packages/core/src/config/extension-defaults.yaml\n" +
+    "--- a/packages/core/src/config/extension-defaults.yaml\n" +
+    "+++ b/packages/core/src/config/extension-defaults.yaml\n" +
+    "@@ -1,1 +1,2 @@\n prompt: review\n+      prompt: no shell: true and no child_process here\n";
+  assert.equal(diffHasSecuritySeam(yamlSeamMention), false, "config/docs mention must not flag a seam");
+
+  const codeSeam =
+    "diff --git a/scripts/loop/driver.mjs b/scripts/loop/driver.mjs\n" +
+    "--- a/scripts/loop/driver.mjs\n" +
+    "+++ b/scripts/loop/driver.mjs\n" +
+    "@@ -1,1 +1,2 @@\n const y = 1;\n+  await page.goto(appUrl);\n";
+  assert.equal(diffHasSecuritySeam(codeSeam), true, "code-file seam must flag");
 });
 
 test("analyzeT1: logic change from import-only diff (imports ARE logic)", () => {
