@@ -576,6 +576,15 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const interpreterRefinementConfig = interpreterConfigHasErrors
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(interpreterConfigResult.config ?? { version: 1 });
+  // Thread the pre-approval CI opt-out (#1337) into the interpreter so a non-draft
+  // converged PR on a requireCi:false repo is not routed to WAITING_FOR_CI /
+  // BLOCKED_NEEDS_USER_DECISION (which pass through unconditionally) before the
+  // gate-coordination guards that honor the flag are reached. Shared by detect and
+  // upsert via this context builder.
+  interpreterRefinementConfig.preApprovalRequireCi = resolveGateConfig(
+    interpreterConfigHasErrors ? {} : (interpreterConfigResult.config ?? {}),
+    "preApproval",
+  ).requireCi;
   if (options.lightweight) {
     // Compose (not replace) the round cap for light-dispatched PRs (#1210):
     // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
