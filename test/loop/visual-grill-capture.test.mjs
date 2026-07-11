@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -132,6 +132,24 @@ test("captureDescriptorScreen: self-validates steps (bypassed parseDescriptor) a
   assert.equal(badShape.ok, false);
   assert.match(badShape.stopReason, /non-empty `steps` array/);
   assert.equal(launched, false, "no browser is launched for an unsafe/malformed descriptor");
+});
+
+test("captureDescriptorScreen: a fail-closed path clears the WHOLE capture subtree, incl. an untracked partial bundle", async () => {
+  const outputDir = tempDir();
+  // Simulate a mid-write partial bundle from a prior/off-origin step that `last`
+  // does not reference (e.g. captureNamedUiState threw after writing screenshot.png).
+  const orphan = path.join(outputDir, "named-states", "orphan-partial");
+  mkdirSync(orphan, { recursive: true });
+  writeFileSync(path.join(orphan, "screenshot.png"), "partial");
+  // Trigger a fail-closed path: the walk lands off-origin.
+  const result = await captureDescriptorScreen(
+    { repoRoot: "/r", appUrl: "http://app.test", outputDir, descriptor: { name: "x", steps: [{ action: "goto", path: "/settings", name: "settings" }] } },
+    { loadConfig: async () => ({ config: {} }), launchBrowser: () => fakeBrowser(fakePage({ url: "http://evil.test/landed" })) },
+  );
+  assert.equal(result.ok, false);
+  // The untracked partial bundle is gone — fail-closed clears the whole subtree,
+  // not just the last returned bundle.
+  assert.equal(existsSync(orphan), false, "an untracked partial capture must not survive a fail-closed path");
 });
 
 test("captureDescriptorScreen: a browser launch failure (runner unavailable) fails closed with a reason", async () => {

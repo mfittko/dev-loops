@@ -211,6 +211,21 @@ async function removeCaptureArtifact(capture) {
   }
 }
 
+// Remove EVERY capture bundle written this invocation (the whole named-states
+// subtree under outputDir). The fail-closed paths use this rather than pruning
+// only the last returned bundle: if captureNamedUiState throws mid-write (after
+// screenshot.png but before returning), the partial bundle isn't tracked by
+// `last`, and a runtime off-origin navigation could have produced it — so on any
+// failure we clear the whole subtree to honor "no off-origin artifact persists".
+async function removeAllCaptures(outputDir) {
+  if (!outputDir) return;
+  try {
+    await rm(path.join(outputDir, "named-states"), { recursive: true, force: true });
+  } catch {
+    // ponytail: swallow — best-effort, must not break the fail-closed envelope.
+  }
+}
+
 export async function captureDescriptorScreen(
   { repoRoot, appUrl, outputDir, descriptor },
   { loadConfig = loadDevLoopConfig, launchBrowser = () => webkit.launch({ headless: true }) } = {},
@@ -261,7 +276,9 @@ export async function captureDescriptorScreen(
       // return a screenshot of an off-origin page. Delete this step's bundle first.
       const currentUrl = page.url();
       if (new URL(currentUrl).origin !== appOrigin) {
-        await removeCaptureArtifact(last);
+        // Clear the whole capture subtree, not just `last` — a mid-write partial
+        // bundle of this off-origin page may exist untracked.
+        await removeAllCaptures(outputDir);
         last = null;
         return { ok: false, screenshotPath: null, statePath: null, stopReason: `navigation left the app origin: ${currentUrl}` };
       }
@@ -269,9 +286,10 @@ export async function captureDescriptorScreen(
     return { ok: true, screenshotPath: last.screenshotPath, statePath: last.statePath, stopReason: null };
   } catch (err) {
     // Runner unavailable (launch threw) or a step failed => fail closed with a
-    // reason, so the grill flags the visual gap unresolved. Prune any intermediate
-    // bundle already written so nothing sensitive is left behind.
-    await removeCaptureArtifact(last);
+    // reason, so the grill flags the visual gap unresolved. Clear the whole capture
+    // subtree — a step that threw mid-write (after screenshot.png, before returning)
+    // leaves a partial bundle `last` doesn't reference.
+    await removeAllCaptures(outputDir);
     return { ok: false, screenshotPath: null, statePath: null, stopReason: (err?.message ?? String(err)).split("\n")[0].slice(0, 300) };
   } finally {
     // Best-effort teardown: a close() error must not mask the returned envelope.
