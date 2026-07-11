@@ -68,9 +68,10 @@ export function analyzeT0(nameStatusOutput) {
   }
 
   const renameOnly = lines.length > 0 && renameCount === lines.length;
-  const allDocs = lines.length > 0 && files.every(
-    (f) => normalizeSep(f).startsWith("docs/") || f.endsWith(".md") || f === "README.md",
-  );
+  // Derive from the shared classifier so this predicate can't drift from it: a
+  // code/config/test file hosted under docs/ is not prose, so a mixed diff that
+  // includes one is not docs-only (it still gets the code-review surface).
+  const allDocs = lines.length > 0 && files.every((f) => classifyFile(f) === "docs");
 
   return {
     files,

@@ -166,6 +166,17 @@ test("analyzeDiff: T0 unambiguous → no T1, not ambiguous", () => {
   assert.equal(result.ambiguous, false);
 });
 
+test("analyzeDiff: a docs/-hosted code file in a mixed diff is NOT docs-only", () => {
+  // allDocs must track classifyFile: a code file under docs/ keeps the code
+  // review surface even alongside a real prose doc — not suppressed as DOCS_ONLY.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tdocs/example.mjs\nM\tdocs/guide.md",
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = 1;\n",
+  });
+  assert.equal(result.t0.allDocs, false);
+  assert.ok(!(result.t1.changeCategories.length === 1 && result.t1.changeCategories[0] === "DOCS_ONLY"));
+});
+
 test("analyzeDiff: T0 ambiguous with diff + logic change → classified, not ambiguous", () => {
   const result = analyzeDiff({
     nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/bar.md",
