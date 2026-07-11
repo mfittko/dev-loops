@@ -79,7 +79,7 @@
         },
         "preApproval": {
           "$ref": "#/$defs/gateConfig",
-          "description": "Pre-approval gate config. `requireCi` is accepted for parity with runtime config, but preApproval always requires CI so that field has no effect here."
+          "description": "Pre-approval gate config. `requireCi` is honored (default true): set it to false to opt out of the CI precondition so a repo with no CI is not held at the pre-approval gate."
         },
         "spike": {
           "$ref": "#/$defs/gateConfig",

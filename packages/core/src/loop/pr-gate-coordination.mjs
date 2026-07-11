@@ -660,6 +660,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const conflictFiles = normalizeConflictFiles(input.conflictFiles);
   const ciStatus = normalizeCiStatus(input.ciStatus);
   const draftGateRequireCi = input.draftGateRequireCi !== false;
+  // Opt-out CI precondition at the pre-approval boundary (mirrors the draft
+  // gate). Default true keeps CI required; false ignores the CI verdict
+  // entirely — a "none"/"pending"/"crediblyGreen"/"failure" head no longer
+  // waits on or blocks pre_approval.
+  const preApprovalRequireCi = input.preApprovalRequireCi !== false;
   const copilotReviewRoundCount = normalizeNonNegativeInteger(input.copilotReviewRoundCount);
   const maxCopilotRounds = normalizePositiveInteger(input.maxCopilotRounds);
   const roundCapReached = isCopilotRoundCapReached({ copilotReviewRoundCount, maxCopilotRounds });
@@ -998,7 +1003,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   if (effectiveLifecycleState === STATE.PR_READY_NO_FEEDBACK) {
     if (reviewMode === "internal_only") {
       // Explicitly internal-only PR: skip the external Copilot review cycle
-      if (ciStatus === "failure" || ciStatus === "crediblyGreen") {
+      if (preApprovalRequireCi && (ciStatus === "failure" || ciStatus === "crediblyGreen")) {
         pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
         pushUnique(forbiddenActions, internalOnlyPostDraftForbidden);
         return buildResult({
@@ -1201,7 +1206,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   }
 
   if (effectiveLifecycleState === STATE.READY_TO_REREQUEST_REVIEW) {
-    if (ciStatus === "failure" || ciStatus === "crediblyGreen") {
+    if (preApprovalRequireCi && (ciStatus === "failure" || ciStatus === "crediblyGreen")) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
@@ -1226,7 +1231,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       });
     }
 
-    if (ciStatus === "pending" || ciStatus === "none") {
+    if (preApprovalRequireCi && (ciStatus === "pending" || ciStatus === "none")) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_CI]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
@@ -1410,7 +1415,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         copilotReviewRoundCount,
       });
     }
-    if (ciStatus === "failure" || ciStatus === "crediblyGreen") {
+    if (preApprovalRequireCi && (ciStatus === "failure" || ciStatus === "crediblyGreen")) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
@@ -1434,7 +1439,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           refinementArtifact,
       });
     }
-    if (ciStatus === "pending" || ciStatus === "none") {
+    if (preApprovalRequireCi && (ciStatus === "pending" || ciStatus === "none")) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_CI]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
@@ -1553,7 +1558,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   }
 
   if (effectiveLifecycleState === STATE.LOW_SIGNAL_CONVERGED) {
-    if (ciStatus === "failure" || ciStatus === "crediblyGreen") {
+    if (preApprovalRequireCi && (ciStatus === "failure" || ciStatus === "crediblyGreen")) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
@@ -1577,7 +1582,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           refinementArtifact,
       });
     }
-    if (ciStatus === "pending" || ciStatus === "none") {
+    if (preApprovalRequireCi && (ciStatus === "pending" || ciStatus === "none")) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_CI]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
