@@ -93,6 +93,26 @@ test("captureDescriptorScreen: walks the descriptor and returns the final screen
   assert.equal(state.stateName, "edit-profile");
 });
 
+test("captureDescriptorScreen: a throwing browser.close() teardown does not reject — the structured envelope is still returned", async () => {
+  const outputDir = tempDir();
+  const throwingCloseBrowser = () => ({
+    newContext: async () => ({ newPage: async () => fakePage() }),
+    close: async () => { throw new Error("EPERM: teardown failed"); },
+  });
+  // Must resolve (not reject) despite the close() throw in the finally.
+  const result = await captureDescriptorScreen(
+    {
+      repoRoot: "/r",
+      appUrl: "http://app.test",
+      outputDir,
+      descriptor: { name: "settings", steps: [{ action: "goto", path: "/settings", name: "settings" }] },
+    },
+    { loadConfig: async () => ({ config: {} }), launchBrowser: throwingCloseBrowser },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.stopReason, null);
+});
+
 test("captureDescriptorScreen: a browser launch failure (runner unavailable) fails closed with a reason", async () => {
   const result = await captureDescriptorScreen(
     { repoRoot: "/r", appUrl: "http://app.test", outputDir: tempDir(), descriptor: { name: "s", steps: [{ action: "goto", path: "/" }] } },

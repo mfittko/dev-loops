@@ -188,7 +188,13 @@ export function parseDescriptor(raw, { readFileSync } = {}) {
 async function removeCaptureArtifact(capture) {
   const anchor = capture?.screenshotPath ?? capture?.statePath;
   if (!anchor) return;
-  await rm(path.dirname(anchor), { recursive: true, force: true });
+  // Best-effort cleanup: a teardown error (EACCES/EPERM) must not escape and turn a
+  // fail-closed path into a rejection — the caller is always owed a structured result.
+  try {
+    await rm(path.dirname(anchor), { recursive: true, force: true });
+  } catch {
+    // ponytail: swallow — leaving a bundle is less bad than breaking the fail-closed contract.
+  }
 }
 
 export async function captureDescriptorScreen(
@@ -246,7 +252,13 @@ export async function captureDescriptorScreen(
     await removeCaptureArtifact(last);
     return { ok: false, screenshotPath: null, statePath: null, stopReason: (err?.message ?? String(err)).split("\n")[0].slice(0, 300) };
   } finally {
-    await browser?.close();
+    // Best-effort teardown: a close() error must not mask the returned envelope.
+    try {
+      await browser?.close();
+    } catch {
+      // ponytail: swallow — the structured result already went out; a dangling browser
+      // is a lesser evil than rejecting a fail-closed path.
+    }
   }
 }
 
