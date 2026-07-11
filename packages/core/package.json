@@ -7,6 +7,7 @@
   },
   "description": "Shared deterministic support package for dev-loop skills, repo-local scripts, and GitHub automation.",
   "exports": {
+    "./analysis/diff-analyzer": "./src/analysis/diff-analyzer.mjs",
     "./bash-exit-one": "./src/bash-exit-one.mjs",
     "./cli/helpers": "./src/cli/helpers.mjs",
     "./cli/primitives": "./src/cli/primitives.mjs",

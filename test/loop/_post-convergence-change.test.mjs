@@ -276,11 +276,13 @@ test("getLatestSubmittedCopilotReviewHeadSha tie-break: a valid timestamp beats 
   assert.equal(sha, "dated");
 });
 
-test("isTrivialDocumentationOnlyPath classifies docs and text extensions as trivial", () => {
-  for (const p of ["docs/x.mjs", "README.md", "a.mdx", "notes.txt", "x.rst", "y.adoc", "", null, undefined]) {
+test("isTrivialDocumentationOnlyPath classifies prose docs as trivial but a docs/-hosted code/config/test file as non-trivial", () => {
+  for (const p of ["docs/guide.md", "docs/notes.rst", "README.md", "a.mdx", "notes.txt", "x.rst", "y.adoc", "", null, undefined]) {
     assert.equal(isTrivialDocumentationOnlyPath(p), true, `${p} should be trivial`);
   }
-  for (const p of ["packages/core/src/a.mjs", "scripts/loop/x.mjs", "test/a.test.mjs"]) {
+  // A code/config/test file hosted under docs/ is NOT trivial — it routes through
+  // classifyFile, so a post-convergence change there re-opens a Copilot round.
+  for (const p of ["docs/x.mjs", "docs/fixture.json", "docs/x.test.mjs", "packages/core/src/a.mjs", "scripts/loop/x.mjs", "test/a.test.mjs"]) {
     assert.equal(isTrivialDocumentationOnlyPath(p), false, `${p} should be non-trivial`);
   }
 });
