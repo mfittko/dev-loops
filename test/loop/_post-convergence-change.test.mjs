@@ -277,12 +277,15 @@ test("getLatestSubmittedCopilotReviewHeadSha tie-break: a valid timestamp beats 
 });
 
 test("isTrivialDocumentationOnlyPath classifies prose docs as trivial but a docs/-hosted code/config/test file as non-trivial", () => {
-  for (const p of ["docs/guide.md", "docs/notes.rst", "README.md", "a.mdx", "notes.txt", "x.rst", "y.adoc", "", null, undefined]) {
+  // Prose under docs/ (any case / surrounding whitespace) stays trivial.
+  for (const p of ["docs/guide.md", "docs/notes.rst", "DOCS/Guide.md", " docs/guide.md ", "README.md", "a.mdx", "notes.txt", "x.rst", "y.adoc", "", null, undefined]) {
     assert.equal(isTrivialDocumentationOnlyPath(p), true, `${p} should be trivial`);
   }
   // A code/config/test file hosted under docs/ is NOT trivial — it routes through
   // classifyFile, so a post-convergence change there re-opens a Copilot round.
-  for (const p of ["docs/x.mjs", "docs/fixture.json", "docs/x.test.mjs", "packages/core/src/a.mjs", "scripts/loop/x.mjs", "test/a.test.mjs"]) {
+  // The classifier is fed the same normalized value, so case/whitespace variants
+  // (docs/x.MJS, " docs/x.mjs") are handled consistently.
+  for (const p of ["docs/x.mjs", "docs/fixture.json", "docs/x.test.mjs", "docs/x.MJS", " docs/x.mjs", "packages/core/src/a.mjs", "scripts/loop/x.mjs", "test/a.test.mjs"]) {
     assert.equal(isTrivialDocumentationOnlyPath(p), false, `${p} should be non-trivial`);
   }
 });

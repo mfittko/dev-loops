@@ -46,7 +46,9 @@ export function isTrivialDocumentationOnlyPath(filePath) {
   // Route the docs/ judgment through the shared classifier so a code/config/test
   // file hosted under docs/ is NOT treated as trivial documentation — such a
   // change must re-open a post-convergence Copilot round, not be suppressed.
-  if (normalized.startsWith("docs/")) return classifyFile(filePath) === "docs";
+  // Pass the SAME trim+lowercased value the prefix check used: classifyFile is
+  // case/whitespace-sensitive, so classifying the raw input could disagree.
+  if (normalized.startsWith("docs/")) return classifyFile(normalized) === "docs";
   return normalized.endsWith(".md")
     || normalized.endsWith(".mdx")
     || normalized.endsWith(".txt")
