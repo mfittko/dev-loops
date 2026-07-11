@@ -6,6 +6,7 @@ import {
   classifyFile,
   analyzeT1,
   analyzeDiff,
+  diffHasSecuritySeam,
 } from "../src/analysis/diff-analyzer.mjs";
 import { resolveDynamicAngles } from "../src/analysis/change-classifier.mjs";
 
@@ -112,6 +113,78 @@ test("analyzeT1: detects logic change from code additions", () => {
   const result = analyzeT1(diff, t0);
   assert.ok(result.changeCategories.includes("LOGIC_CHANGE"));
   assert.equal(result.hunkCount, 1);
+});
+
+// #1336: security-sensitive seam detection.
+const codeT0 = { files: ["scripts/loop/x.mjs"], extensions: [".mjs"], directories: ["scripts/loop"], renameOnly: false, allDocs: false };
+
+test("analyzeT1: browser-automation seam yields SECURITY_SENSITIVE_SEAM", () => {
+  const diff = "@@ -1,2 +1,3 @@\n const y = 1;\n+  await page.goto(appUrl);\n";
+  const result = analyzeT1(diff, codeT0);
+  assert.ok(result.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
+test("analyzeT1: child_process/exec seam yields SECURITY_SENSITIVE_SEAM", () => {
+  const diff = "@@ -1,2 +1,3 @@\n const y = 1;\n+  const out = execSync(`git log ${ref}`);\n";
+  const result = analyzeT1(diff, codeT0);
+  assert.ok(result.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
+test("analyzeT1: untrusted fetch + destructive rm seams yield SECURITY_SENSITIVE_SEAM", () => {
+  for (const line of ["+  const r = await fetch(url);", "+  await rm(dir, { recursive: true });", "+  await page.setInputFiles(sel, localPath);"]) {
+    const diff = `@@ -1,2 +1,3 @@\n const y = 1;\n${line}\n`;
+    assert.ok(analyzeT1(diff, codeT0).changeCategories.includes("SECURITY_SENSITIVE_SEAM"), `expected seam for: ${line}`);
+  }
+});
+
+test("analyzeT1: ordinary logic change (no dangerous primitive) is NOT a seam", () => {
+  const diff = "@@ -1,3 +1,5 @@\n import x from 'y';\n+const total = a + b;\n+export { total };\n";
+  const result = analyzeT1(diff, codeT0);
+  assert.ok(result.changeCategories.includes("LOGIC_CHANGE"));
+  assert.ok(!result.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
+test("seam: a comment/doc line that merely names a primitive is NOT a seam (gated on !isNonLogicLine)", () => {
+  // #1336 fix: no over-triggering on prose/comment mentions of a primitive.
+  assert.ok(!analyzeT1("@@ -1,1 +1,2 @@\n const y = 1;\n+// spawn( a child_process here\n", codeT0).changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+  assert.ok(!analyzeT1("@@ -1,1 +1,2 @@\n const y = 1;\n+ * documents fetch( behavior\n", codeT0).changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
+test("analyzeDiff: PURE-CODE seam diff (no test/doc/config file) still triggers SECURITY_SENSITIVE_SEAM", () => {
+  // #1336 fix: the most concentrated case (editing a browser/exec driver with no
+  // mixed surface) previously skipped analyzeT1 entirely and missed the seam.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tscripts/loop/driver.mjs",
+    diffOutput: "@@ -1,2 +1,3 @@\n const y = 1;\n+  await page.goto(appUrl);\n",
+  });
+  assert.equal(result.t0.files.length, 1);
+  assert.ok(result.t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM"), "pure-code seam must be detected");
+});
+
+test("analyzeDiff: pure-code NON-seam diff does not get SECURITY_SENSITIVE_SEAM", () => {
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tscripts/loop/driver.mjs",
+    diffOutput: "@@ -1,2 +1,3 @@\n const y = 1;\n+  const total = a + b;\n",
+  });
+  assert.ok(!result.t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
+test("seam: a config/docs FILE hunk naming a primitive is NOT a seam; a code file IS (file-gated via diff headers)", () => {
+  // #1336: a real git diff carries `+++ b/<path>` headers; only code files can
+  // carry an executable seam. A yaml persona line with `shell: true` must not flag.
+  const yamlSeamMention =
+    "diff --git a/packages/core/src/config/extension-defaults.yaml b/packages/core/src/config/extension-defaults.yaml\n" +
+    "--- a/packages/core/src/config/extension-defaults.yaml\n" +
+    "+++ b/packages/core/src/config/extension-defaults.yaml\n" +
+    "@@ -1,1 +1,2 @@\n prompt: review\n+      prompt: no shell: true and no child_process here\n";
+  assert.equal(diffHasSecuritySeam(yamlSeamMention), false, "config/docs mention must not flag a seam");
+
+  const codeSeam =
+    "diff --git a/scripts/loop/driver.mjs b/scripts/loop/driver.mjs\n" +
+    "--- a/scripts/loop/driver.mjs\n" +
+    "+++ b/scripts/loop/driver.mjs\n" +
+    "@@ -1,1 +1,2 @@\n const y = 1;\n+  await page.goto(appUrl);\n";
+  assert.equal(diffHasSecuritySeam(codeSeam), true, "code-file seam must flag");
 });
 
 test("analyzeT1: logic change from import-only diff (imports ARE logic)", () => {

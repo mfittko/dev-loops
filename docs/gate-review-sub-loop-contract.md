@@ -89,6 +89,18 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   triggering change category or, for always-include lenses, that it is an
   always-include addition. This additive path is off by default, so existing configured angle pools
   are unaffected unless a gate explicitly opts in.
+- **Security-sensitive-seam trigger (`threat-model`).** When the change categories include
+  `SECURITY_SENSITIVE_SEAM` — a **code** file's diff (config/doc/markdown lines that merely
+  name a primitive are file-gated out) touches browser automation, `child_process`/shell
+  execution, untrusted network fetch, or destructive filesystem / local-file-upload ops — the
+  resolver selects the `threat-model` angle (recommended when configured; added from the pool in
+  additive mode). It is never dropped for such a diff, regardless of change size. `threat-model` is
+  an adversarial-security lens that returns an exhaustive trust-boundary checklist (input allowlists,
+  navigation/origin confinement pre-launch **and** at runtime, resource/loop bounds, data-at-rest +
+  cleanup on every fail-closed path, exported/entry-point self-validation, error/teardown safety,
+  path-traversal/deserialization, shell-injection) rather than a spot-check — so a batched up-front
+  pass surfaces the trust-boundary holes that would otherwise be drip-fed serially through Copilot
+  rounds. `input-validation` is likewise part of the core `LOGIC_CHANGE` subset, not pool-only.
 - the preamble produces one or more review handoff artifacts (branch, head SHA, PR/issue
   scope, acceptance criteria, touched files, validation posture). The resolved angle set
   and its rationale are written as a deterministic handoff artifact under

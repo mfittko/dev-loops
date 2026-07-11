@@ -18,6 +18,10 @@ export const ChangeCategory = Object.freeze({
   CI_ONLY: "CI_ONLY",
   COMMENT_ONLY: "COMMENT_ONLY",
   LOGIC_CHANGE: "LOGIC_CHANGE",
+  // #1336: the diff touches a security-sensitive seam (browser automation,
+  // child_process/shell exec, untrusted network fetch, destructive filesystem
+  // ops / local-file upload). Triggers an up-front adversarial threat-model angle.
+  SECURITY_SENSITIVE_SEAM: "SECURITY_SENSITIVE_SEAM",
 });
 
 // ---------------------------------------------------------------------------
@@ -54,8 +58,16 @@ export const CATEGORY_ANGLE_MAP = {
   // Core review subset for any non-trivial code change. Peripheral lenses
   // (ci-guard, link-check, packaging-runtime, config-drift, etc.) are pulled in
   // only when the diff's other categories implicate them, not by logic alone.
+  // input-validation is included (#1336): it was pool-only and never auto-
+  // recommended, so entrypoint/input drift went unreviewed unless hand-picked.
   [ChangeCategory.LOGIC_CHANGE]: [
-    "scope", "correctness", "coverage", "determinism", "contract-surface",
+    "scope", "correctness", "coverage", "determinism", "contract-surface", "input-validation",
+  ],
+  // #1336: security-sensitive seam → up-front adversarial threat-model, plus
+  // input-validation and the core correctness/scope lenses. threat-model is
+  // never dropped for such a diff (a seam is dangerous regardless of size).
+  [ChangeCategory.SECURITY_SENSITIVE_SEAM]: [
+    "threat-model", "input-validation", "scope", "correctness",
   ],
 };
 

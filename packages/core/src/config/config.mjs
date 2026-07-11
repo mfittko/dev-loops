@@ -605,6 +605,7 @@ const BUILTIN_PERSONAS = Object.freeze({
   yagni:       { persona: "review", defaultModel: null },
   "contract-surface":  { persona: "review", defaultModel: null },
   "input-validation":  { persona: "review", defaultModel: null },
+  "threat-model":      { persona: "review", defaultModel: null },
   "packaging-runtime": { persona: "review", defaultModel: null },
   "state-concurrency": { persona: "review", defaultModel: null },
   "renderer-security": { persona: "review", defaultModel: null },
