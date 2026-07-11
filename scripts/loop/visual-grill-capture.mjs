@@ -353,7 +353,9 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   try {
     descriptor = parseDescriptor(options.descriptor, { readFileSync, base: options.repoRoot });
   } catch (err) {
-    const result = { ok: false, screenshotPath: null, statePath: null, stopReason: (err?.message ?? String(err)).split("\n")[0] };
+    // Truncate consistently with the other fail-closed envelopes so a pathological
+    // parse error can't bloat stdout/stderr or make jq parsing brittle.
+    const result = { ok: false, screenshotPath: null, statePath: null, stopReason: (err?.message ?? String(err)).split("\n")[0].slice(0, 300) };
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
     return;
   }
