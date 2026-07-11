@@ -208,7 +208,9 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
         page,
         testInfo,
         sliceId,
-        stateName: `${mobileCapture.stateName} (mobile 390)`,
+        stateName: mobileCapture.stateName,
+        // The slug carries the viewport — no need to encode it in the state name.
+        viewport: MOBILE,
         fullPage: false,
         metadata: {
           fixture: deckName,
@@ -364,7 +366,9 @@ export function defineArticleSuite({ sliceId, articlePath }) {
         page,
         testInfo,
         sliceId,
-        stateName: `${sliceId} (mobile 390)`,
+        stateName: sliceId,
+        // The slug carries the viewport — no need to encode it in the state name.
+        viewport: MOBILE,
         fullPage: false,
         metadata: {
           fixture: articleName,

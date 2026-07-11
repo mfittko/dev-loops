@@ -463,6 +463,23 @@ describe("schema validation", () => {
     }).success);
   });
 
+  test("S35d: a step may declare a viewport and an interactionState; both are validated", () => {
+    assert.ok(DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "goto", path: "/", viewport: { width: 390, height: 844 }, interactionState: "error" }] }] },
+    }).success);
+    // Non-positive viewport dimensions are rejected (a bad descriptor must fail closed).
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "goto", path: "/", viewport: { width: 0, height: 844 } }] }] },
+    }).success);
+    // Only the route-named interaction states are accepted.
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      uiReview: { flows: [{ name: "decks", steps: [{ action: "goto", path: "/", interactionState: "wiggle" }] }] },
+    }).success);
+  });
+
   test("S36: uiReview.serverLogExceptionPattern rejects a malformed regex", () => {
     assert.ok(!DevLoopConfigSchema.safeParse({
       version: 1,

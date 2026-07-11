@@ -434,6 +434,54 @@ test("makeRunStep: threads consolePath into the runStep result and points state.
   assert.equal(state.artifacts.console.path, outcome.consolePath, "state.json back-references the same console.json");
 });
 
+test("makeRunStep: a declared step viewport resizes the page and slugs the capture into a distinct directory (same state name, different viewport)", async () => {
+  const outputDir = tempDir();
+  const resized = [];
+  const page = {
+    on: () => {},
+    goto: async () => {},
+    setViewportSize: async (v) => resized.push(v),
+    screenshot: async () => {},
+  };
+  const runStep = makeRunStep({ page, outputDir });
+
+  const desktop = await runStep({ appUrl: "http://app", flow: { name: "decks" }, step: { name: "Hero", action: "goto", path: "/" }, index: 0 });
+  const mobile = await runStep({ appUrl: "http://app", flow: { name: "decks" }, step: { name: "Hero", action: "goto", path: "/", viewport: { width: 390, height: 844 } }, index: 1 });
+
+  // The declared viewport is applied to the page (honest pixels, not a mislabeled slug).
+  assert.deepEqual(resized, [{ width: 390, height: 844 }]);
+  // Same state name, different viewport → distinct on-disk directories (no collision).
+  assert.notEqual(desktop.statePath, mobile.statePath);
+  assert.match(path.dirname(desktop.statePath), /hero-default-none$/);
+  assert.match(path.dirname(mobile.statePath), /hero-w390h844-none$/);
+  const mobileState = JSON.parse(readFileSync(mobile.statePath, "utf8"));
+  assert.equal(mobileState.viewport, "w390h844");
+});
+
+test("makeRunStep: a viewport set by an earlier step carries into a later undeclared step's slug (the page stays resized — no stale `default`)", async () => {
+  const outputDir = tempDir();
+  const page = { on: () => {}, goto: async () => {}, setViewportSize: async () => {}, screenshot: async () => {} };
+  const runStep = makeRunStep({ page, outputDir });
+
+  // Step 1 resizes to mobile; step 2 declares NO viewport but the page is STILL at 390.
+  await runStep({ appUrl: "http://app", flow: { name: "decks" }, step: { name: "Hero", action: "goto", path: "/", viewport: { width: 390, height: 844 } }, index: 0 });
+  const later = await runStep({ appUrl: "http://app", flow: { name: "decks" }, step: { name: "Detail", action: "goto", path: "/d" }, index: 1 });
+
+  // The slug + state.json must name the viewport the page is ACTUALLY at, not `default`.
+  assert.match(path.dirname(later.statePath), /detail-w390h844-none$/);
+  assert.equal(JSON.parse(readFileSync(later.statePath, "utf8")).viewport, "w390h844");
+});
+
+test("makeRunStep: a declared interactionState slugs the capture (route names it — the drive never enumerates)", async () => {
+  const outputDir = tempDir();
+  const page = { on: () => {}, goto: async () => {}, click: async () => {}, screenshot: async () => {} };
+  const runStep = makeRunStep({ page, outputDir });
+
+  const errored = await runStep({ appUrl: "http://app", flow: { name: "form" }, step: { name: "Email", action: "click", selector: "#submit", interactionState: "error" }, index: 0 });
+  assert.match(path.dirname(errored.statePath), /email-default-error$/);
+  assert.equal(JSON.parse(readFileSync(errored.statePath, "utf8")).interactionState, "error");
+});
+
 test("makeRunStep: a capture failure still advances the attribution cursor — the next step's console.json does not inherit the prior step's events (no misattribution)", async () => {
   const outputDir = tempDir();
   const handlers = {};
