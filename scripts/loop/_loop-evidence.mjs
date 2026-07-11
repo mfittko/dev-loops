@@ -11,6 +11,7 @@ import {
   normalizeReviewerSnapshot,
 } from "@dev-loops/core/loop/reviewer-loop-state";
 import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
+import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 export async function loadCopilotEvidence({ repo, pr, copilotInputPath }, { env = process.env, ghCommand = "gh" } = {}) {
   let snapshot;
   if (copilotInputPath !== undefined) {
@@ -25,7 +26,7 @@ export async function loadCopilotEvidence({ repo, pr, copilotInputPath }, { env 
   // waiting_for_ci here. Fail soft to defaults if config cannot be loaded.
   let refinementConfig;
   try {
-    const loaded = await loadDevLoopConfig();
+    const loaded = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
     const config = Array.isArray(loaded?.errors) && loaded.errors.length > 0 ? { version: 1 } : (loaded?.config ?? { version: 1 });
     refinementConfig = resolveRefinement(config);
   } catch {

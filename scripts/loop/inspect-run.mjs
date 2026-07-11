@@ -23,6 +23,7 @@ import {
 } from "@dev-loops/core/loop/steering";
 import { validateSteeringStateTarget } from "./_steering-state-file.mjs";
 import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
+import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: inspect-run.mjs --repo <owner/name> --pr <number>
@@ -248,7 +249,7 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
   // gates.preApproval.requireCi:false (#1337) for a CI-less repo; fail soft to defaults.
   let refinementConfig;
   try {
-    const loaded = await loadDevLoopConfig();
+    const loaded = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
     const config = Array.isArray(loaded?.errors) && loaded.errors.length > 0 ? { version: 1 } : (loaded?.config ?? { version: 1 });
     refinementConfig = resolveRefinement(config);
   } catch {

@@ -126,7 +126,9 @@ const GatesConfig = z.strictObject({
   draft: GateConfig.optional(),
   // `requireCi` is honored on both gates: default true keeps CI a precondition,
   // false is an opt-out escape hatch so a repo with no CI is not held at the
-  // gate. The pre-approval gate mirrors the draft gate's `requireCi` semantics.
+  // gate. The pre-approval gate mirrors the draft gate's `requireCi` semantics —
+  // when false the CI verdict is ignored entirely at that boundary, including a
+  // real failure (not merely "green optional").
   preApproval: GateConfig.optional(),
   // Relaxed spike gate profile (#965). A spike's deliverable is a findings doc,
   // not production code, so it should not carry the full draft → pre-approval →
