@@ -143,6 +143,31 @@ test("analyzeT1: ordinary logic change (no dangerous primitive) is NOT a seam", 
   assert.ok(!result.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
 });
 
+test("seam: a comment/doc line that merely names a primitive is NOT a seam (gated on !isNonLogicLine)", () => {
+  // #1336 fix: no over-triggering on prose/comment mentions of a primitive.
+  assert.ok(!analyzeT1("@@ -1,1 +1,2 @@\n const y = 1;\n+// spawn( a child_process here\n", codeT0).changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+  assert.ok(!analyzeT1("@@ -1,1 +1,2 @@\n const y = 1;\n+ * documents fetch( behavior\n", codeT0).changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
+test("analyzeDiff: PURE-CODE seam diff (no test/doc/config file) still triggers SECURITY_SENSITIVE_SEAM", () => {
+  // #1336 fix: the most concentrated case (editing a browser/exec driver with no
+  // mixed surface) previously skipped analyzeT1 entirely and missed the seam.
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tscripts/loop/driver.mjs",
+    diffOutput: "@@ -1,2 +1,3 @@\n const y = 1;\n+  await page.goto(appUrl);\n",
+  });
+  assert.equal(result.t0.files.length, 1);
+  assert.ok(result.t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM"), "pure-code seam must be detected");
+});
+
+test("analyzeDiff: pure-code NON-seam diff does not get SECURITY_SENSITIVE_SEAM", () => {
+  const result = analyzeDiff({
+    nameStatusOutput: "M\tscripts/loop/driver.mjs",
+    diffOutput: "@@ -1,2 +1,3 @@\n const y = 1;\n+  const total = a + b;\n",
+  });
+  assert.ok(!result.t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
 test("analyzeT1: logic change from import-only diff (imports ARE logic)", () => {
   const t0 = { files: ["src/foo.mjs"], extensions: [".mjs"], directories: ["src"], renameOnly: false, allDocs: false };
   const diff = "@@ -1,1 +1,1 @@\n-import x from 'y';\n+import z from 'y';\n";

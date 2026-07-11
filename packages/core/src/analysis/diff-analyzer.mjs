@@ -186,6 +186,34 @@ function isSecuritySensitiveSeamLine(content) {
 }
 
 /**
+ * Scan a unified diff for a security-sensitive seam (#1336) on any added/removed
+ * LOGIC line. Gated on `!isNonLogicLine` so a comment/docstring/prose line that
+ * merely names a primitive (e.g. `child_process` in a doc, `shell: true` in a
+ * yaml prompt) does not falsely trigger — a real seam is always executable code.
+ * Runs independently of the T0/T1 category path so it also covers a pure-code
+ * diff (all files classify as `code`), which is the MOST concentrated seam case
+ * (e.g. editing a Playwright/child_process driver) and the one #1336 targets.
+ *
+ * @param {string} diffOutput — raw unified diff output
+ * @returns {boolean}
+ */
+export function diffHasSecuritySeam(diffOutput) {
+  if (!diffOutput) return false;
+  let inHunk = false;
+  for (const line of diffOutput.split("\n")) {
+    if (line.startsWith("@@")) { inHunk = true; continue; }
+    if (!inHunk) continue;
+    const isAdd = line.startsWith("+") && !line.startsWith("+++");
+    const isDel = line.startsWith("-") && !line.startsWith("---");
+    if (!isAdd && !isDel) continue;
+    const content = line.slice(1).trim();
+    if (isNonLogicLine(content)) continue;
+    if (isSecuritySensitiveSeamLine(content)) return true;
+  }
+  return false;
+}
+
+/**
  * Analyze unified diff hunks to classify change types.
  *
  * Detects:
@@ -211,7 +239,6 @@ export function analyzeT1(diffOutput, t0) {
   let hasLogicChange = false;
   let hasAnyChangedLine = false;
   let allChangedLinesAreNonLogic = true;
-  let hasSecuritySeam = false;
 
   for (const line of lines) {
     // Track hunk headers
@@ -232,7 +259,6 @@ export function analyzeT1(diffOutput, t0) {
         hasLogicChange = true;
         allChangedLinesAreNonLogic = false;
       }
-      if (isSecuritySensitiveSeamLine(content)) hasSecuritySeam = true;
     } else if (line.startsWith("-") && !line.startsWith("---")) {
       deleted++;
       hasAnyChangedLine = true;
@@ -241,7 +267,6 @@ export function analyzeT1(diffOutput, t0) {
         hasLogicChange = true;
         allChangedLinesAreNonLogic = false;
       }
-      if (isSecuritySensitiveSeamLine(content)) hasSecuritySeam = true;
     }
   }
 
@@ -250,7 +275,7 @@ export function analyzeT1(diffOutput, t0) {
   if (hasLogicChange) categories.add("LOGIC_CHANGE");
   // #1336: a diff touching a security-sensitive seam gets an up-front adversarial
   // threat-model angle, batched at draft time instead of drip-fed via Copilot.
-  if (hasSecuritySeam) categories.add("SECURITY_SENSITIVE_SEAM");
+  if (diffHasSecuritySeam(diffOutput)) categories.add("SECURITY_SENSITIVE_SEAM");
   // Mixed diffs never satisfy the exclusive `_ONLY` checks above (some files are
   // code), so their peripheral surfaces would be dropped. In this hunk-level path
   // (only reached for genuinely mixed diffs), also union each surface by PRESENCE
@@ -375,6 +400,14 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
       hunkCount: 0,
       lineStats: { added: 0, deleted: 0 },
     };
+  }
+
+  // #1336: seam detection runs on the raw diff regardless of the T0/T1 path, so a
+  // pure-code diff (single `code` category, T1 skipped) editing a browser/exec/
+  // fetch/fs-mutation driver still triggers the up-front threat-model angle — the
+  // most concentrated seam case, and the one this feature targets.
+  if (diffHasSecuritySeam(diffOutput) && !t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM")) {
+    t1.changeCategories.push("SECURITY_SENSITIVE_SEAM");
   }
 
   // `ambiguous` flags one specific case: a diff T0 could not classify (mixed file
