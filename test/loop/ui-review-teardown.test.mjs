@@ -634,6 +634,36 @@ test("runCli: rowTeardown.deleteCommand non-zero exit => DROP_FAILED (ok:false),
   assert.equal(result.ok, false);
 });
 
+// A present-but-malformed (non-string) worktreePath is a corrupted provision
+// result — the destructive delete must NOT silently fall back to the primary
+// checkout scope. Refuse (runner never invoked), distinct from an absent path.
+test("runCli: malformed (non-string) provision worktreePath fails closed (DROP_FAILED, runner never invoked)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-badwt-"));
+  writeFileSync(join(dir, ".devloops.json"), JSON.stringify({
+    version: 1,
+    uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz", rowTeardown: { deleteCommand: "bin/cleanup-rows" } } },
+  }));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify({ ...PROVISION, worktreePath: { bad: true }, boot: {} }));
+  const manifestPath = join(dir, "manifest.json");
+  writeFileSync(manifestPath, JSON.stringify([{ session: "sess-xyz", step: "save", action: "click" }]));
+
+  const runCalls = [];
+  const run = async (...a) => { runCalls.push(a); return { code: 0, stdout: "", stderr: "" }; };
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const argv = ["--repo-root", dir, "--provision-result", provisionPath, "--row-manifest", manifestPath, "--confirm", "--no-stop-app"];
+  await runCli(argv, { stdout, stderr, run });
+  process.exitCode = 0;
+
+  assert.equal(runCalls.length, 0, "a malformed worktreePath => the runner is never invoked");
+  const result = JSON.parse(out);
+  assert.equal(result.ledger.rows.status, ROW_STATUS.DROP_FAILED);
+  assert.equal(result.ledger.rows.dropped, 0);
+  assert.match(result.ledger.rows.detail, /malformed provision worktreePath|unverified scope/i);
+});
+
 test("parseUiReviewTeardownCliArgs: requires --repo-root and --provision-result", () => {
   assert.throws(() => parseUiReviewTeardownCliArgs(["--provision-result", "/p.json"]), /repo-root/);
   assert.throws(() => parseUiReviewTeardownCliArgs(["--repo-root", "/r"]), /provision-result/);

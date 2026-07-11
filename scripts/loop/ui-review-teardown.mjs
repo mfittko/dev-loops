@@ -255,6 +255,12 @@ function sessionFromManifest(rows) {
  * nothing and says why — the core maps that to a drop failure, never a silent
  * no-op or a wrong-scope delete. */
 async function dropRows({ rows }, { deleteCommand, cwd, run = runChild }) {
+  if (typeof cwd !== "string" || cwd.trim().length === 0) {
+    // No verified dev-scope directory to run the delete in (a malformed provision
+    // worktreePath resolves to null upstream). Refuse rather than run the
+    // destructive command in an unverified/wrong scope.
+    return { ok: false, dropped: 0, detail: "no verified worktree cwd for the row delete (malformed provision worktreePath); refusing to run in an unverified scope" };
+  }
   if (!deleteCommand) {
     return { ok: false, dropped: 0, detail: "no uiReview.run.rowTeardown.deleteCommand configured; cannot drop tagged rows" };
   }
@@ -293,11 +299,15 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const reportResult = readResultJson(options.reportResult);
   const rowManifest = readRowManifest(options.rowManifest);
 
-  // The row-delete command lives in the branch's (worktree) config; fall back to
-  // the primary checkout when no worktree path was captured. The dev DB the
-  // command targets is the worktree's, so the command runs there.
+  // The row-delete command lives in the branch's (worktree) config and runs in the
+  // worktree (its dev DB). Fall back to the primary checkout only when NO worktree
+  // path was captured (absent/empty). A present-but-malformed (non-string)
+  // worktreePath signals a corrupted provision result — resolve to null so the
+  // delete fails closed rather than silently running in the wrong scope.
   const rawWorktreePath = provisionResult?.worktreePath;
-  const dropCwd = typeof rawWorktreePath === "string" && rawWorktreePath.trim().length > 0 ? rawWorktreePath : options.repoRoot;
+  const dropCwd = rawWorktreePath != null && typeof rawWorktreePath !== "string"
+    ? null
+    : (typeof rawWorktreePath === "string" && rawWorktreePath.trim().length > 0 ? rawWorktreePath : options.repoRoot);
 
   const result = await teardown(
     {
