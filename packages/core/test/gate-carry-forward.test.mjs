@@ -79,6 +79,16 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
     assert.equal(decision.carryForward, false);
   });
 
+  test("docs/-hosted .mjs delta + code angle -> false (code re-runs, not carried)", () => {
+    const decision = resolveAngleCarryForward({
+      angle: "correctness",
+      changedFiles: ["docs/example.mjs"],
+      prevVerdict: "clean",
+    });
+    assert.equal(decision.carryForward, false);
+    assert.match(decision.reason, /review surface \(code\)/);
+  });
+
   test("mandatory / always-include angle -> always re-run (never carried)", () => {
     const decision = resolveAngleCarryForward({
       angle: "pr-description",
@@ -167,6 +177,11 @@ describe("resolveConvergenceCarryForward — AC2 fail-closed Copilot convergence
     assert.equal(resolveConvergenceCarryForward({ changedFiles: ["foo.test.mjs"] }).carryForward, false);
     assert.equal(resolveConvergenceCarryForward({ changedFiles: ["config.json"] }).carryForward, false);
     assert.equal(resolveConvergenceCarryForward({ changedFiles: [".github/workflows/ci.yml"] }).carryForward, false);
+  });
+
+  test("docs/-hosted code/config delta -> fresh blocking round (re-open, not carried)", () => {
+    assert.equal(resolveConvergenceCarryForward({ changedFiles: ["docs/example.mjs"] }).carryForward, false);
+    assert.equal(resolveConvergenceCarryForward({ changedFiles: ["docs/fixture.json"] }).carryForward, false);
   });
 
   test("empty delta / unclassifiable file -> false (fail-closed)", () => {

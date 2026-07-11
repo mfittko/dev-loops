@@ -96,9 +96,9 @@ export function classifyFile(filePath) {
   if (fp.startsWith(".github/")) {
     return "ci";
   }
-  if (fp.startsWith("docs/") || fp.endsWith(".md") || fp === "README.md") {
-    return "docs";
-  }
+  // A known code/config/test extension wins over the docs/ directory-prefix
+  // fallback: a code/config/test file hosted under docs/ is still that surface,
+  // not prose. Extension checks run before the prefix fallbacks below.
   if (
     fp.endsWith(".yml") || fp.endsWith(".yaml") ||
     fp.endsWith(".json") || fp === "package.json"
@@ -113,6 +113,9 @@ export function classifyFile(filePath) {
     fp.endsWith(".ts") || fp.endsWith(".mts")
   ) {
     return "code";
+  }
+  if (fp.startsWith("docs/") || fp.endsWith(".md") || fp === "README.md") {
+    return "docs";
   }
   return "unknown";
 }

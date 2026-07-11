@@ -43,6 +43,18 @@ test("classifyFile: ci for .github/ paths", () => {
   assert.equal(classifyFile(".github/workflows/verify.yml"), "ci");
 });
 
+test("classifyFile: code/config/test extension under docs/ wins over docs prefix", () => {
+  assert.equal(classifyFile("docs/example.mjs"), "code");
+  assert.equal(classifyFile("docs/fixture.json"), "config");
+  assert.equal(classifyFile("docs/x.test.mjs"), "test");
+});
+
+test("classifyFile: prose extensions under docs/ stay docs", () => {
+  assert.equal(classifyFile("docs/foo.md"), "docs");
+  assert.equal(classifyFile("docs/foo.html"), "docs");
+  assert.equal(classifyFile("docs/foo.css"), "docs");
+});
+
 test("classifyFile: unknown for unrecognized", () => {
   assert.equal(classifyFile("assets/logo.png"), "unknown");
 });
