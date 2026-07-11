@@ -39,6 +39,7 @@ gates:
       - gate-evidence
       - no-op
       - input-validation
+      - threat-model
       - packaging-runtime
       - state-concurrency
       - renderer-security
@@ -350,6 +351,12 @@ personas:
     persona: review
     prompt: >-
       Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
+    defaultModel: null
+
+  threat-model:
+    persona: review
+    prompt: >-
+      Adversarially threat-model this change end to end — you are an attacker with control over every caller-/plan-influenced input (descriptors, paths, URLs, flags, env, fixture data). Do NOT spot-check; return a trust-boundary CHECKLIST and a verdict per item. Enumerate exhaustively for every seam the diff touches: (1) INPUT ALLOWLISTS — are actions/commands/schemes/hosts allowlisted (not denylisted), and enforced BEFORE any dangerous use (browser launch, exec, read)? (2) NAVIGATION/ORIGIN CONFINEMENT — same-origin/scheme enforced both pre-launch AND at runtime after every redirect / click / server-response (a pre-check the runtime can defeat is a hole). (3) RESOURCE/LOOP BOUNDS — step/size/time/recursion caps on attacker-influenced counts. (4) DATA-AT-REST + CLEANUP — sensitive intermediate artifacts minimized and removed on EVERY fail-closed path (not just the happy path); no off-origin/partial artifact left on disk on error. (5) EXPORTED/ENTRY-POINT TRUST — does every exported function / alternate entry self-validate, or can it bypass the parse-time validation the CLI does? (6) ERROR/TEARDOWN SAFETY — a throw in rm/close/teardown must not break the fail-closed envelope or leak state. (7) PATH TRAVERSAL / DESERIALIZATION — reject absolute/`..`/escape-base paths before read; no unsafe deserialization of untrusted data. (8) SHELL/PROCESS — no unescaped interpolation into a shell; prefer argv arrays; no `shell:true` with caller input. For each category that applies, state whether the change is safe and cite the guarding code (file:line) or flag the specific abuse and a failing-input example. If a category does not apply to the touched seam, say so explicitly rather than skipping it.
     defaultModel: null
 
   determinism:

@@ -114,6 +114,35 @@ test("analyzeT1: detects logic change from code additions", () => {
   assert.equal(result.hunkCount, 1);
 });
 
+// #1336: security-sensitive seam detection.
+const codeT0 = { files: ["scripts/loop/x.mjs"], extensions: [".mjs"], directories: ["scripts/loop"], renameOnly: false, allDocs: false };
+
+test("analyzeT1: browser-automation seam yields SECURITY_SENSITIVE_SEAM", () => {
+  const diff = "@@ -1,2 +1,3 @@\n const y = 1;\n+  await page.goto(appUrl);\n";
+  const result = analyzeT1(diff, codeT0);
+  assert.ok(result.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
+test("analyzeT1: child_process/exec seam yields SECURITY_SENSITIVE_SEAM", () => {
+  const diff = "@@ -1,2 +1,3 @@\n const y = 1;\n+  const out = execSync(`git log ${ref}`);\n";
+  const result = analyzeT1(diff, codeT0);
+  assert.ok(result.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
+test("analyzeT1: untrusted fetch + destructive rm seams yield SECURITY_SENSITIVE_SEAM", () => {
+  for (const line of ["+  const r = await fetch(url);", "+  await rm(dir, { recursive: true });", "+  await page.setInputFiles(sel, localPath);"]) {
+    const diff = `@@ -1,2 +1,3 @@\n const y = 1;\n${line}\n`;
+    assert.ok(analyzeT1(diff, codeT0).changeCategories.includes("SECURITY_SENSITIVE_SEAM"), `expected seam for: ${line}`);
+  }
+});
+
+test("analyzeT1: ordinary logic change (no dangerous primitive) is NOT a seam", () => {
+  const diff = "@@ -1,3 +1,5 @@\n import x from 'y';\n+const total = a + b;\n+export { total };\n";
+  const result = analyzeT1(diff, codeT0);
+  assert.ok(result.changeCategories.includes("LOGIC_CHANGE"));
+  assert.ok(!result.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+});
+
 test("analyzeT1: logic change from import-only diff (imports ARE logic)", () => {
   const t0 = { files: ["src/foo.mjs"], extensions: [".mjs"], directories: ["src"], renameOnly: false, allDocs: false };
   const diff = "@@ -1,1 +1,1 @@\n-import x from 'y';\n+import z from 'y';\n";

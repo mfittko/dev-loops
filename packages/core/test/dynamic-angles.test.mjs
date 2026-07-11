@@ -89,16 +89,51 @@ test("resolveDynamicAngles: LOGIC_CHANGE resolves to core subset, not all angles
   });
   assert.equal(result.fallbackToAll, false);
   // Core review subset (∩ DRAFT_ANGLES) + always-include gate-evidence.
-  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence"]) {
+  // input-validation is part of the core subset (#1336): entrypoint/input drift
+  // is reviewed for every logic change, not only when hand-picked.
+  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence", "input-validation"]) {
     assert.ok(result.recommendedAngles.includes(a), `expected ${a} in core subset`);
   }
   // Peripheral lenses are dropped, not run for logic alone.
-  for (const a of ["link-check", "packaging-runtime", "config-drift", "ci-guard", "input-validation", "state-concurrency", "no-op"]) {
+  for (const a of ["link-check", "packaging-runtime", "config-drift", "ci-guard", "state-concurrency", "no-op"]) {
     assert.ok(result.skippedAngles.includes(a), `expected ${a} skipped`);
     assert.ok(typeof result.reasons[a] === "string");
   }
   // Meaningfully narrower than the full configured pool (not a fallback-to-all).
   assert.ok(result.recommendedAngles.length < DRAFT_ANGLES.length);
+});
+
+// #1336: security-sensitive seam → up-front threat-model angle.
+const SEAM_DRAFT_ANGLES = [...DRAFT_ANGLES, "threat-model"];
+
+test("resolveDynamicAngles: SECURITY_SENSITIVE_SEAM selects threat-model (configured)", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: SEAM_DRAFT_ANGLES,
+    changeCategories: [ChangeCategory.LOGIC_CHANGE, ChangeCategory.SECURITY_SENSITIVE_SEAM],
+  });
+  assert.equal(result.fallbackToAll, false);
+  assert.ok(result.recommendedAngles.includes("threat-model"), "seam diff must select threat-model");
+  assert.ok(!result.skippedAngles.includes("threat-model"), "threat-model must never be skipped for a seam diff");
+  assert.ok(result.recommendedAngles.includes("input-validation"));
+});
+
+test("resolveDynamicAngles: SECURITY_SENSITIVE_SEAM adds threat-model from the pool (additive mode)", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES, // threat-model NOT configured
+    changeCategories: [ChangeCategory.SECURITY_SENSITIVE_SEAM],
+    anglePool: ["threat-model"],
+  });
+  assert.ok(result.addedAngles.includes("threat-model"), "threat-model pulled from the pool for a seam diff");
+  assert.match(result.addedReasons["threat-model"], /SECURITY_SENSITIVE_SEAM/);
+});
+
+test("resolveDynamicAngles: a non-seam logic change does NOT select threat-model", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: SEAM_DRAFT_ANGLES,
+    changeCategories: [ChangeCategory.LOGIC_CHANGE],
+  });
+  assert.ok(!result.recommendedAngles.includes("threat-model"), "non-seam change must not run threat-model");
+  assert.ok(result.skippedAngles.includes("threat-model"));
 });
 
 test("resolveDynamicAngles: mixed logic + CI unions ci-guard into the core subset", () => {

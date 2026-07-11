@@ -146,6 +146,45 @@ function isNonLogicLine(content) {
   return false;
 }
 
+// Security-sensitive seams (#1336): touching these primitives on caller-/plan-
+// influenced input is where trust-boundary bugs concentrate (drove #1335's 8
+// serial Copilot rounds). A changed line matching any of these triggers the
+// SECURITY_SENSITIVE_SEAM category so an up-front adversarial threat-model angle
+// is selected. Fail-safe by design — over-selection just adds one review lens.
+// Plain readFile/writeFile are deliberately excluded (ubiquitous JSON I/O would
+// flag nearly every script diff); the browser/process/network/destructive-fs/
+// upload seams below cover the genuinely dangerous surface, including #1335's
+// Playwright driver.
+const SECURITY_SEAM_PATTERNS = [
+  // Browser automation (driving a real browser over semi-trusted navigation)
+  /\b(playwright|webkit|chromium|puppeteer)\b/i,
+  /\bpage\.(goto|click|fill|evaluate|type|press|selectOption|setInputFiles|route|addInitScript)\b/,
+  /\.newPage\s*\(/,
+  /\bbrowser\.newContext\b/,
+  // Child-process / shell execution
+  /\bchild_process\b/,
+  /\b(exec|execSync|execFile|execFileSync|spawn|spawnSync)\s*\(/,
+  /\bshell\s*:\s*true\b/,
+  // Untrusted network fetch
+  /\bfetch\s*\(/,
+  /\bhttps?\.(get|request)\s*\(/,
+  /\b(axios|node-fetch|undici)\b/,
+  // Destructive filesystem ops + local-file upload (caller-path removal/read)
+  /\b(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync)\s*\(/,
+  /\bsetInputFiles\s*\(/,
+];
+
+/**
+ * Whether a changed diff line (content, prefix stripped) touches a
+ * security-sensitive seam (#1336).
+ *
+ * @param {string} content — trimmed line content (without + / - prefix)
+ * @returns {boolean}
+ */
+function isSecuritySensitiveSeamLine(content) {
+  return SECURITY_SEAM_PATTERNS.some((re) => re.test(content));
+}
+
 /**
  * Analyze unified diff hunks to classify change types.
  *
@@ -172,6 +211,7 @@ export function analyzeT1(diffOutput, t0) {
   let hasLogicChange = false;
   let hasAnyChangedLine = false;
   let allChangedLinesAreNonLogic = true;
+  let hasSecuritySeam = false;
 
   for (const line of lines) {
     // Track hunk headers
@@ -192,6 +232,7 @@ export function analyzeT1(diffOutput, t0) {
         hasLogicChange = true;
         allChangedLinesAreNonLogic = false;
       }
+      if (isSecuritySensitiveSeamLine(content)) hasSecuritySeam = true;
     } else if (line.startsWith("-") && !line.startsWith("---")) {
       deleted++;
       hasAnyChangedLine = true;
@@ -200,12 +241,16 @@ export function analyzeT1(diffOutput, t0) {
         hasLogicChange = true;
         allChangedLinesAreNonLogic = false;
       }
+      if (isSecuritySensitiveSeamLine(content)) hasSecuritySeam = true;
     }
   }
 
   // Build categories from T0 (shared with inferCategoriesFromT0) + hunk analysis.
   for (const c of t0FileCategories(t0)) categories.add(c);
   if (hasLogicChange) categories.add("LOGIC_CHANGE");
+  // #1336: a diff touching a security-sensitive seam gets an up-front adversarial
+  // threat-model angle, batched at draft time instead of drip-fed via Copilot.
+  if (hasSecuritySeam) categories.add("SECURITY_SENSITIVE_SEAM");
   // Mixed diffs never satisfy the exclusive `_ONLY` checks above (some files are
   // code), so their peripheral surfaces would be dropped. In this hunk-level path
   // (only reached for genuinely mixed diffs), also union each surface by PRESENCE
