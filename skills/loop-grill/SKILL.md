@@ -58,6 +58,16 @@ Before detecting gaps, scan the loaded content for external resource references:
 - **`--auto` mode:** attempt to fetch each resource using bounded wrapper commands (e.g. `gh`, API wrapper scripts under `scripts/`). Do not fetch resources inline with raw `curl` or token-heavy calls. Flag any inaccessible resource as `unresolved` in the findings rather than silently skipping it.
 - When no external resources are present, skip this step silently.
 
+### Visual resources
+
+Screenshots and Playwright navigation descriptors are visual resources: they let a design/UI gap be answered against the current screen instead of ambiguous prose. Surface them here, before the Q&A, alongside the other external resources.
+
+- **Screenshot (file path or URL):** include the referenced image as context when answering design/UI-related gaps. A local path is loaded directly with the read tool (it renders images); a URL is fetched with a bounded wrapper command, never a raw token-heavy call. An unreadable path or an inaccessible URL is flagged `unresolved` — never describe a screen you could not see.
+- **Playwright navigation descriptor** (an ordered path to a screen, e.g. "go to /settings, click Edit Profile"):
+  - **`--auto` mode:** invoke the bounded wrapper `node scripts/loop/visual-grill-capture.mjs --repo-root <p> --app-url <url> --output-dir <p> --descriptor <json|@file>` to drive a headless browser and capture that screen's screenshot as context. The wrapper is a thin adapter over the ui_review drive harness; do not run browser code inline. A `@<file>` descriptor reference must be a relative, non-traversing path inside the repo root (an absolute or `..`-escaping path is rejected unread). Navigation is confined to the running app: only http/https `goto` targets on the app's own origin are allowed (a `file:`/`data:` scheme or a cross-origin override is rejected), steps are limited to DOM-interaction actions that reach a screen (`goto`/`click`/`fill`/`select`/`dispatch` — `upload` and unknown actions are rejected so no local file is read), and the descriptor is capped at a bounded step count. Confinement is also enforced at runtime — if a redirect or a click-navigation leaves the app origin, the capture fails closed rather than screenshotting an off-origin page. Only the final screen is persisted: intermediate step captures (which may hold sensitive state, e.g. a screen after a credential `fill`) are pruned as the walk advances. When it returns `ok: false` (the runner is unavailable, login fails, a step cannot be reached, or navigation is rejected), flag the visual gap `unresolved` — never re-describe the screen in prose.
+  - **Interactive mode:** ask the operator to provide the screenshot or confirm the navigation steps before the Q&A starts.
+- Any inaccessible screenshot, or a navigation descriptor that cannot be captured, is flagged `unresolved` — the same fail-closed degradation rule as every other external resource.
+
 ## Step 2 — Detect gaps
 
 Scan the loaded content and identify each gap. The minimum required gap detectors are:
