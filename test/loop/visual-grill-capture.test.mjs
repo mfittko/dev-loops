@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   parseVisualGrillCliArgs,
   parseDescriptor,
+  resolveDescriptorPath,
   captureDescriptorScreen,
   MAX_DESCRIPTOR_STEPS,
 } from "../../scripts/loop/visual-grill-capture.mjs";
@@ -69,6 +70,30 @@ test("parseDescriptor: accepts a well-formed descriptor", () => {
   const d = parseDescriptor(JSON.stringify({ name: "settings", steps: [{ action: "goto", path: "/settings" }] }));
   assert.equal(d.name, "settings");
   assert.equal(d.steps.length, 1);
+});
+
+test("resolveDescriptorPath: confines @<path> to a relative, in-base path", () => {
+  const base = "/repo/root";
+  assert.throws(() => resolveDescriptorPath("/etc/passwd", base), /absolute/);
+  assert.throws(() => resolveDescriptorPath("../../secret", base), /segment/);
+  assert.throws(() => resolveDescriptorPath("a/../../escape", base), /segment/);
+  assert.throws(() => resolveDescriptorPath("tmp/desc.json", undefined), /base/);
+  assert.equal(resolveDescriptorPath("tmp/desc.json", base), path.join(base, "tmp/desc.json"));
+});
+
+test("parseDescriptor: @<path> rejects absolute + traversing paths without reading; reads a relative in-base path", () => {
+  const base = "/repo/root";
+  const calls = [];
+  const reader = (p) => {
+    calls.push(p);
+    return JSON.stringify({ name: "from-file", steps: [{ action: "goto", path: "/x" }] });
+  };
+  assert.throws(() => parseDescriptor("@/etc/passwd", { readFileSync: reader, base }), /absolute/);
+  assert.throws(() => parseDescriptor("@../../secret", { readFileSync: reader, base }), /segment/);
+  assert.equal(calls.length, 0); // never read for the rejected paths
+  const d = parseDescriptor("@tmp/desc.json", { readFileSync: reader, base });
+  assert.equal(d.name, "from-file");
+  assert.deepEqual(calls, [path.join(base, "tmp/desc.json")]); // read exactly the confined path
 });
 
 test("parseDescriptor: rejects an over-cap descriptor (bounded walk)", () => {
@@ -269,6 +294,22 @@ test("captureDescriptorScreen: fails closed if the walk can't start on the app o
   assert.equal(result.ok, false);
   assert.match(result.stopReason, /could not reach the app origin/);
   assert.equal(existsSync(path.join(outputDir, "named-states")) && readdirSync(path.join(outputDir, "named-states")).length > 0, false);
+});
+
+test("captureDescriptorScreen: two consecutive steps with the same name keep the final bundle (prune doesn't delete it)", async () => {
+  const outputDir = tempDir();
+  // Both steps resolve to the same named-state dir; pruning the predecessor must
+  // NOT delete the surviving final bundle (which would return a dangling path).
+  const result = await captureDescriptorScreen(
+    { repoRoot: "/r", appUrl: "http://app.test", outputDir, descriptor: { name: "s", steps: [
+      { action: "goto", path: "/settings", name: "settings" },
+      { action: "click", selector: "text=Edit", name: "settings" },
+    ] } },
+    { loadConfig: async () => ({ config: {} }), launchBrowser: () => fakeBrowser(fakePage()) },
+  );
+  assert.equal(result.ok, true);
+  assert.match(result.screenshotPath, /settings/);
+  assert.equal(existsSync(result.statePath), true, "the final bundle must survive a same-name predecessor prune");
 });
 
 test("captureDescriptorScreen: a same-origin walk is not false-tripped by the runtime guard", async () => {

@@ -162,16 +162,36 @@ export function parseVisualGrillCliArgs(argv) {
 }
 
 /**
+ * Confine a `@<path>` descriptor reference to a relative, non-traversing path
+ * inside `base` (the repo/worktree). The descriptor is semi-trusted, so an
+ * absolute path, a `..` segment, or any resolved path that escapes `base` is
+ * rejected BEFORE any read — no arbitrary local-file read, no /dev/random DoS.
+ * Returns the safe absolute path to read.
+ */
+export function resolveDescriptorPath(rawPath, base) {
+  if (!base) throw new Error("descriptor @<path> requires a repo-root base to confine the read");
+  if (path.isAbsolute(rawPath)) throw new Error(`descriptor @<path> must be relative to the repo root, not absolute: ${rawPath}`);
+  if (rawPath.split(/[/\\]/u).includes("..")) throw new Error(`descriptor @<path> must not contain a ".." segment: ${rawPath}`);
+  const baseAbs = path.resolve(base);
+  const resolved = path.resolve(baseAbs, rawPath);
+  if (resolved !== baseAbs && !resolved.startsWith(baseAbs + path.sep)) {
+    throw new Error(`descriptor @<path> escapes the repo root: ${rawPath}`);
+  }
+  return resolved;
+}
+
+/**
  * Parse the navigation descriptor from an inline JSON string or an `@<path>`
  * reference. Fail closed: malformed JSON, a missing `name`, or an empty `steps`
  * array throws — a descriptor that cannot be walked must never silently capture
- * a wrong (or blank) screen.
+ * a wrong (or blank) screen. An `@<path>` reference is confined to `base` (the
+ * repo root); the inline `{...}` form is unaffected.
  */
-export function parseDescriptor(raw, { readFileSync } = {}) {
+export function parseDescriptor(raw, { readFileSync, base } = {}) {
   let text = raw;
   if (typeof raw === "string" && raw.startsWith("@")) {
     if (!readFileSync) throw new Error("descriptor @<path> requires a file reader");
-    text = readFileSync(raw.slice(1), "utf8");
+    text = readFileSync(resolveDescriptorPath(raw.slice(1), base), "utf8");
   }
   let descriptor;
   try {
@@ -196,6 +216,12 @@ export function parseDescriptor(raw, { readFileSync } = {}) {
  * failure, unreachable step, screenshot write) degrades to { ok: false } with a
  * stated reason — the grill's fail-closed contract.
  */
+// The named-state directory a capture bundle lives in (or null).
+function captureDir(capture) {
+  const anchor = capture?.screenshotPath ?? capture?.statePath;
+  return anchor ? path.dirname(anchor) : null;
+}
+
 // Remove a step's on-disk capture bundle (the whole named-state dir the screenshot
 // lives in). Fail-safe: a missing dir is fine — the goal is only that no off-origin
 // bundle persists.
@@ -279,8 +305,12 @@ export async function captureDescriptorScreen(
       last = await runStep({ appUrl, flow, step: descriptor.steps[index], index });
       // Only the FINAL screen is loop-grill context; delete the superseded prior
       // bundle so a sensitive intermediate state (e.g. a screen after a credential
-      // `fill`) never lingers on disk.
-      await removeCaptureArtifact(prior);
+      // `fill`) never lingers on disk. Skip the prune when prior and last resolve to
+      // the SAME named-state dir (two consecutive steps with the same name/viewport),
+      // else pruning the predecessor would delete the surviving final bundle.
+      if (captureDir(prior) && captureDir(prior) !== captureDir(last)) {
+        await removeCaptureArtifact(prior);
+      }
       // Runtime confinement: a server-side redirect or a click-navigation can leave
       // the app origin after the pre-launch check. If it did, fail closed — never
       // return a screenshot of an off-origin page. Delete this step's bundle first.
@@ -321,7 +351,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const { readFileSync } = await import("node:fs");
   let descriptor;
   try {
-    descriptor = parseDescriptor(options.descriptor, { readFileSync });
+    descriptor = parseDescriptor(options.descriptor, { readFileSync, base: options.repoRoot });
   } catch (err) {
     const result = { ok: false, screenshotPath: null, statePath: null, stopReason: (err?.message ?? String(err)).split("\n")[0] };
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
