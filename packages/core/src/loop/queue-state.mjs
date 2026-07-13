@@ -285,4 +285,3 @@ export function appendBugIssue(queue, issueNumber, dependsOn = null) {
   queue.entries.push(entry);
   return entry;
 }
-

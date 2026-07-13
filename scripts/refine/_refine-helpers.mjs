@@ -293,6 +293,5 @@ export function writeCheckerOutput(result, { stdout = process.stdout, stderr = p
   return 0;
 }
 
-
 // Re-exported for checker scripts
 export { isDirectCliRun };
