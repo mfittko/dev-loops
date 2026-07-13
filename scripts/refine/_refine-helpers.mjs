@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -23,10 +23,6 @@ ${JQ_OUTPUT_USAGE}
 (--jq/--silent only apply together with --json; the verdict is always in the
 payload, never the exit code — a parsed --json run always exits 0 unless
 --jq/--silent explicitly turns the verdict into the exit code.)`.trim();
-
-export function normalizeIssueNumber(value, label, parseError) {
-  return parsePositiveInteger(value, label, parseError);
-}
 
 export function parseCheckerCliArgs(argv, usage, checkerName) {
   const parseError = buildParseError(usage);
@@ -75,7 +71,7 @@ export function normalizeTreePayload(payload) {
   if (!payload || typeof payload !== "object") {
     throw new Error("Refinement tree input must be a JSON object");
   }
-  const rootIssueNumber = normalizeIssueNumber(
+  const rootIssueNumber = parsePositiveInteger(
     payload.rootIssueNumber ?? payload.root,
     "root issue number",
     (message) => new Error(message),
@@ -90,18 +86,18 @@ export function normalizeTreePayload(payload) {
     if (!rawIssue || typeof rawIssue !== "object") {
       throw new Error("Each issue entry must be an object");
     }
-    const number = normalizeIssueNumber(rawIssue.number, "issue number", (message) => new Error(message));
+    const number = parsePositiveInteger(rawIssue.number, "issue number", (message) => new Error(message));
     const title = typeof rawIssue.title === "string" ? rawIssue.title : "";
     const body = typeof rawIssue.body === "string" ? rawIssue.body : "";
     const state = typeof rawIssue.state === "string" ? rawIssue.state : "open";
 
     let parentNumber = null;
     if (rawIssue.parentNumber !== undefined && rawIssue.parentNumber !== null) {
-      parentNumber = normalizeIssueNumber(rawIssue.parentNumber, "parent issue number", (message) => new Error(message));
+      parentNumber = parsePositiveInteger(rawIssue.parentNumber, "parent issue number", (message) => new Error(message));
     }
 
     const children = Array.isArray(rawIssue.children)
-      ? rawIssue.children.map((child) => normalizeIssueNumber(child, "child issue number", (message) => new Error(message)))
+      ? rawIssue.children.map((child) => parsePositiveInteger(child, "child issue number", (message) => new Error(message)))
       : [];
 
     if (byNumber.has(number)) {
@@ -298,9 +294,5 @@ export function writeCheckerOutput(result, { stdout = process.stdout, stderr = p
 }
 
 
-export function handleCliError(error) {
-  process.stderr.write(`${formatCliError(error)}\n`);
-  process.exitCode = 1;
-}
 // Re-exported for checker scripts
 export { isDirectCliRun };

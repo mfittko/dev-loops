@@ -20,9 +20,3 @@ export function buildLegacyDefaultCheckpointDir(pr) {
 export function buildCheckpointFilePath(checkpointDir) {
   return path.join(checkpointDir, "outer-loop-state.json");
 }
-export function buildDefaultCheckpointFilePath(repo, pr) {
-  return buildCheckpointFilePath(buildDefaultCheckpointDir(repo, pr));
-}
-export function buildLegacyDefaultCheckpointFilePath(pr) {
-  return buildCheckpointFilePath(buildLegacyDefaultCheckpointDir(pr));
-}
