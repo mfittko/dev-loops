@@ -200,15 +200,3 @@ export function shapeFindings(findings) {
     return { outcome, artifact, findingId: f.id };
   });
 }
-
-/**
- * Run the full pipeline: cluster → score → shape, return shaped artifacts.
- *
- * @param {Array<object>} signals — debt_signal-compatible array
- * @returns {Array<{ outcome: ShapeOutcome, artifact: object|null, findingId: string }>}
- */
-export async function runPipeline(signals) {
-  const { clusterSignalsEnriched } = await import("./cluster.mjs");
-  const findings = clusterSignalsEnriched(signals);
-  return shapeFindings(findings);
-}

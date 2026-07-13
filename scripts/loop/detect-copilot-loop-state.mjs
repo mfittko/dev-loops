@@ -64,7 +64,6 @@ Exit codes:
   0  Success
   1  Argument error, gh failure, or indeterminate state
   2  Invalid --jq filter`.trim();
-const VALID_OVERRIDE_STATUSES = new Set(["requested", "already-requested", "unavailable", "none", "failed"]);
 const parseError = buildParseError(USAGE);
 export function parseDetectCliArgs(argv) {
   const options = {

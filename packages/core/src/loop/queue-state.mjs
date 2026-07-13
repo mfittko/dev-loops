@@ -285,12 +285,3 @@ export function appendBugIssue(queue, issueNumber, dependsOn = null) {
   queue.entries.push(entry);
   return entry;
 }
-
-// ── Serialization helpers ────────────────────────────────────────────
-
-export function serializeQueue(queue) {
-  return {
-    version: queue.version,
-    entries: queue.entries.map((e) => ({ ...e })),
-  };
-}
