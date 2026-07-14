@@ -40,10 +40,11 @@ function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
  * @returns {string} the npm dist-tag
  */
 // A release-safety helper must fail closed: a non-SemVer input (e.g. "foo", a
-// truncated tag) must NOT slip through as a stable release and publish under the
-// default `latest` dist-tag. Requires major.minor.patch, with optional
-// dot-separated prerelease (`-…`) and build (`+…`) identifiers.
-const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+// truncated tag, or one with a leading-zero component like "01.2.3") must NOT
+// slip through as a stable release and publish under the default `latest`
+// dist-tag. This is the canonical SemVer 2.0.0 regex (semver.org) — it forbids
+// leading zeros in numeric identifiers and validates prerelease/build fields.
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 export function resolveNpmDistTag(version) {
   if (typeof version !== "string" || version.trim().length === 0) {

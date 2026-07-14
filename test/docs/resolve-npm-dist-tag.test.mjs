@@ -48,7 +48,7 @@ test("resolveNpmDistTag: rejects empty/invalid input", () => {
 
 test("resolveNpmDistTag: fails closed on a non-SemVer string (never latest for garbage)", () => {
   // A truncated/garbled tag must NOT be treated as a stable release -> latest.
-  for (const bad of ["foo", "1.0", "1", "v1.0.0", "1.0.0.0", "1.0.0-", "latest", "1.2.x"]) {
+  for (const bad of ["foo", "1.0", "1", "v1.0.0", "1.0.0.0", "1.0.0-", "latest", "1.2.x", "01.2.3", "1.02.3", "1.2.03"]) {
     assert.throws(() => resolveNpmDistTag(bad), /not a valid SemVer version/, `${bad} must fail closed`);
   }
 });
