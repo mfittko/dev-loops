@@ -28,8 +28,12 @@ the workflow does it (and is idempotent if you already created one).
   **idempotent** (no-op if a Release for the tag already exists) and **fails
   closed** if the version has no CHANGELOG section — an undocumented version never
   gets an empty release.
-- **`.github/workflows/npm-publish.yml`** fires on `release: published` (created by
-  the step above) and publishes the packages to npm under the dist-tag resolved by
+- **`.github/workflows/npm-publish.yml`** is dispatched by the step above via
+  `workflow_dispatch` (`gh workflow run npm-publish.yml --ref <tag>`): a
+  `GITHUB_TOKEN`-created Release does **not** emit the `release` event, so the
+  automated tag flow relies on that explicit dispatch rather than `on: release`
+  (the `release: published` trigger remains only for a Release published by hand
+  in the UI). It publishes the packages to npm under the dist-tag resolved by
   `scripts/release/resolve-npm-dist-tag.mjs`: a stable version → `latest`; a
   prerelease → its channel (`1.0.0-rc.1` → `rc`, `…-next.N` → `next`, …) and
   **never** `latest`, so a release candidate is opt-in (`npm install dev-loops@rc`)
