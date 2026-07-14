@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 import { resolveNpmDistTag } from "../../scripts/release/resolve-npm-dist-tag.mjs";
+
+const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "release", "resolve-npm-dist-tag.mjs");
+const runCli = (...args) => spawnSync("node", [CLI, ...args], { encoding: "utf8" });
 
 test("resolveNpmDistTag: stable release -> latest", () => {
   assert.equal(resolveNpmDistTag("1.0.0"), "latest");
@@ -38,4 +44,22 @@ test("resolveNpmDistTag: rejects empty/invalid input", () => {
   assert.throws(() => resolveNpmDistTag(""), /non-empty string/);
   assert.throws(() => resolveNpmDistTag(null), /non-empty string/);
   assert.throws(() => resolveNpmDistTag(42), /non-empty string/);
+});
+
+// CLI entrypoint — the workflow captures stdout via $(...), so the CLI MUST
+// print a non-empty tag and exit 0 on success (an empty capture would become
+// `npm publish --tag ""`), and fail closed (exit 2) on bad input.
+test("CLI: prints the resolved tag and exits 0", () => {
+  const rc = runCli("--version", "1.0.0-rc.1");
+  assert.equal(rc.status, 0);
+  assert.equal(rc.stdout.trim(), "rc");
+  const stable = runCli("--version", "1.0.0");
+  assert.equal(stable.status, 0);
+  assert.equal(stable.stdout.trim(), "latest");
+});
+
+test("CLI: fails closed (exit 2) on an unknown arg", () => {
+  const r = runCli("--bogus", "x");
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout.trim(), "", "must not print a tag on error");
 });

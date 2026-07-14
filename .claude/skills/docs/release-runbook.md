@@ -23,12 +23,17 @@ the workflow does it (and is idempotent if you already created one).
 - **`.github/workflows/release.yml`** fires on the `v*` tag push. It verifies the
   tagged commit is on `origin/main`, extracts the `## <version>` block from
   `CHANGELOG.md` via `scripts/release/extract-changelog-section.mjs`, and creates
-  the GitHub Release (`--latest`, notes = that CHANGELOG section). It is
+  the GitHub Release (`--latest` for a stable version, `--prerelease` for a
+  prerelease version such as `1.0.0-rc.1`; notes = that CHANGELOG section). It is
   **idempotent** (no-op if a Release for the tag already exists) and **fails
   closed** if the version has no CHANGELOG section — an undocumented version never
   gets an empty release.
 - **`.github/workflows/npm-publish.yml`** fires on `release: published` (created by
-  the step above) and publishes the packages to npm.
+  the step above) and publishes the packages to npm under the dist-tag resolved by
+  `scripts/release/resolve-npm-dist-tag.mjs`: a stable version → `latest`; a
+  prerelease → its channel (`1.0.0-rc.1` → `rc`, `…-next.N` → `next`, …) and
+  **never** `latest`, so a release candidate is opt-in (`npm install dev-loops@rc`)
+  and cannot become the default `npm install dev-loops`.
 
 ## Failure modes
 
