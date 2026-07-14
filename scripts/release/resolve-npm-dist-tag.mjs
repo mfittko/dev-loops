@@ -10,14 +10,13 @@
  * that keeps a `v1.0.0-rc.1` tag from overwriting `latest` when release.yml
  * dispatches npm-publish.yml.
  *
- * Usage:
- *   node scripts/release/resolve-npm-dist-tag.mjs --version <v>
- *   node scripts/release/resolve-npm-dist-tag.mjs            # defaults to ./package.json version
+ * Usage: node scripts/release/resolve-npm-dist-tag.mjs --version <v>
  *
- * Prints the dist-tag to stdout. Exit 0 on success, 2 on usage/parse error.
+ * `--version` is required (the workflows always pass it) — fail closed rather
+ * than silently guessing. Prints the dist-tag to stdout. Exit 0 on success,
+ * 2 on usage/parse error.
  */
 import fs from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Inlined (node: builtins only): this script runs in npm-publish.yml as a CLI; a
@@ -94,14 +93,10 @@ function main() {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(2);
   }
-  let { version } = parsed;
+  const { version } = parsed;
   if (version == null) {
-    try {
-      version = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")).version;
-    } catch (error) {
-      process.stderr.write(`Could not read version from ./package.json: ${error instanceof Error ? error.message : String(error)}\n`);
-      process.exit(2);
-    }
+    process.stderr.write("Missing required --version <v>\n");
+    process.exit(2);
   }
   try {
     process.stdout.write(`${resolveNpmDistTag(version)}\n`);

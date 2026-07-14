@@ -83,6 +83,12 @@ test("CLI: --version with no value is a usage error (exit 2, no fallback)", () =
   assert.equal(r.stdout.trim(), "", "must not silently fall back or print a tag");
 });
 
+test("CLI: no args is a usage error (--version is required, exit 2)", () => {
+  const r = runCli();
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout.trim(), "", "must fail closed, not guess from package.json");
+});
+
 test("CLI: a non-SemVer --version value fails closed (exit 2)", () => {
   const r = runCli("--version", "foo");
   assert.equal(r.status, 2);
