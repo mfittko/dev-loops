@@ -39,11 +39,20 @@ function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
  * @param {string} version — a SemVer version string
  * @returns {string} the npm dist-tag
  */
+// A release-safety helper must fail closed: a non-SemVer input (e.g. "foo", a
+// truncated tag) must NOT slip through as a stable release and publish under the
+// default `latest` dist-tag. Requires major.minor.patch, with optional
+// dot-separated prerelease (`-…`) and build (`+…`) identifiers.
+const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
 export function resolveNpmDistTag(version) {
   if (typeof version !== "string" || version.trim().length === 0) {
     throw new Error("version must be a non-empty string");
   }
   const v = version.trim();
+  if (!SEMVER_RE.test(v)) {
+    throw new Error(`not a valid SemVer version: ${version}`);
+  }
   // SemVer: the prerelease component is everything after the first `-` and
   // before any `+build` metadata.
   const withoutBuild = v.split("+", 1)[0];
@@ -62,6 +71,9 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--version") {
       version = argv[i + 1];
+      if (version === undefined) {
+        throw new Error("Missing value for --version");
+      }
       i++;
     } else {
       throw new Error(`Unknown argument: ${argv[i]}`);

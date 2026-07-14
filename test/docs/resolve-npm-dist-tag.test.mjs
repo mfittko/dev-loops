@@ -46,6 +46,13 @@ test("resolveNpmDistTag: rejects empty/invalid input", () => {
   assert.throws(() => resolveNpmDistTag(42), /non-empty string/);
 });
 
+test("resolveNpmDistTag: fails closed on a non-SemVer string (never latest for garbage)", () => {
+  // A truncated/garbled tag must NOT be treated as a stable release -> latest.
+  for (const bad of ["foo", "1.0", "1", "v1.0.0", "1.0.0.0", "1.0.0-", "latest", "1.2.x"]) {
+    assert.throws(() => resolveNpmDistTag(bad), /not a valid SemVer version/, `${bad} must fail closed`);
+  }
+});
+
 // CLI entrypoint — the workflow captures stdout via $(...), so the CLI MUST
 // print a non-empty tag and exit 0 on success (an empty capture would become
 // `npm publish --tag ""`), and fail closed (exit 2) on bad input.
@@ -62,4 +69,16 @@ test("CLI: fails closed (exit 2) on an unknown arg", () => {
   const r = runCli("--bogus", "x");
   assert.equal(r.status, 2);
   assert.equal(r.stdout.trim(), "", "must not print a tag on error");
+});
+
+test("CLI: --version with no value is a usage error (exit 2, no fallback)", () => {
+  const r = runCli("--version");
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout.trim(), "", "must not silently fall back or print a tag");
+});
+
+test("CLI: a non-SemVer --version value fails closed (exit 2)", () => {
+  const r = runCli("--version", "foo");
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout.trim(), "", "garbage must not publish under latest");
 });
