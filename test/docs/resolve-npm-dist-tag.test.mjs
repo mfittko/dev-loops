@@ -13,8 +13,12 @@ test("resolveNpmDistTag: stable release -> latest", () => {
   assert.equal(resolveNpmDistTag("1.0.0"), "latest");
   assert.equal(resolveNpmDistTag("0.9.0"), "latest");
   assert.equal(resolveNpmDistTag("2.3.4"), "latest");
-  // build metadata is not a prerelease
+  // build metadata is not a prerelease — even when it contains a hyphen, which
+  // must not be mistaken for a prerelease separator (release.yml derives the
+  // GitHub-Release --latest/--prerelease flag from this same result).
   assert.equal(resolveNpmDistTag("1.0.0+build.5"), "latest");
+  assert.equal(resolveNpmDistTag("1.0.0+build-1"), "latest");
+  assert.equal(resolveNpmDistTag("1.0.0+20130313144700"), "latest");
 });
 
 test("resolveNpmDistTag: rc prerelease -> rc (never latest)", () => {
