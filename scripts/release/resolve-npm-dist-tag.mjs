@@ -62,9 +62,12 @@ export function resolveNpmDistTag(version) {
   const prerelease = withoutBuild.slice(dashIndex + 1);
   const firstIdentifier = prerelease.split(".")[0] ?? "";
   const alpha = (firstIdentifier.match(/^[a-zA-Z]+/) ?? [])[0];
-  // A purely-numeric prerelease identifier (e.g. `1.0.0-1`) has no alpha token;
-  // fall back to `next` — anything but `latest`.
-  return alpha ? alpha.toLowerCase() : "next";
+  const tag = alpha ? alpha.toLowerCase() : "next";
+  // A prerelease NEVER publishes under `latest`. A purely-numeric prerelease
+  // (`1.0.0-1`) has no alpha token, and the pathological `1.0.0-latest` would
+  // otherwise resolve to `latest` — both fall back to `next` so the invariant
+  // holds for every input, not just bump-script-generated `rc.N` tags.
+  return tag === "latest" ? "next" : tag;
 }
 
 function parseArgs(argv) {

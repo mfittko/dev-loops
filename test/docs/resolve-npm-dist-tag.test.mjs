@@ -39,9 +39,11 @@ test("resolveNpmDistTag: purely-numeric prerelease falls back to next, never lat
 });
 
 test("resolveNpmDistTag: a prerelease is NEVER latest (the load-bearing invariant)", () => {
-  for (const v of ["1.0.0-rc.1", "1.0.0-next.1", "1.0.0-beta", "1.0.0-1", "1.0.0-0.3.7"]) {
+  // incl. the pathological `-latest` identifier, which must be guarded, not passed through.
+  for (const v of ["1.0.0-rc.1", "1.0.0-next.1", "1.0.0-beta", "1.0.0-1", "1.0.0-0.3.7", "1.0.0-latest", "1.0.0-latest.2", "1.0.0-LATEST"]) {
     assert.notEqual(resolveNpmDistTag(v), "latest", `${v} must not publish to latest`);
   }
+  assert.equal(resolveNpmDistTag("1.0.0-latest"), "next");
 });
 
 test("resolveNpmDistTag: rejects empty/invalid input", () => {
