@@ -75,10 +75,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # A prerelease version (e.g. 1.0.0-rc.1, contains a `-`) must NOT be
+          # marked --latest — it stays a --prerelease GitHub Release so it never
+          # becomes the default download, mirroring the npm dist-tag choice.
+          case "${{ steps.version.outputs.version }}" in
+            *-*) RELEASE_FLAG=--prerelease ;;
+            *)   RELEASE_FLAG=--latest ;;
+          esac
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file release-notes.md \
-            --latest \
+            "${RELEASE_FLAG}" \
             --verify-tag
 
       # Not gated on `exists`: re-running after a failed dispatch/publish must
