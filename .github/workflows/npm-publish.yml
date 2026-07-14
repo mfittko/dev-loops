@@ -54,17 +54,19 @@ jobs:
           # jq, not `npm pkg get`: inside a workspace npm prints a name->version
           # map, not the bare version.
           VERSION=$(jq -r .version packages/core/package.json)
+          DIST_TAG=$(node scripts/release/resolve-npm-dist-tag.mjs --version "${VERSION}")
           if npm view "@dev-loops/core@${VERSION}" version >/dev/null 2>&1; then
             echo "::notice::@dev-loops/core@${VERSION} already published; skipping."
           else
-            npm publish -w packages/core --provenance --access public
+            npm publish -w packages/core --provenance --access public --tag "${DIST_TAG}"
           fi
 
       - name: Publish root package to npm
         run: |
           VERSION=$(npm pkg get version | tr -d '"')
+          DIST_TAG=$(node scripts/release/resolve-npm-dist-tag.mjs --version "${VERSION}")
           if npm view "dev-loops@${VERSION}" version >/dev/null 2>&1; then
             echo "::notice::dev-loops@${VERSION} already published; skipping."
           else
-            npm publish --provenance --access public
+            npm publish --provenance --access public --tag "${DIST_TAG}"
           fi

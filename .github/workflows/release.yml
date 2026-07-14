@@ -75,10 +75,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Single source of truth for prerelease detection: reuse the npm
+          # dist-tag resolver (it strips SemVer build metadata, validates the
+          # version, and fails closed on a garbled tag). A `latest` dist-tag means
+          # a stable release (--latest); anything else is a prerelease channel
+          # (--prerelease) so the RC never becomes the default download. This
+          # keeps the GitHub-Release flag and the npm dist-tag from ever drifting.
+          DIST_TAG=$(node scripts/release/resolve-npm-dist-tag.mjs --version "${{ steps.version.outputs.version }}")
+          if [ "${DIST_TAG}" = "latest" ]; then
+            RELEASE_FLAG=--latest
+          else
+            RELEASE_FLAG=--prerelease
+          fi
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file release-notes.md \
-            --latest \
+            "${RELEASE_FLAG}" \
             --verify-tag
 
       # Not gated on `exists`: re-running after a failed dispatch/publish must
