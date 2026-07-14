@@ -18,6 +18,22 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Inlined (node: builtins only): this script runs in npm-publish.yml as a CLI; a
+// workspace import would be fragile in the release environment. realpath-based so
+// a relative `node scripts/release/resolve-npm-dist-tag.mjs` invocation (as the
+// workflow uses) still detects direct-run — a brittle `file://${argv[1]}` string
+// compare could miss and skip main(), yielding an empty `npm publish --tag ""`.
+// Mirrors scripts/release/extract-changelog-section.mjs.
+function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
+  if (typeof argv1 !== "string" || argv1.length === 0) return false;
+  try {
+    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(importMetaUrl));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * @param {string} version — a SemVer version string
@@ -79,6 +95,6 @@ function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectCliRun(import.meta.url)) {
   main();
 }
