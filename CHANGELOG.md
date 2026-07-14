@@ -4,9 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-## 1.0.0 - 2026-07-11
+## 1.0.0-rc.1 - 2026-07-14
 
-**1.0 marks the public surface as stable.** From this release, `dev-loops` follows [semantic versioning](https://semver.org/) for its public API — breaking changes to it bump the major version. See the [Stability section in the README](./README.md#stability) for the full statement.
+**Release candidate for 1.0.** `1.0.0-rc.1` freezes the intended 1.0 public surface and publishes it for consumers to validate *before* the final `1.0.0` — install it opt-in with `npm install dev-loops@rc` (it is not the default `latest`). From 1.0, `dev-loops` follows [semantic versioning](https://semver.org/) for its public API — breaking changes to it bump the major version — and this RC window is the chance to surface anything that should change before that surface is frozen. See the [Stability section in the README](./README.md#stability) for the full statement.
 
 ### Stability
 

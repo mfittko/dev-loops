@@ -76,7 +76,7 @@
     ]
   },
   "dependencies": {
-    "@dev-loops/core": "^0.9.0"
+    "@dev-loops/core": "^1.0.0-rc.1"
   },
   "repository": {
     "type": "git",
@@ -86,7 +86,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "0.9.0",
+  "version": "1.0.0-rc.1",
   "files": [
     "cli/",
     "lib/",
