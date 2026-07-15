@@ -2,8 +2,11 @@
 // Assembles the GitHub Pages publishable dir deterministically. The landing
 // page (index.html) is the "Introducing dev-loops" article; the deep-dive
 // article and the deep-dive deck are published alongside it and reached through
-// a shared navigation bar injected into the article pages. The source HTML files
-// under docs/ are the source of truth; site/ is assembled, never hand-maintained.
+// a shared navigation bar injected into the article pages. The HTML files under
+// docs/ are the inputs here; site/ is assembled, never hand-maintained. Articles
+// listed in render-article.mjs's RENDERED_ARTICLES are themselves derived from
+// their markdown twin (edit the .md, then `npm run articles:render`); the rest
+// are hand-maintained sources.
 // Usage: node scripts/pages/build-site.mjs [--out <dir>] [--repo-root <dir>]
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, parse as parsePath } from 'node:path';

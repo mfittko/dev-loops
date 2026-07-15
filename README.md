@@ -145,7 +145,7 @@ Full details: the shipped defaults in `packages/core/src/config/extension-defaul
 
 From **1.0**, `dev-loops` follows [semantic versioning](https://semver.org/) for its public surface — breaking changes to it bump the major version:
 
-- **The `.devloops` configuration surface** — gate angles, personas, `gates.*` (including each gate's `requireCi` toggle and `gates.preApproval.requireCi`), `refinement.*`, `uiReview.*`, `autonomy.*`, and `workflow.*`. The authoritative validator is the config loader in `packages/core/src/config/config.mjs`; `schemas/dev-loop-config.schema.json` documents the common keys (it is a partial reference, not the full surface).
+- **The `.devloops` configuration surface** — gate angles, personas, `gates.*` (including each gate's `requireCi` toggle and `gates.preApproval.requireCi`), `refinement.*`, `uiReview.*`, `autonomy.*`, and `workflow.*`. The authoritative validator is the config loader in `packages/core/src/config/config.mjs`; `schemas/dev-loop-config.schema.json` is generated from it (`node scripts/generate-config-schema.mjs`) and covers the full file-level surface — only cross-field refinements stay zod-only.
 - **The public `dev-loop` command and skill surface** — the natural-language `dev-loop` router and the named `/loop-*` entrypoints.
 - **The routing contract** — the [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md).
 

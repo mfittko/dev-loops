@@ -95,6 +95,14 @@ const EXCLUDED = new Map([
     "github/create-pr.mjs",
     "Thin passthrough wrapper around `gh pr create`; its stdout IS gh's own PR URL, never a JSON tool-result to filter with --jq. The optional trailing board-enqueue line is an advisory side note appended for the issue-less lightweight path, not the command's queryable output.",
   ],
+  [
+    "generate-config-schema.mjs",
+    "Derived-artifact generator (npm run schema:generate/schema:check): JSON.stringify writes schemas/dev-loop-config.schema.json to disk; stdout is a one-line human status, never a JSON tool-result to filter with --jq — same class as claude/generate-claude-assets.mjs.",
+  ],
+  [
+    "pages/render-article.mjs",
+    "Derived-artifact generator (npm run articles:render/articles:check): emits HTML files; JSON.stringify appears only inside thrown error messages, and stdout is a one-line human status — nothing for a caller to filter with --jq.",
+  ],
 ]);
 
 async function walk(dir) {
