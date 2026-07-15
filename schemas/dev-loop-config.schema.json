@@ -7,7 +7,8 @@
   "properties": {
     "version": {
       "type": "number",
-      "const": 1
+      "const": 1,
+      "description": "Config format version; always 1."
     },
     "strategy": {
       "type": "object",
@@ -17,10 +18,12 @@
           "enum": [
             "local-first",
             "github-first"
-          ]
+          ],
+          "description": "Default work-intake strategy: local-first starts from a repo plan file, github-first from a tracked issue."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Work-intake strategy defaults."
     },
     "inputSource": {
       "type": "object",
@@ -30,17 +33,20 @@
           "enum": [
             "tracker",
             "phase-docs"
-          ]
+          ],
+          "description": "Where local-first work reads its spec: the tracker issue body, or repo phase docs."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Spec source for local-first work."
     },
     "models": {
       "type": "object",
       "properties": {
         "conductor": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Model override for the conductor (dev-loop) session; absent = inherit the session model."
         },
         "roles": {
           "type": "object",
@@ -50,7 +56,8 @@
           "additionalProperties": {
             "type": "string",
             "minLength": 1
-          }
+          },
+          "description": "Concrete per-role/angle model overrides (highest precedence, above tiers)."
         },
         "tiers": {
           "type": "object",
@@ -85,7 +92,8 @@
               }
             },
             "additionalProperties": false
-          }
+          },
+          "description": "Tier alias → per-harness concrete model; null on a harness means inherit (no override)."
         },
         "roleTiers": {
           "type": "object",
@@ -96,10 +104,12 @@
           "additionalProperties": {
             "type": "string",
             "minLength": 1
-          }
+          },
+          "description": "Role or gate angle → tier alias: a built-in alias (low, high), a custom models.tiers alias, or \"inherit\"."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Model routing: conductor override, per-role/angle overrides, tier aliases, and role→tier policy."
     },
     "refinement": {
       "type": "object",
@@ -107,31 +117,37 @@
         "fanOut": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 10
+          "maximum": 10,
+          "description": "Parallel reviewers per refinement round."
         },
         "mode": {
           "type": "string",
           "enum": [
             "parallel",
             "sequential"
-          ]
+          ],
+          "description": "Whether refinement reviewers run in parallel or one after another."
         },
         "maxCopilotRounds": {
           "default": 5,
+          "description": "Automated Copilot review rounds before converging; 0 disables Copilot review.",
           "type": "integer",
           "minimum": 0
         },
         "stopOnLowSignal": {
           "default": false,
+          "description": "Stop Copilot rounds early once they stop producing signal.",
           "type": "boolean"
         },
         "lowSignalRoundThreshold": {
           "default": 3,
+          "description": "Rounds counted toward the low-signal stop decision.",
           "type": "integer",
           "minimum": 0
         },
         "lowSignalMaxComments": {
           "default": 2,
+          "description": "A round with at most this many comments counts as low-signal.",
           "type": "integer",
           "minimum": 0
         },
@@ -140,10 +156,12 @@
           "items": {
             "type": "string",
             "minLength": 1
-          }
+          },
+          "description": "Review lenses the refinement fan-out dispatches."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Refinement fan-out and Copilot review-round behavior."
     },
     "gates": {
       "type": "object",
@@ -156,10 +174,12 @@
               "items": {
                 "type": "string",
                 "minLength": 1
-              }
+              },
+              "description": "Review lenses this gate fans out to."
             },
             "excludeAngles": {
               "default": [],
+              "description": "Angles removed from the resolved angle list.",
               "type": "array",
               "items": {
                 "type": "string",
@@ -168,6 +188,7 @@
             },
             "mandatoryAngles": {
               "default": [],
+              "description": "Angles that always run, regardless of diff-based dynamic selection.",
               "type": "array",
               "items": {
                 "type": "string",
@@ -176,16 +197,19 @@
             },
             "required": {
               "default": true,
+              "description": "Whether this gate must run.",
               "type": "boolean"
             },
             "requireCi": {
               "default": true,
+              "description": "Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure.",
               "type": "boolean"
             },
             "blockCleanOnFindingSeverities": {
               "default": [
                 "must-fix"
               ],
+              "description": "Finding severities that block a clean gate verdict.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -199,14 +223,17 @@
             },
             "dynamicAngles": {
               "default": false,
+              "description": "Enable diff-driven dynamic angle resolution for this gate.",
               "type": "boolean"
             },
             "additiveAngles": {
               "default": false,
+              "description": "Allow diff-driven addition of catalog angles beyond this gate's configured pool.",
               "type": "boolean"
             }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Draft gate config (runs before a PR leaves draft)."
         },
         "preApproval": {
           "type": "object",
@@ -216,10 +243,12 @@
               "items": {
                 "type": "string",
                 "minLength": 1
-              }
+              },
+              "description": "Review lenses this gate fans out to."
             },
             "excludeAngles": {
               "default": [],
+              "description": "Angles removed from the resolved angle list.",
               "type": "array",
               "items": {
                 "type": "string",
@@ -228,6 +257,7 @@
             },
             "mandatoryAngles": {
               "default": [],
+              "description": "Angles that always run, regardless of diff-based dynamic selection.",
               "type": "array",
               "items": {
                 "type": "string",
@@ -236,16 +266,19 @@
             },
             "required": {
               "default": true,
+              "description": "Whether this gate must run.",
               "type": "boolean"
             },
             "requireCi": {
               "default": true,
+              "description": "Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure.",
               "type": "boolean"
             },
             "blockCleanOnFindingSeverities": {
               "default": [
                 "must-fix"
               ],
+              "description": "Finding severities that block a clean gate verdict.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -259,14 +292,17 @@
             },
             "dynamicAngles": {
               "default": false,
+              "description": "Enable diff-driven dynamic angle resolution for this gate.",
               "type": "boolean"
             },
             "additiveAngles": {
               "default": false,
+              "description": "Allow diff-driven addition of catalog angles beyond this gate's configured pool.",
               "type": "boolean"
             }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Pre-approval gate config (final re-review before the merge handoff)."
         },
         "spike": {
           "type": "object",
@@ -276,10 +312,12 @@
               "items": {
                 "type": "string",
                 "minLength": 1
-              }
+              },
+              "description": "Review lenses this gate fans out to."
             },
             "excludeAngles": {
               "default": [],
+              "description": "Angles removed from the resolved angle list.",
               "type": "array",
               "items": {
                 "type": "string",
@@ -288,6 +326,7 @@
             },
             "mandatoryAngles": {
               "default": [],
+              "description": "Angles that always run, regardless of diff-based dynamic selection.",
               "type": "array",
               "items": {
                 "type": "string",
@@ -296,16 +335,19 @@
             },
             "required": {
               "default": true,
+              "description": "Whether this gate must run.",
               "type": "boolean"
             },
             "requireCi": {
               "default": true,
+              "description": "Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure.",
               "type": "boolean"
             },
             "blockCleanOnFindingSeverities": {
               "default": [
                 "must-fix"
               ],
+              "description": "Finding severities that block a clean gate verdict.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -319,41 +361,51 @@
             },
             "dynamicAngles": {
               "default": false,
+              "description": "Enable diff-driven dynamic angle resolution for this gate.",
               "type": "boolean"
             },
             "additiveAngles": {
               "default": false,
+              "description": "Allow diff-driven addition of catalog angles beyond this gate's configured pool.",
               "type": "boolean"
             }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Relaxed spike gate profile; applies only to spike-mode work."
         },
         "requireFanoutEvidence": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Require fan-out/fan-in review evidence on gate verdicts (rejects inline single-agent runs)."
         },
         "requireFanoutProvenance": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch)."
         },
         "maxFanoutReviewers": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 64
+          "maximum": 64,
+          "description": "Cap on parallel gate fan-out reviewers; overflow runs in sequential batches."
         },
         "postFindingsComments": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Post consolidated gate findings as a marker-tagged PR comment (default true)."
         },
         "anglePool": {
           "type": "array",
           "items": {
             "type": "string",
             "minLength": 1
-          }
+          },
+          "description": "Explicit global lens catalog for additive angle selection."
         },
         "rejectForeignAngles": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Reject fan-out provenance naming angles outside the gate's configured pool (default true)."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Gate review configuration: per-gate angle sets plus fan-out enforcement knobs."
     },
     "autonomy": {
       "type": "object",
@@ -368,13 +420,16 @@
               "pre-approval",
               "merge"
             ]
-          }
+          },
+          "description": "Checkpoints that require operator confirmation before the loop proceeds (default: [\"merge\"])."
         },
         "humanMergeOnly": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Merge stays a fixed human-only action: the agent never merges and any per-run merge authorization is ignored (fails closed)."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "How far the loop proceeds without operator confirmation."
     },
     "approval": {
       "type": "object",
@@ -407,13 +462,15 @@
           "additionalProperties": false
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Approval / merge-handoff behavior (human-handoff offer)."
     },
     "workflow": {
       "type": "object",
       "properties": {
         "asyncStartMode": {
           "default": "required",
+          "description": "Whether the async start contract is required or merely allowed.",
           "type": "string",
           "enum": [
             "required",
@@ -421,16 +478,20 @@
           ]
         },
         "requireRetrospective": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Require a retrospective checkpoint before a loop completes."
         },
         "requireDraftFirst": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Open pull requests as drafts and promote via the draft gate."
         },
         "devModeDefault": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Default new loops to dev mode."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Workflow posture: draft-first, retrospectives, dev mode, async start."
     },
     "localImplementation": {
       "type": "object",
@@ -439,18 +500,22 @@
           "type": "object",
           "properties": {
             "enabled": {
-              "type": "boolean"
+              "type": "boolean",
+              "description": "Opt small scoped changes into the lightweight dispatch path."
             },
             "maxFiles": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "description": "Light mode applies only when the change touches at most this many files."
             },
             "maxLines": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "description": "Light mode applies only when the change stays within this many lines."
             },
             "maxCopilotRounds": {
               "default": 1,
+              "description": "Copilot round cap for light-dispatched PRs; composes as min(this, refinement.maxCopilotRounds).",
               "type": "integer",
               "minimum": 0
             }
@@ -463,43 +528,51 @@
           "additionalProperties": false
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Local implementation dispatch (light mode for small scoped changes)."
     },
     "queue": {
       "type": "object",
       "properties": {
         "maxParallel": {
           "default": 3,
+          "description": "Maximum queue items worked in parallel.",
           "type": "integer",
           "minimum": 1,
           "maximum": 10
         },
         "maxAutoFiledIssues": {
           "default": 10,
+          "description": "Cap on auto-filed issues per run.",
           "type": "integer",
           "minimum": 0,
           "maximum": 100
         },
         "reDispatchMaxRetries": {
           "default": 1,
+          "description": "Retries when re-dispatching a failed queue item.",
           "type": "integer",
           "minimum": 0,
           "maximum": 10
         },
         "projectNumber": {
           "type": "integer",
-          "exclusiveMinimum": 0
+          "exclusiveMinimum": 0,
+          "description": "GitHub Projects board number (explicit opt-in to Projects-based queue ordering)."
         },
         "boardTitle": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "GitHub Projects board title (explicit opt-in to Projects-based queue ordering)."
         },
         "archiveOlderThanDays": {
           "type": "integer",
-          "exclusiveMinimum": 0
+          "exclusiveMinimum": 0,
+          "description": "Archive done board items older than this many days."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Queue mode: parallelism, auto-filing caps, and Projects board opt-in."
     },
     "personas": {
       "type": "object",
@@ -533,7 +606,8 @@
           }
         },
         "additionalProperties": false
-      }
+      },
+      "description": "Gate-angle → reviewer persona registry overrides (angle name → persona, prompt, default model)."
     },
     "internalPathPatterns": {
       "minItems": 1,
@@ -541,7 +615,8 @@
       "items": {
         "type": "string",
         "minLength": 1
-      }
+      },
+      "description": "Regex whitelist for internal-only PR detection."
     },
     "worktree": {
       "type": "object",
@@ -551,17 +626,20 @@
           "items": {
             "type": "string",
             "minLength": 1
-          }
+          },
+          "description": "Repo-relative paths/globs copied into a fresh worktree (isolated per worktree — use for mutable files)."
         },
         "linkOnInit": {
           "type": "array",
           "items": {
             "type": "string",
             "minLength": 1
-          }
+          },
+          "description": "Repo-relative paths/globs symlinked to the main checkout (shared — read-only data only)."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Worktree provisioning: gitignored files/dirs copied or symlinked into fresh worktrees."
     },
     "uiReview": {
       "type": "object",
@@ -811,7 +889,8 @@
           "minLength": 1
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps."
     },
     "localPlanning": {}
   },
