@@ -1322,6 +1322,67 @@ test("runCli --lightweight ALONE (no --issue): under-threshold change resolves i
   }
 });
 
+test("runCli --lightweight ALONE: issueless.enabled allows an OVER-threshold change (#1349 AC)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-optin-"));
+  try {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n  issueless:\n    enabled: true\n",
+      "utf8",
+    );
+    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
+    execFileSync("git", ["commit", "-am", "big change"], { cwd: tempDir, stdio: "ignore" });
+    const result = await runNode(["--lightweight"], { cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.selectedStrategy, "local_implementation");
+    assert.equal(parsed.canonicalSpecSource, "pr_body");
+    assert.equal(parsed.canonicalStateSummary.target.issue, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --lightweight ALONE: issueless.enabled allows startup even with lightMode disabled (#1349 full decoupling)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-optin-"));
+  try {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 3\n    maxLines: 200\n  issueless:\n    enabled: true\n",
+      "utf8",
+    );
+    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\n", "utf8");
+    execFileSync("git", ["commit", "-am", "small change"], { cwd: tempDir, stdio: "ignore" });
+    const result = await runNode(["--lightweight"], { cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.canonicalSpecSource, "pr_body");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("runCli --lightweight ALONE: issueless.enabled=false keeps the over-threshold fail-closed behavior (#1349 default unchanged)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-issueless-optin-"));
+  try {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n  issueless:\n    enabled: false\n",
+      "utf8",
+    );
+    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
+    execFileSync("git", ["commit", "-am", "big change"], { cwd: tempDir, stdio: "ignore" });
+    const result = await runNode(["--lightweight"], { cwd: tempDir });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /stay within the light-mode threshold/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("resolveIssuelessLightweightEligibility scopes git merge-base/diff to the given cwd, not process.cwd() (review: bind cwd like other git calls in this file)", async () => {
   // Outer dir: a plain non-repo directory. If the merge-base/detectScope git
   // calls fell back to inheriting process.cwd() instead of the explicit cwd

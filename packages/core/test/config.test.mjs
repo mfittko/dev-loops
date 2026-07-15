@@ -26,6 +26,7 @@ import {
   resolveAnglePool,
   resolveWorkflowConfig,
   resolveLightMode,
+  resolveIssuelessEnabled,
   resolveGateDispatchMode,
   resolveEffectiveCopilotRoundCap,
   GATE_FULL_LABEL,
@@ -2636,6 +2637,68 @@ test("resolveLightMode uses built-in defaults when enabled with no overrides", (
 test("resolveLightMode with built-in defaults (disabled)", () => {
   const result = resolveLightMode({ version: 1 });
   assert.equal(result, null);
+});
+
+// ── LocalImplementation issue-less PR-first opt-in (#1349) ────────────────
+
+test("resolveIssuelessEnabled is false when issueless is absent", () => {
+  assert.equal(resolveIssuelessEnabled({ version: 1 }), false);
+  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: {} }), false);
+});
+
+test("resolveIssuelessEnabled is false when enabled=false or malformed", () => {
+  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: { issueless: { enabled: false } } }), false);
+  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: { issueless: { enabled: "yes" } } }), false);
+});
+
+test("resolveIssuelessEnabled is true when enabled", () => {
+  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: { issueless: { enabled: true } } }), true);
+});
+
+test("schema accepts localImplementation.issueless.enabled", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-issueless-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  issueless:\n    enabled: true\n",
+      "utf8",
+    );
+    const { loadDevLoopConfig: load } = await import("../src/config/config.mjs");
+    const result = await load({ repoRoot: tmpDir });
+    assert.deepStrictEqual(result.errors, []);
+    assert.equal(result.config.localImplementation.issueless.enabled, true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("schema rejects unknown keys inside localImplementation.issueless (strict object)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-issueless-bad-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  issueless:\n    enabled: true\n    bogus: 1\n",
+      "utf8",
+    );
+    const { loadDevLoopConfig: load } = await import("../src/config/config.mjs");
+    const result = await load({ repoRoot: tmpDir });
+    assert.ok(result.errors.length > 0);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveGateDispatchMode: over-threshold stays full_fanout regardless of issueless.enabled (#1349 no-conflation)", () => {
+  const config = {
+    version: 1,
+    localImplementation: {
+      lightMode: { enabled: true, maxFiles: 3, maxLines: 200 },
+      issueless: { enabled: true },
+    },
+  };
+  const result = resolveGateDispatchMode(config, "draft", { scope: { filesChanged: 10, linesChanged: 999 } });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "over_threshold");
 });
 
 // ── Effective Copilot round cap composition (#1210) ───────────────────────

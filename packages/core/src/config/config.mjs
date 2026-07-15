@@ -224,6 +224,15 @@ const LocalImplementationConfig = z.strictObject({
     // resolveEffectiveCopilotRoundCap.
     maxCopilotRounds: z.number().int().nonnegative().default(1),
   }).optional(),
+  /**
+   * Opt into issue-less PR-first (`--lightweight` with no --issue) at ANY
+   * change scope. Decoupled from lightMode: gate dispatch still resolves
+   * inline vs full_fanout from scope on its own, so over-threshold issue-less
+   * PRs get the full fan-out and the full-PR Copilot round cap.
+   */
+  issueless: z.strictObject({
+    enabled: z.boolean(),
+  }).optional(),
 });
 
 /** Queue mode config */
@@ -527,6 +536,7 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
   }),
   localImplementation: Object.freeze({
     lightMode: Object.freeze({ enabled: false, maxFiles: 3, maxLines: 200, maxCopilotRounds: 1 }),
+    issueless: Object.freeze({ enabled: false }),
   }),
   queue: Object.freeze({
     maxParallel: 3,
@@ -1422,6 +1432,19 @@ export function resolveLightMode(config) {
       ? cfg.maxLines
       : 200,
   };
+}
+
+/**
+ * Resolve the issue-less PR-first any-scope opt-in (#1349).
+ *
+ * True only when `localImplementation.issueless.enabled` is exactly `true`;
+ * absent, false, or malformed values resolve to false (fail closed).
+ *
+ * @param {DevLoopConfig} config
+ * @returns {boolean}
+ */
+export function resolveIssuelessEnabled(config) {
+  return config?.localImplementation?.issueless?.enabled === true;
 }
 
 /**

@@ -21,7 +21,7 @@ import {
 } from "@dev-loops/core/loop/async-start-contract";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
-import { loadDevLoopConfig, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { detectScope } from "./detect-change-scope.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { validatePlanFile } from "../refine/validate-plan-file.mjs";
@@ -638,7 +638,10 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
  * (issue-less PR-first, #1210): `--lightweight` used alone, no --issue.
  *
  * Read-only: no tracker mutation, no GitHub calls, no issue/PR number. Gated
- * by {@link resolveIssuelessLightweightEligibility} — an ineligible change
+ * by {@link resolveIssuelessLightweightEligibility} — unless
+ * `localImplementation.issueless.enabled` (#1349) sanctions any-scope
+ * issue-less PR-first, in which case the eligibility gate is skipped entirely.
+ * Otherwise an ineligible change
  * throws so the CLI fails closed (exit 1, no readiness bundle) with a message
  * naming the distinct reason, mirroring buildPlanFileInput/buildSpikeInput's
  * fail-closed-on-invalid-input convention. Exempt from the worktree-isolation
@@ -649,15 +652,22 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
  * @returns {object} startup input with canonicalSpecSource: "pr_body"
  */
 export function buildLightweightIssuelessInput({ config, cwd }) {
-  const eligibility = resolveIssuelessLightweightEligibility(config, cwd);
-  if (!eligibility.eligible) {
-    if (eligibility.reason === "light_mode_disabled") {
-      throw new Error("--lightweight without --issue (issue-less PR-first) requires localImplementation.lightMode.enabled in .devloops; enable light mode or provide --issue <n>.");
+  // localImplementation.issueless.enabled (#1349) sanctions issue-less
+  // PR-first at ANY change scope — for consumers whose spec of record lives
+  // in an external tracker and who cannot mint a GitHub issue for big work.
+  // Review depth is unaffected: gate dispatch re-measures scope itself and
+  // fails safe to full_fanout over threshold.
+  if (!resolveIssuelessEnabled(config)) {
+    const eligibility = resolveIssuelessLightweightEligibility(config, cwd);
+    if (!eligibility.eligible) {
+      if (eligibility.reason === "light_mode_disabled") {
+        throw new Error("--lightweight without --issue (issue-less PR-first) requires localImplementation.lightMode.enabled in .devloops; enable light mode, set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.");
+      }
+      if (eligibility.reason === "scope_detection_failed") {
+        throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Provide --issue <n> instead.`);
+      }
+      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.`);
     }
-    if (eligibility.reason === "scope_detection_failed") {
-      throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Provide --issue <n> instead.`);
-    }
-    throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Provide --issue <n> for above-threshold changes.`);
   }
   return {
     intent: "start_issue_locally",
