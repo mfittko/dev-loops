@@ -30,8 +30,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { isDirectCliRun } from "../_core-helpers.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ARTICLES_DIR = path.join(REPO_ROOT, "docs", "articles");
@@ -110,6 +111,9 @@ function parseBlocks(body) {
       blocks.push({ type: "p", text: para.join(" ") });
     }
   }
+  if (metricsPending) {
+    throw new Error("unterminated metrics block: <!-- metrics:start --> has no matching <!-- metrics:end -->");
+  }
   return blocks;
 }
 
@@ -157,6 +161,9 @@ export function renderArticleHtml(mdSource, shell, sourceBasename) {
     if (block.type === "h1") continue;
     if (block.type === "h2") {
       const slug = slugify(block.text);
+      if (slug === "") {
+        throw new Error(`h2 heading ${JSON.stringify(block.text)} produces an empty slug id`);
+      }
       if (seenSlugs.has(slug)) {
         throw new Error(`duplicate h2 slug "${slug}" — two sections would share one anchor id`);
       }
@@ -222,6 +229,6 @@ async function main() {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isDirectCliRun(import.meta.url)) {
   await main();
 }

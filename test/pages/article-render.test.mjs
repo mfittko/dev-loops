@@ -83,6 +83,8 @@ test("renderer fails closed on unsupported markdown constructs", () => {
     "```text\nunterminated fence",
     "<!-- not-a-metrics-marker -->",
     "<!-- metrics -->\n- **1** item",
+    "<!-- metrics:start -->\n- **1** unterminated block",
+    "## ¿¿¿\n\nempty slug heading",
   ]) {
     assert.throws(() => render(body), `should throw for: ${JSON.stringify(body)}`);
   }

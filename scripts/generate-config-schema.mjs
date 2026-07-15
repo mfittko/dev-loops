@@ -18,9 +18,10 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { FileConfigSchema } from "@dev-loops/core/config";
+import { isDirectCliRun } from "./_core-helpers.mjs";
 
 const SCHEMA_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -106,6 +107,6 @@ async function main() {
   console.log(`wrote ${relative}`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isDirectCliRun(import.meta.url)) {
   await main();
 }
