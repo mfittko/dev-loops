@@ -165,16 +165,16 @@
   <header class="hero-card">
     <p class="kicker">dev-loops</p>
     <h1>Introducing dev-loops</h1>
-    <p class="lede">The slow part of AI-assisted development is no longer writing code — it is the coordination around it. dev-loops runs those in-between steps as recorded decisions, with a person at the merge by default.</p>
+    <p class="lede">The coordination around the code is now the slow part of AI-assisted development. dev-loops runs those in-between steps as recorded decisions, with a person at the merge by default.</p>
   </header>
 
-  <p>The slow part of AI-assisted development is no longer writing code. It is everything that has to happen around the code: someone notices a change is ready, rebuilds enough context to review it, checks that the tests ran, decides the next step is safe. Each of those is a small wait, and once the typing is fast, the waits are where the lead time lives.</p>
+  <p>In AI-assisted development, the slow part is now everything that has to happen around the code: someone notices a change is ready, rebuilds enough context to review it, checks that the tests ran, decides the next step is safe. Each of those is a small wait, and together those waits make up most of the lead time.</p>
 
   <p>dev-loops is a runtime for those in-between steps. It keeps the state of every change explicit, computes the next action from that state, and runs the routine transitions itself — drafting, reviewing, gating on green CI — while recording each decision where you can read it. A person stays at the merge by default. This article explains the idea, shows what it does on a real repository, and walks through running it on your own project. A deeper piece is linked at the end.</p>
 
   <h2 id="the-idea">The idea</h2>
 
-  <p>An agent left to its own devices tends to assume its way past the hard moments: it declares the review done, the tests good enough, the work finished, and nobody checks the declaration until something breaks. dev-loops replaces each of those assumptions with a decision the system takes deliberately. Is this change ready for review? Did the review actually run, with evidence? Is CI green on the current head? Every transition is computed, applied, and recorded — and when the answer is ambiguous, the loop fails closed and waits for a person rather than guessing.</p>
+  <p>An agent left to its own devices tends to assume its way past the hard moments: it declares the review done, the tests good enough, the work finished, and nobody checks the declaration until something breaks. dev-loops replaces each of those assumptions with a decision the system takes deliberately. Is this change ready for review? Did the review actually run, with evidence? Is CI green on the current head? Every transition is computed, applied, and recorded — and when the answer is ambiguous, the loop fails closed and waits for a person.</p>
 
   <p>Three ideas carry most of the value:</p>
 
@@ -188,11 +188,11 @@
 
   <h2 id="what-it-does-to-the-work">What it does to the work</h2>
 
-  <p>Coordination is the cost that compounds. Every change carries a handful of transitions — is it ready, who reviews it, did the review pass, is CI green, can it merge — and every transition a person runs by hand is an interrupt with a context-switch attached. Multiply transitions per change by the number of changes and the hand-run coordination grows much faster than the throughput it supports. That compounding, not the code, is what caps how much an AI-assisted team ships.</p>
+  <p>Coordination is the cost that compounds. Every change carries a handful of transitions — is it ready, who reviews it, did the review pass, is CI green, can it merge — and every transition a person runs by hand is an interrupt with a context-switch attached. Multiply transitions per change by the number of changes and the hand-run coordination grows much faster than the throughput it supports. That compounding is what caps how much an AI-assisted team ships.</p>
 
   <p>The loop breaks the compounding by turning each transition into a machine decision with a log. What remains for the human is roughly one bounded decision per change: the merge, plus anything the loop flags as unclear.</p>
 
-  <p>dev-loops is developed with dev-loops, so the honest evidence is its own history. The numbers below come straight from the repository's git log, not from a benchmark:</p>
+  <p>dev-loops is developed with dev-loops, so the honest evidence is its own history. The numbers below come straight from the repository's git log:</p>
 
   <div class="metrics" role="list">
     <div class="metric" role="listitem"><div class="num">534</div><div class="lab">pull requests merged in the project's first nine weeks</div></div>
@@ -207,7 +207,7 @@
 
   <p>The same loop runs three ways over one shared core: as a Claude Code plugin, as a Pi extension, and as a standalone CLI. Routing, gates, and phases are defined once; the harnesses are thin integrations over that shared workflow.</p>
 
-  <p>Model choice is configuration in the same spirit. Roles map to model tiers, and tiers map per harness to concrete models: routine subagents (implementation, docs, small fixes, build chores) default to the low tier, while planning and review — the steps that guard quality — run on the high tier, and the conductor inherits whatever the session runs. Swapping the model behind any role is a config edit, not a code change.</p>
+  <p>Model choice is configuration in the same spirit. Roles map to model tiers, and tiers map per harness to concrete models: routine subagents (implementation, docs, small fixes, build chores) default to the low tier, while planning and review — the steps that guard quality — run on the high tier, and the conductor inherits whatever the session runs. Swapping the model behind any role is a config edit.</p>
 
   <p>That split is the practical argument for model flexibility. The structure constrains how far any single step can stray: each step is bounded, each gate fails closed, and the review fan-out checks the work regardless of which model produced it. So the quality bar sits where the gates put it, and a cheaper or self-hosted model can carry the routine steps while the strongest model you have is reserved for the judgment-heavy ones.</p>
 
@@ -224,7 +224,7 @@
 
   <pre><code>pi install npm:dev-loops@&lt;version&gt;</code></pre>
 
-  <p><strong>Run a loop.</strong> The named commands are direct entrypoints; you never pick internal modes. On Claude Code:</p>
+  <p><strong>Run a loop.</strong> The named commands are direct entrypoints; the loop selects its internal strategy itself. On Claude Code:</p>
 
   <pre><code>/loop-start 112          <span class="cm"># start a dev loop on a tracked issue</span>
 /loop-auto 112           <span class="cm"># run autonomously to the human-approval checkpoint</span>
@@ -234,7 +234,7 @@
 /loop-info 112           <span class="cm"># read-only state summary for an issue or PR</span>
 /loop-status             <span class="cm"># readiness check: gh auth, git repo, subagents</span></code></pre>
 
-  <p>On Pi the same set is reachable as subcommands of one command: <code>/dev-loops start 112</code>, <code>/dev-loops auto 112</code>, <code>/dev-loops continue</code>, and so on. Plain language works too — <code>start dev loop on issue 112</code> or <code>continue dev loop on PR 88</code> routes through the same deterministic contract, so the named commands are thin shortcuts, not a separate mechanism.</p>
+  <p>On Pi the same set is reachable as subcommands of one command: <code>/dev-loops start 112</code>, <code>/dev-loops auto 112</code>, <code>/dev-loops continue</code>, and so on. Plain language works too — <code>start dev loop on issue 112</code> or <code>continue dev loop on PR 88</code> routes through the same deterministic contract, so the named commands are thin shortcuts over that routing.</p>
 
   <p><strong>Tune the posture (optional).</strong> A <code>.devloops</code> file at the repository root controls how work arrives and how strict the loop is:</p>
 
@@ -259,7 +259,7 @@ autonomy:
 
     <h2 id="where-to-go-deeper">Where to go deeper</h2>
 
-    <p>The <a href="./dev-loops-deep-dive.html">dev-loops deep dive</a> takes these ideas apart in detail, in two parts: why the next step is always computable from visible state, so the next actor pulls work instead of waiting for a handoff — and how to measure the waiting between actions, which is where the lead time goes once the code itself is fast to write.</p>
+    <p>The <a href="./dev-loops-deep-dive.html">dev-loops deep dive</a> takes these ideas apart in detail, in two parts: why the next step is always computable from visible state, so the next actor can pull work the moment it is ready — and how to measure the waiting between actions, which accounts for most of the lead time.</p>
 
   </section>
 
