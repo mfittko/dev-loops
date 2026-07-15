@@ -1222,6 +1222,7 @@ test("runCli --lightweight ALONE (no --issue): light mode disabled fails closed 
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /lightMode\.enabled/);
+    assert.match(result.stderr, /issueless\.enabled/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1235,6 +1236,7 @@ test("runCli --lightweight ALONE (no --issue): undetectable scope (no commits) f
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /measurable change scope/);
+    assert.match(result.stderr, /issueless\.enabled/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1281,6 +1283,7 @@ test("runCli --lightweight ALONE (no --issue): DIRTY-TREE above-threshold change
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /stay within the light-mode threshold/);
+    assert.match(result.stderr, /issueless\.enabled/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

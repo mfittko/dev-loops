@@ -664,7 +664,7 @@ export function buildLightweightIssuelessInput({ config, cwd }) {
         throw new Error("--lightweight without --issue (issue-less PR-first) requires localImplementation.lightMode.enabled in .devloops; enable light mode, set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.");
       }
       if (eligibility.reason === "scope_detection_failed") {
-        throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Provide --issue <n> instead.`);
+        throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.`);
       }
       throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.`);
     }

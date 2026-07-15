@@ -2672,6 +2672,22 @@ test("schema accepts localImplementation.issueless.enabled", async () => {
   }
 });
 
+test("schema rejects a non-boolean issueless.enabled at config load", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-issueless-type-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      "version: 1\nlocalImplementation:\n  issueless:\n    enabled: \"yes\"\n",
+      "utf8",
+    );
+    const { loadDevLoopConfig: load } = await import("../src/config/config.mjs");
+    const result = await load({ repoRoot: tmpDir });
+    assert.ok(result.errors.length > 0);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("schema rejects unknown keys inside localImplementation.issueless (strict object)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-issueless-bad-"));
   try {
