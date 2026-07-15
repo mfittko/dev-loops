@@ -22,7 +22,7 @@ An agent left to its own devices tends to assume its way past the hard moments: 
 
 Three ideas carry most of the value:
 
-- **Every change walks the same path.** A draft gate checks the basics, automated review rounds look for real problems, and a pre-approval gate re-checks the final state — with green CI required at both gates unless a repository explicitly opts out. Nothing skips the path, including every change that built dev-loops itself.
+- **Every change walks the same path.** A draft gate checks the basics, automated review rounds look for real problems, and a pre-approval gate re-checks the final state — with green CI required at both gates unless a repository explicitly opts out. The changes that build dev-loops itself run this same path.
 - **A person merges by default.** Out of the box the loop stops at the merge and hands over; it merges on its own only when a repository grants that explicitly. There is also a stricter setting that makes the merge human-only no matter what any single run claims — it cannot be overridden from inside the loop.
 - **Work starts from a durable spec.** A change begins as a short plan file in the repository or as a tracked issue, and the pull request carries that spec through review to merge. There is always a written artifact to check the result against.
 
@@ -34,16 +34,16 @@ Coordination is the cost that compounds. Every change carries a handful of trans
 
 The loop breaks the compounding by turning each transition into a machine decision with a log. What remains for the human is roughly one bounded decision per change: the merge, plus anything the loop flags as unclear.
 
-dev-loops is developed with dev-loops, so the honest evidence is its own history. The numbers below come straight from the repository's git log:
+dev-loops is developed with dev-loops, so the honest evidence is its own history. The numbers below come straight from the repository's git log, as of mid-July 2026:
 
 <!-- metrics:start -->
-- **534** pull requests merged in the project's first nine weeks
-- **~10/day** over the most recent two weeks (138 in fourteen days)
+- **530+** pull requests merged in the project's first nine weeks
+- **~10/day** across the most recent two weeks
 - **24** tagged releases in the same stretch, up to a 1.0 release candidate
 - **1** human decision per change — the default posture stops at the merge
 <!-- metrics:end -->
 
-The review load behind that pace is real work, and it is where the loop earns its keep. At the draft gate, review fans out to focused reviewers that each read the change through a single lens — scope, coverage, correctness, and input validation among them. Before approval, a second fan-out applies design and simplicity lenses (DRY, KISS, YAGNI, single-responsibility) plus a check of the change against its own written acceptance criteria. Findings land as comments on the pull request, and a finding rated must-fix blocks a clean verdict until it is addressed. The gate sits exactly where unattended automation is usually weakest — the moment a change is about to land — so the cadence stays fast while the merges stay ones a person can stand behind.
+The review load behind that pace is real work, and it is where the loop earns its keep. At the draft gate, review fans out to focused reviewers that each read the change through a single lens — scope, coverage, correctness, and input validation among them. Before approval, a second fan-out applies design and simplicity lenses (DRY, KISS, YAGNI, single-responsibility) plus a check of the change against its own written acceptance criteria. Findings land as comments on the pull request, and a finding rated must-fix blocks a clean verdict until it is addressed. The gate sits exactly where unattended automation is usually weakest — the moment a change is about to land — so the cadence stays fast and every merge is one a person can stand behind.
 
 ## Model-agnostic by construction
 
@@ -82,7 +82,7 @@ pi install npm:dev-loops@<version>
 /loop-status             # readiness check: gh auth, git repo, subagents
 ```
 
-On Pi the same set is reachable as subcommands of one command: `/dev-loops start 112`, `/dev-loops auto 112`, `/dev-loops continue`, and so on. Plain language works too — `start dev loop on issue 112` or `continue dev loop on PR 88` routes through the same deterministic contract, so the named commands are thin shortcuts over that routing.
+On Pi the same set is reachable as subcommands of one command: `/dev-loops start 112`, `/dev-loops auto 112`, `/dev-loops continue`, and so on. Plain language works too — `start dev loop on issue 112` or `continue dev loop on PR 88` routes through the same deterministic router, so the named commands are thin shortcuts over it.
 
 **Tune the posture (optional).** A `.devloops` file at the repository root controls how work arrives and how strict the loop is:
 
@@ -99,7 +99,7 @@ autonomy:
   humanMergeOnly: true    # merge stays a human-only action, regardless of any per-run flag
 ```
 
-Three choices shape the experience. Work can start **local-first** — you write a short plan in the repository and the loop opens a pull request straight from it — or **github-first**, where a tracked issue is the starting point. The automated review rounds can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; by default it stops and hands the merge to you. Start with the shipped defaults and dial each setting toward the autonomy your team is comfortable with. As of 1.0 this configuration surface follows semantic versioning, so a `.devloops` file you write today keeps working across minor upgrades.
+Three choices shape the experience. Work can start **local-first** — you write a short plan in the repository and the loop opens a pull request straight from it — or **github-first**, where a tracked issue is the starting point. The automated review rounds can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; by default it stops and hands the merge to you. Start with the shipped defaults and dial each setting toward the autonomy your team is comfortable with. From 1.0 onward this configuration surface follows semantic versioning, so a `.devloops` file you write today keeps working across minor upgrades.
 
 ## Where to go deeper
 

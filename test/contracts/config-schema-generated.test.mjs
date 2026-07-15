@@ -9,7 +9,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { parse as parseYaml } from "yaml";
 import { FileConfigSchema } from "@dev-loops/core/config";
-import { renderConfigJsonSchema } from "../../scripts/generate-config-schema.mjs";
+import { generateConfigJsonSchema, renderConfigJsonSchema } from "../../scripts/generate-config-schema.mjs";
 
 const schemaFileUrl = new URL("../../schemas/dev-loop-config.schema.json", import.meta.url);
 
@@ -31,6 +31,20 @@ test("JSON schema top-level surface mirrors FileConfigSchema exactly", async () 
   assert.equal(jsonSchema.additionalProperties, false);
   assert.deepEqual(jsonSchema.required, ["version"]);
   assert.deepEqual(jsonSchema.properties.version, { type: "number", const: 1 });
+});
+
+test("JS safe-integer sentinels are stripped from the generated schema", () => {
+  // zod stamps ±MAX_SAFE_INTEGER bounds on every .int() field; the generator
+  // strips exactly those. The drift test can't catch this regressing (both
+  // sides come from the same code), so pin it against the generator directly.
+  const rendered = JSON.stringify(generateConfigJsonSchema());
+  assert.ok(
+    !rendered.includes(String(Number.MAX_SAFE_INTEGER)),
+    "generated schema leaks MAX_SAFE_INTEGER bounds"
+  );
+  // Real hand-authored bounds must survive the strip (refinement.fanOut max 10).
+  const schema = generateConfigJsonSchema();
+  assert.equal(schema.properties.refinement.properties.fanOut.maximum, 10);
 });
 
 test("shipped config layers parse under the validator the schema is extracted from", async () => {

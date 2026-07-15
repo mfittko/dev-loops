@@ -16,7 +16,7 @@ const shellUrl = new URL("../../scripts/pages/article-shell.html", import.meta.u
 async function freshRender({ md }) {
   const shell = await readFile(shellUrl, "utf8");
   const mdSource = await readFile(new URL(md, articlesUrl), "utf8");
-  return renderArticleHtml(mdSource.replace(/^---\n/, `---\nsourceBasename: ${md}\n`), shell);
+  return renderArticleHtml(mdSource, shell, md);
 }
 
 for (const article of RENDERED_ARTICLES) {
@@ -59,4 +59,69 @@ test("in-page anchors written in the markdown resolve in the rendered HTML", asy
       );
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Behavior units. The drift test above compares two outputs of the same code,
+// so it cannot catch the renderer itself regressing; these pin the promised
+// behaviors directly against synthetic inputs.
+// ---------------------------------------------------------------------------
+
+const MIN_SHELL = "<title>{{TITLE}}</title>\n{{GENERATED}}\n<style></style>\n";
+
+function doc(body, { title = "T", heroLede = "L" } = {}) {
+  return `---\ntitle: "${title}"\nheroLede: "${heroLede}"\n---\n\n# ${title}\n\n${body}\n`;
+}
+
+const render = (body, fm) => renderArticleHtml(doc(body, fm), MIN_SHELL, "t.md");
+
+test("renderer fails closed on unsupported markdown constructs", () => {
+  for (const body of [
+    "> a blockquote",
+    "| a | b |",
+    "  indented block start",
+    "```text\nunterminated fence",
+  ]) {
+    assert.throws(() => render(body), `should throw for: ${JSON.stringify(body)}`);
+  }
+  assert.throws(() => renderArticleHtml("# no frontmatter\n\ntext\n", MIN_SHELL, "t.md"));
+  assert.throws(() => renderArticleHtml('---\ntitle: "T"\n---\n\n# T\n\ntext\n', MIN_SHELL, "t.md"), /heroLede/);
+  assert.throws(() => renderArticleHtml(doc("text"), MIN_SHELL, ""), /sourceBasename/);
+  assert.throws(() => renderArticleHtml('---\ntitle: "T"\nheroLede: "L"\n---\n\n# Other\n\ntext\n', MIN_SHELL, "t.md"), /h1 matching/);
+  assert.throws(() => render("## Same\n\na\n\n## Same\n\nb"), /duplicate h2 slug/);
+});
+
+test("relative .md links rewrite to .html; absolute and anchor links pass through", () => {
+  const html = render(
+    "See [a](./x.md), [b](../y.md#frag), [c](https://example.com/z.md), and [d](#the-end).\n\n## The end\n\nfin"
+  );
+  assert.ok(html.includes('href="./x.html"'), "./x.md should rewrite");
+  assert.ok(html.includes('href="../y.html#frag"'), "../y.md#frag should rewrite keeping the fragment");
+  assert.ok(html.includes('href="https://example.com/z.md"'), "absolute URLs must not rewrite");
+  assert.ok(html.includes('href="#the-end"'), "in-page anchors must pass through");
+});
+
+test("metrics-marked lists render as .metric cards and reject malformed items", () => {
+  const html = render("<!-- metrics:start -->\n- **42** things counted\n- **~7/day** of pace\n<!-- metrics:end -->");
+  assert.ok(html.includes('<div class="num">42</div>'));
+  assert.ok(html.includes('<div class="lab">things counted</div>'));
+  assert.ok(html.includes('<div class="num">~7/day</div>'));
+  assert.throws(() => render("<!-- metrics:start -->\n- no bold prefix\n<!-- metrics:end -->"), /metrics item/);
+});
+
+test("code-fence # comments get .cm spans; non-comment # stays plain", () => {
+  const html = render("```text\nrun me   # trailing note\n# full-line note\nvalue a#b stays\n```");
+  assert.ok(html.includes('<span class="cm"># trailing note</span>'));
+  assert.ok(html.includes('<span class="cm"># full-line note</span>'));
+  assert.ok(html.includes("value a#b stays"), "a#b must not be treated as a comment");
+  assert.equal(html.match(/class="cm"/g).length, 2);
+});
+
+test("generated page carries slug ids, hero fields, and the provenance marker", () => {
+  const html = render("intro para\n\n## First Section\n\nbody\n\n## Keep going\n\nout", { title: "My Page", heroLede: "The lede." });
+  assert.ok(html.includes("<title>My Page</title>"));
+  assert.ok(html.includes('<p class="lede">The lede.</p>'));
+  assert.ok(html.includes('<h2 id="first-section">'));
+  assert.ok(html.includes('<section class="deeper">'), "last h2 section becomes the deeper outro");
+  assert.ok(html.includes("GENERATED from docs/articles/t.md"));
 });

@@ -16,10 +16,11 @@
 //   - A bullet list between `<!-- metrics:start -->` and `<!-- metrics:end -->`
 //     renders as the .metrics card row; each item must be `**<num>** <label>`.
 //   - Every h2 gets a GitHub-style slug id, so in-page `#anchors` written in
-//     the markdown resolve in both renderings.
+//     the markdown resolve in both renderings. Duplicate h2 slugs throw.
 //   - The final h2 section renders as the boxed .deeper outro behind an
 //     <hr class="rule" />.
-//   - Relative links to `.md` files are rewritten to their `.html` twins.
+//   - Relative `./`- or `../`-prefixed links to `.md` files are rewritten to
+//     their `.html` twins.
 //   - `#`-to-end-of-line comments inside fenced code render in .cm spans.
 //
 // Usage:
@@ -117,9 +118,11 @@ function renderMetrics(items) {
  * Render one article's markdown source into the full HTML page.
  * @param {string} mdSource - full markdown file contents including frontmatter
  * @param {string} shell - article-shell.html template contents
+ * @param {string} sourceBasename - the markdown file's basename, for the GENERATED marker
  * @returns {string}
  */
-export function renderArticleHtml(mdSource, shell) {
+export function renderArticleHtml(mdSource, shell, sourceBasename) {
+  if (!sourceBasename) throw new Error("renderArticleHtml requires the markdown sourceBasename");
   const fm = mdSource.match(/^---\n([\s\S]*?)\n---\n/);
   if (!fm) throw new Error("article markdown must start with YAML frontmatter");
   const meta = parseYaml(fm[1]);
@@ -141,15 +144,21 @@ export function renderArticleHtml(mdSource, shell) {
   </header>`);
 
   let inDeeper = false;
+  const seenSlugs = new Set();
   for (const [i, block] of blocks.entries()) {
     if (block.type === "h1") continue;
     if (block.type === "h2") {
+      const slug = slugify(block.text);
+      if (seenSlugs.has(slug)) {
+        throw new Error(`duplicate h2 slug "${slug}" — two sections would share one anchor id`);
+      }
+      seenSlugs.add(slug);
       if (i === lastH2) {
         out.push(`  <hr class="rule" />`, ``, `  <section class="deeper">`);
-        out.push(`    <h2 id="${slugify(block.text)}">${renderInline(block.text)}</h2>`);
+        out.push(`    <h2 id="${slug}">${renderInline(block.text)}</h2>`);
         inDeeper = true;
       } else {
-        out.push(`  <h2 id="${slugify(block.text)}">${renderInline(block.text)}</h2>`);
+        out.push(`  <h2 id="${slug}">${renderInline(block.text)}</h2>`);
       }
     } else if (block.type === "p") {
       out.push(inDeeper ? `    <p>${renderInline(block.text)}</p>` : `  <p>${renderInline(block.text)}</p>`);
@@ -163,7 +172,7 @@ export function renderArticleHtml(mdSource, shell) {
   }
   if (inDeeper) out.push(`  </section>`);
 
-  const generated = `<!-- GENERATED from docs/articles/${meta.sourceBasename} by scripts/pages/render-article.mjs — do not edit; edit the markdown and regenerate. -->`;
+  const generated = `<!-- GENERATED from docs/articles/${sourceBasename} by scripts/pages/render-article.mjs — do not edit; edit the markdown and regenerate. -->`;
   return (
     shell.replace("{{TITLE}}", escapeHtml(meta.title)).replace("{{GENERATED}}", generated) +
     `<body>\n<div class="wrap">\n<article class="article">\n\n${out.join("\n\n")}\n\n</article>\n</div>\n</body>\n</html>\n`
@@ -175,12 +184,7 @@ async function renderAll() {
   const results = [];
   for (const { md, html } of RENDERED_ARTICLES) {
     const mdSource = await readFile(path.join(ARTICLES_DIR, md), "utf8");
-    // Thread the source basename through frontmatter meta for the marker line.
-    const rendered = renderArticleHtml(
-      mdSource.replace(/^---\n/, `---\nsourceBasename: ${md}\n`),
-      shell
-    );
-    results.push({ md, html, rendered });
+    results.push({ md, html, rendered: renderArticleHtml(mdSource, shell, md) });
   }
   return results;
 }
