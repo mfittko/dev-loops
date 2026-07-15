@@ -465,11 +465,14 @@ const PersonasConfig = z.record(z.string().min(1), PersonaEntry);
 
 // Partial nested gate entries for file-level config (allows overriding only
 // requireCi/required/angles without restating the whole gate object).
-const FileGateConfig = GateConfig.partial();
 const FileGatesConfig = z.strictObject({
-  draft: FileGateConfig.describe("Draft gate config (runs before a PR leaves draft).").optional(),
-  preApproval: FileGateConfig.describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
-  spike: FileGateConfig.describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
+  // Each gate gets its own GateConfig.partial() instance: a shared clone
+  // (FileGateConfig.describe(...) x3) makes the three entries share one
+  // underlying def, and zod's reused-def bookkeeping then renders their
+  // metadata inconsistently across environments.
+  draft: GateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
+  preApproval: GateConfig.partial().describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
+  spike: GateConfig.partial().describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
   requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts (rejects inline single-agent runs).").optional(),
   requireFanoutProvenance: z.boolean().describe("Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch).").optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).describe("Cap on parallel gate fan-out reviewers; overflow runs in sequential batches.").optional(),
