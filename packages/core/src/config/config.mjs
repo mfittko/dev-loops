@@ -232,7 +232,7 @@ const LocalImplementationConfig = z.strictObject({
    * PRs get the full fan-out and the full-PR Copilot round cap.
    */
   issueless: z.strictObject({
-    enabled: z.boolean(),
+    enabled: z.boolean().describe("Opt into issue-less PR-first dispatch at any change scope; gate dispatch still resolves inline vs full fan-out from scope on its own."),
   }).optional(),
 });
 
@@ -466,14 +466,13 @@ const PersonasConfig = z.record(z.string().min(1), PersonaEntry);
 // Partial nested gate entries for file-level config (allows overriding only
 // requireCi/required/angles without restating the whole gate object).
 const FileGatesConfig = z.strictObject({
-  // Each gate gets its own GateConfig.partial() instance: a shared clone
-  // (FileGateConfig.describe(...) x3) makes the three entries share one
-  // underlying def, and zod's reused-def bookkeeping then renders their
-  // metadata inconsistently across environments.
+  // Each gate gets its own GateConfig.partial() instance rather than three
+  // .describe() clones of one shared partial, so no underlying def is shared
+  // and per-gate metadata renders unambiguously.
   draft: GateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
   preApproval: GateConfig.partial().describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
   spike: GateConfig.partial().describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
-  requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts (rejects inline single-agent runs).").optional(),
+  requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason).").optional(),
   requireFanoutProvenance: z.boolean().describe("Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch).").optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).describe("Cap on parallel gate fan-out reviewers; overflow runs in sequential batches.").optional(),
   postFindingsComments: z.boolean().describe("Post consolidated gate findings as a marker-tagged PR comment (default true).").optional(),

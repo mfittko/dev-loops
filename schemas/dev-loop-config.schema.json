@@ -375,7 +375,7 @@
         },
         "requireFanoutEvidence": {
           "type": "boolean",
-          "description": "Require fan-out/fan-in review evidence on gate verdicts (rejects inline single-agent runs)."
+          "description": "Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason)."
         },
         "requireFanoutProvenance": {
           "type": "boolean",
@@ -524,6 +524,19 @@
             "enabled",
             "maxFiles",
             "maxLines"
+          ],
+          "additionalProperties": false
+        },
+        "issueless": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Opt into issue-less PR-first dispatch at any change scope; gate dispatch still resolves inline vs full fan-out from scope on its own."
+            }
+          },
+          "required": [
+            "enabled"
           ],
           "additionalProperties": false
         }
