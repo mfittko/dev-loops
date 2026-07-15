@@ -2,31 +2,41 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mfittko/dev-loops/schemas/dev-loop-config.schema.json",
   "title": "dev-loops config",
-  "description": "Schema for dev-loops config across all layers: the shipped defaults in packages/core/src/config/extension-defaults.yaml, the repo-local .pi/dev-loop/defaults.* override layer, and consumer .devloops (legacy .pi/dev-loop/settings.* and .pi/dev-loop/overrides.* still validate against it).",
+  "description": "GENERATED FILE — do not edit by hand; regenerate with `node scripts/generate-config-schema.mjs`. Extracted from FileConfigSchema in packages/core/src/config/config.mjs, the validator the loader applies to every config file layer: the shipped defaults in packages/core/src/config/extension-defaults.yaml, the repo-local .pi/dev-loop/defaults.* layer, consumer .devloops (.yaml/.yml/.json), and the legacy .pi/dev-loop/settings.*/overrides.* fallbacks. The zod loader remains authoritative: cross-field refinements (models.roleTiers alias resolution, uiReview step per-action requirements, regex validity) are enforced there and cannot be expressed in JSON Schema.",
   "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "version"
-  ],
   "properties": {
     "version": {
+      "type": "number",
       "const": 1
     },
     "strategy": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "default": {
+          "type": "string",
           "enum": [
             "local-first",
             "github-first"
           ]
         }
-      }
+      },
+      "additionalProperties": false
+    },
+    "inputSource": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": "string",
+          "enum": [
+            "tracker",
+            "phase-docs"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "models": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "conductor": {
           "type": "string",
@@ -34,16 +44,65 @@
         },
         "roles": {
           "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "tiers": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "claude": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pi": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "roleTiers": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
           "additionalProperties": {
             "type": "string",
             "minLength": 1
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "refinement": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "fanOut": {
           "type": "integer",
@@ -51,14 +110,30 @@
           "maximum": 10
         },
         "mode": {
+          "type": "string",
           "enum": [
             "parallel",
             "sequential"
           ]
         },
         "maxCopilotRounds": {
+          "default": 5,
           "type": "integer",
-          "minimum": 1
+          "minimum": 0
+        },
+        "stopOnLowSignal": {
+          "default": false,
+          "type": "boolean"
+        },
+        "lowSignalRoundThreshold": {
+          "default": 3,
+          "type": "integer",
+          "minimum": 0
+        },
+        "lowSignalMaxComments": {
+          "default": 2,
+          "type": "integer",
+          "minimum": 0
         },
         "roles": {
           "type": "array",
@@ -67,47 +142,226 @@
             "minLength": 1
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "gates": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "draft": {
-          "$ref": "#/$defs/gateConfig",
-          "description": "Draft gate config. `requireCi` controls whether draft gate waits for green CI."
+          "type": "object",
+          "properties": {
+            "angles": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "excludeAngles": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "mandatoryAngles": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": {
+              "default": true,
+              "type": "boolean"
+            },
+            "requireCi": {
+              "default": true,
+              "type": "boolean"
+            },
+            "blockCleanOnFindingSeverities": {
+              "default": [
+                "must-fix"
+              ],
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "must-fix",
+                  "worth-fixing-now",
+                  "defer"
+                ]
+              }
+            },
+            "dynamicAngles": {
+              "default": false,
+              "type": "boolean"
+            },
+            "additiveAngles": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         },
         "preApproval": {
-          "$ref": "#/$defs/gateConfig",
-          "description": "Pre-approval gate config. `requireCi` is honored (default true): set it to false to opt out of the CI precondition so a repo with no CI is not held at the pre-approval gate. When false the CI verdict is ignored entirely at this boundary — including a real CI failure, which no longer blocks (not merely 'green optional')."
+          "type": "object",
+          "properties": {
+            "angles": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "excludeAngles": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "mandatoryAngles": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": {
+              "default": true,
+              "type": "boolean"
+            },
+            "requireCi": {
+              "default": true,
+              "type": "boolean"
+            },
+            "blockCleanOnFindingSeverities": {
+              "default": [
+                "must-fix"
+              ],
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "must-fix",
+                  "worth-fixing-now",
+                  "defer"
+                ]
+              }
+            },
+            "dynamicAngles": {
+              "default": false,
+              "type": "boolean"
+            },
+            "additiveAngles": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         },
         "spike": {
-          "$ref": "#/$defs/gateConfig",
-          "description": "Relaxed spike gate profile (#965). Lighter than the production draft -> pre-approval set: a spike's deliverable is a findings doc, so this is a small docs-first angle set, not a required gate, and CI is not a prerequisite. Applies only to spike-mode work."
+          "type": "object",
+          "properties": {
+            "angles": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "excludeAngles": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "mandatoryAngles": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": {
+              "default": true,
+              "type": "boolean"
+            },
+            "requireCi": {
+              "default": true,
+              "type": "boolean"
+            },
+            "blockCleanOnFindingSeverities": {
+              "default": [
+                "must-fix"
+              ],
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "must-fix",
+                  "worth-fixing-now",
+                  "defer"
+                ]
+              }
+            },
+            "dynamicAngles": {
+              "default": false,
+              "type": "boolean"
+            },
+            "additiveAngles": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         },
         "requireFanoutEvidence": {
-          "type": "boolean",
-          "description": "Require fan-out/fan-in review evidence on gate verdicts (rejects inline_single_agent)."
+          "type": "boolean"
+        },
+        "requireFanoutProvenance": {
+          "type": "boolean"
         },
         "maxFanoutReviewers": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 64,
-          "description": "Maximum number of fan-out reviewers per gate."
+          "maximum": 64
         },
         "postFindingsComments": {
-          "type": "boolean",
-          "description": "Whether to post gate findings comments (default true). Local-first keeps them on: findings live on the PR as review evidence."
+          "type": "boolean"
+        },
+        "anglePool": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rejectForeignAngles": {
+          "type": "boolean"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "autonomy": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "stopAt": {
           "type": "array",
           "items": {
+            "type": "string",
             "enum": [
               "refinement",
               "draft-pr",
@@ -117,53 +371,55 @@
           }
         },
         "humanMergeOnly": {
-          "type": "boolean",
-          "description": "When true, merge is a fixed human-only action: the agent never runs `gh pr merge`, `resolveAutonomyStopAt` always includes \"merge\", and any per-run merge authorization is ignored (fails closed).",
-          "default": false
+          "type": "boolean"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "approval": {
       "type": "object",
-      "additionalProperties": false,
-      "description": "Approval / merge-handoff behavior. `humanHandoff` (opt-in) offers to assign the PR to a contributor at the pre-approval gate. Pairs with autonomy.humanMergeOnly.",
       "properties": {
         "humanHandoff": {
           "type": "object",
-          "additionalProperties": false,
-          "description": "Offer to assign the PR to a human reviewer/assignee at the pre-approval / merge-handoff boundary. Opt-in; disabled by default. OFFER-only \u2014 the operator confirms the assignee.",
           "properties": {
             "enabled": {
-              "type": "boolean",
               "default": false,
-              "description": "Enable the human-handoff offer at the pre-approval gate."
+              "type": "boolean"
             },
             "candidatesFrom": {
               "type": "array",
               "items": {
+                "type": "string",
                 "enum": [
                   "codeowners",
                   "recent-committers"
                 ]
-              },
-              "description": "Candidate sources the resolver queries: CODEOWNERS for touched paths and/or recent committers to those paths."
+              }
             },
             "assignees": {
               "type": "array",
               "items": {
                 "type": "string",
                 "minLength": 1
-              },
-              "description": "Static, highest-priority candidate logins to offer (e.g. [alice, bob])."
+              }
             }
-          }
+          },
+          "additionalProperties": false
         }
-      }
+      },
+      "additionalProperties": false
     },
     "workflow": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
+        "asyncStartMode": {
+          "default": "required",
+          "type": "string",
+          "enum": [
+            "required",
+            "allowed"
+          ]
+        },
         "requireRetrospective": {
           "type": "boolean"
         },
@@ -173,128 +429,394 @@
         "devModeDefault": {
           "type": "boolean"
         }
-      }
+      },
+      "additionalProperties": false
+    },
+    "localImplementation": {
+      "type": "object",
+      "properties": {
+        "lightMode": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "maxFiles": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxLines": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxCopilotRounds": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "enabled",
+            "maxFiles",
+            "maxLines"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "queue": {
+      "type": "object",
+      "properties": {
+        "maxParallel": {
+          "default": 3,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "maxAutoFiledIssues": {
+          "default": 10,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "reDispatchMaxRetries": {
+          "default": 1,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "projectNumber": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "boardTitle": {
+          "type": "string",
+          "minLength": 1
+        },
+        "archiveOlderThanDays": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
     },
     "personas": {
       "type": "object",
       "propertyNames": {
+        "type": "string",
         "minLength": 1
       },
       "additionalProperties": {
-        "$ref": "#/$defs/personaEntry"
+        "type": "object",
+        "properties": {
+          "persona": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prompt": {
+            "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle",
+            "type": "string",
+            "minLength": 1
+          },
+          "defaultModel": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "internalPathPatterns": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
       }
     },
     "worktree": {
       "type": "object",
-      "additionalProperties": false,
-      "description": "Worktree lifecycle automation. Provision gitignored files/dirs into a fresh worktree from the main checkout. Entries are repo-relative literal paths or glob patterns; directories recurse. Empty/absent is a no-op.",
       "properties": {
         "copyOnInit": {
           "type": "array",
           "items": {
             "type": "string",
             "minLength": 1
-          },
-          "description": "Paths/globs copied into the worktree (isolated per worktree \u2014 use for mutable files). Do not target node_modules."
+          }
         },
         "linkOnInit": {
           "type": "array",
           "items": {
             "type": "string",
             "minLength": 1
-          },
-          "description": "Paths/globs symlinked (absolute) into the main checkout (shared \u2014 use only for read-only data). Do not target node_modules."
+          }
         }
-      }
+      },
+      "additionalProperties": false
     },
-    "localPlanning": {
-      "deprecated": true,
-      "description": "Deprecated (removed in #1088). Accepted for backward compatibility but ignored \u2014 nothing reads it."
-    }
-  },
-  "$defs": {
-    "gateConfig": {
+    "uiReview": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
-        "angles": {
+        "run": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "minLength": 1
+            },
+            "readyUrl": {
+              "type": "string",
+              "format": "uri"
+            },
+            "readyTimeoutMs": {
+              "default": 60000,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600000
+            },
+            "readyIntervalMs": {
+              "default": 1000,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            },
+            "cwd": {
+              "type": "string",
+              "minLength": 1
+            },
+            "migrate": {
+              "type": "object",
+              "properties": {
+                "statusCommand": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "applyCommand": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "destructivePattern": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "statusCommand",
+                "applyCommand"
+              ],
+              "additionalProperties": false
+            },
+            "rowTeardown": {
+              "type": "object",
+              "properties": {
+                "deleteCommand": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "deleteCommand"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "command",
+            "readyUrl"
+          ],
+          "additionalProperties": false
+        },
+        "login": {
+          "type": "object",
+          "properties": {
+            "loginUrl": {
+              "type": "string",
+              "format": "uri"
+            },
+            "usernameSelector": {
+              "type": "string",
+              "minLength": 1
+            },
+            "usernameValue": {
+              "type": "string",
+              "minLength": 1
+            },
+            "passwordSelector": {
+              "type": "string",
+              "minLength": 1
+            },
+            "passwordValue": {
+              "type": "string",
+              "minLength": 1
+            },
+            "submitSelector": {
+              "type": "string",
+              "minLength": 1
+            },
+            "successSelector": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "loginUrl",
+            "submitSelector",
+            "successSelector"
+          ],
+          "additionalProperties": false
+        },
+        "interstitials": {
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
+            "type": "object",
+            "properties": {
+              "selector": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "selector"
+            ],
+            "additionalProperties": false
           }
         },
-        "excludeAngles": {
+        "flows": {
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pathPatterns": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "steps": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "goto",
+                        "click",
+                        "fill",
+                        "select",
+                        "upload",
+                        "dispatch"
+                      ]
+                    },
+                    "selector": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "event": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "viewport": {
+                      "type": "object",
+                      "properties": {
+                        "width": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "height": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        }
+                      },
+                      "required": [
+                        "width",
+                        "height"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "interactionState": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "focus",
+                        "hover",
+                        "error"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "name",
+              "steps"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "caps": {
+          "type": "object",
+          "properties": {
+            "maxScreenshots": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxFlows": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxStepsPerFlow": {
+              "type": "integer",
+              "minimum": 1
+            }
           },
-          "default": [],
-          "description": "Angles to remove from the resolved angle list."
+          "additionalProperties": false
         },
-        "required": {
-          "type": "boolean",
-          "default": true
+        "serverLogPath": {
+          "type": "string",
+          "minLength": 1
         },
-        "requireCi": {
-          "type": "boolean",
-          "default": true,
-          "description": "Per-gate CI prerequisite toggle (default true). When true the gate requires green current-head CI; set false to opt that gate out of the CI precondition. Honored on both the draft and pre-approval gates — on the pre-approval gate a false value ignores the CI verdict entirely (including a real failure)."
-        },
-        "blockCleanOnFindingSeverities": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "must-fix",
-              "worth-fixing-now",
-              "defer"
-            ]
-          },
-          "minItems": 1,
-          "default": [
-            "must-fix"
-          ],
-          "description": "Finding severities that block a clean gate verdict."
-        },
-        "dynamicAngles": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable dynamic gate angle resolution based on PR diff analysis."
-        },
-        "mandatoryAngles": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "default": [],
-          "description": "Angles that always run regardless of diff-based dynamic selection."
+        "serverLogExceptionPattern": {
+          "type": "string",
+          "minLength": 1
         }
-      }
+      },
+      "additionalProperties": false
     },
-    "personaEntry": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "persona": {
-          "type": "string",
-          "minLength": 1
-        },
-        "prompt": {
-          "type": "string",
-          "minLength": 1
-        },
-        "defaultModel": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1,
-          "default": null
-        }
-      }
-    }
-  }
+    "localPlanning": {}
+  },
+  "required": [
+    "version"
+  ],
+  "additionalProperties": false
 }
