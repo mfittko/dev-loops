@@ -1,6 +1,7 @@
 ---
 title: "Introducing dev-loops"
 subtitle: "A coordination runtime for AI-assisted development — and a guide to running it yourself."
+heroLede: "The slow part of AI-assisted development is no longer writing code — it is the coordination around it. dev-loops runs those in-between steps as recorded decisions, with a person at the merge by default."
 tags:
   - AI
   - Software Engineering
@@ -25,7 +26,7 @@ Three ideas carry most of the value:
 - **A person merges by default.** Out of the box the loop stops at the merge and hands over; it merges on its own only when a repository grants that explicitly. There is also a stricter setting that makes the merge human-only no matter what any single run claims — it cannot be overridden from inside the loop.
 - **Work starts from a durable spec.** A change begins as a short plan file in the repository or as a tracked issue, and the pull request carries that spec through review to merge. There is always a written artifact to check the result against.
 
-None of this is tied to one model or one editor; the section on model-agnosticism below explains why that follows from the design. dev-loops is a runtime for the decisions around a change, and it runs inside the AI coding tools teams already use.
+None of this is tied to one model or one editor, and the section [Model-agnostic by construction](#model-agnostic-by-construction) explains why that follows from the design. dev-loops is a runtime for the decisions around a change, and it runs inside the AI coding tools teams already use.
 
 ## What it does to the work
 
@@ -35,10 +36,12 @@ The loop breaks the compounding by turning each transition into a machine decisi
 
 dev-loops is developed with dev-loops, so the honest evidence is its own history. The numbers below come straight from the repository's git log, not from a benchmark:
 
-- **534 pull requests** merged in the project's first nine weeks.
-- **About ten a day** over the most recent two weeks (138 in fourteen days).
-- **24 tagged releases** in the same stretch, up to a 1.0 release candidate.
-- **One human decision per change** — the loop's default posture stops every change at the merge.
+<!-- metrics:start -->
+- **534** pull requests merged in the project's first nine weeks
+- **~10/day** over the most recent two weeks (138 in fourteen days)
+- **24** tagged releases in the same stretch, up to a 1.0 release candidate
+- **1** human decision per change — the default posture stops at the merge
+<!-- metrics:end -->
 
 The review load behind that pace is real work, and it is where the loop earns its keep. At the draft gate, review fans out to focused reviewers that each read the change through a single lens — scope, coverage, correctness, and input validation among them. Before approval, a second fan-out applies design and simplicity lenses (DRY, KISS, YAGNI, single-responsibility) plus a check of the change against its own written acceptance criteria. Findings land as comments on the pull request, and a finding rated must-fix blocks a clean verdict until it is addressed. The gate sits exactly where unattended automation is usually weakest — the moment a change is about to land — so the cadence stays fast while the merges stay ones a person can stand behind.
 
