@@ -81,6 +81,8 @@ test("renderer fails closed on unsupported markdown constructs", () => {
     "| a | b |",
     "  indented block start",
     "```text\nunterminated fence",
+    "<!-- not-a-metrics-marker -->",
+    "<!-- metrics -->\n- **1** item",
   ]) {
     assert.throws(() => render(body), `should throw for: ${JSON.stringify(body)}`);
   }
@@ -99,6 +101,13 @@ test("relative .md links rewrite to .html; absolute and anchor links pass throug
   assert.ok(html.includes('href="../y.html#frag"'), "../y.md#frag should rewrite keeping the fragment");
   assert.ok(html.includes('href="https://example.com/z.md"'), "absolute URLs must not rewrite");
   assert.ok(html.includes('href="#the-end"'), "in-page anchors must pass through");
+});
+
+test("quotes in link targets and text are attribute-safe", () => {
+  const html = render('A [q](./a"b.md) link and a "quoted" word.');
+  assert.ok(html.includes('href="./a&quot;b.html"'), "quote in href must be escaped");
+  assert.ok(!html.includes('href="./a"b'), "raw quote must not break out of the attribute");
+  assert.ok(html.includes("&quot;quoted&quot;"));
 });
 
 test("metrics-marked lists render as .metric cards and reject malformed items", () => {

@@ -43,8 +43,10 @@ export const RENDERED_ARTICLES = [
   { md: "introducing-dev-loops.md", html: "introducing-dev-loops.html" },
 ];
 
+// Quote-escaping matters even under the strict CSP: rendered text is also
+// interpolated into href="" attributes, where a bare quote breaks out.
 const escapeHtml = (s) =>
-  s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 const slugify = (s) =>
   s.toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-");
@@ -79,6 +81,12 @@ function parseBlocks(body) {
     if (line.trim() === "") continue;
     if (line.trim() === "<!-- metrics:start -->") { metricsPending = true; continue; }
     if (line.trim() === "<!-- metrics:end -->") { metricsPending = false; continue; }
+    // Any other HTML comment must fail closed: the paragraph collector treats
+    // `<!--` as a block boundary, so an unrecognized comment line would
+    // otherwise re-enter the loop at the same index forever.
+    if (line.trimStart().startsWith("<!--")) {
+      throw new Error(`unsupported HTML comment at line ${i + 1}: ${JSON.stringify(line.trim())} — only the metrics markers are recognized`);
+    }
     if (line.startsWith("```")) {
       const fence = [];
       for (i++; i < lines.length && !lines[i].startsWith("```"); i++) fence.push(lines[i]);
