@@ -73,7 +73,11 @@ Optional modifier:
                  enabled AND the live change scope (git diff) staying within
                  its maxFiles/maxLines threshold; fails closed with a distinct
                  reason (light mode disabled / scope undetectable / over
-                 threshold) requiring --issue above the threshold.
+                 threshold) requiring --issue above the threshold — unless
+                 localImplementation.issueless.enabled is set, which sanctions
+                 issue-less PR-first at ANY change scope (the whole eligibility
+                 gate is skipped; gate dispatch still resolves review depth
+                 from scope on its own).
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
