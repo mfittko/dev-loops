@@ -19,7 +19,7 @@ Canonical owner for the acceptance-criteria verification procedure run during th
 
 1. **Resolve the linked issue number deterministically:** use `gh pr view <pr-number> --repo <owner/name> --json closingIssuesReferences,body` and apply this decision tree: if there is exactly one closing issue reference, use it; else if there is exactly one PR-body `Closes #N` / `Fixes #N` pattern, use it; otherwise (zero or multiple candidates), post the gate comment with verdict `blocked` (gate cannot complete deterministically) rather than guessing.
 
-2. **Read the issue body:** `gh issue view <issue-number> --repo <owner/name> --json body`
+2. **Read the issue body:** `node scripts/github/view-issue.mjs --repo <owner/name> --issue <issue-number> --json body --jq '.issue.body'`
 
 3. **Extract checklist items** from the **Acceptance criteria** section of the issue body (both `- [ ]` unchecked and `- [x]` already-checked items). Ignore checklist items from other sections (DoD, tasks, non-goals) that are not acceptance criteria.
 

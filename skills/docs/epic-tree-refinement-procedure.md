@@ -55,7 +55,7 @@ If the sub-issue tree does not yet exist, use [Issue Intake Procedure](./issue-i
 Refine the root issue **first** before touching any child.
 
 For the root issue:
-1. Read the current body: `gh issue view <root> --repo <repo> --json number,title,body`
+1. Read the current body: `node scripts/github/view-issue.mjs --repo <repo> --issue <root> --json number,title,body`
 2. Confirm the problem statement is clear and scoped
 3. Confirm a **phase scope table** exists — one row per immediate child naming what each child
    owns and what it excludes; add or update this table if missing
@@ -80,8 +80,8 @@ parent's updated body, not each other's output.
 
 **For each issue at this level:**
 
-1. Read the parent's updated body: `gh issue view <parent> --repo <repo> --json number,title,body`
-2. Read the current child body: `gh issue view <child> --repo <repo> --json number,title,body`
+1. Read the parent's updated body: `node scripts/github/view-issue.mjs --repo <repo> --issue <parent> --json number,title,body`
+2. Read the current child body: `node scripts/github/view-issue.mjs --repo <repo> --issue <child> --json number,title,body`
 3. Verify the child's scope matches what the parent's phase table delegates to it
 4. Identify any overlap with sibling issues (read sibling titles/bodies if needed)
 5. Refine the child body with:
@@ -112,7 +112,7 @@ updated bodies, not sibling parents).
 
 **For each parent (bottom-up):**
 
-1. Re-read the parent body: `gh issue view <parent> --repo <repo> --json number,title,body`
+1. Re-read the parent body: `node scripts/github/view-issue.mjs --repo <repo> --issue <parent> --json number,title,body`
 2. Re-read all direct children bodies
 3. Verify:
    - The parent's phase scope table still matches what the children now claim to own
@@ -131,7 +131,7 @@ updated bodies, not sibling parents).
 
 After all immediate children of the root have been reconciled:
 
-1. Re-read the root body: `gh issue view <root> --repo <repo> --json number,title,body`
+1. Re-read the root body: `node scripts/github/view-issue.mjs --repo <repo> --issue <root> --json number,title,body`
 2. Re-read all immediate children bodies
 3. Verify:
    - Phase scope table matches actual child scope

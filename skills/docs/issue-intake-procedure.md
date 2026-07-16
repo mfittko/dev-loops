@@ -116,7 +116,7 @@ Preflight verdicts:
 ### From a GitHub issue number or URL
 
 - if the input is a full GitHub issue URL, parse `<owner/name>` and `<number>`
-- fetch with `gh issue view <number> --repo <owner/name> --json number,title,body,state,labels,assignees,milestone`
+- fetch with `node scripts/github/view-issue.mjs --repo <owner/name> --issue <number> --json number,title,body,state,labels,assignees,milestone`
 - If the issue is closed, stop for a user decision before proceeding
 - detect an existing linked PR with the deterministic linked-PR helper:
   `node <resolved-skill-scripts>/github/detect-linked-issue-pr.mjs --repo <resolved-repo> --issue <number>`
@@ -230,7 +230,7 @@ node scripts/github/edit-issue.mjs --repo <resolved-repo> --issue <number> --add
 ```
 Verify assignment with:
 ```sh
-gh issue view <number> --repo <resolved-repo> --json assignees
+node scripts/github/view-issue.mjs --repo <resolved-repo> --issue <number> --json assignees
 ```
 
 When the linked PR becomes substantive, keep the shared loop scoped to the resolved repo, for example:

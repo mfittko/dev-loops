@@ -58,7 +58,7 @@ A fresh human or agent should be able to read the active phase doc first and und
 For tracker-backed local sessions, the tracker issue is the durable canonical spec for the active local slice.
 
 - resolve the tracker reference deterministically from a full GitHub issue URL or explicit `<owner/name>` + issue number
-- use the bounded GitHub-backed helper path (`scripts/github/resolve-tracker-local-spec.mjs`) or the equivalent `gh issue view <number> --repo <owner/name> --json number,title,body,url,state` call
+- use the bounded GitHub-backed helper path (`scripts/github/resolve-tracker-local-spec.mjs`) or the equivalent `node scripts/github/view-issue.mjs --repo <owner/name> --issue <number> --json number,title,body,url,state` call
 - treat the tracker issue title/body/acceptance content as the local spec surface
 - sync durable scope / acceptance / status changes back to the tracker issue
 - do **not** also maintain `Phase Plan` (`docs/phases/phase-<n>.md`) for that same tracker-backed session

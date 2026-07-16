@@ -213,7 +213,7 @@ test("issue-intake normalization docs require issue state checks and avoid the s
   const skillContent = await readIssueIntakeSurface();
   const planContent = await readRepo("PLAN.md");
 
-  assert.match(skillContent, /gh issue view <number> --repo <(?:owner\/name|resolved-repo)> --json number,title,body,state,labels,assignees,milestone/);
+  assert.match(skillContent, /node scripts\/github\/view-issue\.mjs --repo <(?:owner\/name|resolved-repo)> --issue <number> --json number,title,body,state,labels,assignees,milestone/);
   assert.match(skillContent, /If a matching issue exists:[\s\S]*if the matching issue is closed, stop for a user decision[\s\S]*if a PR already exists, classify bootstrap-wait versus follow-up/i);
   assert.doesNotMatch(planContent, /remain a mode of `copilot-dev-loop`, or become a separate top-level workflow/i);
 });
@@ -222,7 +222,7 @@ test("issue-intake docs cover issue URLs, state-all issue search, and abstract i
   const skillContent = await readIssueIntakeSurface();
 
   assert.match(skillContent, /if the input is a full GitHub issue URL, parse `<owner\/name>` and `<number>`/i);
-  assert.match(skillContent, /gh issue view <number> --repo <owner\/name> --json number,title,body,state,labels,assignees,milestone/);
+  assert.match(skillContent, /node scripts\/github\/view-issue\.mjs --repo <owner\/name> --issue <number> --json number,title,body,state,labels,assignees,milestone/);
   assert.match(skillContent, /gh issue list --repo <resolved-repo> --state all --search/);
   assert.match(skillContent, /if a governing plan doc or roadmap section actually applies, follow the plan-doc normalization path above/i);
   assert.match(skillContent, /otherwise search existing issues directly/i);

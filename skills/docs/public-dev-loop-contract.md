@@ -268,7 +268,7 @@ Deterministic GitHub-backed spec resolution:
 
 1. accept either a full GitHub issue URL or an explicit `<owner/name>` + `<number>` tracker reference
 2. parse that reference into one deterministic repo slug + issue number pair
-3. resolve the issue through the bounded GitHub helper path (`scripts/github/resolve-tracker-local-spec.mjs`) or the equivalent `gh issue view <number> --repo <owner/name> --json number,title,body,url,state` call
+3. resolve the issue through the bounded GitHub helper path (`scripts/github/resolve-tracker-local-spec.mjs`) or the equivalent `node scripts/github/view-issue.mjs --repo <owner/name> --issue <number> --json number,title,body,url,state` call
 4. treat the returned issue `title`, `body`, `url`, and `state` as the usable local spec bundle
 5. if the tracker reference cannot be resolved into one valid issue payload, fail closed instead of guessing or falling back to a duplicate phase doc
 
