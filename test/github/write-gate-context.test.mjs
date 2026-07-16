@@ -1281,8 +1281,8 @@ test("CLI without --angles + a gate with no configured angles/mandatoryAngles: w
     const stderrText = stderrChunks.join("");
     assert.match(
       stderrText,
-      /dynamic angle resolution produced zero angles for gate draft_gate/,
-      "warns to stderr when dynamic resolution yields zero angles",
+      /angle resolution produced zero angles for gate draft_gate/,
+      "warns to stderr when angle resolution yields zero angles",
     );
 
     const artifact = await readGateContext({

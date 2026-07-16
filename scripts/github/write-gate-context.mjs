@@ -1134,7 +1134,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
       if (resolvedAngles.length === 0) {
         process.stderr.write(
-          `[write-gate-context] warning: dynamic angle resolution produced zero angles for gate ${options.gate}; the gate-context bundle carries no review angles. Check the gate's configured angles/mandatoryAngles.\n`,
+          `[write-gate-context] warning: angle resolution produced zero angles for gate ${options.gate}; the gate-context bundle carries no review angles. Check the gate's configured angles/mandatoryAngles.\n`,
         );
       }
       options.angles = resolvedAngles;
@@ -1144,7 +1144,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // ignored rather than persisted as a stale mismatch.
       if (options.rationale.length > 0) {
         process.stderr.write(
-          "[write-gate-context] warning: --rationale was supplied without --angles; ignoring it in favor of the dynamically-resolved rationale.\n",
+          "[write-gate-context] warning: --rationale was supplied without --angles; ignoring it in favor of the resolver-derived rationale (angles were resolved from config rather than supplied via --angles).\n",
         );
       }
       options.rationale = rationale;
