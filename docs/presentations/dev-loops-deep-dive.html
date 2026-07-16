@@ -252,7 +252,7 @@
     <div class="hero-card">
       <p class="kicker">dev-loops</p>
       <h1>A Deep Dive: Coordination Delay and the Waiting Between Actions</h1>
-      <p class="hero-copy">AI agents made writing code cheap. The cost moved to the coordination around it &mdash; author to reviewer, reviewer to CI, CI back to a human &mdash; where the hours leak while work waits to be handed over. dev-loops keeps the next step always known, so whoever is free pulls it from the visible state, and it turns the waiting between actions into something you can measure.</p>
+      <p class="hero-copy">AI agents collapsed the time it takes to write code. The hours now leak in the coordination around it &mdash; author to reviewer, reviewer to CI, CI back to a human &mdash; while work waits to be handed over. dev-loops keeps the next step always known, so whoever is free pulls it from the visible state, and it turns the waiting between actions into something you can measure.</p>
       <div class="chip-row">
         <span class="pill">known next step</span>
         <span class="pill">wait states</span>
@@ -308,13 +308,13 @@
         <ul class="tight-list">
           <li><strong>Pause now</strong> &mdash; it's safe to hand control to a human this instant.</li>
           <li><strong>Pause at the next clean boundary</strong> &mdash; finish the step in flight first, then stop.</li>
-          <li><strong>Blocked</strong> &mdash; a required check is missing, so the work holds.</li>
+          <li><strong>Blocked</strong> &mdash; a human decision is required before the loop continues.</li>
           <li>A pull request advances only after its review actually runs. The gate fails closed.</li>
         </ul>
       </div>
       <div class="glass-card">
         <p class="card-label">Example</p>
-        <p class="soft-note">You ask it to stop. If it's mid-edit, it doesn't drop the file &mdash; it tags the request <code>stop_at_next_safe_gate</code> and pauses the moment the current step lands clean. You get a tidy stopping point at a clean boundary.</p>
+        <p class="soft-note">You ask it to stop mid-edit. It tags the request <code>stop_at_next_safe_gate</code>, finishes the step in flight, and pauses the moment that step lands clean. You get a tidy stopping point at a clean boundary.</p>
       </div>
     </div>
   </div>
@@ -344,12 +344,12 @@
 <section class="slide" id="parallel-review">
   <div class="slide-inner">
     <p class="kicker">Parallel review</p>
-    <h2>Many Reviewers, One Verdict</h2>
+    <h2>Parallel Reviewers Converge on One Verdict</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
           <li>Every reviewer reads the <strong>same evidence bundle</strong> &mdash; the same diff, the same context &mdash; so their verdicts are directly comparable.</li>
-          <li>Each looks from a different angle (scope, test coverage, security) at the same time.</li>
+          <li>Each looks from a different angle (scope, coverage, threat model) at the same time.</li>
           <li>The findings merge into <strong>one verdict</strong>.</li>
           <li>A single serious finding <em>blocks the merge</em>.</li>
         </ul>
@@ -363,7 +363,7 @@
             <div class="flow-col">
               <div class="node">Scope</div>
               <div class="node">Coverage</div>
-              <div class="node">Security</div>
+              <div class="node">Threat&nbsp;model</div>
             </div>
             <div class="edge"><span class="arrow">&rarr;</span></div>
             <div class="node accent">One&nbsp;verdict</div>
@@ -376,7 +376,7 @@
 
 <section class="slide" id="trust">
   <div class="slide-inner">
-    <p class="kicker">It never lies about being done</p>
+    <p class="kicker">Verified done</p>
     <h2>"Done" Means Merged</h2>
     <div class="grid grid-3">
       <div class="glass-card">
@@ -399,7 +399,7 @@
         <p class="card-label">Green is checked</p>
         <ul class="mini-list">
           <li>CI-green is verified against the real result.</li>
-          <li>Works with any CI provider.</li>
+          <li>Reads whatever provider posts checks to the PR.</li>
           <li>It waits for the real result before reporting.</li>
         </ul>
       </div>
@@ -425,7 +425,7 @@
   <div class="slide-inner">
     <span class="part-tag">Part 2 &middot; Make the waiting visible</span>
     <p class="kicker">The delay pattern</p>
-    <h2>One Interrupt, Five Transitions</h2>
+    <h2>One Interrupt Costs Five Transitions</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
@@ -491,7 +491,7 @@
       <ul class="tight-list">
         <li>The tools show the wait: GitHub timestamps every transition; a PR timeline reveals exactly how long each gap lasted.</li>
         <li>The cost is the routing &mdash; getting from &ldquo;ready&rdquo; to &ldquo;shipped&rdquo; runs through human attention.</li>
-        <li>The person who can act is busy, context-switched, or in another timezone &mdash; so the wait is structural, not a tooling gap.</li>
+        <li>The person who can act is busy, context-switched, or in another timezone, so the wait is structural.</li>
         <li>When it is available, spending it on mechanical decisions &mdash; noticing a status, confirming a CI result &mdash; crowds out the judgment-heavy work only a person should do.</li>
       </ul>
     </div>
@@ -560,7 +560,7 @@
       <div class="glass-card">
         <p class="card-label">Owner &amp; next step are a board</p>
         <ul class="mini-list">
-          <li>Work moves through visible columns: waiting, in progress, done.</li>
+          <li>Work moves through visible columns: next up, in progress, done.</li>
           <li>The column carries the current owner and the safe next step.</li>
           <li>A deterministic resolver picks the next action and names whose move it is.</li>
         </ul>
@@ -576,7 +576,7 @@
       <div class="glass-card">
         <p class="card-label">Automate only where it's safe</p>
         <ul class="mini-list">
-          <li>The wait at CI is handled by waiting on the real result, on any provider.</li>
+          <li>The wait at CI is handled by waiting on the real check result from whatever provider posts it.</li>
           <li>After a merge, finished workspaces are reclaimed and long-done items archived.</li>
           <li>Automation runs only where the state says continuing is safe.</li>
         </ul>
@@ -628,7 +628,7 @@
           <li><strong>Keep the next step always known,</strong> so whoever is free pulls it and a handoff, when it happens, is a recorded decision you can see.</li>
           <li><strong>Make the state explicit,</strong> and pickup becomes a continuation of work already under way.</li>
           <li><strong>Measure the waits,</strong> and the biggest stall stops hiding behind your commit history.</li>
-          <li><strong>Automate only where state proves it's safe</strong> &mdash; judgment stays human.</li>
+          <li><strong>Automate only where state proves it's safe,</strong> and the judgment calls stay with a human.</li>
         </ul>
       </div>
       <div class="metric-card closer">
