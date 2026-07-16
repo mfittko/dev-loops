@@ -1132,6 +1132,11 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       const configKey = mapGateToConfigKey(options.gate);
       const resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff });
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
+      if (resolvedAngles.length === 0) {
+        process.stderr.write(
+          `[write-gate-context] warning: dynamic angle resolution produced zero angles for gate ${options.gate}; the gate-context bundle carries no review angles. Check the gate's configured angles/mandatoryAngles.\n`,
+        );
+      }
       options.angles = resolvedAngles;
       if (options.rationale.length === 0) options.rationale = rationale;
     }

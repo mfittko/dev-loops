@@ -1196,6 +1196,51 @@ test("CLI without --angles + malformed .devloops: warns to stderr and proceeds w
   }
 });
 
+test("CLI without --angles + a gate with no configured angles/mandatoryAngles: warns of zero resolved angles and still writes the artifact (warn-and-proceed, not fail-closed)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-emptyresolved-"));
+  try {
+    // draft gate explicitly configured with EMPTY angles + mandatoryAngles
+    // (overriding the extension-defaults angle pool): resolveGateAnglesDynamic
+    // resolves an empty recommendedAngles — the hollow gate-evidence path this
+    // warning exists to flag.
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1", "gates:", "  draft:",
+        "    angles: []", "    mandatoryAngles: []", "    excludeAngles: []", "    dynamicAngles: false",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const origErr = process.stderr.write;
+    const stderrChunks = [];
+    process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+    try {
+      await main([
+        "--repo", "owner/repo", "--pr", "64", "--gate", "draft_gate",
+        "--head-sha", "abc1234567890",
+      ], { repoRoot });
+    } finally {
+      process.stderr.write = origErr;
+    }
+
+    const stderrText = stderrChunks.join("");
+    assert.match(
+      stderrText,
+      /dynamic angle resolution produced zero angles for gate draft_gate/,
+      "warns to stderr when dynamic resolution yields zero angles",
+    );
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.ok(artifact, "artifact still written despite zero resolved angles (warn-and-proceed)");
+    assert.deepEqual(artifact.resolvedAngles, [], "resolvedAngles is empty, matching the resolver's null->[] mapping");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI --base <ref> that fails to resolve fails closed (no artifact written, non-zero exit)", async () => {
   const { repoRoot, headSha } = await makeBaseDiffRepo();
   try {
