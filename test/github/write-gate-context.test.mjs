@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 
 import {
   assertWorktreeAtHead,
@@ -90,6 +90,49 @@ const DOCS_ONLY_DIFF = {
   nameStatusOutput: "M\tdocs/foo.md\nM\tREADME.md\n",
   diffOutput: "",
 };
+
+// A git repo fixture whose HEAD diff is DOCS-ONLY (only docs/foo.md changes),
+// so the dynamic classifier drops non-docs candidate angles (e.g. "coverage"),
+// mirroring the synthetic DOCS_ONLY_DIFF above but exercisable through the CLI
+// --base path (which captures the diff from a real `git diff`).
+async function makeDocsOnlyDiffRepo() {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-docs-"));
+  git(repoRoot, ["init", "-q"]);
+  git(repoRoot, ["config", "user.email", "test@example.com"]);
+  git(repoRoot, ["config", "user.name", "Test"]);
+  await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+  await writeFile(path.join(repoRoot, "docs", "foo.md"), "# Old heading\n", "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "base"]);
+  const baseSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+  await writeFile(path.join(repoRoot, "docs", "foo.md"), "# New heading\nMore detail.\n", "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "docs only"]);
+  const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+  return { repoRoot, baseSha, headSha };
+}
+
+// Write a .devloops gate config the CLI's loadDevLoopConfig will pick up. Mirrors
+// draftConfig() but as the on-disk YAML the loader reads, so the CLI path and the
+// programmatic buildGateContext path (which receives the same loaded config) see
+// identical config and must resolve identical angle sets.
+async function writeDraftDevLoops(repoRoot, overrides = {}) {
+  const draft = {
+    angles: ["scope", "coverage", "correctness", "docs", "link-check", "config-drift"],
+    mandatoryAngles: ["gate-evidence"],
+    excludeAngles: [],
+    dynamicAngles: true,
+    ...overrides,
+  };
+  const lines = ["version: 1", "gates:", "  draft:"];
+  lines.push(`    dynamicAngles: ${draft.dynamicAngles}`);
+  lines.push(`    excludeAngles: []`);
+  lines.push("    angles:");
+  for (const a of draft.angles) lines.push(`      - ${a}`);
+  lines.push("    mandatoryAngles:");
+  for (const m of draft.mandatoryAngles) lines.push(`      - ${m}`);
+  await writeFile(path.join(repoRoot, ".devloops"), `${lines.join("\n")}\n`, "utf8");
+}
 
 // ---------------------------------------------------------------------------
 // Path builder
@@ -927,6 +970,122 @@ test("CLI without --base emits an explicit thin-briefing posture, not a silent f
     assert.equal(artifact.scope.diffPath, null);
     assert.deepEqual(artifact.scope.changedFiles, []);
     assert.equal(Object.prototype.hasOwnProperty.call(artifact, "adjacentCode"), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("parseWriteGateContextCliArgs: --angles is optional (omitted → undefined, no missing-arg error)", () => {
+  const result = parseWriteGateContextCliArgs([
+    "--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234",
+  ]);
+  assert.equal(result.repo, "a/b");
+  assert.equal(result.angles, undefined, "--angles omitted → undefined (resolved dynamically by main)");
+});
+
+test("CLI without --angles resolves angles dynamically (trims for a docs-only diff; keeps the mandatory floor)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeDocsOnlyDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot); // dynamicAngles: true
+    await main([
+      "--repo", "owner/repo", "--pr", "50", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 50, gate: "draft_gate", headSha,
+    }, { repoRoot });
+
+    assert.ok(artifact, "artifact written without --angles");
+    // Mandatory floor survives dynamic selection.
+    assert.ok(artifact.resolvedAngles.includes("gate-evidence"), "mandatory floor kept");
+    // "coverage" is dropped for a docs-only diff (matches the buildGateContext
+    // DOCS_ONLY_DIFF behavior) — proves the dynamic resolver RAN on the CLI path,
+    // not just returned the static pool verbatim.
+    assert.ok(!artifact.resolvedAngles.includes("coverage"), "non-docs candidate trimmed");
+    // Resolved set is a subset of the configured pool + mandatory.
+    for (const a of artifact.resolvedAngles) {
+      assert.ok(
+        ["scope", "coverage", "correctness", "docs", "link-check", "config-drift", "gate-evidence"].includes(a),
+        `resolved angle ${a} is from the pool/mandatory`,
+      );
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI without --angles matches buildGateContext resolvedAngles (CLI/API parity, dynamicAngles:true)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot); // dynamicAngles: true
+    await main([
+      "--repo", "owner/repo", "--pr", "51", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+    ], { repoRoot });
+
+    const cliArtifact = await readGateContext({
+      repo: "owner/repo", pr: 51, gate: "draft_gate", headSha,
+    }, { repoRoot });
+
+    // API path: same loaded config + the same captured diff the CLI used.
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const diff = captureDiffFromBase(baseSha, { repoRoot });
+    const apiResult = await buildGateContext(
+      { config, repo: "owner/repo", pr: "51", gate: "draft_gate", headSha, branch: null, diff, tmpRoot: "tmp" },
+      { repoRoot },
+    );
+
+    assert.deepEqual(cliArtifact.resolvedAngles, apiResult.artifact.resolvedAngles);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI without --angles + dynamicAngles:false falls back to the full static pool (matches API)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot, { dynamicAngles: false });
+    await main([
+      "--repo", "owner/repo", "--pr", "52", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+    ], { repoRoot });
+
+    const cliArtifact = await readGateContext({
+      repo: "owner/repo", pr: 52, gate: "draft_gate", headSha,
+    }, { repoRoot });
+
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const diff = captureDiffFromBase(baseSha, { repoRoot });
+    const apiResult = await buildGateContext(
+      { config, repo: "owner/repo", pr: "52", gate: "draft_gate", headSha, branch: null, diff, tmpRoot: "tmp" },
+      { repoRoot },
+    );
+
+    assert.deepEqual(cliArtifact.resolvedAngles, apiResult.artifact.resolvedAngles);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI with --angles uses the list VERBATIM (override bypasses dynamic resolution)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeDocsOnlyDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot); // dynamicAngles: true — would normally drop "coverage"
+    await main([
+      "--repo", "owner/repo", "--pr", "53", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+      "--angles", '["coverage","custom-angle"]',
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 53, gate: "draft_gate", headSha,
+    }, { repoRoot });
+
+    // Verbatim override: the passed list is used as-is, including an angle that
+    // dynamic resolution would have dropped ("coverage") and one outside the
+    // configured pool ("custom-angle"). No trimming, no mandatory-floor merge.
+    assert.deepEqual(artifact.resolvedAngles, ["coverage", "custom-angle"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
