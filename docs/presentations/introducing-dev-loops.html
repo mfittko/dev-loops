@@ -253,9 +253,9 @@
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
-          <li>AI writes the code in seconds, so the expensive part of the work moved.</li>
-          <li>It now sits in the coordination around the code: the wait for someone to notice a change is ready, to rebuild context to review it, to decide the next step is safe.</li>
-          <li>That waiting between actions is where the lead time of an AI-assisted workflow goes once the typing is fast.</li>
+          <li>Code generation is fast now, so most of an AI-assisted workflow's time sits in the coordination around the code.</li>
+          <li>Someone notices a change is ready, rebuilds context to review it, checks the tests ran, decides the next step is safe.</li>
+          <li>Each of those is a small wait, and together the waits make up most of the lead time.</li>
         </ul>
       </div>
       <div class="glass-card flow-card">
@@ -316,7 +316,7 @@
         <p class="card-label">Pull, like a Kanban board</p>
         <ul class="mini-list">
           <li>The system computes the next action; whoever is free pulls it from the visible state.</li>
-          <li>Every change still runs the same draft, review, and green-CI path, including the changes that built dev-loops itself.</li>
+          <li>Every change runs the same draft, review, and green-CI path — the changes that build dev-loops itself run it too.</li>
         </ul>
       </div>
       <div class="glass-card">
@@ -389,7 +389,7 @@
         </ul>
       </div>
     </div>
-    <p class="card-label">Run end to end on top-tier open-source models: DeepSeek V4, Kimi K2.6, MiniMax M3, Qwen 3.6, GLM 5.2.</p>
+    <p class="card-label">Model routing is configuration: roles map to tiers, tiers map per harness to concrete models — routine work on the cheap tier, planning and review on the strong one, swappable with a config edit.</p>
   </div>
 </section>
 
@@ -399,19 +399,19 @@
     <h2>A Cadence That Holds</h2>
     <div class="grid grid-3">
       <div class="metric-card">
-        <p class="metric-figure">87</p>
-        <p class="metric-label">pull requests merged in four days — roughly 22 a day.</p>
+        <p class="metric-figure">530+</p>
+        <p class="metric-label">pull requests merged in the project's first nine weeks.</p>
       </div>
       <div class="metric-card">
-        <p class="metric-figure">36</p>
-        <p class="metric-label">tracked issues closed and shipped in that same window.</p>
+        <p class="metric-figure">~10/day</p>
+        <p class="metric-label">across the most recent two weeks.</p>
       </div>
       <div class="metric-card">
-        <p class="metric-figure">2</p>
-        <p class="metric-label">full releases (v0.4.0 + v0.5.0) cut to npm. Every PR: full gate.</p>
+        <p class="metric-figure">24</p>
+        <p class="metric-label">releases tagged in the same stretch, through a 1.0 release candidate.</p>
       </div>
     </div>
-    <p class="soft-note">The cadence held because the extra work landed as machine transitions, with the human's part staying that one bounded decision at the merge.</p>
+    <p class="soft-note">Straight from the repository's git log, as of mid-July 2026. The cadence holds because the transitions land as machine decisions, with the human's part staying that one bounded call at the merge.</p>
   </div>
 </section>
 
@@ -427,24 +427,24 @@
           <span class="pill">/plugin marketplace add mfittko/dev-loops</span>
           <span class="pill">/plugin install dev-loops@dev-loops</span>
         </div>
-        <p class="soft-note note-top-md">Pi:</p>
+        <p class="soft-note note-top-md">Pi, pinned to a version:</p>
         <div class="chip-row note-top-sm">
-          <span class="pill">pi install npm:dev-loops</span>
+          <span class="pill">pi install npm:dev-loops@&lt;version&gt;</span>
         </div>
-        <p class="soft-note note-top-md">Run a loop with a direct command (Claude Code; in Pi drop the colon: <code>/dev-loops start …</code>):</p>
+        <p class="soft-note note-top-md">Run a loop with a direct command (Claude Code; on Pi the same set hangs off one command: <code>/dev-loops start …</code>):</p>
         <div class="chip-row note-top-sm">
-          <span class="pill">/dev-loops:start 112</span>
-          <span class="pill">/dev-loops:auto 112</span>
-          <span class="pill">/dev-loops:continue 112</span>
-          <span class="pill">/dev-loops:continue</span>
-          <span class="pill">/dev-loops:start-spike "…"</span>
+          <span class="pill">/loop-start 112</span>
+          <span class="pill">/loop-auto 112</span>
+          <span class="pill">/loop-continue 112</span>
+          <span class="pill">/loop-continue</span>
+          <span class="pill">/loop-start-spike "…"</span>
         </div>
-        <p class="soft-note note-top-sm">Read state, never start work:</p>
+        <p class="soft-note note-top-sm">Read-only state commands:</p>
         <div class="chip-row note-top-sm">
-          <span class="pill">/dev-loops:info 112</span>
-          <span class="pill">/dev-loops:status</span>
+          <span class="pill">/loop-info 112</span>
+          <span class="pill">/loop-status</span>
         </div>
-        <p class="soft-note note-top-sm"><code>/dev-loops:dev-loop</code> is the catch-all router for plain-language intent. You never pick internal modes.</p>
+        <p class="soft-note note-top-sm">Plain language works too — <code>start dev loop on issue 112</code> routes through the same deterministic router; the loop selects its internal strategy itself.</p>
       </div>
       <div class="glass-card">
         <p class="card-label">Three choices shape the posture</p>
