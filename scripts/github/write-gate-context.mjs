@@ -1113,7 +1113,22 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // falls back to the static configured pool otherwise. When --angles IS
     // supplied, it is a verbatim override (dynamic resolution bypassed).
     if (!Array.isArray(options.angles)) {
-      const { config } = await loadDevLoopConfig({ repoRoot });
+      // loadDevLoopConfig never throws: it returns { config, warnings, errors }, and
+      // on a validation error it still returns `config` with every layer merged (its
+      // own documented fallback). buildGateContext — the programmatic API this CLI
+      // mirrors — never calls loadDevLoopConfig itself (callers hand it a config), so
+      // there is no separate fail-closed/null-out behavior to match there; the gap is
+      // purely a missing signal. Mirror post-gate-findings.mjs's stderr warning so a
+      // malformed .devloops is never silently swallowed, then proceed with that same
+      // merged fallback config — nulling it out here (unlike post-gate-findings.mjs's
+      // boolean-flag default) would replace a partially-valid configured angle set
+      // with an EMPTY one, a worse regression than the signal gap this fixes.
+      const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
+      if (Array.isArray(configErrors) && configErrors.length > 0) {
+        process.stderr.write(
+          `[write-gate-context] warning: dev-loop config could not be fully loaded/validated; resolving angles from the merged fallback config. errors=${JSON.stringify(configErrors)}\n`,
+        );
+      }
       const configKey = mapGateToConfigKey(options.gate);
       const resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff });
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);

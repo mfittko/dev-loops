@@ -1091,6 +1091,111 @@ test("CLI with --angles uses the list VERBATIM (override bypasses dynamic resolu
   }
 });
 
+test("CLI without --base and without --angles: static fallback pool + CLI/API parity (diffSource=none)", async () => {
+  // Realistic operator/CI invocation: neither --base nor --angles supplied.
+  // dynamicAngles:true in config, but with no diff available the resolver
+  // falls back to the full static configured pool (mandatory floor + angles).
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-nobase-noangles-"));
+  try {
+    await writeDraftDevLoops(repoRoot); // dynamicAngles: true
+    await main([
+      "--repo", "owner/repo", "--pr", "60", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+    ], { repoRoot });
+
+    const cliArtifact = await readGateContext({
+      repo: "owner/repo", pr: 60, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+
+    assert.ok(cliArtifact, "artifact written for the no-base/no-angles invocation");
+    assert.equal(cliArtifact.scope.diffSource, "none");
+    assert.deepEqual(cliArtifact.resolvedAngles, [
+      "gate-evidence", "scope", "coverage", "correctness", "docs", "link-check", "config-drift",
+    ], "diff=null -> static fallback pool (mandatory floor + configured angles), despite dynamicAngles:true");
+
+    // CLI/API parity: buildGateContext with the same loaded config and diff:null
+    // must resolve the identical angle set as the CLI path.
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const apiResult = await buildGateContext(
+      { config, repo: "owner/repo", pr: "61", gate: "draft_gate", headSha: "abc1234567890", branch: null, diff: null, tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.deepEqual(cliArtifact.resolvedAngles, apiResult.artifact.resolvedAngles);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --angles '[]' is used VERBATIM (empty escape hatch bypasses dynamic resolution)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-empty-angles-"));
+  try {
+    await writeDraftDevLoops(repoRoot); // dynamicAngles: true; static pool is non-empty
+    await main([
+      "--repo", "owner/repo", "--pr", "62", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", "[]",
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 62, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+
+    assert.ok(artifact, "artifact written for an explicit empty override");
+    assert.deepEqual(artifact.resolvedAngles, [], "empty array override used verbatim, not the configured pool");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI without --angles + malformed .devloops: warns to stderr and proceeds with the documented fallback (not fail-closed)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-badconfig-"));
+  try {
+    // dynamicAngles must be a boolean; a string value fails schema validation
+    // (mirrors the postFindingsComments:"yes" fixture in post-gate-findings.test.mjs).
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  draft:",
+        "    dynamicAngles: \"yes\"",
+        "    angles:",
+        "      - scope",
+        "      - coverage",
+        "    mandatoryAngles:",
+        "      - gate-evidence",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const origErr = process.stderr.write;
+    const stderrChunks = [];
+    process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+    try {
+      await main([
+        "--repo", "owner/repo", "--pr", "63", "--gate", "draft_gate",
+        "--head-sha", "abc1234567890",
+      ], { repoRoot });
+    } finally {
+      process.stderr.write = origErr;
+    }
+
+    const stderrText = stderrChunks.join("");
+    assert.match(stderrText, /could not be fully loaded\/validated/, "warns to stderr on a malformed .devloops");
+    assert.match(stderrText, /dynamicAngles/, "warning surfaces the actual validation error");
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.ok(artifact, "artifact still written despite the config error (documented fallback, not a fail-closed exit)");
+    // Fallback proceeds with the merged config rather than nulling it out into
+    // an empty angle set: a non-empty resolved pool comes back either way.
+    assert.ok(Array.isArray(artifact.resolvedAngles) && artifact.resolvedAngles.length > 0);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI --base <ref> that fails to resolve fails closed (no artifact written, non-zero exit)", async () => {
   const { repoRoot, headSha } = await makeBaseDiffRepo();
   try {
