@@ -34,7 +34,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -106,15 +106,15 @@ export function rationaleFromResolver(resolverResult) {
   return { resolvedAngles: [...recommended], rationale };
 }
 
-const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --angles <json> [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--validation-posture <text>] [--tmp-root <path>]
+const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--validation-posture <text>] [--tmp-root <path>]
 Write a deterministic gate-review context-builder handoff artifact under tmp/ paths.
 Required:
   --repo <owner/name>
   --pr <number>
   --gate <draft_gate|pre_approval_gate>
   --head-sha <sha>
-  --angles <json>                JSON array of resolved review-angle name strings
 Optional:
+  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is used VERBATIM as an explicit override (dynamic resolution is bypassed) — an escape hatch for forcing a specific angle set.
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
@@ -338,7 +338,7 @@ export function parseWriteGateContextCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  const missing = ["repo", "pr", "gate", "headSha", "angles"]
+  const missing = ["repo", "pr", "gate", "headSha"]
     .filter((k) => options[k] === undefined);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
@@ -1075,13 +1075,14 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // full bundle. A run WITH --base that then fails to resolve (bad ref, not a
     // git repo, etc.) DOES fail closed: the caller opted into the full bundle,
     // so a silent thin degrade there would be a worse surprise than an error.
+    let diff = null;
     if (options.base) {
       // Fail-closed precondition: the diff is resolved FROM the CWD worktree, so
       // enforce that CWD is this PR's worktree at --head-sha before diffing.
       // Otherwise a stale CWD silently yields the wrong diff (caught only after
       // fan-out today). Throws → caught below → exit 1, no artifact written.
       assertWorktreeAtHead(options.headSha, { repoRoot });
-      const diff = captureDiffFromBase(options.base, { repoRoot });
+      diff = captureDiffFromBase(options.base, { repoRoot });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
         { repoRoot },
@@ -1103,6 +1104,50 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     } else {
       process.stderr.write("[write-gate-context] warning: no --base given; emitting a THIN briefing (scope.diffPath=null, scope.changedFiles=[], no adjacentCode). Pass --base <ref> for the full build-once bundle.\n");
       options.diffSource = "none";
+    }
+    // Angle resolution: when --angles is omitted, resolve dynamically from the
+    // loaded config (.devloops) + the captured --base diff — the SAME path the
+    // programmatic buildGateContext API uses (resolveGateAnglesDynamic). This
+    // keeps the CLI consistent with the API: dynamicAngles trims to the
+    // mandatory floor + diff-selected candidates when a diff is present, and
+    // falls back to the static configured pool otherwise. When --angles IS
+    // supplied, it is a verbatim override (dynamic resolution bypassed).
+    if (!Array.isArray(options.angles)) {
+      // loadDevLoopConfig never throws: it returns { config, warnings, errors }, and
+      // on a validation error it still returns `config` with every layer merged (its
+      // own documented fallback). buildGateContext — the programmatic API this CLI
+      // mirrors — never calls loadDevLoopConfig itself (callers hand it a config), so
+      // there is no separate fail-closed/null-out behavior to match there; the gap is
+      // purely a missing signal. Mirror post-gate-findings.mjs's stderr warning so a
+      // malformed .devloops is never silently swallowed, then proceed with that same
+      // merged fallback config — nulling it out here (unlike post-gate-findings.mjs's
+      // boolean-flag default) would replace a partially-valid configured angle set
+      // with an EMPTY one, a worse regression than the signal gap this fixes.
+      const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
+      if (Array.isArray(configErrors) && configErrors.length > 0) {
+        process.stderr.write(
+          `[write-gate-context] warning: dev-loop config could not be fully loaded/validated; resolving angles from the merged fallback config. errors=${JSON.stringify(configErrors)}\n`,
+        );
+      }
+      const configKey = mapGateToConfigKey(options.gate);
+      const resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff });
+      const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
+      if (resolvedAngles.length === 0) {
+        process.stderr.write(
+          `[write-gate-context] warning: angle resolution produced zero angles for gate ${options.gate}; the gate-context bundle carries no review angles. Check the gate's configured angles/mandatoryAngles.\n`,
+        );
+      }
+      options.angles = resolvedAngles;
+      // Resolver-derived rationale is authoritative here: a caller cannot supply
+      // meaningful rationale for angles it did not name (angles were just
+      // resolved dynamically above), so any --rationale the caller passed is
+      // ignored rather than persisted as a stale mismatch.
+      if (options.rationale.length > 0) {
+        process.stderr.write(
+          "[write-gate-context] warning: --rationale was supplied without --angles; ignoring it in favor of the resolver-derived rationale (angles were resolved from config rather than supplied via --angles).\n",
+        );
+      }
+      options.rationale = rationale;
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
