@@ -1042,6 +1042,36 @@ test("CLI without --angles matches buildGateContext resolvedAngles (CLI/API pari
   }
 });
 
+test("CLI --rationale supplied WITHOUT --angles is ignored; resolver-derived rationale is persisted", async () => {
+  const { repoRoot, baseSha, headSha } = await makeDocsOnlyDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot); // dynamicAngles: true
+    const staleRationale = [{ angle: "coverage", action: "kept", reason: "caller-supplied, cannot apply to dynamically-resolved angles" }];
+    await main([
+      "--repo", "owner/repo", "--pr", "55", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+      "--rationale", JSON.stringify(staleRationale),
+    ], { repoRoot });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 55, gate: "draft_gate", headSha,
+    }, { repoRoot });
+
+    // The resolver-derived rationale (from the SAME resolution the API path
+    // uses) is what's persisted, not the caller's stale --rationale.
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const diff = captureDiffFromBase(baseSha, { repoRoot });
+    const apiResult = await buildGateContext(
+      { config, repo: "owner/repo", pr: "55", gate: "draft_gate", headSha, branch: null, diff, tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.deepEqual(artifact.rationale, apiResult.artifact.rationale);
+    assert.notDeepEqual(artifact.rationale, staleRationale, "caller's stale --rationale must not be persisted");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI without --angles + dynamicAngles:false falls back to the full static pool (matches API)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {

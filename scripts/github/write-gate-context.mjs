@@ -1138,7 +1138,16 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
         );
       }
       options.angles = resolvedAngles;
-      if (options.rationale.length === 0) options.rationale = rationale;
+      // Resolver-derived rationale is authoritative here: a caller cannot supply
+      // meaningful rationale for angles it did not name (angles were just
+      // resolved dynamically above), so any --rationale the caller passed is
+      // ignored rather than persisted as a stale mismatch.
+      if (options.rationale.length > 0) {
+        process.stderr.write(
+          "[write-gate-context] warning: --rationale was supplied without --angles; ignoring it in favor of the dynamically-resolved rationale.\n",
+        );
+      }
+      options.rationale = rationale;
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
