@@ -126,7 +126,7 @@ async function writeDraftDevLoops(repoRoot, overrides = {}) {
   };
   const lines = ["version: 1", "gates:", "  draft:"];
   lines.push(`    dynamicAngles: ${draft.dynamicAngles}`);
-  lines.push(`    excludeAngles: []`);
+  lines.push(`    excludeAngles: ${JSON.stringify(draft.excludeAngles)}`);
   lines.push("    angles:");
   for (const a of draft.angles) lines.push(`      - ${a}`);
   lines.push("    mandatoryAngles:");
@@ -1151,6 +1151,30 @@ test("CLI without --base and without --angles: static fallback pool + CLI/API pa
       { repoRoot },
     );
     assert.deepEqual(cliArtifact.resolvedAngles, apiResult.artifact.resolvedAngles);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeDraftDevLoops honors an excludeAngles override (emitted excludeAngles matches draft, not hard-coded [])", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-exclude-angles-"));
+  try {
+    await writeDraftDevLoops(repoRoot, { excludeAngles: ["coverage"] });
+    await main([
+      "--repo", "owner/repo", "--pr", "63", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+    ], { repoRoot });
+
+    const cliArtifact = await readGateContext({
+      repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+
+    // diff=null -> static fallback pool. If excludeAngles were still ignored in
+    // the emitted .devloops YAML, "coverage" would leak into resolvedAngles.
+    assert.ok(!cliArtifact.resolvedAngles.includes("coverage"), "excludeAngles override must be honored by the loaded config");
+    assert.deepEqual(cliArtifact.resolvedAngles, [
+      "gate-evidence", "scope", "correctness", "docs", "link-check", "config-drift",
+    ]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
