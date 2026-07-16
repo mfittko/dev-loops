@@ -44,7 +44,7 @@ Before doing anything else:
 
 ## Step 1 — Load the target
 
-- **Tracker-first:** fetch the issue body (title + description).
+- **Tracker-first:** fetch the issue body (title + description) via `scripts/github/view-issue.mjs` (never raw `gh`).
 - **PR body:** fetch the PR body via `scripts/github/view-pr.mjs` (never raw `gh`).
 - **Local-planning:** read the plan file from disk.
 
