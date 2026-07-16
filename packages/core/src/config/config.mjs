@@ -13,11 +13,11 @@ import { z } from "zod";
 // ============================================================================
 
 const StrategyConfig = z.strictObject({
-  default: z.enum(["local-first", "github-first"]),
+  default: z.enum(["local-first", "github-first"]).describe("Default work-intake strategy: local-first starts from a repo plan file, github-first from a tracked issue."),
 });
 
 const InputSourceConfig = z.strictObject({
-  default: z.enum(["tracker", "phase-docs"]),
+  default: z.enum(["tracker", "phase-docs"]).describe("Where local-first work reads its spec: the tracker issue body, or repo phase docs."),
 });
 
 // Built-in tier aliases shipped with zero config. A tier alias maps a
@@ -82,44 +82,45 @@ function refineRoleTiers(models, ctx) {
 }
 
 const ModelsConfigBase = z.strictObject({
-  conductor: z.string().trim().min(1).optional(),
-  roles: z.record(z.string(), z.string().trim().min(1)).optional(),
+  conductor: z.string().trim().min(1).describe("Model override for the conductor (dev-loop) session; absent = inherit the session model.").optional(),
+  roles: z.record(z.string(), z.string().trim().min(1)).describe("Concrete per-role/angle model overrides (highest precedence, above tiers).").optional(),
   // Tier alias → per-harness concrete model (null = inherit / no-op).
-  tiers: z.record(z.string().min(1), ModelTierMapping).optional(),
+  tiers: z.record(z.string().min(1), ModelTierMapping).describe("Tier alias → per-harness concrete model; null on a harness means inherit (no override).").optional(),
   // Role / angle → tier alias (a built-in/custom alias or "inherit").
-  roleTiers: z.record(z.string().min(1), z.string().trim().min(1)).optional(),
+  roleTiers: z.record(z.string().min(1), z.string().trim().min(1)).describe("Role or gate angle → tier alias: a built-in alias (low, high), a custom models.tiers alias, or \"inherit\".").optional(),
 });
 
 const ModelsConfig = ModelsConfigBase.superRefine(refineRoleTiers);
 
 const RefinementConfig = z.strictObject({
-  fanOut: z.number().int().min(1).max(10),
-  mode: z.enum(["parallel", "sequential"]),
-  maxCopilotRounds: z.number().int().nonnegative().default(5),
-  stopOnLowSignal: z.boolean().default(false),
-  lowSignalRoundThreshold: z.number().int().nonnegative().default(3),
-  lowSignalMaxComments: z.number().int().nonnegative().default(2),
-  roles: z.array(z.string().trim().min(1)).optional(),
+  fanOut: z.number().int().min(1).max(10).describe("Parallel reviewers per refinement round."),
+  mode: z.enum(["parallel", "sequential"]).describe("Whether refinement reviewers run in parallel or one after another."),
+  maxCopilotRounds: z.number().int().nonnegative().default(5).describe("Automated Copilot review rounds before converging; 0 disables Copilot review."),
+  stopOnLowSignal: z.boolean().default(false).describe("Stop Copilot rounds early once they stop producing signal."),
+  lowSignalRoundThreshold: z.number().int().nonnegative().default(3).describe("Rounds counted toward the low-signal stop decision."),
+  lowSignalMaxComments: z.number().int().nonnegative().default(2).describe("A round with at most this many comments counts as low-signal."),
+  roles: z.array(z.string().trim().min(1)).describe("Review lenses the refinement fan-out dispatches.").optional(),
 });
 
 const GateConfig = z.strictObject({
-  angles: z.array(z.string().trim().min(1)).optional(),
-  excludeAngles: z.array(z.string().trim().min(1)).default([]),
-  mandatoryAngles: z.array(z.string().trim().min(1)).default([]),
-  required: z.boolean().default(true),
-  requireCi: z.boolean().default(true),
+  angles: z.array(z.string().trim().min(1)).describe("Review lenses this gate fans out to.").optional(),
+  excludeAngles: z.array(z.string().trim().min(1)).default([]).describe("Angles removed from the resolved angle list."),
+  mandatoryAngles: z.array(z.string().trim().min(1)).default([]).describe("Angles that always run, regardless of diff-based dynamic selection."),
+  required: z.boolean().default(true).describe("Whether this gate must run."),
+  requireCi: z.boolean().default(true).describe("Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure."),
   blockCleanOnFindingSeverities: z
     .array(z.enum(["must-fix", "worth-fixing-now", "defer"]))
     .min(1)
-    .default(["must-fix"]),
-  dynamicAngles: z.boolean().default(false),
+    .default(["must-fix"])
+    .describe("Finding severities that block a clean gate verdict."),
+  dynamicAngles: z.boolean().default(false).describe("Enable diff-driven dynamic angle resolution for this gate."),
   // Additive counterpart to the subtractive dynamicAngles path (#1048): when
   // true, the context-builder may also ADD catalog angles — from
   // resolveAnglePool() (gates.anglePool, or else the union of the persona
   // registry and this config's own configured angles) — that change-category
   // heuristics recommend but that are not already in this gate's configured
   // pool. Default false preserves today's subtractive-only behavior exactly.
-  additiveAngles: z.boolean().default(false),
+  additiveAngles: z.boolean().default(false).describe("Allow diff-driven addition of catalog angles beyond this gate's configured pool."),
 });
 
 const GatesConfig = z.strictObject({
@@ -179,12 +180,12 @@ const GatesConfig = z.strictObject({
 const AutonomyConfig = z.strictObject({
   stopAt: z.array(
     z.enum(["refinement", "draft-pr", "pre-approval", "merge"])
-  ),
+  ).describe("Checkpoints that require operator confirmation before the loop proceeds (default: [\"merge\"])."),
   // When true, merge is a fixed, non-overridable human action: the agent never
   // runs `gh pr merge`, `resolveAutonomyStopAt` always includes "merge", and
   // any per-run merge authorization (envelope flag / explicit instruction) is
   // ignored — it fails closed. See resolveHumanMergeOnly / resolveEffectiveMergeAuthorized.
-  humanMergeOnly: z.boolean().optional(),
+  humanMergeOnly: z.boolean().describe("Merge stays a fixed human-only action: the agent never merges and any per-run merge authorization is ignored (fails closed).").optional(),
 });
 
 /**
@@ -207,22 +208,22 @@ const ApprovalConfig = z.strictObject({
 });
 
 const WorkflowConfig = z.strictObject({
-  asyncStartMode: z.enum(["required", "allowed"]).default("required"),
-  requireRetrospective: z.boolean(),
-  requireDraftFirst: z.boolean(),
-  devModeDefault: z.boolean(),
+  asyncStartMode: z.enum(["required", "allowed"]).default("required").describe("Whether the async start contract is required or merely allowed."),
+  requireRetrospective: z.boolean().describe("Require a retrospective checkpoint before a loop completes."),
+  requireDraftFirst: z.boolean().describe("Open pull requests as drafts and promote via the draft gate."),
+  devModeDefault: z.boolean().describe("Default new loops to dev mode."),
 });
 
 const LocalImplementationConfig = z.strictObject({
   /** Opt into light mode for small scoped changes */
   lightMode: z.strictObject({
-    enabled: z.boolean(),
-    maxFiles: z.number().int().min(1),
-    maxLines: z.number().int().min(1),
+    enabled: z.boolean().describe("Opt small scoped changes into the lightweight dispatch path."),
+    maxFiles: z.number().int().min(1).describe("Light mode applies only when the change touches at most this many files."),
+    maxLines: z.number().int().min(1).describe("Light mode applies only when the change stays within this many lines."),
     // Copilot review round cap for light-dispatched PRs (#1210). Composes with
     // (does not replace) refinement.maxCopilotRounds — see
     // resolveEffectiveCopilotRoundCap.
-    maxCopilotRounds: z.number().int().nonnegative().default(1),
+    maxCopilotRounds: z.number().int().nonnegative().default(1).describe("Copilot round cap for light-dispatched PRs; composes as min(this, refinement.maxCopilotRounds)."),
   }).optional(),
   /**
    * Opt into issue-less PR-first (`--lightweight` with no --issue) at ANY
@@ -231,18 +232,18 @@ const LocalImplementationConfig = z.strictObject({
    * PRs get the full fan-out and the full-PR Copilot round cap.
    */
   issueless: z.strictObject({
-    enabled: z.boolean(),
+    enabled: z.boolean().describe("Opt into issue-less PR-first dispatch at any change scope; gate dispatch still resolves inline vs full fan-out from scope on its own."),
   }).optional(),
 });
 
 /** Queue mode config */
 const QueueConfig = z.strictObject({
-  maxParallel: z.number().int().min(1).max(10).default(3),
-  maxAutoFiledIssues: z.number().int().min(0).max(100).default(10),
-  reDispatchMaxRetries: z.number().int().min(0).max(10).default(1),
-  projectNumber: z.number().int().positive().optional(),
-  boardTitle: z.string().trim().min(1).optional(),
-  archiveOlderThanDays: z.number().int().positive().optional(),
+  maxParallel: z.number().int().min(1).max(10).default(3).describe("Maximum queue items worked in parallel."),
+  maxAutoFiledIssues: z.number().int().min(0).max(100).default(10).describe("Cap on auto-filed issues per run."),
+  reDispatchMaxRetries: z.number().int().min(0).max(10).default(1).describe("Retries when re-dispatching a failed queue item."),
+  projectNumber: z.number().int().positive().describe("GitHub Projects board number (explicit opt-in to Projects-based queue ordering).").optional(),
+  boardTitle: z.string().trim().min(1).describe("GitHub Projects board title (explicit opt-in to Projects-based queue ordering).").optional(),
+  archiveOlderThanDays: z.number().int().positive().describe("Archive done board items older than this many days.").optional(),
 });
 
 /**
@@ -253,8 +254,8 @@ const QueueConfig = z.strictObject({
  * data). Both optional; empty/absent is a valid no-op.
  */
 const WorktreeConfig = z.strictObject({
-  copyOnInit: z.array(z.string().trim().min(1)).optional(),
-  linkOnInit: z.array(z.string().trim().min(1)).optional(),
+  copyOnInit: z.array(z.string().trim().min(1)).describe("Repo-relative paths/globs copied into a fresh worktree (isolated per worktree — use for mutable files).").optional(),
+  linkOnInit: z.array(z.string().trim().min(1)).describe("Repo-relative paths/globs symlinked to the main checkout (shared — read-only data only).").optional(),
 });
 
 /**
@@ -464,17 +465,19 @@ const PersonasConfig = z.record(z.string().min(1), PersonaEntry);
 
 // Partial nested gate entries for file-level config (allows overriding only
 // requireCi/required/angles without restating the whole gate object).
-const FileGateConfig = GateConfig.partial();
 const FileGatesConfig = z.strictObject({
-  draft: FileGateConfig.optional(),
-  preApproval: FileGateConfig.optional(),
-  spike: FileGateConfig.optional(),
-  requireFanoutEvidence: z.boolean().optional(),
-  requireFanoutProvenance: z.boolean().optional(),
-  maxFanoutReviewers: z.number().int().min(1).max(64).optional(),
-  postFindingsComments: z.boolean().optional(),
-  anglePool: z.array(z.string().trim().min(1)).optional(),
-  rejectForeignAngles: z.boolean().optional(),
+  // Each gate gets its own GateConfig.partial() instance rather than three
+  // .describe() clones of one shared partial, so no underlying def is shared
+  // and per-gate metadata renders unambiguously.
+  draft: GateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
+  preApproval: GateConfig.partial().describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
+  spike: GateConfig.partial().describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
+  requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason).").optional(),
+  requireFanoutProvenance: z.boolean().describe("Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch).").optional(),
+  maxFanoutReviewers: z.number().int().min(1).max(64).describe("Cap on parallel gate fan-out reviewers; overflow runs in sequential batches.").optional(),
+  postFindingsComments: z.boolean().describe("Post consolidated gate findings as a marker-tagged PR comment (default true).").optional(),
+  anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection.").optional(),
+  rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
 });
 
 // Partial persona entries for file-level config (allows omitting fields)
@@ -563,21 +566,21 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
 // ============================================================================
 
 export const FileConfigSchema = z.strictObject({
-  version: z.literal(1),
-  strategy: StrategyConfig.partial().optional(),
-  inputSource: InputSourceConfig.partial().optional(),
-  models: ModelsConfigBase.partial().superRefine(refineRoleTiers).optional(),
-  refinement: RefinementConfig.partial().optional(),
-  gates: FileGatesConfig.optional(),
-  autonomy: AutonomyConfig.partial().optional(),
-  approval: ApprovalConfig.partial().optional(),
-  workflow: WorkflowConfig.partial().optional(),
-  localImplementation: LocalImplementationConfig.partial().optional(),
-  queue: QueueConfig.partial().optional(),
-  personas: FilePersonasConfig.optional(),
-  internalPathPatterns: InternalPatternsConfig.optional(),
-  worktree: WorktreeConfig.partial().optional(),
-  uiReview: UiReviewConfig.partial().optional(),
+  version: z.literal(1).describe("Config format version; always 1."),
+  strategy: StrategyConfig.partial().describe("Work-intake strategy defaults.").optional(),
+  inputSource: InputSourceConfig.partial().describe("Spec source for local-first work.").optional(),
+  models: ModelsConfigBase.partial().superRefine(refineRoleTiers).describe("Model routing: conductor override, per-role/angle overrides, tier aliases, and role→tier policy.").optional(),
+  refinement: RefinementConfig.partial().describe("Refinement fan-out and Copilot review-round behavior.").optional(),
+  gates: FileGatesConfig.describe("Gate review configuration: per-gate angle sets plus fan-out enforcement knobs.").optional(),
+  autonomy: AutonomyConfig.partial().describe("How far the loop proceeds without operator confirmation.").optional(),
+  approval: ApprovalConfig.partial().describe("Approval / merge-handoff behavior (human-handoff offer).").optional(),
+  workflow: WorkflowConfig.partial().describe("Workflow posture: draft-first, retrospectives, dev mode, async start.").optional(),
+  localImplementation: LocalImplementationConfig.partial().describe("Local implementation dispatch (light mode for small scoped changes).").optional(),
+  queue: QueueConfig.partial().describe("Queue mode: parallelism, auto-filing caps, and Projects board opt-in.").optional(),
+  personas: FilePersonasConfig.describe("Gate-angle → reviewer persona registry overrides (angle name → persona, prompt, default model).").optional(),
+  internalPathPatterns: InternalPatternsConfig.describe("Regex whitelist for internal-only PR detection.").optional(),
+  worktree: WorktreeConfig.partial().describe("Worktree provisioning: gitignored files/dirs copied or symlinked into fresh worktrees.").optional(),
+  uiReview: UiReviewConfig.partial().describe("UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps.").optional(),
   // Deprecated (removed in #1088): tolerated so consumer .devloops files that
   // still carry a localPlanning block keep parsing. Accepted, never read.
   localPlanning: z.unknown().optional(),

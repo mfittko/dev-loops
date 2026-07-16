@@ -30,7 +30,11 @@ test("JSON schema top-level surface mirrors FileConfigSchema exactly", async () 
   );
   assert.equal(jsonSchema.additionalProperties, false);
   assert.deepEqual(jsonSchema.required, ["version"]);
-  assert.deepEqual(jsonSchema.properties.version, { type: "number", const: 1 });
+  // Pin the semantic core, not the exact object — annotations like
+  // description may accrete without changing what validates.
+  assert.ok(jsonSchema.properties.version, "schema is missing the version property");
+  assert.equal(jsonSchema.properties.version.type, "number");
+  assert.equal(jsonSchema.properties.version.const, 1);
 });
 
 test("JS safe-integer sentinels are stripped from the generated schema", () => {
