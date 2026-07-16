@@ -93,7 +93,7 @@ When selecting the next item:
 
 Useful checks:
 - `gh issue list --state open`
-- `gh issue view <number>`
+- `node scripts/github/view-issue.mjs --repo <owner/name> --issue <number>`
 - `gh pr list --state open`
 
 If the user asks for status/progress/readiness/merge-state/next-step (including “what is next”):
