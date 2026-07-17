@@ -7,8 +7,13 @@
 //   exactly one In Progress   -> { ok: true, target: {kind,number}, source: "in-progress" }
 //   multiple In Progress      -> { ok: false, reason: "..." }  (names the items)
 //   zero In Progress:
-//     Next Up has items        -> { ok: true, target: {kind,number}, source: "next-up" }
-//                                  (HEAD of Next Up, by POSITION ascending)
+//     Next Up has items        -> single-contributor ownership gate (#1377) scans
+//                                  Next Up by POSITION ascending, claims (@me) the
+//                                  first unassigned/viewer-owned item, and SKIPS
+//                                  items owned by another human (reported in
+//                                  `skipped`) -> { ok: true, target: {kind,number},
+//                                  source: "next-up", skipped?: [...] }
+//     all Next Up items foreign -> { ok: false, reason: "...", source: "next-up", skipped: [...] }
 //     Next Up empty            -> { ok: false, reason: <canonical empty-queue msg>, source: "next-up" }
 //     Next Up query errors     -> propagates (fail closed — surface it, no fallback)
 //
@@ -20,6 +25,14 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { main as listQueueItems } from "./list-queue-items.mjs";
 import { EMPTY_NEXT_UP_MESSAGE } from "@dev-loops/core/loop/queue-board-ordering";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import {
+  OWNERSHIP_STATE,
+  OwnershipGateFailure,
+  classifyOwnership,
+  ownershipNeedsViewerLogin,
+} from "@dev-loops/core/github/ownership-helpers";
+import { editIssue } from "../github/edit-issue.mjs";
+import { editPr } from "../github/edit-pr.mjs";
 
 // Illustrative default labels for USAGE/help + comments only; the actual query
 // columns resolve through queue.statusColumns.in_progress / .next_up at
@@ -147,10 +160,63 @@ function collapseToTarget(items) {
   return { ok: true, target: itemToTarget(items[0]), source: "in-progress" };
 }
 
+// Single-contributor ownership gate for Next Up pickup (#1377): fetch the
+// target's current assignees via `gh`. Resolves the viewer login only when a
+// non-copilot assignee is present, keeping the copilot/empty cases immune to
+// viewer-login resolution failures (same posture as resolve-dev-loop-startup).
+async function fetchAssignees(target, repo, { env, runChild }) {
+  const viewArgs = target.kind === "pr" ? ["pr", "view"] : ["issue", "view"];
+  const result = await runChild("gh", [...viewArgs, String(target.number), "--repo", repo, "--json", "assignees"], env);
+  if (result.code !== 0) {
+    throw new Error(`gh ${viewArgs.join(" ")} ${target.number} failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
+  }
+  const payload = JSON.parse(result.stdout);
+  return Array.isArray(payload?.assignees) ? payload.assignees : [];
+}
+
+async function resolveViewerLogin({ env, runChild }) {
+  const result = await runChild("gh", ["api", "user"], env);
+  if (result.code !== 0) {
+    throw new OwnershipGateFailure(
+      `Unable to resolve the current GitHub viewer login (gh api user failed: ${result.stderr.trim() || `exit code ${result.code}`}); cannot verify or claim single-contributor ownership — fail closed. Check \`gh auth status\` and retry.`,
+    );
+  }
+  let login;
+  try {
+    login = JSON.parse(result.stdout)?.login;
+  } catch (err) {
+    throw new OwnershipGateFailure(`Unable to parse gh api user output while resolving the viewer login: ${err.message}`);
+  }
+  if (typeof login !== "string" || login.length === 0) {
+    throw new OwnershipGateFailure("gh api user returned no login; cannot verify or claim single-contributor ownership — fail closed.");
+  }
+  return login;
+}
+
+// The one sanctioned mutation this script performs: claim an unassigned Next
+// Up item for the viewer (`@me`) before handing it to the loop, so the
+// claim is visible to every other contributor's fail-closed ownership gate
+// (resolve-dev-loop-startup.mjs) before that gate is ever hit.
+async function claimTarget(target, repo, { env, runChild }) {
+  const options = { repo, addAssignees: ["@me"], removeAssignees: [] };
+  if (target.kind === "pr") {
+    await editPr({ ...options, pr: target.number }, { env, ghCommand: "gh", run: runChild });
+  } else {
+    await editIssue({ ...options, issue: target.number }, { env, ghCommand: "gh", run: runChild });
+  }
+}
+
 // Zero in-progress: the live continue path falls through to the "Next Up"
-// column, HEAD by POSITION ascending (list-queue-items returns position order).
-// NEVER pulls from Backlog; empty Next Up fails closed with the canonical
-// message, and a query error propagates (fail closed — surface it, no fallback).
+// column, scanned by POSITION ascending (list-queue-items returns position
+// order). NEVER pulls from Backlog; empty Next Up fails closed with the
+// canonical message, and a query error propagates (fail closed — surface it,
+// no fallback).
+//
+// Ownership gate (#1377): each candidate is skipped if it is assigned to a
+// human other than the viewer (reported in `skipped`); an unassigned
+// candidate is claimed (`@me`) and picked; a viewer-owned or copilot-owned
+// candidate is picked as-is. If every item is foreign-owned, pickup fails
+// closed with the skip reasons — parallel loopers naturally take disjoint work.
 async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = {}) {
   // Resolve the next_up column name through the SAME statusColumns mapping
   // board-sync uses (#1098): a repo that renamed Next Up (e.g. to "Todo") gets
@@ -176,7 +242,40 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
   if (items.length === 0) {
     return { ok: false, reason: EMPTY_QUEUE_REASON, source: "next-up" };
   }
-  return { ok: true, target: itemToTarget(items[0]), source: "next-up" };
+  let viewerLogin = null;
+  let viewerLoginResolved = false;
+  const skipped = [];
+  for (const item of items) {
+    const target = itemToTarget(item);
+    const assignees = await fetchAssignees(target, args.repo, { env, runChild });
+    if (ownershipNeedsViewerLogin(assignees) && !viewerLoginResolved) {
+      viewerLogin = await resolveViewerLogin({ env, runChild });
+      viewerLoginResolved = true;
+    }
+    const ownership = classifyOwnership(assignees, viewerLogin);
+    if (ownership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
+      skipped.push({
+        target,
+        reason: `${describeItem(item)} is assigned to ${ownership.foreignLogins.join(", ")}, not the current viewer — skipped.`,
+      });
+      continue;
+    }
+    if (ownership.state === OWNERSHIP_STATE.UNASSIGNED) {
+      await claimTarget(target, args.repo, { env, runChild });
+    }
+    return {
+      ok: true,
+      target,
+      source: "next-up",
+      ...(skipped.length > 0 ? { skipped } : {}),
+    };
+  }
+  return {
+    ok: false,
+    reason: `Every ${NEXT_UP_COLUMN} item is owned by another contributor: ${skipped.map((s) => s.reason).join(" ")}`,
+    source: "next-up",
+    skipped,
+  };
 }
 
 async function main(args, { env = process.env, runChild, cwd = process.cwd() } = {}) {

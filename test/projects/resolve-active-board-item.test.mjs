@@ -18,7 +18,20 @@ after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 // the resolver's --column filter pick. `itemsError` forces only the SECOND items
 // query to fail (the resolver queries In Progress first, then Next Up), so the
 // In Progress query succeeds and only the Next Up query errors / hits an outage.
-function boardRunChild({ columns = {}, itemsError = false, optionNames = ["Backlog", "Next Up", "In Progress", "Done"] } = {}) {
+//
+// Ownership gate (#1377): `assignees` maps an issue/PR number to its current
+// assignees (defaults to `[]`, i.e. unassigned, for any number not listed).
+// `viewerLogin` answers `gh api user`. `claims` (mutated in place) records
+// every `issue edit --add-assignee @me` / `pr edit --add-assignee @me` call
+// the resolver makes, so tests can assert exactly which items got claimed.
+function boardRunChild({
+  columns = {},
+  itemsError = false,
+  optionNames = ["Backlog", "Next Up", "In Progress", "Done"],
+  assignees = {},
+  viewerLogin = "test-viewer",
+  claims = [],
+} = {}) {
   let itemsQueryCount = 0;
   const options = optionNames.map((name, i) => ({ id: `O_${i}`, name }));
   const nodes = [];
@@ -47,6 +60,18 @@ function boardRunChild({ columns = {}, itemsError = false, optionNames = ["Backl
     if (query.includes("user(login")) return json({ user: { id: "U_1" } });
     if (query.includes("fields(first")) {
       return json({ node: { fields: { nodes: [{ name: "Status", options }], pageInfo: { hasNextPage: false, endCursor: null } } } });
+    }
+    if (argv[0] === "api" && argv[1] === "user") {
+      return { code: 0, stdout: JSON.stringify({ login: viewerLogin }), stderr: "" };
+    }
+    if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "view") {
+      const number = Number(argv[2]);
+      return { code: 0, stdout: JSON.stringify({ assignees: assignees[number] ?? [] }), stderr: "" };
+    }
+    if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "edit") {
+      const number = Number(argv[2]);
+      claims.push({ kind: argv[0], number });
+      return { code: 0, stdout: "{}", stderr: "" };
     }
     // items query — fail only the second one (Next Up), leaving In Progress OK
     itemsQueryCount += 1;
@@ -153,6 +178,82 @@ describe("resolve-active-board-item main — In Progress vs Next Up (#1091)", ()
       () => runArgs(boardRunChild({ columns: { "In Progress": [] }, itemsError: true })),
       /gh api graphql failed/,
     );
+  });
+});
+
+describe("resolve-active-board-item Next Up single-contributor ownership gate (#1377)", () => {
+  it("claims (@me) an unassigned Next Up head item as part of pickup", async () => {
+    const claims = [];
+    const r = await runArgs(boardRunChild({
+      columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      assignees: { 7: [] },
+      claims,
+    }));
+    assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
+    assert.deepEqual(claims, [{ kind: "issue", number: 7 }]);
+  });
+
+  it("does NOT claim an item already assigned to the viewer", async () => {
+    const claims = [];
+    const r = await runArgs(boardRunChild({
+      columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      assignees: { 7: [{ login: "test-viewer" }] },
+      viewerLogin: "test-viewer",
+      claims,
+    }));
+    assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
+    assert.deepEqual(claims, []);
+  });
+
+  it("skips a Next Up item assigned to another human, reports the skip reason, and picks + claims the next unassigned item", async () => {
+    const claims = [];
+    const r = await runArgs(boardRunChild({
+      columns: { "In Progress": [], "Next Up": [
+        { issueNumber: 7, title: "Foreign" },
+        { issueNumber: 8, title: "Free" },
+      ] },
+      assignees: { 7: [{ login: "someone-else" }], 8: [] },
+      claims,
+    }));
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.target, { kind: "issue", number: 8 });
+    assert.equal(r.source, "next-up");
+    assert.equal(r.skipped.length, 1);
+    assert.match(r.skipped[0].reason, /issue #7 \(Foreign\) is assigned to someone-else, not the current viewer/);
+    assert.deepEqual(claims, [{ kind: "issue", number: 8 }]);
+  });
+
+  it("fails closed when every Next Up item is owned by another human", async () => {
+    const r = await runArgs(boardRunChild({
+      columns: { "In Progress": [], "Next Up": [
+        { issueNumber: 7, title: "Foreign one" },
+        { prNumber: 9, title: "Foreign two" },
+      ] },
+      assignees: { 7: [{ login: "someone-else" }], 9: [{ login: "another-dev" }] },
+    }));
+    assert.equal(r.ok, false);
+    assert.equal(r.source, "next-up");
+    assert.equal(r.skipped.length, 2);
+    assert.match(r.reason, /issue #7 \(Foreign one\) is assigned to someone-else/);
+    assert.match(r.reason, /PR #9 \(Foreign two\) is assigned to another-dev/);
+  });
+
+  it("a copilot-assigned Next Up item is picked as-is (no claim, no viewer-login lookup)", async () => {
+    const claims = [];
+    let apiUserCalls = 0;
+    const child = boardRunChild({
+      columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Copilot" }] },
+      assignees: { 7: [{ login: "copilot-swe-agent" }] },
+      claims,
+    });
+    const wrapped = async (cmd, argv) => {
+      if (argv[0] === "api" && argv[1] === "user") apiUserCalls += 1;
+      return child(cmd, argv);
+    };
+    const r = await runArgs(wrapped);
+    assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
+    assert.deepEqual(claims, []);
+    assert.equal(apiUserCalls, 0);
   });
 });
 
