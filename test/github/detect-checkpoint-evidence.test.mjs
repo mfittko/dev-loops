@@ -215,6 +215,17 @@ test("parseDetectCheckpointEvidenceCliArgs defaults skipFanoutLedgerCheck to fal
   assert.equal(opts.skipFanoutLedgerCheck, true);
 });
 
+test("parseDetectCheckpointEvidenceCliArgs REJECTS --no-skip-fanout-ledger-check (no parseArgs negation; fail closed)", () => {
+  // node:util parseArgs does NOT implement `--no-<boolean>` negation (that is a
+  // commander/yargs feature). So the negation form must be rejected outright, not
+  // silently treated as enabling the skip — the only way to keep full enforcement
+  // is to omit the flag. This pins the fail-closed behavior on a security-gate flag.
+  assert.throws(
+    () => parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--no-skip-fanout-ledger-check"]),
+    /Unknown argument/,
+  );
+});
+
 // --- gh-less REST/GraphQL fallback (issue #1358, AC4) ---
 // A session with no `gh` binary on PATH (spawn ENOENT) must still be able to read
 // gate evidence given a GH_TOKEN/GITHUB_TOKEN, via the REST/GraphQL fallback.

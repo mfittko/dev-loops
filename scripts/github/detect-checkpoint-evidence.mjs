@@ -148,6 +148,10 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       continue;
     }
     if (token.name === "skip-fanout-ledger-check") {
+      // node:util parseArgs has no `--no-` boolean negation (unlike commander/
+      // yargs): `--no-skip-fanout-ledger-check` is rejected as an unknown token
+      // below, never silently enabling the skip. So presence => enable, and the
+      // only way to keep full enforcement is to omit the flag (the default).
       options.skipFanoutLedgerCheck = true;
       continue;
     }
