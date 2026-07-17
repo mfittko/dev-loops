@@ -1098,6 +1098,50 @@ test("buildPreMergeGateCheck skipFanoutLedgerCheck: also skips requireFanoutProv
   assert.deepEqual(result.failures, []);
 });
 
+// AC1/AC2 "unaffected by the skip flag": --skip-fanout-ledger-check drops ONLY the
+// ledger/provenance/angle-coverage layer. The remotely-verifiable preconditions —
+// a clean draft_gate and a clean CURRENT-head pre_approval_gate — must still fail
+// closed under the flag, so a future refactor that hoisted the skip short-circuit
+// above those checks (silently reopening the exact API-driven bypass #1358 closes)
+// would flip these assertions instead of leaving every skip test green on clean input.
+test("buildPreMergeGateCheck skipFanoutLedgerCheck: still FAILS when the draft_gate verdict is missing", () => {
+  const evidence = {
+    currentHeadSha: "abc1234",
+    draftGate: { visible: false },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+  };
+  const result = buildPreMergeGateCheck(evidence, 0, null, {
+    required: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: false },
+    ],
+  }, { skipFanoutLedgerCheck: true });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("draft_gate")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck skipFanoutLedgerCheck: still FAILS when the pre_approval_gate is for a stale head", () => {
+  const evidence = {
+    currentHeadSha: "abc1234",
+    draftGate: { visible: true, verdict: "clean" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "stale999" },
+  };
+  const result = buildPreMergeGateCheck(evidence, 0, null, {
+    required: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: false },
+    ],
+  }, { skipFanoutLedgerCheck: true });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("current-head pre_approval_gate")),
+    JSON.stringify(result.failures),
+  );
+});
+
 // --- Fan-out provenance enforcement (AC2, gates.requireFanoutProvenance) ---
 
 test("buildPreMergeGateCheck with requireProvenance ON passes when ledger records distinctReviewers >= floor", () => {
