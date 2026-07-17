@@ -296,16 +296,22 @@ Fail closed if those readiness/assignment facts are missing or invalid.
 
 ## Single-contributor ownership gate (resolve-dev-loop-startup)
 
-This is a separate, script-layer gate — not a new value of the `issueAssignmentState` variation parameter above — enforced by `resolve-dev-loop-startup.mjs` before it routes `--issue`/`--pr` toward implementation or continuation. It requires the artifact (issue or PR) to be assigned to the viewer (`gh api user`'s login) and fails closed on anything else:
+This is a separate, script-layer gate — `issueAssignmentState` above is an authoritative issue-state fact, not a bounded variation parameter (see [Bounded variation parameter contract](#bounded-variation-parameter-contract)), and this gate is a distinct seam from the Copilot-first assignment seam. It is enforced by `resolve-dev-loop-startup.mjs` before it routes `--issue`/`--pr` toward implementation or continuation, and requires the artifact (issue or PR) to resolve to a SOLE human owner — the viewer (`gh api user`'s login) and no other human assignee — failing closed on anything else:
 
-- assigned to another human → foreign-ownership error naming the assignee(s); no readiness bundle
+- assigned to another human, or co-assigned to the viewer AND another human (contested — not sole) → foreign-ownership error naming the OTHER assignee(s), never the viewer; no readiness bundle
 - unassigned → not-claimed error naming the exact claim command (`edit-issue.mjs`/`edit-pr.mjs --add-assignee @me`); no readiness bundle
-- assigned to the viewer → proceed
-- assigned to `copilot-swe-agent` → unaffected; the Copilot-first seam above still governs
+- assigned to the viewer alone → proceed
+- assigned to `copilot-swe-agent` → unaffected; the Copilot-first seam above still governs; the viewer login is never resolved for this case
 - the PR path also fails closed when the PR's linked issue is assigned to another human — the issue owner owns the whole loop
 - the viewer login itself failing to resolve fails closed too (cannot verify or claim ownership)
 
-Claiming happens before this gate is reached, not inside it: `resolve-active-board-item.mjs` (Next Up pickup) claims an unassigned candidate as part of pickup and skips items owned by another human; the issue-intake procedure claims a directly-targeted issue before invoking startup. This keeps unassigned-but-being-worked impossible by construction — two contributors can never both start the same issue or PR.
+Claiming is NOT compare-and-swap, so it is not atomic: `gh issue/pr edit --add-assignee @me` can land two racing contributors as co-assignees on the same item. The guarantee holds anyway through three layers, not through the claim call alone:
+
+1. `resolve-active-board-item.mjs` (Next Up pickup) claims an unassigned candidate, then immediately RE-READS its assignees. Sole → proceed. Contested (the viewer plus another human) → deterministic tiebreak (case-insensitive lexicographically-smallest login wins, so every racer computes the same winner independently): the loser self-unassigns and skips to the next candidate; the winner proceeds.
+2. The issue-intake procedure claims a directly-targeted issue before invoking startup, same claim semantics.
+3. Even if a racer never re-reads or the tiebreak is bypassed, every contributor's own `resolve-dev-loop-startup.mjs` invocation re-derives sole ownership from scratch and fails closed on any contested (non-sole) state.
+
+Together this makes "two contributors both working the same issue or PR" impossible by construction: co-assignment is at most a transient window, closed by the pickup re-verify/tiebreak and backstopped by every gate refusing to start on a contested artifact.
 
 ## Authoritative gate contract
 
