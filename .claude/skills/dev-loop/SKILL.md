@@ -81,7 +81,7 @@ Do not preload route packs before the resolver selects the strategy.
 
 ## Async dispatch
 
-**Async dispatch rule (enforced):** the resolver fails closed for GitHub-first strategies when `canonicalStateSummary.requiresAsyncDispatch` is `true` (default `required` mode) — inline invocation without an async run-id marker (`DEVLOOPS_RUN_ID`) is rejected for those routes. Under the Claude Code harness this requirement is relaxed automatically. See [Startup procedure](#startup-procedure).
+**Async dispatch rule (enforced):** the resolver fails closed for GitHub-first strategies when `canonicalStateSummary.requiresAsyncDispatch` is `true` (default `required` mode) — inline invocation without an async run-id marker (`DEVLOOPS_RUN_ID` or `PI_SUBAGENT_RUN_ID`) is rejected for those routes. Under the Claude Code harness this requirement is relaxed automatically. See [Startup procedure](#startup-procedure).
 
 ## Fallback gate-comment poster
 
