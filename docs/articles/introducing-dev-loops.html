@@ -64,10 +64,18 @@
     font-weight: 600;
   }
 
-  h1, h2, h3 { color: var(--heading); letter-spacing: -0.02em; margin-top: 0; }
+  h1, h2 { color: var(--heading); letter-spacing: -0.02em; margin-top: 0; }
   h1 { font-weight: 760; font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.08; margin-bottom: 0.9rem; }
   h2 { font-weight: 720; font-size: clamp(1.35rem, 3.4vw, 1.85rem); line-height: 1.15; margin: 2.6rem 0 0.9rem; }
-  h3 { font-weight: 680; font-size: clamp(1.08rem, 2.4vw, 1.28rem); line-height: 1.25; margin: 1.8rem 0 0.6rem; color: var(--accent-soft); }
+
+  /* part divider: the two big movements of a two-part deep dive */
+  .part {
+    margin: 3.4rem 0 1.4rem;
+    padding-top: 2.2rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+  }
+  .part .kicker { margin-bottom: 0.4rem; }
+  .part h2 { margin-top: 0; font-size: clamp(1.5rem, 3.8vw, 2.1rem); }
 
   .lede {
     color: var(--copy);
@@ -83,6 +91,18 @@
   li + li { margin-top: 0.5rem; }
   a { color: var(--kicker); text-decoration: none; border-bottom: 1px solid rgba(147, 197, 253, 0.35); }
   a:hover { border-bottom-color: var(--kicker); }
+
+  /* callout: a left-accent glass panel for asides (e.g. a cross-link nudge) */
+  blockquote {
+    margin: 1.6rem 0;
+    padding: 0.9rem 1.2rem;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid var(--card-border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 14px 14px 0;
+    color: var(--copy);
+  }
+  blockquote p { margin: 0; }
 
   code {
     font-family: var(--mono);
@@ -126,6 +146,81 @@
     margin-bottom: 2.6rem;
   }
   .hero-card .lede { margin-bottom: 0; }
+
+  /* diagram figure: glass card + horizontal-scroll safety for wide flows */
+  figure {
+    margin: 1.8rem 0 2rem;
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.8), rgba(15, 23, 42, 0.62));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-radius: 20px;
+    padding: 1.3rem 1.35rem 1.1rem;
+  }
+  .diagram-scroll { overflow-x: auto; padding-bottom: 0.35rem; }
+  figcaption {
+    color: var(--copy);
+    font-size: 0.9rem;
+    line-height: 1.45;
+    margin-top: 1rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+    padding-top: 0.8rem;
+  }
+  figcaption b { color: var(--accent-soft); font-weight: 650; }
+
+  /* inline flow nodes (ported from the deck's inline-flow technique) */
+  .flow { display: flex; align-items: center; gap: 0; min-width: max-content; }
+  .flow-col { display: flex; flex-direction: column; gap: 0.55rem; justify-content: center; }
+  .node {
+    background: linear-gradient(180deg, rgba(24, 36, 61, 0.92), rgba(17, 24, 39, 0.82));
+    border: 1px solid var(--node-border);
+    border-radius: 14px;
+    padding: 0.55rem 0.85rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: #e2e8f0;
+    white-space: nowrap;
+    text-align: center;
+  }
+  .node.accent { border-color: rgba(167, 139, 250, 0.7); color: var(--accent-soft); }
+  .node.start { border-color: rgba(147, 197, 253, 0.6); color: var(--kicker); }
+  .edge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: rgba(148, 163, 184, 0.85);
+    padding: 0 0.6rem;
+    min-width: 3rem;
+  }
+  .edge .arrow { font-size: 1.1rem; line-height: 1; }
+  .edge.dashed .arrow { color: rgba(167, 139, 250, 0.75); }
+  .edge .edge-label {
+    font-size: 0.64rem;
+    color: var(--kicker);
+    text-align: center;
+    margin-top: 0.2rem;
+    max-width: 7.5rem;
+    line-height: 1.2;
+  }
+
+  /* SVG diagrams scale within their scroll container */
+  .diagram-scroll svg { display: block; height: auto; }
+  .diagram-scroll svg text { font-family: var(--mono); fill: #e2e8f0; }
+  .diagram-scroll svg .lab { fill: var(--kicker); font-family: var(--font); }
+
+  /* tree grounding diagram scales down on mobile */
+  .tree-svg { width: 100%; height: auto; display: block; }
+  .tree-svg text { font-family: var(--mono); fill: #e2e8f0; }
+  .tree-svg .lbl { fill: var(--kicker); font-family: var(--font); }
+
+  .closer {
+    color: var(--accent-soft);
+    font-weight: 620;
+    font-size: clamp(1.12rem, 2.6vw, 1.4rem);
+    line-height: 1.4;
+    margin: 1.6rem 0 0;
+  }
 
   /* metric row for the proof numbers */
   .metrics {

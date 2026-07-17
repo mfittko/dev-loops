@@ -1,12 +1,14 @@
 ---
 title: "dev-loops: A Deep Dive"
 subtitle: "AI made writing code cheap. The hours now go into the handoffs around the code, and into the waiting between actions."
+heroLede: "AI made writing code cheap. The hours now go into the handoffs around the code, author to reviewer, reviewer to CI, CI back to a human, and into the waiting between actions."
 tags:
   - AI
   - Software Engineering
   - Developer Tools
   - Automation
   - Productivity
+outro: closer
 ---
 
 # dev-loops: A Deep Dive
@@ -45,17 +47,33 @@ stateDiagram-v2
 
 *Diagram 1 — The nested loops. An outer "what is the next action here?" decision routes each cycle to exactly one move, then returns to ask again. When the next step is ambiguous, the loop hands control to a human.*
 
+<!-- figure
+      <div class="flow" role="img" aria-label="Nested loops: from Start the system repeatedly computes what the next action is — write the code, resolve feedback, or ask a human when ambiguous — then returns to that decision.">
+        <div class="node start">Start</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">What&nbsp;is&nbsp;the&nbsp;next&nbsp;action?</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="flow-col">
+          <div class="node">Write&nbsp;the&nbsp;code</div>
+          <div class="node">Resolve&nbsp;feedback</div>
+          <div class="node">Ask&nbsp;a&nbsp;human&nbsp;(ambiguous)</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">one move, then ask again</span></div>
+        <div class="node accent">What&nbsp;is&nbsp;the&nbsp;next&nbsp;action?</div>
+      </div>
+-->
+
 ## What a known next step buys you
 
 Computing the next action for any change makes four behaviors possible that a guess-based workflow cannot offer.
 
-The first is safe pauses. Because the system always knows where it is, it can stop without making a mess. Ask it to stop mid-edit and it finishes the current step, lands it clean, and hands you a stopping point with the file intact. There are only a few honest answers to "can I stop now?": stop this instant, stop at the next clean boundary, or not yet because a required check is missing. The system gives you whichever one holds.
+The first is safe pauses. Because the system always knows where it is, it can stop without making a mess. Ask it to stop mid-edit and it finishes the current step, lands it clean, and hands you a stopping point with the file intact. There are only two honest answers to "can I stop now?": stop at the next clean boundary, or not yet because a required check is missing. The system gives you whichever one holds.
 
 The second is mid-flight steering. You can change the rules while the machine keeps running. Halfway through a run you can say "don't touch the auth module," and that lands as a hard constraint the remaining steps must honor; the run keeps its progress and applies the rule from the next move on. A softer nudge becomes a preference the system honors when it can, and a "stop when safe" request winds the work down at the next clean boundary.
 
-The third is parallel review that consolidates into a single verdict. Several reviewers examine a pull request at once, each on a different angle (scope, test coverage, security), and all of them read the *same evidence bundle*: the same diff, the same context. Because the inputs are identical, the verdicts are directly comparable, and they merge into a single answer. One serious finding blocks the merge.
+The third is parallel review that consolidates into a single verdict. Several reviewers examine a pull request at once, each on a different angle (scope, coverage, input validation, among others), and all of them read the *same evidence bundle*: the same diff, the same context. Because the inputs are identical, the verdicts are directly comparable, and they merge into a single answer. One serious finding blocks the merge.
 
-The fourth is the most important: "done" means merged. The board shows done only when a pull request has actually merged, read from the platform's own merge signal that the agent cannot fabricate. CI-green comes from the real check result, so the system waits for it before proceeding. And the merge itself always belongs to a contributor.
+The fourth is the most important: "done" means merged. The board shows done only when a pull request has actually merged, read from the platform's own merge signal that the agent cannot fabricate. CI-green comes from the real check result, so the system waits for it before proceeding. And the merge itself is a human's call by default.
 
 ```mermaid
 flowchart TD
@@ -66,12 +84,59 @@ flowchart TD
   D -- yes --> E[Author resolves] --> C
   D -- no --> F{Pre-approval gate:<br/>CI verified green?}
   F -- not yet --> C
-  F -- yes --> G[Hand to a contributor]
-  G --> H[Human merges]
-  H --> I([Done = merged])
+  F -- yes --> G[Human merges]
+  G --> H([Done = merged])
 ```
 
 *Diagram 2 — A pull request's lifecycle through the gates. Every gate must run before the next step: a draft with missing checks loops back, an unresolved finding returns to the author, and a human performs the merge.*
+
+<!-- figure
+      <svg viewBox="0 0 640 300" width="640" role="img" aria-label="A pull request's lifecycle through the gates">
+        <defs>
+          <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 z" fill="#94a3b8" />
+          </marker>
+        </defs>
+        <g font-size="12">
+          <rect x="20" y="20" width="150" height="40" rx="12" fill="#0f172a" stroke="#93c5fd" />
+          <text x="95" y="44" text-anchor="middle">Draft opened</text>
+
+          <rect x="20" y="100" width="150" height="48" rx="12" fill="#111827" stroke="#818cf8" />
+          <text x="95" y="120" text-anchor="middle">Draft gate:</text>
+          <text x="95" y="136" text-anchor="middle">checks present?</text>
+
+          <rect x="245" y="100" width="150" height="40" rx="12" fill="#0f172a" stroke="#818cf8" />
+          <text x="320" y="124" text-anchor="middle">Review rounds</text>
+
+          <rect x="245" y="20" width="150" height="48" rx="12" fill="#111827" stroke="#a78bfa" />
+          <text x="320" y="40" text-anchor="middle" class="lab">findings? author</text>
+          <text x="320" y="56" text-anchor="middle" class="lab">resolves &amp; loops</text>
+
+          <rect x="470" y="100" width="150" height="48" rx="12" fill="#111827" stroke="#818cf8" />
+          <text x="545" y="120" text-anchor="middle">Pre-approval gate:</text>
+          <text x="545" y="136" text-anchor="middle">CI green?</text>
+
+          <rect x="470" y="200" width="150" height="40" rx="12" fill="#0f172a" stroke="#818cf8" />
+          <text x="545" y="224" text-anchor="middle">Hand to a human</text>
+
+          <rect x="245" y="200" width="150" height="40" rx="12" fill="#0f172a" stroke="#6ee7b7" />
+          <text x="320" y="224" text-anchor="middle" style="fill:#6ee7b7">Done = merged</text>
+        </g>
+        <g stroke="#94a3b8" fill="none" stroke-width="1.4" marker-end="url(#ah)">
+          <path d="M95,60 L95,100" />
+          <path d="M170,124 L245,122" />
+          <path d="M320,100 L320,68" />
+          <path d="M395,120 L470,122" />
+          <path d="M545,148 L545,200" />
+          <path d="M470,220 L395,220" />
+        </g>
+        <g font-size="10" font-family="-apple-system, sans-serif">
+          <text x="60" y="84" style="fill:#93c5fd">yes</text>
+          <text x="408" y="114" style="fill:#93c5fd">verified</text>
+          <text x="500" y="180" style="fill:#93c5fd">human merges</text>
+        </g>
+      </svg>
+-->
 
 ## Fan out wide, fan in to one answer
 
@@ -81,7 +146,7 @@ The parallel review deserves a closer look, because it is a small pattern with a
 flowchart LR
   E[One neutral<br/>evidence bundle] --> S[Scope review]
   E --> C[Coverage review]
-  E --> Z[Security review]
+  E --> Z[Input validation review]
   S --> V{Consolidate}
   C --> V
   Z --> V
@@ -89,6 +154,20 @@ flowchart LR
 ```
 
 *Diagram 3 — Fan-out / fan-in. One evidence bundle fans out to independent reviewers working different angles in parallel, then their findings fan back in to a single consolidated verdict.*
+
+<!-- figure
+      <div class="flow" role="img" aria-label="Fan-out then fan-in: one neutral evidence bundle goes as the same diff to independent scope, coverage, and input-validation reviewers; the strictest verdict wins.">
+        <div class="node start">One&nbsp;neutral<br/>evidence&nbsp;bundle</div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">same diff to each</span></div>
+        <div class="flow-col">
+          <div class="node">Scope&nbsp;review</div>
+          <div class="node">Coverage&nbsp;review</div>
+          <div class="node">Input&nbsp;validation&nbsp;review</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">consolidate</span></div>
+        <div class="node accent">One&nbsp;verdict<br/>strictest&nbsp;wins</div>
+      </div>
+-->
 
 A shared bundle keeps the angles aligned, because when each reviewer scrapes its own context they end up arguing about different versions of reality. With one input feeding every angle in parallel, the verdicts stay comparable and merge into a single answer you can trust.
 
@@ -110,6 +189,25 @@ flowchart TD
 ```
 
 *Diagram 4 — Steering flow. A hard constraint is applied immediately when it is safe, or queued until the next safe point. The run keeps its progress either way and applies the change only at a clean boundary.*
+
+<!-- figure
+      <div class="flow" role="img" aria-label="Mid-flight steering: an operator instruction is classified as a hard constraint or a preference; a hard constraint applies from the next move or queues until safe, a preference is honored when safe.">
+        <div class="node start">Operator&nbsp;injects<br/>an&nbsp;instruction</div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">classify</span></div>
+        <div class="flow-col">
+          <div class="node accent">Hard&nbsp;constraint</div>
+          <div class="node">Preference</div>
+          <div class="node">Stop&nbsp;when&nbsp;safe</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">safe now?</span></div>
+        <div class="flow-col">
+          <div class="node">Apply&nbsp;from&nbsp;next&nbsp;move</div>
+          <div class="node">Queue&nbsp;until&nbsp;safe</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Run&nbsp;continues,<br/>steered</div>
+      </div>
+-->
 
 ## Why a state graph beats a prompt
 
@@ -141,6 +239,22 @@ flowchart LR
 ```
 *Diagram 5 — The interrupt-cost chain. A five-minute question triggers five transitions, and the answer itself is only one of them.*
 
+<!-- figure
+      <div class="flow" role="img" aria-label="Interrupt cost: one interruption forces five transitions — Notice, Switch, Rebuild state, Act, then Recover — before the original work resumes.">
+        <div class="node start">Need&nbsp;response</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Notice</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Switch</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Rebuild&nbsp;state</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Act</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Recover</div>
+      </div>
+-->
+
 The five minutes of answering is the small box in the middle. The notice, switch, rebuild, and recover are the tax, and both sides of the exchange pay it. Across a queue of work, these costs multiply. Each handoff is an interrupt for whoever receives it, so a backlog of pending handoffs is a backlog of context switches waiting to happen.
 
 ## Every handoff restarts the same discovery from scratch
@@ -158,6 +272,20 @@ flowchart LR
 ```
 *Diagram 6 — One handoff round trip. Every question the state can't answer becomes an ask → answer → confirm cycle, and the work waits until it closes — then the next ambiguity restarts it.*
 
+<!-- figure
+      <div class="flow" role="img" aria-label="Handoff round trip: Receiver asks, Sender answers, Receiver confirms, work resumes — then the cycle repeats on the next ambiguity.">
+        <div class="node start">Receiver&nbsp;asks</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Sender&nbsp;answers</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Receiver&nbsp;confirms</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Work&nbsp;resumes</div>
+        <div class="edge dashed"><span class="arrow">&#8630;</span><span class="edge-label">next ambiguity</span></div>
+        <div class="node start">Receiver&nbsp;asks</div>
+      </div>
+-->
+
 A mix of humans and AI agents makes it worse. Ambiguous ownership pauses a human until they ask. Missing context halts an agent, which either guesses and leaves you the cleanup or stops cold. Every human-to-agent and agent-to-human swap is one more place the state can drop on the floor. "More hands make it faster" holds only when the state survives each handoff intact, and any boundary it can fall through quietly cancels the gain you were counting on.
 
 ## The bottleneck is where human attention goes
@@ -166,7 +294,7 @@ The tools can show the wait. GitHub timestamps every transition; a pull request'
 
 The cost is not concealment — it is the routing. Getting work from "ready" to "shipped" runs through human attention, and attention has two failure modes. It is often not immediately available: the person who can act is in a meeting, context-switched onto something else, or on the other side of a timezone. That unavailability is where the stall lives. And when attention is available, spending it on mechanical coordination — noticing a status update, confirming a CI result, deciding a branch is safe to merge — crowds out the work only a person can do: shaping the product, setting the right review bar, staying accountable for what ships.
 
-The drag on lead time is not that the tooling cannot see the wait. It is that routing routine transitions through human attention makes those transitions dependent on attention's availability — and pulls that attention away from the judgment-heavy decisions where it is genuinely irreplaceable.
+The drag on lead time is not that the tooling cannot see the wait. It is that routing routine transitions through human attention makes those transitions dependent on attention's availability — and pulls that attention away from the judgment-heavy decisions where it is irreplaceable.
 
 ## Four fields get the next actor moving
 
@@ -196,6 +324,20 @@ flowchart LR
 ```
 *Diagram 7 — The measurement loop. Capture, measure, change, verify — then back to capture. It repeats as a cycle, because the slowest transition moves as you fix things.*
 
+<!-- figure
+      <div class="flow" role="img" aria-label="Measurement loop: Capture state, Measure waits, Change the process, Verify outcomes — then loop back to capture.">
+        <div class="node start">Capture&nbsp;state</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Measure&nbsp;waits</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Change&nbsp;the&nbsp;process</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Verify&nbsp;outcomes</div>
+        <div class="edge"><span class="arrow">&#8635;</span><span class="edge-label">back to capture</span></div>
+        <div class="node start">Capture&nbsp;state</div>
+      </div>
+-->
+
 This is ordinary improvement discipline, applied to the part of delivery that has stayed invisible. Shortening a wait depends on measuring it, and measuring it depends on capturing its state.
 
 ## Those four fields already live in the work
@@ -221,6 +363,40 @@ flowchart TD
 
 *Diagram 8 — Grounding "observable state" in real mechanisms. The board carries owner and next step, the gate trail carries the latest decision, the resolver answers whose move it is, and safe automation runs on that confirmed state.*
 
+<!-- figure
+      <svg class="tree-svg" viewBox="0 0 640 360" role="img" aria-label="Observable state feeds the board, gate trail, and resolver, which let the next actor start and let safe automation run.">
+        <defs>
+          <marker id="ah2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L7,3 L0,6 Z" fill="rgba(148,163,184,0.85)" />
+          </marker>
+        </defs>
+        <rect x="230" y="14" width="180" height="46" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(167,139,250,0.7)"/>
+        <text x="320" y="42" text-anchor="middle" font-size="15" style="fill:#ddd6fe">Observable state</text>
+        <rect x="22" y="118" width="180" height="58" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(129,140,248,0.4)"/>
+        <text x="112" y="143" text-anchor="middle" font-size="13">Board lifecycle</text>
+        <text x="112" y="162" text-anchor="middle" font-size="11" class="lbl">owner + safe next step</text>
+
+        <rect x="230" y="118" width="180" height="58" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(129,140,248,0.4)"/>
+        <text x="320" y="143" text-anchor="middle" font-size="13">Gate evidence trail</text>
+        <text x="320" y="162" text-anchor="middle" font-size="11" class="lbl">latest decision + findings</text>
+
+        <rect x="438" y="118" width="180" height="58" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(129,140,248,0.4)"/>
+        <text x="528" y="143" text-anchor="middle" font-size="13">Next-action resolver</text>
+        <text x="528" y="162" text-anchor="middle" font-size="11" class="lbl">whose move it is</text>
+        <rect x="150" y="232" width="340" height="50" rx="13" fill="rgba(24,36,61,0.92)" stroke="rgba(147,197,253,0.6)"/>
+        <text x="320" y="262" text-anchor="middle" font-size="14" style="fill:#93c5fd">Next actor starts immediately</text>
+        <rect x="120" y="316" width="400" height="40" rx="13" fill="rgba(17,24,39,0.82)" stroke="rgba(167,139,250,0.55)"/>
+        <text x="320" y="341" text-anchor="middle" font-size="12.5" style="fill:#ddd6fe">CI wait + post-merge reclaim run only where state says safe</text>
+        <path d="M285,60 L130,116" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M320,60 L320,116" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M355,60 L510,116" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M120,176 L240,230" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M320,176 L320,230" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M520,176 L400,230" stroke="rgba(148,163,184,0.85)" fill="none" marker-end="url(#ah2)"/>
+        <path d="M320,282 L320,314" stroke="rgba(167,139,250,0.7)" fill="none" marker-end="url(#ah2)"/>
+      </svg>
+-->
+
 These are the same mechanisms from Part 1, read from the other side. The board, the gates, and the resolver carry the four fields latent in the work, ready to surface. Making them explicit stops them from leaking.
 
 ## The close
@@ -230,13 +406,3 @@ AI made the code cheap, and the coordination around it is now the expensive part
 So make the next step always known, and measure the waits. Compute the next action for any change and put it on the board, so whoever is free pulls it. Once the next action is visible, the rest follows from it: who acts next, whether it is safe to pause, what a mid-flight instruction means, and above all whether the work has actually merged. A handoff still happens when someone adds a note, and it stays a decision you can see. Build that on a state graph so the guarantee holds even when the model underneath you changes. Then capture state at each transition so the biggest stall shows up in plain numbers, and automate only where the state proves it's safe.
 
 The next agent will write your code in seconds. The lever you control is the coordination around it: keep the next step known so the next actor pulls it, and measure how long the work waits.
-
-<!--
----
-
-## Rendering the diagrams on Medium
-
-Before pasting into Medium, remove the YAML front-matter block (the `---` fenced `title` / `subtitle` / `tags` at the top) — Medium shows it as literal text; use the title and subtitle as the Medium headline and subtitle, and the tags as Medium tags.
-
-Medium does not natively render Mermaid. Each diagram above is written as a fenced `mermaid` block so it stays editable, and each carries a caption so the article reads cleanly with each diagram shown as a static image. To publish on Medium, either paste each block into a Mermaid-enabled editor (for example, the Mermaid Live Editor or any Markdown tool with Mermaid support) and embed the rendered image, or export each diagram as SVG/PNG and drop it in where the block sits. Because every diagram is captioned, the prose carries the argument on its own and the diagrams support it.
--->
