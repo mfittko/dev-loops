@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * Generate the Claude Code asset tree (.claude/agents, .claude/skills) from the canonical
- * Pi sources (agents/*.agent.md, skills/<name>/SKILL.md). The sources remain the single
- * source of truth; the generated tree is committed and kept in sync by `--check` (CI/test).
+ * Generate the Claude Code asset tree (.claude/agents, .claude/skills, and the plugin
+ * manifest version in .claude/.claude-plugin/plugin.json) from the canonical Pi sources
+ * (agents/*.agent.md, skills/<name>/SKILL.md) and the root package.json version. The sources
+ * remain the single source of truth; the generated tree is committed and kept in sync by
+ * `--check` (CI/test).
  *
  * Usage:
  *   node scripts/claude/generate-claude-assets.mjs            Write the .claude tree.

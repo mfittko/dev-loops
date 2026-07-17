@@ -189,6 +189,18 @@ test("every canonical agent and non-doc skill has a generated counterpart", () =
   }
 });
 
+test("a malformed plugin manifest fails asset generation loudly instead of writing garbage", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-assets-plugin-bad-"));
+  try {
+    fs.writeFileSync(path.join(tmpRoot, "package.json"), JSON.stringify({ name: "x", version: "9.9.9" }) + "\n", "utf8");
+    fs.mkdirSync(path.join(tmpRoot, ".claude", ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, ".claude", ".claude-plugin", "plugin.json"), "{not json", "utf8");
+    assert.throws(() => collectGeneratedAssets({ repoRoot: tmpRoot }), SyntaxError);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test("plugin manifest version is a generated asset stamped from package.json (#1348)", () => {
   // Real repo: the manifest must be emitted with the package version.
   const assets = collectGeneratedAssets({ repoRoot });
