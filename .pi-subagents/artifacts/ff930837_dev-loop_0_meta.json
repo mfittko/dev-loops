@@ -1,0 +1,36 @@
+{
+  "runId": "ff930837",
+  "agent": "dev-loop",
+  "task": "DIAGNOSTIC ONLY. Do not run dev-loop startup, do not mutate files or GitHub. Run exactly one bash command to print relevant environment: `env | sort | grep -E 'PI_SUBAGENT|MCP_DIRECT|PI_CODING_AGENT|TOOLS|EXTENSION' || true`. Then report only those env lines and whether `PI_SUBAGENT_FANOUT_CHILD` is 1.",
+  "exitCode": 0,
+  "usage": {
+    "input": 9344,
+    "output": 732,
+    "cacheRead": 7168,
+    "cacheWrite": 0,
+    "cost": 0.07226400000000001,
+    "turns": 2
+  },
+  "model": "openai-codex/gpt-5.5",
+  "attemptedModels": [
+    "openai-codex/gpt-5.5"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.5",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 9344,
+        "output": 732,
+        "cacheRead": 7168,
+        "cacheWrite": 0,
+        "cost": 0.07226400000000001,
+        "turns": 2
+      }
+    }
+  ],
+  "durationMs": 16923,
+  "toolCount": 1,
+  "timestamp": 1783120687480
+}

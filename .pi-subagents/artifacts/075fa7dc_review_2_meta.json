@@ -1,0 +1,37 @@
+{
+  "runId": "075fa7dc",
+  "agent": "review",
+  "task": "Independent v0.8 release audit for issue #1192, lane C: semantic drift spot-checks and epic closeout. Work in /Users/mfittko/github/dev-loops. Read issue #1192 and issue #1104 body/comments. Do not mutate tracked files. Baseline is parent of first epic commit 02bd0de0 unless evidence points elsewhere. Sample reworded rules from each batch (#1147/#1148/#1149/#1150/#1151/#1156/#1157/#1158/#1153/#1154/#1159 plus post-epic #1190/#1200/#1205/#1207/#1210/#1193) against git history. Verify #1104 AC1-AC6 and DoD1-DoD3 evidence, especially word-count roll-up/closing comment. Return blockers with exact evidence.\n\n---\nUpdate progress at: /Users/mfittko/github/dev-loops/.pi-subagents/artifacts/progress/075fa7dc/progress.md\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mfittko/github/dev-loops/.pi-subagents/artifacts/outputs/075fa7dc/tmp/audits/lane-c-drift-closeout.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 205856,
+    "output": 15671,
+    "cacheRead": 1949184,
+    "cacheWrite": 0,
+    "cost": 2.4740019999999996,
+    "turns": 39
+  },
+  "model": "openai-codex/gpt-5.5",
+  "attemptedModels": [
+    "openai-codex/gpt-5.5"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.5",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 205856,
+        "output": 15671,
+        "cacheRead": 1949184,
+        "cacheWrite": 0,
+        "cost": 2.4740019999999996,
+        "turns": 39
+      }
+    }
+  ],
+  "durationMs": 785217,
+  "toolCount": 41,
+  "transcriptPath": "/Users/mfittko/github/dev-loops/.pi-subagents/artifacts/075fa7dc_review_2_transcript.jsonl",
+  "timestamp": 1783345938584
+}

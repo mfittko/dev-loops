@@ -1,0 +1,27 @@
+{
+  "runId": "5ec065fa-7d6f-4072-b0fe-6d42dce0e1a9",
+  "agent": "dev-loop",
+  "task": "Final approval + merge for issue #1043 / PR #1080, repo mfittko/dev-loops.\n\nInputs: issue=1043, pr=1080, head=4e257242a9876596832afcbda320c797018bebe3. Gate state already complete: draft_gate clean fanout_fanin, pre_approval_gate clean fanout_fanin (6 angles) on current head, preMergeGateCheck ok:true, CI success, 0 unresolved threads (7/7 resolved), mergeStateStatus CLEAN, mergeable MERGEABLE.\n\nAuthorization: HUMAN MERGE EXPLICITLY AUTHORIZED for this PR (gate-complete threshold met).\n\nNote on local verify: 2 failing tests in test/contracts/claude-hooks-settings.test.mjs are environmental (write-guard hook reads this run's coordination file runId 777e5178-..., not a /^devloops-/ pattern) — NOT a PR regression. Do not block on these; they are unrelated to #1043's surface.\n\nProcedure:\n1. Resolve dev-loops package root via bounded candidates (node module resolution → ~/.pi/agent/npm/node_modules/dev-loops → package-relative → global). Never unbounded find.\n2. Load final-approval skill + copilot-pr-followup skill + copilot-loop-operations.\n3. Re-verify live merge preconditions at merge time: `loop info --pr 1080`, `detect-checkpoint-evidence.mjs` (preMergeGateCheck must be ok:true), current CI green, mergeStateStatus CLEAN. If PR #1078 merges first and this PR's mergeability/CI regresses, re-baseline (rebase/re-run CI as the final-approval path prescribes) rather than force. If any precondition regressed and cannot be re-baselined cleanly, STOP and report.\n4. Retrospective merge gate (requireRetrospectiveGate:true, requireRetrospectiveInternalTooling:true): satisfy a fresh retro checkpoint for THIS PR (complete + mergeApproved:true + internalToolingOnly:true + empty rawCallViolations) before merging. If it cannot be satisfied cleanly, STOP and report — do not bypass.\n5. Execute the merge via the final-approval skill's sanctioned merge path (squash). Use the dev-loops merge wrapper if one exists; otherwise the final-approval skill's merge procedure. No raw `gh pr merge` if a wrapper exists.\n6. Post-merge: confirm PR state MERGED, linked issue #1043 closure, report merge SHA.\n7. Report back: merge verdict, SHA, retro-gate outcome, any post-merge/rebase notes.\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mfittko/github/dev-loops/.pi-subagents/artifacts/outputs/5ec065fa-7d6f-4072-b0fe-6d42dce0e1a9/tmp/dev-loop-runs/pr-1080-merge.out.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nReview gate: required by reviewer.\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "makora/zai-org/GLM-5.2-FP8",
+  "attemptedModels": [
+    "makora/zai-org/GLM-5.2-FP8"
+  ],
+  "modelAttempts": [
+    {
+      "model": "makora/zai-org/GLM-5.2-FP8",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 48944,
+        "output": 12682,
+        "cacheRead": 978880,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 30
+      }
+    }
+  ],
+  "skills": [],
+  "timestamp": 1782983008225
+}

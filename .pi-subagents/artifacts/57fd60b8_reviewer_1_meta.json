@@ -1,0 +1,37 @@
+{
+  "runId": "57fd60b8",
+  "agent": "reviewer",
+  "task": "[Read from: /Users/mfittko/github/dev-loops/plan.md, /Users/mfittko/github/dev-loops/progress.md]\n\nINDEPENDENT CONTRACT AUDIT — Scope item 5 of issue #1192 (v0.8 release gate). Fresh reviewer, no prior batch-PR context.\n\nRepo: /Users/mfittko/github/dev-loops (cwd). Read-only. Write ONLY to tmp/audits/GLM-5.2-FP8/review/05-semantic-drift.md.\n\nTASK — Semantic-drift spot-checks: sample reworded rules from EVERY batch of epic #1104 against their pre-epic baselines via git history. Verify ZERO meaning change — conditions, guards, and exceptions must be intact.\n\nBaseline commit (pre-epic): 8cda46daea2f838962f1fc653ddd123fbb167278 (parent of the first epic PR #1183). Compare with: git show 8cda46da:<path> vs current HEAD:<path>.\n\nThe epic batches (PRs): #1183(1147), #1189(1148), #1191(1149), #1194(1150), #1196(1151), #1197(1156), #1199(1157), #1201(1158), #1202(1153), #1203(1154), #1204(1159).\n\nMETHOD:\n1. Pick ≥3 representative rule-owning docs that were reworded across the batches. Good candidates: skills/docs/stop-conditions.md, skills/docs/confirmation-rules.md, skills/docs/merge-preconditions.md, skills/docs/pr-lifecycle-contract.md, skills/docs/public-dev-loop-contract.md, skills/docs/main-agent-contract.md, docs/gate-review-sub-loop-contract.md, docs/conductor-routing-contract.md, docs/reviewer-loop-state-graph.md, skills/copilot-pr-followup/SKILL.md, skills/local-implementation/SKILL.md.\n2. For each chosen doc, run: git show 8cda46da:<path> > /tmp/baseline.md and diff against the current file. Use `git diff 8cda46da -- <path>` to see the rewording.\n3. For every rule that was REWORDED (not just rule-ID-tagged), judge: did the meaning change? Check: conditions (when X), guards (MUST/MUST NOT), exceptions (unless Y), thresholds, lists of allowed/forbidden actions.\n4. Flag any rule where a condition/guard/exception was dropped, added, weakened, or strengthened — that is semantic drift. Restatement in firmer RFC-2119 language with identical meaning = NOT drift (that is the epic's intent).\n\nDELIVERABLE (write to output file):\n- Header: '# Scope 5 — Semantic-drift spot-checks (independent)'\n- Verdict: PASS (zero meaning change) or FAIL (drift found).\n- Per-doc section: path, rules sampled, baseline-vs-head diff summary, drift verdict per rule.\n- Findings table for any drift: | # | Doc | Rule ID | Baseline meaning | HEAD meaning | Drift type | Severity |\n- If clean, state 'Zero semantic drift across N rules sampled across M docs.'\n- Method note + sample size.\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mfittko/github/dev-loops/.pi-subagents/artifacts/outputs/57fd60b8/tmp/audits/GLM-5.2-FP8/review/05-semantic-drift.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 55410,
+    "output": 26179,
+    "cacheRead": 1299072,
+    "cacheWrite": 0,
+    "cost": 0,
+    "turns": 29
+  },
+  "model": "makora/zai-org/GLM-5.2-FP8:high",
+  "attemptedModels": [
+    "makora/zai-org/GLM-5.2-FP8:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "makora/zai-org/GLM-5.2-FP8:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 55410,
+        "output": 26179,
+        "cacheRead": 1299072,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 29
+      }
+    }
+  ],
+  "durationMs": 208611,
+  "toolCount": 34,
+  "transcriptPath": "/Users/mfittko/github/dev-loops/.pi-subagents/artifacts/57fd60b8_reviewer_1_transcript.jsonl",
+  "timestamp": 1783348769607
+}

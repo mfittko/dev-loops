@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.0.0-rc.2 - 2026-07-17
+
+Second release candidate: closes out the pre-1.0 backlog surfaced during the rc.1 window.
+
+### Added
+
+- **Issue-less PR-first at any change scope (#1350).** `localImplementation.issueless.enabled` (default off) lets consumers whose spec of record lives in an external tracker run `--lightweight` with no `--issue` regardless of change size. Review depth stays scope-driven: over-threshold PRs keep the full gate fan-out and the full-PR Copilot round cap; with the flag off, control flow and fail-closed reason codes are unchanged.
+- **Config JSON schema generated from the zod validator (#1351, #1357),** with field descriptions flowing through and drift tests guarding the rendered schema.
+- **Sanctioned `view-issue.mjs` wrapper (#1365)** for issue-body reads, unblocking AC checkbox ticking at merge.
+
+### Changed
+
+- **The plugin manifest version is now a generated asset (#1348).** `generate-claude-assets.mjs` stamps `.claude/.claude-plugin/plugin.json` from the root `package.json`, the committed-tree no-drift check catches a stale manifest in `verify`, and the release runbook names the regenerate step — the rc.1 publish-time abort can't recur.
+- **Both articles now render from markdown (#1351, #1356).** The deep-dive article — the last hand-synced md/html twin — renders via `render-article.mjs` (fail-closed constructs: blockquote callouts, Part dividers, mermaid diagram figures, outro opt-out), fact-grounded and desloped with drift/anchor/nav/CSP contract tests and Playwright slices covering both articles.
+- **Both decks fact-grounded and desloped (#1354, #1355).**
+- **Gate-context CLI resolves angles dynamically when `--angles` is omitted (#1367).**
+
+### Fixed
+
+- **AC-hygiene follow-ups, groups A+B (#1340).** Skill-doc drift corrected (run-id provenance claims aligned with shipped behavior in both passages, raw script refs migrated to existing `dev-loops` subcommands, gate-inspection terminology stragglers fixed) and three regressed hand-rolled argv parsers re-migrated to `node:util` parseArgs with a contract-test guard against reappearance. Decision-shaped groups split to #1371/#1372/#1373/#1376.
+
 ## 1.0.0-rc.1 - 2026-07-14
 
 **Release candidate for 1.0.** `1.0.0-rc.1` freezes the intended 1.0 public surface and publishes it for consumers to validate *before* the final `1.0.0` — install it opt-in with `npm install dev-loops@rc` (it is not the default `latest`). From 1.0, `dev-loops` follows [semantic versioning](https://semver.org/) for its public API — breaking changes to it bump the major version — and this RC window is the chance to surface anything that should change before that surface is frozen. See the [Stability section in the README](./README.md#stability) for the full statement.

@@ -1,0 +1,36 @@
+{
+  "runId": "f3f5eefd",
+  "agent": "review",
+  "task": "Gate-review subagent. PR mfittko/dev-loops #1107 (draft_gate, head 08b8fc07). SINGLE REVIEW ANGLE: coverage. Read the diff at /Users/mfittko/github/dev-loops/tmp/gate-context/mfittko-dev-loops/pr-1107/diff-08b8fc07.patch and test/github/probe-copilot-review.test.mjs. Verify: do the tests cover the restored --timeout-ms 0 single-check path and the no-strip behavior? Any uncovered branch? Are the 19 tests sufficient for this change? Produce findings JSON to the output path: {\"angle\":\"coverage\",\"verdict\":\"clean\"|\"findings_present\",\"findings\":[{\"severity\":\"must-fix\"|\"worth-fixing-now\"|\"defer\",\"summary\":\"...\",\"file\":\"...\",\"line\":N,\"recommendation\":\"...\"}]}. clean ⟹ empty findings. Be rigorous. Do NOT modify files; only write output JSON.\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mfittko/github/dev-loops/.pi-subagents/artifacts/outputs/f3f5eefd/tmp/gate-context/mfittko-dev-loops/pr-1107/draft_gate-coverage.json\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 16513,
+    "output": 7064,
+    "cacheRead": 215168,
+    "cacheWrite": 0,
+    "cost": 0,
+    "turns": 12
+  },
+  "model": "makora/zai-org/GLM-5.2-FP8",
+  "attemptedModels": [
+    "makora/zai-org/GLM-5.2-FP8"
+  ],
+  "modelAttempts": [
+    {
+      "model": "makora/zai-org/GLM-5.2-FP8",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 16513,
+        "output": 7064,
+        "cacheRead": 215168,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 12
+      }
+    }
+  ],
+  "durationMs": 353156,
+  "toolCount": 13,
+  "timestamp": 1783057010094
+}

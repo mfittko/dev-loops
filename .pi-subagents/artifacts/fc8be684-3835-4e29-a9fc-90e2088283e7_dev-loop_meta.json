@@ -1,0 +1,28 @@
+{
+  "runId": "fc8be684-3835-4e29-a9fc-90e2088283e7",
+  "agent": "dev-loop",
+  "task": "User instruction: continue the dev-loop queue and ship the next patch version for this repository.\n\nOperate as the dev-loop async worker, not the main agent. Follow the installed dev-loop skill and repo AGENTS.md exactly:\n- Resolve authoritative queue/current state through dev-loop startup/resolver/envelope; do not rely on chat context.\n- Use only tracked artifact origins (issue, persisted plan, or sanctioned lightweight PR-body spec).\n- Always use a worktree for git/file/validation work; fetch origin before creating/reusing it.\n- Continue one bounded item at a time according to queue/canonical state.\n- Prefer the GitHub-first routed path and canonical dev-loops wrappers; never raw gh reads where wrappers exist.\n- Run required gates/verification and post required checkpoint evidence.\n- User authorized continuing queue and preparing/shipping the next patch version, but do NOT perform any force-push, branch deletion/recreation, reset moving branch heads, rebase-to-push, or merge that changes remote branch state unless the current conversation contains explicit target-specific approval. Stop at any human merge/release approval gate and report exact needed approval.\n- Stop and report if state is ambiguous, retrospective/reconcile blocks, or no queue item is actionable.\n\nReturn: active artifact(s), branch/PR/version, validation/gate evidence, what shipped or what approval is still needed.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nReview gate: required by reviewer.\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.5",
+  "attemptedModels": [
+    "openai-codex/gpt-5.5"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.5",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 457569,
+        "output": 28447,
+        "cacheRead": 9383424,
+        "cacheWrite": 0,
+        "cost": 7.832966999999999,
+        "turns": 99
+      }
+    }
+  ],
+  "transcriptPath": "/Users/mfittko/github/dev-loops/.pi-subagents/artifacts/fc8be684-3835-4e29-a9fc-90e2088283e7_dev-loop_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1783260384529
+}

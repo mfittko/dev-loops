@@ -1,0 +1,37 @@
+{
+  "runId": "363fd6c8",
+  "agent": "delegate",
+  "task": "## Audit Scope 1 & 2: Rule Ownership + L2/L3 Conformance\n\n**Repo**: /Users/mfittko/github/dev-loops\n**Output**: Write findings to `tmp/audits/claude-sonnet-4/scope-1-2-ownership-conformance.md`\n\n### Tasks\n\n1. Run `node scripts/docs/validate-rule-ownership.mjs` and capture full output. Verify:\n   - Every normative doc opens with canonical-owner line\n   - No rule restated outside its owner doc\n   - Required-rules manifest covers the corpus\n   - DoD2: `validate-no-duplicate-rules.mjs` retired or subsumed with unique checks ported\n\n2. Run `node scripts/docs/validate-state-machine-conformance.mjs` and capture full output. Verify:\n   - ALL wired machines pass (pr-gate-coordination, conductor-routing, copilot-loop-state, reviewer-loop-state)\n   - Any others that should be wired but aren't (check skills/docs/ for machine definitions)\n   - No STALE known-gap/allowlist entries (each must reference an open tracking issue)\n   - L3 completeness, safety, liveness passed for all machines\n\n3. Check `scripts/docs/validate-links.mjs` also passes if it exists.\n\n**Context**: This is audit scope 1+2 of the v0.8 release gate contract audit (#1192). Epic is #1104.\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mfittko/github/dev-loops/.pi-subagents/artifacts/outputs/363fd6c8/tmp/audits/claude-sonnet-4/scope-1-2-ownership-conformance.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 31430,
+    "output": 9169,
+    "cacheRead": 449280,
+    "cacheWrite": 0,
+    "cost": 0.023277720000000002,
+    "turns": 20
+  },
+  "model": "deepseek/deepseek-v4-pro",
+  "attemptedModels": [
+    "deepseek/deepseek-v4-pro"
+  ],
+  "modelAttempts": [
+    {
+      "model": "deepseek/deepseek-v4-pro",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 31430,
+        "output": 9169,
+        "cacheRead": 449280,
+        "cacheWrite": 0,
+        "cost": 0.023277720000000002,
+        "turns": 20
+      }
+    }
+  ],
+  "durationMs": 129146,
+  "toolCount": 44,
+  "transcriptPath": "/Users/mfittko/github/dev-loops/.pi-subagents/artifacts/363fd6c8_delegate_0_transcript.jsonl",
+  "timestamp": 1783349188682
+}

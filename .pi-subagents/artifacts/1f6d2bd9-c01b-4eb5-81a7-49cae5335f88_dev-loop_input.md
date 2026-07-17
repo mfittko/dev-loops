@@ -1,0 +1,51 @@
+# Task for dev-loop
+
+Run the unified dev-loop on GitHub issue #1096 (mfittko/dev-loops) end-to-end through all gates. Operator authorization: this is `auto dev loop on issue 1096` with intent `auto_continue_current` — proceed through the GitHub-first Copilot loop until stop condition or human approval checkpoint. When all gates clear (draft_gate, pre_approval_gate at current head, Copilot convergence, CI green, mergeable), the operator has pre-authorized merge: proceed to final approval and merge the PR. Stop only at a genuine human-decision checkpoint (blocking review finding that can't be auto-resolved, CI failure needing human judgment, spec ambiguity, or merge-state conflict). Report the canonical artifact identity (PR number, head SHA, gate verdicts, next action) on completion.
+
+## Acceptance Contract
+Acceptance level: attested
+Completion is not accepted from prose alone. End with a structured acceptance report.
+
+Criteria:
+- criterion-1: Return a concise result and residual risks when applicable
+
+Required evidence: manual-notes, residual-risks
+
+Finish with a fenced JSON block tagged `acceptance-report` in this shape:
+Use empty arrays when no items apply; array fields contain strings unless object entries are shown.
+```acceptance-report
+{
+  "criteriaSatisfied": [
+    {
+      "id": "criterion-1",
+      "status": "satisfied",
+      "evidence": "specific proof"
+    }
+  ],
+  "changedFiles": [
+    "src/file.ts"
+  ],
+  "testsAddedOrUpdated": [
+    "test/file.test.ts"
+  ],
+  "commandsRun": [
+    {
+      "command": "command",
+      "result": "passed",
+      "summary": "short result"
+    }
+  ],
+  "validationOutput": [
+    "validation output or concise summary"
+  ],
+  "residualRisks": [
+    "none"
+  ],
+  "noStagedFiles": true,
+  "diffSummary": "short description of the diff",
+  "reviewFindings": [
+    "blocker: file.ts:12 - issue found, or no blockers"
+  ],
+  "manualNotes": "anything else the parent should know"
+}
+```

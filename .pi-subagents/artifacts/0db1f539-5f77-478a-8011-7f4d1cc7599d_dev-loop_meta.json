@@ -1,0 +1,27 @@
+{
+  "runId": "0db1f539-5f77-478a-8011-7f4d1cc7599d",
+  "agent": "dev-loop",
+  "task": "DIAGNOSTIC ONLY. Do not run dev-loop startup, do not mutate files or GitHub. Test whether the `subagent` tool is callable in this async child. First action: if the `subagent` tool is available, call `subagent({ action: \"list\" })` and report the result. If it is not available in your callable tools, report the exact callable function/tool names you can see and stop. This is only a runtime tool-availability test.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return a concise result and residual risks when applicable\n\nRequired evidence: manual-notes, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.5",
+  "attemptedModels": [
+    "openai-codex/gpt-5.5"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.5",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 8031,
+        "output": 750,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "cost": 0.062655,
+        "turns": 1
+      }
+    }
+  ],
+  "skills": [],
+  "timestamp": 1783120368266
+}

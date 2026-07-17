@@ -1,0 +1,1 @@
+A Copilot review has run and produced substantive thread comments — including a real correctness finding in the new code. Let me get the settled Copilot review summary.

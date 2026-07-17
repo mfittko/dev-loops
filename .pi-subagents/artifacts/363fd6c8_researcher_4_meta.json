@@ -1,0 +1,37 @@
+{
+  "runId": "363fd6c8",
+  "agent": "researcher",
+  "task": "## Audit Scope 7: Dedup / Condensation Lens\n\n**Repo**: /Users/mfittko/github/dev-loops\n**Baseline commit**: 8cda46da\n**Output**: Write findings to `tmp/audits/claude-sonnet-4/scope-7-condensation.md`\n\n### Tasks\n\n**Part A: Word/line counts baseline vs head**\n- Compute `wc -w` AND `wc -l` over all contract docs at baseline (8cda46da) vs HEAD\n- Contract docs: skills/docs/*.md, skills/*/SKILL.md, docs/*.md, agents/, commands/\n- Report total and per-doc deltas\n- To get baseline: create temp worktree `git worktree add /tmp/audit-baseline 8cda46da`, compute, then `git worktree remove /tmp/audit-baseline`\n\n**Part B: Growth attribution**\n- Categorize line growth into: (a) machine annotation (marker/ID lines like `<!-- rule: ... -->`), (b) genuinely new normative prose, (c) residual verbosity\n- Sample representative docs to estimate proportions\n\n**Part C: Semantic dedup pass**\n- Find same-behavior rules across families phrased differently\n- Find procedures restated as prose around a rule that already owns them\n- Find elaboration bullets repeating the rule line\n\n**Part D: Condensation candidates**\n- Rank by expected word savings\n- Every candidate worth > ~50 words → recommend filing as `pre-v0.8` condensation issue\n- State whether epic AC5 (\"total corpus word count reduced with zero information loss\") is genuinely met against the pre-epic baseline\n\n**Context**: This is audit scope 7 of the v0.8 release gate contract audit (#1192). Epic is #1104.\n\n---\nUpdate progress at: /Users/mfittko/github/dev-loops/.pi-subagents/artifacts/progress/363fd6c8/progress.md\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mfittko/github/dev-loops/.pi-subagents/artifacts/outputs/363fd6c8/tmp/audits/claude-sonnet-4/scope-7-condensation.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 35265,
+    "output": 2322,
+    "cacheRead": 68608,
+    "cacheWrite": 0,
+    "cost": 0.017609119,
+    "turns": 7
+  },
+  "model": "deepseek/deepseek-v4-pro:medium",
+  "attemptedModels": [
+    "deepseek/deepseek-v4-pro:medium"
+  ],
+  "modelAttempts": [
+    {
+      "model": "deepseek/deepseek-v4-pro:medium",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 35265,
+        "output": 2322,
+        "cacheRead": 68608,
+        "cacheWrite": 0,
+        "cost": 0.017609119,
+        "turns": 7
+      }
+    }
+  ],
+  "durationMs": 37985,
+  "toolCount": 18,
+  "transcriptPath": "/Users/mfittko/github/dev-loops/.pi-subagents/artifacts/363fd6c8_researcher_4_transcript.jsonl",
+  "timestamp": 1783349097528
+}
