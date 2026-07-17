@@ -70,7 +70,20 @@ export async function restGraphqlJson(query, variables, env, { fetchImpl = fetch
   if (!res.ok) {
     throw new Error(`GitHub GraphQL fallback failed: ${res.status} ${res.statusText}`);
   }
-  return res.json();
+  const body = await res.json();
+  // GraphQL returns HTTP 200 even for query-level failures (`{errors:[...], data:null}`).
+  // Fail CLOSED on that, matching the gh path (`gh api graphql` exits non-zero): a
+  // 200-with-errors or a missing `data` must NOT be handed back as an empty/clean
+  // result, or a gh-less verifier would read "0 unresolved threads" (false green) on
+  // exactly the API-merge path this check guards.
+  if (Array.isArray(body?.errors) && body.errors.length > 0) {
+    const first = body.errors[0]?.message ?? "unknown GraphQL error";
+    throw new Error(`GitHub GraphQL fallback returned errors: ${first}`);
+  }
+  if (body?.data == null) {
+    throw new Error("GitHub GraphQL fallback returned no data");
+  }
+  return body;
 }
 
 // Fetches the fields gate-evidence reads off `gh pr view --json headRefOid` /

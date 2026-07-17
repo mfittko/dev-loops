@@ -61,13 +61,15 @@ practice:
 - **Client-side:** the PreToolUse Bash hook blocks an ungated `gh pr ready` /
   `gh pr merge` invocation, and `detect-checkpoint-evidence.mjs` is what the
   dev-loop tooling calls before merging.
-- **Server-side:** the `gate-evidence` required status check
+- **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
-  GitHub's own token for every non-draft PR. This is what actually closes the
-  ready/merge bypass — a direct GitHub API call (MCP/REST, web UI, a raw `gh`
-  invocation outside the hook) skips the client-side path entirely but still
-  cannot merge without a green `gate-evidence` check once branch protection on
-  `main` requires it.
+  GitHub's own token for every non-draft PR. This is what closes the ready/merge
+  bypass — a direct GitHub API call (MCP/REST, web UI, a raw `gh` invocation
+  outside the hook) skips the client-side path entirely but still cannot merge
+  without a green `gate-evidence` check **once branch protection on `main`
+  requires it**. Until an operator adds it to branch protection, the check runs
+  and reports on every non-draft PR but does **not** yet block merge — it is
+  reporting-only in that window.
 
 The server-side check verifies the same visible, comment-derived verdict fields
 the client-side tooling does (including the light-mode inline exception,

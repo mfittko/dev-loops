@@ -79,6 +79,24 @@ test("restGraphqlJson posts the query/variables and returns the raw GraphQL resp
   assert.deepEqual(result.data.repository.pullRequest.reviewThreads.nodes, []);
 });
 
+test("restGraphqlJson fails closed on a 200 response carrying GraphQL errors (no false green)", async () => {
+  // GraphQL returns HTTP 200 even for query-level failures; returning it as-is would
+  // let a gh-less verifier read "0 unresolved threads" where the gh path fails closed.
+  const fetchImpl = async () => jsonResponse({ data: null, errors: [{ message: "Bad credentials" }] });
+  await assert.rejects(
+    () => restGraphqlJson("query { x }", {}, { GH_TOKEN: "tok" }, { fetchImpl }),
+    /returned errors: Bad credentials/,
+  );
+});
+
+test("restGraphqlJson fails closed on a 200 response with no data", async () => {
+  const fetchImpl = async () => jsonResponse({ data: null });
+  await assert.rejects(
+    () => restGraphqlJson("query { x }", {}, { GH_TOKEN: "tok" }, { fetchImpl }),
+    /returned no data/,
+  );
+});
+
 test("restFetchPrView maps head/base sha and labels (string or object shape)", async () => {
   const fetchImpl = async () => jsonResponse({
     head: { sha: "abc1234" },
