@@ -294,6 +294,19 @@ For Copilot-first issue flows (`currentState.target.kind=issue`, `ownership=copi
 
 Fail closed if those readiness/assignment facts are missing or invalid.
 
+## Single-contributor ownership gate (resolve-dev-loop-startup)
+
+This is a separate, script-layer gate — not a new value of the `issueAssignmentState` variation parameter above — enforced by `resolve-dev-loop-startup.mjs` before it routes `--issue`/`--pr` toward implementation or continuation. It requires the artifact (issue or PR) to be assigned to the viewer (`gh api user`'s login) and fails closed on anything else:
+
+- assigned to another human → foreign-ownership error naming the assignee(s); no readiness bundle
+- unassigned → not-claimed error naming the exact claim command (`edit-issue.mjs`/`edit-pr.mjs --add-assignee @me`); no readiness bundle
+- assigned to the viewer → proceed
+- assigned to `copilot-swe-agent` → unaffected; the Copilot-first seam above still governs
+- the PR path also fails closed when the PR's linked issue is assigned to another human — the issue owner owns the whole loop
+- the viewer login itself failing to resolve fails closed too (cannot verify or claim ownership)
+
+Claiming happens before this gate is reached, not inside it: `resolve-active-board-item.mjs` (Next Up pickup) claims an unassigned candidate as part of pickup and skips items owned by another human; the issue-intake procedure claims a directly-targeted issue before invoking startup. This keeps unassigned-but-being-worked impossible by construction — two contributors can never both start the same issue or PR.
+
 ## Authoritative gate contract
 
 Authoritative route selection is a two-step boundary for this slice:
