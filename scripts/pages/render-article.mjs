@@ -54,6 +54,7 @@ const SHELL_PATH = path.join(REPO_ROOT, "scripts", "pages", "article-shell.html"
 // Rendered articles: markdown source → derived HTML twin.
 export const RENDERED_ARTICLES = [
   { md: "introducing-dev-loops.md", html: "introducing-dev-loops.html" },
+  { md: "dev-loops-deep-dive.md", html: "dev-loops-deep-dive.html" },
 ];
 
 // Quote-escaping matters even under the strict CSP: rendered text is also
