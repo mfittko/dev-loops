@@ -16,8 +16,9 @@
 //     `heroLede` fills the hero card's lede line.
 //   - A bullet list between `<!-- metrics:start -->` and `<!-- metrics:end -->`
 //     renders as the .metrics card row; each item must be `**<num>** <label>`.
-//   - Every h2 gets a GitHub-style slug id, so in-page `#anchors` written in
-//     the markdown resolve in both renderings. Duplicate h2 slugs throw.
+//   - Every `##` section heading gets a GitHub-style slug id, so in-page
+//     `#anchors` written in the markdown resolve in both renderings.
+//     Duplicate slugs throw. (Part-divider h2s are visual only — no id.)
 //   - The final h2 section renders as the boxed .deeper outro behind an
 //     <hr class="rule" />, unless frontmatter sets `outro: closer` — then the
 //     last h2 renders as a plain section and the article's final paragraph
@@ -143,7 +144,7 @@ function parseBlocks(body) {
     // regions are only ever consumed from inside the mermaid-fence branch
     // below, so a stray one here still hits this throw.
     if (line.trimStart().startsWith("<!--")) {
-      throw new Error(`unsupported HTML comment at line ${i + 1}: ${JSON.stringify(line.trim())} — only the metrics markers and diagram figure regions are recognized`);
+      throw new Error(`unsupported HTML comment at line ${i + 1}: ${JSON.stringify(line.trim())} — only the metrics markers are recognized here; a figure region is valid only immediately after a mermaid fence`);
     }
     if (line.startsWith("```")) {
       const info = line.slice(3).trim();
