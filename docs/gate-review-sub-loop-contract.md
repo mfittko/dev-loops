@@ -242,7 +242,9 @@ manual chore:
   manual clear step**.
 - **Within one round the contamination guard is preserved:** a same-scope + same-head
   re-entry still fails closed (`fresh: false`, exit 1) — that is genuine main-agent /
-  cross-session state bleed.
+  cross-session state bleed. (The one sanctioned same-head exception is the opt-in
+  `--pr-body-fix-retry` overwrite documented below, gated on a matching prefix hash; it is
+  not state bleed.)
 - The orchestrator **MUST NOT** need to manually clear sentinels between rounds, and
   **MUST NOT** clear the sentinels of carried-forward clean angles (Phase 5's re-fan
   re-invokes the surface-touched angles, every angle that produced `findings_present`, and
