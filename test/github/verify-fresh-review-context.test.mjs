@@ -500,3 +500,112 @@ test("head round: a stale pre-round (scope-only) sentinel does NOT block a new h
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+// ---------------------------------------------------------------------------
+// Sanctioned same-head PR-body-fix retry: a PR-body/description-only fix does
+// not change the head SHA (the round key), so a same-scope + same-head
+// re-entry would otherwise always trip the contamination guard. --pr-body-fix-retry
+// permits ONE narrow exception, gated on the given prefix hash matching the
+// existing sentinel's recorded one exactly (proof the seeded briefing bytes
+// were NOT rebuilt, preserving the round's byte-identity invariant).
+// ---------------------------------------------------------------------------
+
+test("--pr-body-fix-retry overwrites an existing sentinel when the prefix hash matches", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "a".repeat(64);
+
+    const first = runScript(["--scope", "findings-present", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(JSON.parse(first.stdout.trim()).fresh, true);
+
+    // Plain re-entry (no flag) still fails closed — the escape hatch is opt-in only.
+    const collision = runScript(["--scope", "findings-present", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(collision.status, 1, collision.stderr);
+    assert.equal(JSON.parse(collision.stdout.trim()).fresh, false);
+
+    const retry = runScript(
+      ["--scope", "findings-present", "--prefix-hash", hash, "--pr-body-fix-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(retry.status, 0, retry.stderr);
+    const retryOutput = JSON.parse(retry.stdout.trim());
+    assert.equal(retryOutput.fresh, true);
+    assert.equal(retryOutput.sentinelCreated, true);
+    assert.equal(retryOutput.prBodyFixRetry, true);
+    assert.equal(retryOutput.prefixHash, hash);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--pr-body-fix-retry fails closed when the prefix hash does not match the existing sentinel's recorded hash", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const first = runScript(["--scope", "findings-present", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+
+    // A DIFFERENT hash means the context-builder actually rebuilt the briefing —
+    // outside this narrow escape hatch's scope; still fail closed.
+    const retry = runScript(
+      ["--scope", "findings-present", "--prefix-hash", "b".repeat(64), "--pr-body-fix-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(retry.status, 1, retry.stderr);
+    const output = JSON.parse(retry.stdout.trim());
+    assert.equal(output.fresh, false);
+    assert.ok(output.reason.includes("DIFFERENT prefix hash"), output.reason);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--pr-body-fix-retry fails closed when the existing sentinel recorded no prefix hash", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    // Existing sentinel with no prefixHash at all (predates GATE-EXEC-BRIEFING-PREFIX
+    // enforcement, or a caller that never passed --prefix-hash/--prefix-file).
+    const first = runScript(["--scope", "findings-present"], { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+
+    const retry = runScript(
+      ["--scope", "findings-present", "--prefix-hash", "a".repeat(64), "--pr-body-fix-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(retry.status, 1, retry.stderr);
+    const output = JSON.parse(retry.stdout.trim());
+    assert.equal(output.fresh, false);
+    assert.ok(output.reason.includes("no prefix hash"), output.reason);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--pr-body-fix-retry requires --prefix-hash or --prefix-file", async () => {
+  const result = runScript(["--scope", "findings-present", "--pr-body-fix-retry"]);
+  assert.equal(result.status, 2, result.stderr);
+  assert.ok(result.stderr.includes("pr-body-fix-retry"), result.stderr);
+});
+
+test("--pr-body-fix-retry on a first run (no existing sentinel) behaves like a normal fresh run", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const result = runScript(
+      ["--scope", "findings-present", "--prefix-hash", "a".repeat(64), "--pr-body-fix-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.fresh, true);
+    assert.equal(output.sentinelCreated, true);
+    // The flag only changes behavior when a collision actually occurs; a plain
+    // first run is unaffected and does not report prBodyFixRetry.
+    assert.equal("prBodyFixRetry" in output, false);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

@@ -242,7 +242,9 @@ manual chore:
   manual clear step**.
 - **Within one round the contamination guard is preserved:** a same-scope + same-head
   re-entry still fails closed (`fresh: false`, exit 1) — that is genuine main-agent /
-  cross-session state bleed.
+  cross-session state bleed. (The one sanctioned same-head exception is the opt-in
+  `--pr-body-fix-retry` overwrite documented below, gated on a matching prefix hash; it is
+  not state bleed.)
 - The orchestrator **MUST NOT** need to manually clear sentinels between rounds, and
   **MUST NOT** clear the sentinels of carried-forward clean angles (Phase 5's re-fan
   re-invokes the surface-touched angles, every angle that produced `findings_present`, and
@@ -250,6 +252,27 @@ manual chore:
   re-invoked angle gets a distinct new-head key, so no cleanup is required).
 - Stale pre-round sentinels (the old scope-only name) never collide with a head-keyed round
   and are simply ignored.
+
+**Sanctioned same-head PR-body-fix retry.** A PR-body/description-only fix (e.g. adding a
+missing acceptance-criteria matrix to satisfy `pr-checklist-matrix`) does not change the head
+SHA, so it earns no new round key on its own — a plain re-invocation of the fixed angle
+collides with its own pass-1 sentinel and fails closed exactly like genuine contamination
+would. `verify-fresh-review-context.mjs --pr-body-fix-retry` is the sanctioned escape hatch
+for exactly this case: it overwrites the existing sentinel for that scope+round, but **only**
+when the given `--prefix-hash`/`--prefix-file` matches the existing sentinel's recorded prefix
+hash **exactly**. An identical hash proves the seeded briefing bytes were NOT rebuilt, so the
+byte-identity invariant (`GATE-EXEC-BRIEFING-PREFIX`) stays fully intact for every other
+sentinel of the same round — the previously-clean angles' sentinels are left untouched and
+still verify against the same on-disk record, so `verify-briefing-prefixes.mjs` needs no full
+re-fan of clean angles and no manual sentinel deletion. A hash mismatch (the context-builder
+genuinely rebuilt the briefing) or an existing sentinel recording no prefix hash still fails
+closed — this flag is a narrow, auditable exception for one documented scenario, never a
+general bypass of the contamination guard. Practically: re-brief the retried reviewer with the
+UNCHANGED, byte-identical invariant prefix (do not re-run `write-gate-context.mjs`) plus an
+angle-specific instruction to fetch the CURRENT PR body/description live (e.g. `gh pr view`)
+rather than trust the prefix's now-stale inlined copy, since the point of the retry is to
+re-check the just-edited description. See `verify-fresh-review-context.mjs --help` for the
+flag's exact semantics and exit codes.
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
