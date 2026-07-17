@@ -237,7 +237,11 @@ function buildIssueInfo(issueNumber, repo, cwd) {
   let startupBundle = null;
   try {
     const startupScript = path.join(REPO_ROOT, "scripts/loop/resolve-dev-loop-startup.mjs");
-    const env = { ...process.env, ...runContextEnv("info-readonly-placeholder") };
+    // info.mjs only previews routing (read-only); it never starts or claims
+    // anything, so it opts out of the single-contributor ownership gate
+    // (#1377) — otherwise this preview would fail closed for any issue the
+    // viewer hasn't claimed yet.
+    const env = { ...process.env, ...runContextEnv("info-readonly-placeholder"), DEVLOOPS_OWNERSHIP_BYPASS: "1" };
     const raw = execFileSync(process.execPath, [startupScript, "--issue", String(issueNumber)], {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env,
     });

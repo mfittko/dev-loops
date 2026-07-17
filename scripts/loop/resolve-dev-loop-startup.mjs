@@ -21,6 +21,12 @@ import {
 } from "@dev-loops/core/loop/async-start-contract";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
+import {
+  OWNERSHIP_STATE,
+  classifyOwnership,
+  ownershipNeedsViewerLogin,
+} from "@dev-loops/core/github/ownership-helpers";
+import { resolveLinkedIssuesFromPr } from "./detect-pr-gate-coordination-state.mjs";
 import { loadDevLoopConfig, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { detectScope } from "./detect-change-scope.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
@@ -257,6 +263,60 @@ function mapGhState(ghState) {
   if (s === "MERGED") return "merged";
   throw new Error(`Unknown GitHub state: "${ghState}"`);
 }
+// Single-contributor ownership gate (issue #1377): resolved once per CLI run
+// and memoized, since both the --issue and --pr paths (and, within the --pr
+// path, the linked-issue check) may need it. `gh api user` failing means we
+// cannot verify OR claim ownership at all, so it fails closed with its own
+// distinct reason rather than falling back to a default.
+let viewerLoginCache = null;
+function resolveViewerLogin(cwd) {
+  if (viewerLoginCache !== null) return viewerLoginCache;
+  let login;
+  try {
+    login = ghJson(["api", "user"], cwd)?.login;
+  } catch (err) {
+    throw new Error(
+      `Unable to resolve the current GitHub viewer login (gh api user failed: ${err instanceof Error ? err.message : String(err)}); cannot verify or claim single-contributor ownership — fail closed, do not start. Check \`gh auth status\` and retry.`,
+    );
+  }
+  if (typeof login !== "string" || login.length === 0) {
+    throw new Error(
+      "gh api user returned no login; cannot verify or claim single-contributor ownership — fail closed, do not start.",
+    );
+  }
+  viewerLoginCache = login;
+  return login;
+}
+// Classify assignees against the viewer, resolving the viewer login only when
+// a non-copilot assignee is present (keeps the copilot flow and the genuinely
+// empty-assignees case immune to viewer-login resolution failures).
+function resolveOwnershipState(assignees, cwd) {
+  const viewerLogin = ownershipNeedsViewerLogin(assignees) ? resolveViewerLogin(cwd) : null;
+  return classifyOwnership(assignees, viewerLogin);
+}
+// Unassigned work is impossible by construction (#1377): the startup resolver
+// requires assigned_to_me and fails closed on anything else. assigned_to_other
+// names the foreign assignee(s); unassigned names the exact claim command so
+// the caller can self-heal (claim, then re-run) instead of guessing.
+function enforceOwnershipGate(ownership, { describeArtifact, claimCommand }) {
+  if (ownership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
+    throw new Error(
+      `${describeArtifact} is assigned to ${ownership.foreignLogins.join(", ")}, not the current viewer; fail closed — do not start. Have the owner unassign it, or pick a different item.`,
+    );
+  }
+  if (ownership.state === OWNERSHIP_STATE.UNASSIGNED) {
+    throw new Error(
+      `${describeArtifact} is not claimed by any contributor; fail closed — do not start. Claim it first: ${claimCommand}`,
+    );
+  }
+}
+// Read-only inspection tools (e.g. `info.mjs`, which previews routing without
+// starting or claiming anything) opt out of the ownership gate with this var —
+// it must NEVER be set on a sanctioned start/continue path.
+const OWNERSHIP_GATE_BYPASS_VAR = "DEVLOOPS_OWNERSHIP_BYPASS";
+function ownershipGateBypassed(env) {
+  return (env?.[OWNERSHIP_GATE_BYPASS_VAR] ?? "").trim() === "1";
+}
 function hasAcSection(body) {
   if (typeof body !== "string" || body.length === 0) return false;
   return /##\s*Acceptance Criteria|##\s*AC\b|###\s*Acceptance Criteria|###\s*AC\b/i.test(body);
@@ -329,7 +389,11 @@ function normalizeConfigInputSource(value) {
   if (value === "tracker") return "tracker";
   return "tracker";
 }
-export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource }) {
+export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, env = process.env }) {
+  // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
+  // (PR + linked-issue checks); reset it per invocation so a long-lived
+  // process (or test) never reuses a stale login across resolutions.
+  viewerLoginCache = null;
   let repoRoot = cwd;
   try {
     repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
@@ -400,16 +464,42 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       issueReadiness = "needs_clarification";
       warnings.push(`issueReadiness: using default "${issueReadiness}" — gh issue view failed`);
     }
-    let issueAssignmentState;
+    // Single-contributor ownership gate (#1377): a failed read defaults to an
+    // empty assignee list (today's warn+default posture for the READ), but the
+    // ownership GATE below then applies uniformly regardless of why the issue
+    // looks unassigned — resolve-dev-loop-startup is the one seam every
+    // implementation route passes through, so "unassigned but being worked" is
+    // impossible by construction.
+    let assignees = [];
     try {
       const assigneesJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "assignees"], repoRoot);
-      issueAssignmentState = (assigneesJson.assignees || []).some(a => a.login === "copilot-swe-agent")
-        ? "assigned_to_copilot"
-        : "unassigned";
+      assignees = assigneesJson.assignees || [];
     } catch {
-      issueAssignmentState = "unassigned";
-      warnings.push(`issueAssignmentState: using default "${issueAssignmentState}" — gh issue view failed`);
+      warnings.push('issueAssignmentState: using default "unassigned" — gh issue view failed');
     }
+    // Bypassed (read-only inspection, e.g. info.mjs): classify without ever
+    // resolving the viewer login, so a preview never needs `gh api user` or
+    // fails on its absence.
+    const issueOwnershipGateActive = !ownershipGateBypassed(env);
+    const issueOwnership = issueOwnershipGateActive
+      ? resolveOwnershipState(assignees, repoRoot)
+      : classifyOwnership(assignees, null);
+    if (issueOwnershipGateActive) {
+      enforceOwnershipGate(issueOwnership, {
+        describeArtifact: `Issue #${issue}`,
+        claimCommand: `node scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
+      });
+    }
+    // Only assigned_to_me and assigned_to_copilot pass the gate above. The pure
+    // routing evaluator's issueAssignmentState authoritative issue-state input
+    // (not a variation parameter — see public-dev-loop-contract.md) only
+    // distinguishes copilot vs not-copilot (DEV_LOOP_ISSUE_ASSIGNMENT_STATE has
+    // no assigned_to_me value) — assigned_to_me is passed through as
+    // "unassigned" for that purpose; the gate above already proved the viewer
+    // is the sole human owner.
+    const issueAssignmentState = issueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT
+      ? "assigned_to_copilot"
+      : "unassigned";
     const loopState = "issue_intake_start";
     return {
       intent: "start_issue_locally",
@@ -434,11 +524,57 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     };
   }
   let artifactState;
+  let prAssignees = [];
+  let linkedIssueNumbers = [];
   try {
-    const prJson = ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt"], repoRoot);
+    const prJson = ghJson(
+      ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,assignees,closingIssuesReferences,body"],
+      repoRoot,
+    );
     artifactState = prJson.mergedAt ? "merged" : mapGhState(prJson.state);
+    prAssignees = prJson.assignees || [];
+    linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
   } catch {
     artifactState = "open";
+  }
+  // Single-contributor ownership gate (#1377): same fail-closed shape as the
+  // --issue path (assigned_to_other -> foreign-ownership error, unassigned ->
+  // not-claimed error naming edit-pr.mjs). A failed read defaults to an empty
+  // assignee list, which the gate treats as unassigned — consistent with the
+  // --issue path's posture. Bypassed (read-only inspection): classify without
+  // resolving the viewer login, mirroring the --issue path above.
+  const prOwnershipGateActive = !ownershipGateBypassed(env);
+  const prOwnership = prOwnershipGateActive
+    ? resolveOwnershipState(prAssignees, repoRoot)
+    : classifyOwnership(prAssignees, null);
+  if (prOwnershipGateActive) {
+    enforceOwnershipGate(prOwnership, {
+      describeArtifact: `PR #${pr}`,
+      claimCommand: `node scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
+    });
+    // A PR whose linked issue is foreign-owned is foreign too — the issue owner
+    // owns the whole loop. This only checks for a FOREIGN linked issue (not
+    // unassigned): the PR's own ownership above already gates the unclaimed
+    // case, and an unassigned linked issue is not evidence anyone else owns it.
+    // Copilot-assigned PRs short-circuit: the Copilot-first flow governs them,
+    // and their path stays immune to viewer-login resolution entirely.
+    for (const linkedIssueNumber of prOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT ? [] : linkedIssueNumbers) {
+      let linkedIssueAssignees;
+      try {
+        const linkedIssueJson = ghJson(["issue", "view", String(linkedIssueNumber), "--repo", repo, "--json", "assignees"], repoRoot);
+        linkedIssueAssignees = linkedIssueJson.assignees || [];
+      } catch {
+        // Warn-on-failure posture, same as other reads: an unreadable linked
+        // issue cannot block continuation on its own.
+        continue;
+      }
+      const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot);
+      if (linkedIssueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
+        throw new Error(
+          `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.`,
+        );
+      }
+    }
   }
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);
   return {
@@ -888,6 +1024,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       cwd: sessionCwd,
       targetPreference,
       inputSource,
+      env: adapter.getEnv(),
     });
     // --lightweight modifier (issue #1025): the PR body becomes the
     // spec-of-record for this local session — no phase/plan doc minted.
@@ -907,6 +1044,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       pr: options.pr,
       cwd: sessionCwd,
       targetPreference,
+      env: adapter.getEnv(),
     });
   }
   const result = buildResolveDevLoopStartupResult(input, { asyncStartMode, adapter });
