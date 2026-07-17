@@ -28,7 +28,9 @@ after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 // claimed concurrently. Falls back to `assignees` when no sequence is given.
 // `viewerLoginError` forces `gh api user` to fail (viewer-login resolution
 // failure). `claims` (mutated in place) records every `issue/pr edit
-// --add-assignee|--remove-assignee @me` call as `{kind, number, action}`.
+// --add-assignee|--remove-assignee` call as `{kind, number, action, logins}`
+// (`logins` is `@me` for a self claim/unclaim, or the actual login(s) the
+// tiebreak WINNER removes from a contested claim).
 function boardRunChild({
   columns = {},
   itemsError = false,
@@ -86,8 +88,11 @@ function boardRunChild({
     }
     if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "edit") {
       const number = Number(argv[2]);
-      const action = argv.includes("--remove-assignee") ? "remove-assignee" : "add-assignee";
-      claims.push({ kind: argv[0], number, action });
+      const loginsAfterFlag = (flag) => argv.reduce((acc, a, i) => (argv[i - 1] === flag ? [...acc, a] : acc), []);
+      const removed = loginsAfterFlag("--remove-assignee");
+      const added = loginsAfterFlag("--add-assignee");
+      const action = removed.length > 0 ? "remove-assignee" : "add-assignee";
+      claims.push({ kind: argv[0], number, action, logins: removed.length > 0 ? removed : added });
       return { code: 0, stdout: "{}", stderr: "" };
     }
     // items query — fail only the second one (Next Up), leaving In Progress OK
@@ -207,7 +212,7 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
       claims,
     }));
     assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
-    assert.deepEqual(claims, [{ kind: "issue", number: 7, action: "add-assignee" }]);
+    assert.deepEqual(claims, [{ kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] }]);
   });
 
   it("does NOT claim an item already assigned to the viewer", async () => {
@@ -237,7 +242,7 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
     assert.equal(r.source, "next-up");
     assert.equal(r.skipped.length, 1);
     assert.match(r.skipped[0].reason, /issue #7 \(Foreign\) is assigned to someone-else, not the current viewer/);
-    assert.deepEqual(claims, [{ kind: "issue", number: 8, action: "add-assignee" }]);
+    assert.deepEqual(claims, [{ kind: "issue", number: 8, action: "add-assignee", logins: ["@me"] }]);
   });
 
   it("fails closed when every Next Up item is owned by another human", async () => {
@@ -292,7 +297,7 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
     assert.equal(apiUserCalls, 1);
   });
 
-  it("post-claim re-verify: claim contested but the viewer wins the deterministic tiebreak -> proceeds, no self-unassign", async () => {
+  it("post-claim re-verify: claim contested but the viewer wins the deterministic tiebreak -> proceeds and removes the loser's login (claim_contested_won_tiebreak)", async () => {
     const claims = [];
     const r = await runArgs(boardRunChild({
       columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
@@ -303,8 +308,18 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
       viewerLogin: "test-viewer",
       claims,
     }));
-    assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
-    assert.deepEqual(claims, [{ kind: "issue", number: 7, action: "add-assignee" }]);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.target, { kind: "issue", number: 7 });
+    assert.equal(r.source, "next-up");
+    assert.match(r.claimNote, /issue #7 \(Head\) claim was contested by zzz-other/);
+    assert.match(r.claimNote, /claim_contested_won_tiebreak/);
+    // Convergence: the winner removes the raced-past contender so the item
+    // leaves pickup solely-owned — that contender's later startup re-read
+    // then sees only the winner, not itself, and fails closed as foreign.
+    assert.deepEqual(claims, [
+      { kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] },
+      { kind: "issue", number: 7, action: "remove-assignee", logins: ["zzz-other"] },
+    ]);
   });
 
   it("post-claim re-verify: claim contested and the viewer LOSES the tiebreak -> self-unassigns, skips with claim_contested_lost_tiebreak, and picks the next item", async () => {
@@ -326,16 +341,18 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
     assert.match(r.skipped[0].reason, /issue #7 \(Contested\) claim contested by aaa-other/);
     assert.match(r.skipped[0].reason, /claim_contested_lost_tiebreak/);
     assert.deepEqual(claims, [
-      { kind: "issue", number: 7, action: "add-assignee" },
-      { kind: "issue", number: 7, action: "remove-assignee" },
-      { kind: "issue", number: 8, action: "add-assignee" },
+      { kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] },
+      { kind: "issue", number: 7, action: "remove-assignee", logins: ["@me"] },
+      { kind: "issue", number: 8, action: "add-assignee", logins: ["@me"] },
     ]);
   });
 
-  it("post-claim re-read failure fails closed (does not silently trust the claim call alone)", async () => {
+  it("post-claim re-read failure fails closed AND best-effort self-unclaims (no orphaned claim left behind)", async () => {
+    const claims = [];
     const child = boardRunChild({
       columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
       assignees: { 7: [] },
+      claims,
     });
     let viewCallsFor7 = 0;
     const wrapped = async (cmd, argv) => {
@@ -348,6 +365,11 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
       return child(cmd, argv);
     };
     await assert.rejects(() => runArgs(wrapped), /gh issue view 7 failed/);
+    // Original error still fails the run closed, but the cleanup attempt ran.
+    assert.deepEqual(claims, [
+      { kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] },
+      { kind: "issue", number: 7, action: "remove-assignee", logins: ["@me"] },
+    ]);
   });
 
   it("fails closed when the viewer login cannot be resolved (distinct reason from an assignee-read failure)", async () => {
@@ -359,6 +381,76 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
       })),
       /Unable to resolve the current GitHub viewer login/,
     );
+  });
+
+  it("tiebreak compares logins case-insensitively on BOTH sides (mixed-case viewer AND contender)", async () => {
+    const claims = [];
+    // Naive (non-lowercased) string comparison would sort "Viewer-Z" before
+    // "apple-A" (uppercase 'V' < lowercase 'a' in ASCII) — i.e. the viewer
+    // would incorrectly win. Case-folded, "apple-a" < "viewer-z", so the
+    // OTHER contender wins and the viewer must self-unassign.
+    const r = await runArgs(boardRunChild({
+      columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      assigneesSequence: { 7: [[], [{ login: "Viewer-Z" }, { login: "apple-A" }]] },
+      viewerLogin: "Viewer-Z",
+      claims,
+    }));
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /claim_contested_lost_tiebreak/);
+    assert.deepEqual(claims, [
+      { kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] },
+      { kind: "issue", number: 7, action: "remove-assignee", logins: ["@me"] },
+    ]);
+  });
+
+  it("orphaned-claim cleanup: the tiebreak-loser's own unclaim call failing still fails closed, with a best-effort retry", async () => {
+    const claims = [];
+    const child = boardRunChild({
+      columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      assigneesSequence: { 7: [[], [{ login: "test-viewer" }, { login: "aaa-other" }]] },
+      viewerLogin: "test-viewer",
+      claims,
+    });
+    let removeCallsFor7 = 0;
+    const wrapped = async (cmd, argv) => {
+      if (argv[0] === "issue" && argv[1] === "edit" && Number(argv[2]) === 7 && argv.includes("--remove-assignee")) {
+        removeCallsFor7 += 1;
+        if (removeCallsFor7 === 1) {
+          return { code: 1, stdout: "", stderr: "boom: gh outage" };
+        }
+      }
+      return child(cmd, argv);
+    };
+    await assert.rejects(() => runArgs(wrapped), /gh issue edit failed/);
+    // First unclaim attempt failed (not recorded by the stub since it errored
+    // before the stub could record it); the best-effort retry succeeded.
+    assert.deepEqual(claims, [
+      { kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] },
+      { kind: "issue", number: 7, action: "remove-assignee", logins: ["@me"] },
+    ]);
+  });
+
+  it("orphaned-claim cleanup: the tiebreak-winner's foreign-login removal failing self-unassigns and still fails closed", async () => {
+    const claims = [];
+    const child = boardRunChild({
+      columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      assigneesSequence: { 7: [[], [{ login: "test-viewer" }, { login: "zzz-other" }]] },
+      viewerLogin: "test-viewer",
+      claims,
+    });
+    const wrapped = async (cmd, argv) => {
+      if (argv[0] === "issue" && argv[1] === "edit" && Number(argv[2]) === 7 && argv.includes("--remove-assignee") && argv.includes("zzz-other")) {
+        return { code: 1, stdout: "", stderr: "boom: gh outage" };
+      }
+      return child(cmd, argv);
+    };
+    await assert.rejects(() => runArgs(wrapped), /gh issue edit failed/);
+    // The winner's removal of the foreign login failed; best-effort cleanup
+    // then self-unassigns so this run doesn't strand the viewer's own claim.
+    assert.deepEqual(claims, [
+      { kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] },
+      { kind: "issue", number: 7, action: "remove-assignee", logins: ["@me"] },
+    ]);
   });
 });
 
