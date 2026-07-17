@@ -23,7 +23,6 @@ import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
 import {
   OWNERSHIP_STATE,
-  OwnershipGateFailure,
   classifyOwnership,
   ownershipNeedsViewerLogin,
 } from "@dev-loops/core/github/ownership-helpers";
@@ -276,12 +275,12 @@ function resolveViewerLogin(cwd) {
   try {
     login = ghJson(["api", "user"], cwd)?.login;
   } catch (err) {
-    throw new OwnershipGateFailure(
+    throw new Error(
       `Unable to resolve the current GitHub viewer login (gh api user failed: ${err instanceof Error ? err.message : String(err)}); cannot verify or claim single-contributor ownership — fail closed, do not start. Check \`gh auth status\` and retry.`,
     );
   }
   if (typeof login !== "string" || login.length === 0) {
-    throw new OwnershipGateFailure(
+    throw new Error(
       "gh api user returned no login; cannot verify or claim single-contributor ownership — fail closed, do not start.",
     );
   }
@@ -301,12 +300,12 @@ function resolveOwnershipState(assignees, cwd) {
 // the caller can self-heal (claim, then re-run) instead of guessing.
 function enforceOwnershipGate(ownership, { describeArtifact, claimCommand }) {
   if (ownership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
-    throw new OwnershipGateFailure(
+    throw new Error(
       `${describeArtifact} is assigned to ${ownership.foreignLogins.join(", ")}, not the current viewer; fail closed — do not start. Have the owner unassign it, or pick a different item.`,
     );
   }
   if (ownership.state === OWNERSHIP_STATE.UNASSIGNED) {
-    throw new OwnershipGateFailure(
+    throw new Error(
       `${describeArtifact} is not claimed by any contributor; fail closed — do not start. Claim it first: ${claimCommand}`,
     );
   }
@@ -571,7 +570,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       }
       const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot);
       if (linkedIssueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
-        throw new OwnershipGateFailure(
+        throw new Error(
           `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.`,
         );
       }

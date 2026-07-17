@@ -17,14 +17,6 @@ export const OWNERSHIP_STATE = Object.freeze({
 });
 
 /**
- * Fail-closed ownership-gate error: the caller could not verify or claim
- * single-contributor ownership of an issue/PR (foreign assignee, unclaimed
- * artifact, or an unresolved viewer login). Throw this to propagate a
- * distinct, remedy-bearing reason all the way to a CLI's exit-1 error path.
- */
-export class OwnershipGateFailure extends Error {}
-
-/**
  * Classify assignee ownership of an issue/PR relative to the viewer.
  *
  * Copilot assignment is checked FIRST and short-circuits before any human

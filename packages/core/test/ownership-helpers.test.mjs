@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   OWNERSHIP_STATE,
-  OwnershipGateFailure,
   classifyOwnership,
   ownershipNeedsViewerLogin,
 } from "../src/github/ownership-helpers.mjs";
@@ -71,11 +70,4 @@ test("classifyOwnership: login comparison is case-insensitive (assigned_to_me)",
 test("classifyOwnership: case-insensitive co-assignment is still contested (not sole)", () => {
   const result = classifyOwnership([{ login: "OctoCat" }, { login: "someone-else" }], "octocat");
   assert.deepEqual(result, { state: OWNERSHIP_STATE.ASSIGNED_TO_OTHER, foreignLogins: ["someone-else"] });
-});
-
-test("OwnershipGateFailure is a distinguishable Error subclass", () => {
-  const err = new OwnershipGateFailure("foreign owner");
-  assert.ok(err instanceof Error);
-  assert.ok(err instanceof OwnershipGateFailure);
-  assert.equal(err.message, "foreign owner");
 });
