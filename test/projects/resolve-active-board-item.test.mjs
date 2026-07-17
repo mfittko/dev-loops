@@ -347,6 +347,32 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
     ]);
   });
 
+  it("post-claim re-read shows ONLY another human (our own claim not yet visible) -> not our item to arbitrate: no tiebreak, no removal, best-effort self-unclaim, fails closed with claim_not_visible_post_read", async () => {
+    const claims = [];
+    const r = await runArgs(boardRunChild({
+      columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      // First read: unassigned -> claim. Second read (post-claim re-verify):
+      // read-after-write lag / a degraded claim means OUR OWN @me never shows
+      // up — only "someone-else" is visible. This must NOT be treated as a
+      // contest the viewer is part of.
+      assigneesSequence: { 7: [[], [{ login: "someone-else" }]] },
+      viewerLogin: "test-viewer",
+      claims,
+    }));
+    assert.equal(r.ok, false);
+    assert.equal(r.source, "next-up");
+    assert.equal(r.skipped.length, 1);
+    assert.match(r.skipped[0].reason, /issue #7 \(Head\) claim was not visible on re-read \(only someone-else showed up\)/);
+    assert.match(r.skipped[0].reason, /claim_not_visible_post_read/);
+    // No --remove-assignee call ever targets "someone-else" — the winner-side
+    // removal path must never fire here. Only our own claim + a best-effort
+    // self-unclaim of it.
+    assert.deepEqual(claims, [
+      { kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] },
+      { kind: "issue", number: 7, action: "remove-assignee", logins: ["@me"] },
+    ]);
+  });
+
   it("post-claim re-read failure fails closed AND best-effort self-unclaims (no orphaned claim left behind)", async () => {
     const claims = [];
     const child = boardRunChild({

@@ -10,13 +10,19 @@
 //     Next Up has items        -> single-contributor ownership gate (#1377) scans
 //                                  Next Up by POSITION ascending, claims (@me) an
 //                                  unassigned item, RE-READS it (the claim is not
-//                                  compare-and-swap) and resolves a contested
-//                                  claim with a deterministic tiebreak: the loser
-//                                  self-unassigns and skips (`claim_contested_lost_
-//                                  tiebreak`); the winner removes the loser
-//                                  login(s) so the item converges to solely-owned
-//                                  regardless of race order (`claimNote:
-//                                  claim_contested_won_tiebreak`). SKIPS items
+//                                  compare-and-swap) and, ONLY when the viewer's
+//                                  own claim is actually visible in that re-read,
+//                                  resolves a genuine contest with a deterministic
+//                                  tiebreak: the loser self-unassigns and skips
+//                                  (`claim_contested_lost_tiebreak`); the winner
+//                                  removes the loser login(s) so the item converges
+//                                  to solely-owned regardless of race order
+//                                  (`claimNote: claim_contested_won_tiebreak`). If
+//                                  the re-read shows only OTHER humans (our own
+//                                  claim not yet visible), it is not ours to
+//                                  arbitrate: best-effort self-unclaim and skip
+//                                  without touching their assignment
+//                                  (`claim_not_visible_post_read`). SKIPS items
 //                                  owned by another human (reported in `skipped`)
 //                                  -> { ok: true, target: {kind,number},
 //                                  source: "next-up", skipped?: [...], claimNote?: "..." }
@@ -323,6 +329,25 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
       }
       const postClaimOwnership = classifyOwnership(postClaimAssignees, viewerLogin);
       if (postClaimOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
+        // ASSIGNED_TO_OTHER only means "some non-viewer human is present" — it
+        // does NOT guarantee OUR OWN claim is actually visible in this read
+        // (read-after-write lag, a silently-degraded claim, a permissions
+        // quirk). If the viewer isn't in postClaimAssignees, this isn't a
+        // contest we're part of: don't tiebreak, don't touch the other
+        // human's assignment. Just try to withdraw our own (possibly
+        // lingering) claim and fail closed on this candidate.
+        const viewerLoginLower = viewerLogin.toLowerCase();
+        const viewerVisible = postClaimAssignees.some(
+          (a) => typeof a?.login === "string" && a.login.toLowerCase() === viewerLoginLower,
+        );
+        if (!viewerVisible) {
+          await bestEffortSelfUnclaim(target, args.repo, { env, runChild });
+          skipped.push({
+            target,
+            reason: `${describeItem(item)} claim was not visible on re-read (only ${postClaimOwnership.foreignLogins.join(", ")} showed up) — not our item to arbitrate, skipped (claim_not_visible_post_read).`,
+          });
+          continue;
+        }
         const winner = pickTiebreakWinner([viewerLogin, ...postClaimOwnership.foreignLogins]);
         if (winner.toLowerCase() !== viewerLogin.toLowerCase()) {
           // Lost: back off so the winner ends up the sole assignee. The
