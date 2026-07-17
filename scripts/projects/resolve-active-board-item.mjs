@@ -25,18 +25,20 @@
 //                                  owned by another human (reported in `skipped`)
 //                                  -> { ok: true, target: {kind,number},
 //                                  source: "next-up", skipped?: [...], claimNote?: "..." }
-//     HARD guarantee: no two contributors ever both proceed past their own
-//     startup gate on the same artifact (resolve-dev-loop-startup.mjs
-//     re-derives sole ownership from scratch and fails closed on any
-//     contested/foreign state) — double work never happens. Convergence to
-//     solely-owned holds for the common races (sequential, or either racer's
-//     re-read observing the contention, which the tiebreak above self-heals).
-//     Rare residual (GitHub assignment has no compare-and-swap): if BOTH
-//     racers' re-reads land before the other's write propagates, neither
-//     observes the contention and the item is left safely co-assigned — both
-//     sides still fail closed at their own startup gate, but it needs a
-//     human to unassign one login (see the no-lease/no-automatic-reclamation
-//     non-goal).
+//     Every ownership read that observes contention fails closed, so a
+//     contributor is stopped the moment contention is visible to it — making
+//     two contributors both proceeding improbable and short-lived, NOT
+//     impossible (assignment has no compare-and-swap; a "proceed" can't be
+//     un-done). Two accepted residuals: (1) racer A completes claim -> both
+//     re-reads (sole) -> proceeds before B's claim lands; B then wins the
+//     tiebreak and removes A, but cannot retract A's already-started work, so
+//     both proceed in that narrow window (self-corrects on A's next read).
+//     (2) if BOTH racers' re-reads land before the other's write propagates,
+//     neither observes the contention and the item is left safely co-assigned
+//     — both fail closed at their own startup gate, released by a manual
+//     unassign (the no-lease/no-automatic-reclamation non-goal). Convergence
+//     to solely-owned holds for the common races (sequential, or either
+//     racer's re-read observing the contention, which the tiebreak self-heals).
 //     all Next Up items foreign -> { ok: false, reason: "...", source: "next-up", skipped: [...] }
 //     Next Up empty            -> { ok: false, reason: <canonical empty-queue msg>, source: "next-up" }
 //     Next Up query errors     -> propagates (fail closed — surface it, no fallback)
