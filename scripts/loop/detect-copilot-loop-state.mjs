@@ -22,10 +22,13 @@ import {
   summarizeLoopInterpretation,
 } from "@dev-loops/core/loop/copilot-loop-state";
 import {
-  normalizeStatusCheckRollupContract,
   summarizeHeadScopedCheckRunsSignal,
   normalizeHeadScopedCommitStatus,
   normalizeHeadScopedCiContract,
+  deriveLoopCiStatusFromRollup,
+  partitionEntriesByCheckName,
+  promoteExcludedCleanCiStatus,
+  LOOP_DERIVED_CI_CHECK_NAME,
 } from "@dev-loops/core/loop/copilot-ci-status";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -226,24 +229,37 @@ async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }
   ]);
   let checkRunsSignal = null;
   let checkRunsCount = null;
+  // Failing-ness of the excluded gate-evidence run (#1358), tracked separately
+  // from the pre-existing PR-visibility exclusion (#740) so only OUR
+  // exclusion can promote the merged status to crediblyGreen below.
+  let loopDerivedFailureDetails = [];
   if (checkRunsResult.code === 0) {
     try {
       const payload = JSON.parse(checkRunsResult.stdout);
       if (Array.isArray(payload?.check_runs)) {
+        const { matched: loopDerivedRuns, rest: nonLoopDerivedRuns } =
+          partitionEntriesByCheckName(payload.check_runs, LOOP_DERIVED_CI_CHECK_NAME);
+        loopDerivedFailureDetails = summarizeHeadScopedCheckRunsSignal({ check_runs: loopDerivedRuns }).status === "failure"
+          ? [LOOP_DERIVED_CI_CHECK_NAME]
+          : [];
         const visibleSet = prVisibleCheckNames?.length > 0 ? new Set(prVisibleCheckNames) : null;
         const visibleRuns = visibleSet
-          ? payload.check_runs.filter((run) => !run.name || visibleSet.has(run.name))
-          : payload.check_runs;
+          ? nonLoopDerivedRuns.filter((run) => !run.name || visibleSet.has(run.name))
+          : nonLoopDerivedRuns;
         // Use visible runs for the status signal, but preserve the full-set
         // unsupportedCompleted flag so hidden check-runs still contribute to
         // the cautious none override (#740).
         const visibleSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: visibleRuns });
-        const fullSignal = summarizeHeadScopedCheckRunsSignal(payload);
+        const fullSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: nonLoopDerivedRuns });
         const excludedRuns = visibleSet
-          ? payload.check_runs.filter((run) => run.name && !visibleSet.has(run.name))
+          ? nonLoopDerivedRuns.filter((run) => run.name && !visibleSet.has(run.name))
           : [];
         const excludedSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: excludedRuns });
-        checkRunsSignal = { ...visibleSignal, unsupportedCompleted: fullSignal.unsupportedCompleted, excludedFailureDetails: excludedSignal.failureDetails ?? [] };
+        checkRunsSignal = {
+          ...visibleSignal,
+          unsupportedCompleted: fullSignal.unsupportedCompleted,
+          excludedFailureDetails: [...(excludedSignal.failureDetails ?? []), ...loopDerivedFailureDetails],
+        };
         checkRunsCount = payload.check_runs.length;
       }
     } catch {
@@ -268,12 +284,13 @@ async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }
   if (checkRunsSignal === null && commitStatus === null) {
     return null;
   }
+  const mergedStatus = normalizeHeadScopedCiContract({
+    checkRunsStatus: checkRunsSignal?.status ?? "none",
+    commitStatus: commitStatus ?? "none",
+    checkRunsUnsupportedCompleted: checkRunsSignal?.unsupportedCompleted ?? false,
+  }).overallStatus;
   return {
-    status: normalizeHeadScopedCiContract({
-      checkRunsStatus: checkRunsSignal?.status ?? "none",
-      commitStatus: commitStatus ?? "none",
-      checkRunsUnsupportedCompleted: checkRunsSignal?.unsupportedCompleted ?? false,
-    }).overallStatus,
+    status: promoteExcludedCleanCiStatus(mergedStatus, loopDerivedFailureDetails),
     observedZeroSuitesAndStatuses: checkRunsCount === 0 && statusesCount === 0,
     failureDetails: checkRunsSignal?.failureDetails ?? [],
     excludedFailureDetails: checkRunsSignal?.excludedFailureDetails ?? [],
@@ -347,7 +364,11 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     ? prData.headRefOid.trim()
     : null;
   const reviewSummary = summarizeCopilotReviews(prData.reviews, { headSha: prHeadSha, draftGateResetAtMs });
-  const fallbackCiStatus = normalizeStatusCheckRollupContract(prData.statusCheckRollup).overallStatus;
+  // Exclude the loop's own gate-evidence check (#1358): its conclusion is derived
+  // from the loop's own progress, so it must never block the pre_approval step
+  // that would turn it green.
+  const fallbackDerivation = deriveLoopCiStatusFromRollup(prData.statusCheckRollup);
+  const fallbackCiStatus = fallbackDerivation.status;
   let copilotReviewRequestStatus;
   if (reviewRequestStatusOverride !== undefined) {
     copilotReviewRequestStatus = reviewRequestStatusOverride;
@@ -397,7 +418,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   const prVisibleCheckNames = extractPrVisibleCheckNames(prData.statusCheckRollup);
   let currentHeadCiStatus = fallbackCiStatus;
   let failureDetails = [];
-  let excludedFailureDetails = [];
+  let excludedFailureDetails = fallbackDerivation.excludedFailureDetails;
   if (shouldRefreshCurrentHeadCi) {
     const refreshed = await fetchCurrentHeadCiEvidence({ repo, headSha: prHeadSha, prVisibleCheckNames }, { env, ghCommand, runChild });
     currentHeadCiStatus = refreshed?.status ?? "none";

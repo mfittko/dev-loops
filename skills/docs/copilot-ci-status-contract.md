@@ -12,8 +12,13 @@ Implementation surface:
 
 - `normalizeStatusCheckRollupContract(statusCheckRollup)` — normalizes the PR `statusCheckRollup` snapshot from `gh pr view`
 - `normalizeHeadScopedCiContract({ checkRunsStatus, commitStatus })` — normalizes current-head refresh inputs after explicit `check-runs` / commit-status probes
+- `deriveLoopCiStatusFromRollup(statusCheckRollup)` — same rollup input as above, but excludes the loop's own `LOOP_DERIVED_CI_CHECK_NAME` (`gate-evidence`) check before computing the status, returning `{ status, excludedFailureDetails }`. `status` is `"crediblyGreen"` (never masked as a plain `"success"`) when every OTHER check is green and `gate-evidence` was the only excluded failure; a genuinely failing check right beside it still yields `"failure"`.
 
-Both entry points return the same machine-readable contract shape.
+Both `normalizeStatusCheckRollupContract` and `normalizeHeadScopedCiContract` return the same machine-readable contract shape.
+
+## Loop-derived check exclusion
+
+`gate-evidence` (`.github/workflows/gate-evidence.yml`) is a server-side check whose conclusion is DERIVED from the loop's own progress (a clean current-head `pre_approval_gate` verdict) — not an independent build/test signal. The dev-loop must never let it block the very step (posting `pre_approval_gate`) that would turn it green. `LOOP_DERIVED_CI_CHECK_NAME` is the single exported constant naming this check; `partitionEntriesByCheckName` and `promoteExcludedCleanCiStatus` are the shared primitives `deriveLoopCiStatusFromRollup` composes from, and the check-runs-shaped equivalent in `scripts/loop/detect-copilot-loop-state.mjs` reuses the same constant and promotion rule so the fallback (rollup) and refresh (check-runs) derivation paths never disagree.
 
 ## Inputs
 

@@ -12,7 +12,7 @@
  * becomes an explicit bounded input (agentFixStatus) rather than hidden orchestration behavior.
  */
 
-import { normalizeStatusCheckRollupContract } from "./copilot-ci-status.mjs";
+import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
 
 /** Stable state name constants for the async Copilot review/fix loop. */
 export const STATE = Object.freeze({
@@ -191,7 +191,7 @@ export function isCopilotRoundCapReached({ copilotReviewRoundCount, maxCopilotRo
 }
 
 export function normalizeCiStatus(rollup) {
-  return normalizeStatusCheckRollupContract(rollup).overallStatus;
+  return deriveLoopCiStatusFromRollup(rollup).status;
 }
 
 export function buildSnapshotFromPrFacts({
@@ -206,11 +206,15 @@ export function buildSnapshotFromPrFacts({
   ciStatus,
   lastCopilotRoundMaxSignal = null,
   failureDetails = [],
-  excludedFailureDetails = [],
+  excludedFailureDetails,
 }) {
   const prState = typeof prData?.state === "string" ? prData.state.toUpperCase() : "OPEN";
   const prMerged = prState === "MERGED";
   const prClosed = prState === "CLOSED";
+  // Default derivation excludes the loop's own gate-evidence check (#1358) so a
+  // caller that never threads an explicit ciStatus (e.g. gate-coordination
+  // detection) still never treats it as a blocking CI failure.
+  const rollupDerivation = deriveLoopCiStatusFromRollup(prData?.statusCheckRollup);
 
   return normalizeSnapshot({
     prExists: true,
@@ -225,9 +229,9 @@ export function buildSnapshotFromPrFacts({
     actionableThreadCount,
     copilotReviewRoundCount,
     lastCopilotRoundMaxSignal,
-    ciStatus: ciStatus ?? normalizeCiStatus(prData?.statusCheckRollup),
+    ciStatus: ciStatus ?? rollupDerivation.status,
     failureDetails,
-    excludedFailureDetails,
+    excludedFailureDetails: excludedFailureDetails ?? rollupDerivation.excludedFailureDetails,
   });
 }
 
