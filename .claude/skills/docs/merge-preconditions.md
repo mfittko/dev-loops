@@ -52,6 +52,33 @@ Before merge, ALL of the following MUST hold:
 
 > Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
 
+### Items 3 and 4 apply to every path, not just the dev-loop tooling
+
+Items 3 and 4 (clean `draft_gate` / current-head `pre_approval_gate` verdicts) are
+enforced two ways, and both must be closed for the precondition to hold in
+practice:
+
+- **Client-side:** the PreToolUse Bash hook blocks an ungated `gh pr ready` /
+  `gh pr merge` invocation, and `detect-checkpoint-evidence.mjs` is what the
+  dev-loop tooling calls before merging.
+- **Server-side:** the `gate-evidence` required status check
+  (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
+  GitHub's own token for every non-draft PR. This is what actually closes the
+  ready/merge bypass — a direct GitHub API call (MCP/REST, web UI, a raw `gh`
+  invocation outside the hook) skips the client-side path entirely but still
+  cannot merge without a green `gate-evidence` check once branch protection on
+  `main` requires it.
+
+The server-side check verifies the same visible, comment-derived verdict fields
+the client-side tooling does (including the light-mode inline exception,
+[Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs)),
+via `--skip-fanout-ledger-check`. It does **not** re-verify the deeper fan-out
+findings-log ledger/provenance layer (`gates.requireFanoutEvidence` /
+`requireFanoutProvenance`): that evidence lives in a gitignored, worktree-local
+`tmp/` file only the machine that ran the review has on disk, so a stateless CI
+runner can never see it. That layer remains client-side/self-reported-only — the
+same "not un-forgeable" caveat the sub-loop contract already documents.
+
 ### Evidence writes and `gh pr merge` MUST be separate tool calls (#1172)
 
 The PreToolUse Bash gate evaluates `gh pr merge` **before** the Bash tool call executes. A compound

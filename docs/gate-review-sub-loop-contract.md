@@ -502,6 +502,17 @@ does NOT claim un-forgeable enforcement. Un-forgeable recording (the harness att
 actually ran each per-angle review) is the Pi-harness bridge — the subagent tool honored
 at child depth (see #1084).
 
+This provenance layer is distinct from the underlying gate verdict itself. The verdict
+comment's clean `draft_gate`/`pre_approval_gate` presence on the current head IS enforced
+server-side — the `gate-evidence` required status check
+(`.github/workflows/gate-evidence.yml`, [Merge preconditions](../skills/docs/merge-preconditions.md#items-3-and-4-apply-to-every-path-not-just-the-dev-loop-tooling))
+re-runs `detect-checkpoint-evidence.mjs --skip-fanout-ledger-check` on GitHub's own
+token so an API-driven ready/merge transition cannot skip it. That flag deliberately
+does NOT re-verify the findings-log ledger/provenance/angle-coverage layer described
+above: the ledger is a gitignored, worktree-local `tmp/` file that only the machine
+that ran the review has on disk, so a stateless CI runner can never see it. That
+narrower gap is exactly what this caveat and the Pi-harness bridge remain scoped to.
+
 ### Angle-coverage enforcement (mandatory angles + pool membership)
 
 <!-- rule: GATE-EXEC-ANGLE-COVERAGE -->
