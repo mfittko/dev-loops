@@ -30,10 +30,9 @@ const MANUAL_FOR_INDEX_LOOP_RE = /for\s*\(\s*let\s+i\s*=\s*0;\s*i\s*<\s*(?:args|
 // parsing. Every entry must name a concrete reason a maintainer can evaluate
 // on sight.
 const EXCLUDED = new Map([
-  [
-    "manage-sub-issues.mjs",
-    "Already parseArgs-migrated; `args.shift()` here only consumes the single leading positional subcommand token before parseArgs runs on the remainder, not a hand-rolled full-argv parser loop.",
-  ],
+  // Currently empty: manage-sub-issues.mjs's single leading `args.shift()`
+  // (positional subcommand consumption before parseArgs) does not match
+  // either banned shape, so it needs no exclusion.
 ]);
 
 async function discoverGithubScripts() {
