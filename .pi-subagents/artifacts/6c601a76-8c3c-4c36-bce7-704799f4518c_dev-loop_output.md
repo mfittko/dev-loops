@@ -1,1 +1,0 @@
-The integration test fails because `detectPostConvergenceSignificantChange` requires `roundCapCleanEligible === true`, but the test's review data doesn't produce that interpreter state. Let me understand the interpreter logic.

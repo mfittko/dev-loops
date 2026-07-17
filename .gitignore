@@ -23,3 +23,7 @@ worktrees/
 .llmwiki/search/
 .llmwiki/bootstrap-plan.json
 .llmwiki/graph.json
+
+# local-only scratch (never commit)
+ombase/
+.pi-subagents/
