@@ -6,7 +6,7 @@
 // on) plus a deterministic transform of the markdown body.
 //
 // The transform is deliberately a fail-closed subset, not a general markdown
-// engine: headings (h1-h3), paragraphs, bullet lists, blockquotes, fenced code
+// engine: headings (h1-h2), paragraphs, bullet lists, blockquotes, fenced code
 // blocks, mermaid diagram figures, and the inline set (**bold**, *em*, `code`,
 // [links]) used by the articles. Anything it does not recognize throws, so an
 // unsupported construct becomes a build error instead of silently mangled
