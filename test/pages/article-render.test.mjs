@@ -237,12 +237,12 @@ test("a bare \">\" or nested \">>\" blockquote line throws", () => {
 });
 
 // ---------------------------------------------------------------------------
-// h3: a trivial construct, listed in the AC.
+// h3: no rendered article uses ###; the parser fails closed on it, so support
+// can land with the first real use.
 // ---------------------------------------------------------------------------
 
-test("### renders as an h3 with no slug id", () => {
-  const html = render("### A subheading\n\nbody");
-  assert.ok(html.includes("<h3>A subheading</h3>"));
+test("### fails closed as an unsupported construct", () => {
+  assert.throws(() => render("### A subheading\n\nbody"));
 });
 
 // ---------------------------------------------------------------------------

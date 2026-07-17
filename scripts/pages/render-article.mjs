@@ -158,8 +158,6 @@ function parseBlocks(body) {
       } else {
         blocks.push({ type: "code", text: fence.join("\n") });
       }
-    } else if (line.startsWith("### ")) {
-      blocks.push({ type: "h3", text: line.slice(4).trim() });
     } else if (line.startsWith("## ")) {
       blocks.push({ type: "h2", text: line.slice(3).trim() });
     } else if (line.startsWith("# ")) {
@@ -272,8 +270,6 @@ export function renderArticleHtml(mdSource, shell, sourceBasename) {
       }
     } else if (block.type === "part") {
       out.push(`  <div class="part">\n    <p class="kicker">Part ${block.num}</p>\n    <h2>${renderInline(block.title)}</h2>\n  </div>`);
-    } else if (block.type === "h3") {
-      out.push(inDeeper ? `    <h3>${renderInline(block.text)}</h3>` : `  <h3>${renderInline(block.text)}</h3>`);
     } else if (block.type === "blockquote") {
       out.push(inDeeper ? `    <blockquote>${renderInline(block.text)}</blockquote>` : `  <blockquote>${renderInline(block.text)}</blockquote>`);
     } else if (block.type === "diagram") {
