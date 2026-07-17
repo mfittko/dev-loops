@@ -391,6 +391,10 @@ function normalizeConfigInputSource(value) {
   return "tracker";
 }
 export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, env = process.env }) {
+  // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
+  // (PR + linked-issue checks); reset it per invocation so a long-lived
+  // process (or test) never reuses a stale login across resolutions.
+  viewerLoginCache = null;
   let repoRoot = cwd;
   try {
     repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
@@ -553,7 +557,9 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     // owns the whole loop. This only checks for a FOREIGN linked issue (not
     // unassigned): the PR's own ownership above already gates the unclaimed
     // case, and an unassigned linked issue is not evidence anyone else owns it.
-    for (const linkedIssueNumber of linkedIssueNumbers) {
+    // Copilot-assigned PRs short-circuit: the Copilot-first flow governs them,
+    // and their path stays immune to viewer-login resolution entirely.
+    for (const linkedIssueNumber of prOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT ? [] : linkedIssueNumbers) {
       let linkedIssueAssignees;
       try {
         const linkedIssueJson = ghJson(["issue", "view", String(linkedIssueNumber), "--repo", repo, "--json", "assignees"], repoRoot);

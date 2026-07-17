@@ -1322,6 +1322,92 @@ test("--pr assigned to copilot-swe-agent takes the unchanged copilot path, not t
   }
 });
 
+test("PR assigned to copilot skips the linked-issue ownership check entirely", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-pr-copilot-linked-issue-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    // Linked issue #511 is foreign-owned, but NO stub entry for its assignee
+    // read and NO "api user" entry: a copilot-assigned PR must short-circuit
+    // BEFORE the linked-issue loop, so neither gh call is ever made. If that
+    // short-circuit regressed, the unstubbed claims-mode call would fail
+    // closed and this test would catch it.
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          assignees: [{ login: "copilot-swe-agent" }],
+          closingIssuesReferences: [{ number: 511 }],
+          body: "",
+        }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("viewer-login memo is reset per buildAutoResolvedInput invocation (no stale-viewer reuse across calls)", async () => {
+  // In-process (not runNode/subprocess) on purpose: a subprocess pair resets
+  // module state for free and would never exercise the memo bug this pins.
+  // ghJson reads the AMBIENT process.env (not a passed env), so the two
+  // in-process calls below swap process.env between them and restore it in
+  // finally.
+  const tempDirAlice = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-viewer-memo-alice-"));
+  const tempDirBob = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-viewer-memo-bob-"));
+  const savedEnv = { ...process.env };
+  try {
+    await initRepoWithOrigin(tempDirAlice);
+    await initRepoWithOrigin(tempDirBob);
+    await stubNoLinkedPr(tempDirAlice, 12);
+    await stubNoLinkedPr(tempDirBob, 12);
+    // Same issue #12, same assignee (alice) in both stubs — only the VIEWER
+    // (gh api user) differs between the two calls.
+    const ghStubAlice = await writeGhStubHelper(tempDirAlice, [
+      { assertArgs: ["issue", "view", "12", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "alice" }] }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "alice" }) },
+    ], { matchMode: "claims" });
+    const ghStubBob = await writeGhStubHelper(tempDirBob, [
+      { assertArgs: ["issue", "view", "12", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "alice" }] }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "bob" }) },
+    ], { matchMode: "claims" });
+
+    // Call 1: viewer is alice, issue #12 is assigned to alice -> sole owner,
+    // proceeds. This memoizes "alice" as the viewer login (pre-fix behavior).
+    Object.assign(process.env, ghStubAlice.env);
+    const resultAlice = buildAutoResolvedInput({ issue: 12, cwd: tempDirAlice });
+    assert.equal(resultAlice.currentState.target.issue, 12);
+    assert.equal(resultAlice.issueAssignmentState, "unassigned"); // assigned_to_me maps to "unassigned" for the pure evaluator
+
+    // Call 2: viewer is now bob, but the SAME issue #12 is still (only)
+    // assigned to alice. Without resetting the memo, this call would reuse
+    // the cached "alice" login (never calling `gh api user` at all, so
+    // ghStubBob's "bob" answer would never even be consulted), classify
+    // alice === alice as assigned_to_me, and wrongly proceed. With the reset,
+    // it must resolve "bob" fresh and fail closed as foreign.
+    Object.assign(process.env, ghStubBob.env);
+    assert.throws(
+      () => buildAutoResolvedInput({ issue: 12, cwd: tempDirBob }),
+      /Issue #12 is assigned to alice, not the current viewer/,
+    );
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in savedEnv)) delete process.env[key];
+    }
+    Object.assign(process.env, savedEnv);
+    await rm(tempDirAlice, { recursive: true, force: true });
+    await rm(tempDirBob, { recursive: true, force: true });
+  }
+});
+
 test("--issue co-assigned to the viewer AND another human is contested (assigned_to_other), not assigned_to_me", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-issue-contested-"));
   try {
