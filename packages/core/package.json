@@ -21,6 +21,7 @@
     "./debt/shape": "./src/debt/shape.mjs",
     "./debt/signal": "./src/debt/debt-signal.mjs",
     "./github/copilot-helpers": "./src/github/copilot-helpers.mjs",
+    "./github/ownership-helpers": "./src/github/ownership-helpers.mjs",
     "./github/repo-slug": "./src/github/repo-slug.mjs",
     "./github/review-threads": "./src/github/review-threads.mjs",
     "./loop/async-start-contract": "./src/loop/async-start-contract.mjs",
