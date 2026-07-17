@@ -1264,11 +1264,57 @@ test("--pr assigned to the viewer proceeds", async () => {
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr assigned to copilot-swe-agent takes the unchanged copilot path, not the ownership error", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-pr-copilot-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    // No "api user" entry: a copilot assignee must never need the viewer login.
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "copilot-swe-agent" }], closingIssuesReferences: [], body: "" }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--issue co-assigned to the viewer AND another human is contested (assigned_to_other), not assigned_to_me", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-issue-contested-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await stubNoLinkedPr(tempDir, 511);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }, { login: "someone-else" }] }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    // foreignLogins excludes the viewer: only the other human is named.
+    assert.match(result.stderr, /Issue #511 is assigned to someone-else, not the current viewer/);
+    assert.doesNotMatch(result.stderr, /test-viewer/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1325,7 +1371,7 @@ test("--pr continuation proceeds when the linked issue is merely unassigned (onl
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
