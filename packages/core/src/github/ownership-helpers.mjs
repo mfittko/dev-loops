@@ -32,6 +32,15 @@ export class OwnershipGateFailure extends Error {}
  * copilot-assigned artifact is unaffected by viewer-login resolution
  * failures (matches the existing, unchanged Copilot-first flow).
  *
+ * `assigned_to_me` requires the viewer to be the SOLE human assignee.
+ * `gh issue/pr edit --add-assignee` is not compare-and-swap, so two loopers
+ * racing to claim the same unassigned item can both end up co-assigned;
+ * membership-based classification would wave both through. A viewer
+ * co-assigned alongside another human is `assigned_to_other` (contested) —
+ * `foreignLogins` names the OTHER humans only (never the viewer), so error
+ * messages stay accurate. Login comparison is case-insensitive (GitHub
+ * logins are case-insensitive).
+ *
  * @param {Array<{login?: string}>} assignees
  * @param {string|null} [viewerLogin] - required only when a non-copilot
  *   assignee is present; pass null/undefined when the caller skipped
@@ -48,10 +57,16 @@ export function classifyOwnership(assignees, viewerLogin = null) {
   if (logins.length === 0) {
     return { state: OWNERSHIP_STATE.UNASSIGNED, foreignLogins: [] };
   }
-  if (typeof viewerLogin === "string" && viewerLogin.length > 0 && logins.includes(viewerLogin)) {
+  const viewerLoginLower = typeof viewerLogin === "string" && viewerLogin.length > 0
+    ? viewerLogin.toLowerCase()
+    : null;
+  const otherLogins = viewerLoginLower === null
+    ? logins
+    : logins.filter((login) => login.toLowerCase() !== viewerLoginLower);
+  if (viewerLoginLower !== null && otherLogins.length === 0) {
     return { state: OWNERSHIP_STATE.ASSIGNED_TO_ME, foreignLogins: [] };
   }
-  return { state: OWNERSHIP_STATE.ASSIGNED_TO_OTHER, foreignLogins: logins };
+  return { state: OWNERSHIP_STATE.ASSIGNED_TO_OTHER, foreignLogins: otherLogins };
 }
 
 /**

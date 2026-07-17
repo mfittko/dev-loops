@@ -53,6 +53,26 @@ test("ownershipNeedsViewerLogin: true when a non-copilot assignee is present", (
   assert.equal(ownershipNeedsViewerLogin([{ login: "octocat" }]), true);
 });
 
+test("classifyOwnership: viewer co-assigned with another human -> contested (assigned_to_other), foreignLogins excludes the viewer", () => {
+  const result = classifyOwnership([{ login: "octocat" }, { login: "someone-else" }], "octocat");
+  assert.deepEqual(result, { state: OWNERSHIP_STATE.ASSIGNED_TO_OTHER, foreignLogins: ["someone-else"] });
+});
+
+test("classifyOwnership: viewer co-assigned with multiple others -> all others named, viewer excluded", () => {
+  const result = classifyOwnership([{ login: "a" }, { login: "octocat" }, { login: "b" }], "octocat");
+  assert.deepEqual(result, { state: OWNERSHIP_STATE.ASSIGNED_TO_OTHER, foreignLogins: ["a", "b"] });
+});
+
+test("classifyOwnership: login comparison is case-insensitive (assigned_to_me)", () => {
+  assert.equal(classifyOwnership([{ login: "OctoCat" }], "octocat").state, OWNERSHIP_STATE.ASSIGNED_TO_ME);
+  assert.equal(classifyOwnership([{ login: "octocat" }], "OctoCat").state, OWNERSHIP_STATE.ASSIGNED_TO_ME);
+});
+
+test("classifyOwnership: case-insensitive co-assignment is still contested (not sole)", () => {
+  const result = classifyOwnership([{ login: "OctoCat" }, { login: "someone-else" }], "octocat");
+  assert.deepEqual(result, { state: OWNERSHIP_STATE.ASSIGNED_TO_OTHER, foreignLogins: ["someone-else"] });
+});
+
 test("OwnershipGateFailure is a distinguishable Error subclass", () => {
   const err = new OwnershipGateFailure("foreign owner");
   assert.ok(err instanceof Error);
