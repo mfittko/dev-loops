@@ -8,10 +8,13 @@
 //   multiple In Progress      -> { ok: false, reason: "..." }  (names the items)
 //   zero In Progress:
 //     Next Up has items        -> single-contributor ownership gate (#1377) scans
-//                                  Next Up by POSITION ascending, claims (@me) the
-//                                  first unassigned/viewer-owned item, and SKIPS
-//                                  items owned by another human (reported in
-//                                  `skipped`) -> { ok: true, target: {kind,number},
+//                                  Next Up by POSITION ascending, claims (@me) an
+//                                  unassigned item, RE-READS it (the claim is not
+//                                  compare-and-swap) and resolves a contested
+//                                  claim with a deterministic tiebreak (loses ->
+//                                  self-unassign + skip), and SKIPS items owned
+//                                  by another human (reported in `skipped`) ->
+//                                  { ok: true, target: {kind,number},
 //                                  source: "next-up", skipped?: [...] }
 //     all Next Up items foreign -> { ok: false, reason: "...", source: "next-up", skipped: [...] }
 //     Next Up empty            -> { ok: false, reason: <canonical empty-queue msg>, source: "next-up" }
@@ -193,17 +196,31 @@ async function resolveViewerLogin({ env, runChild }) {
   return login;
 }
 
-// The one sanctioned mutation this script performs: claim an unassigned Next
-// Up item for the viewer (`@me`) before handing it to the loop, so the
-// claim is visible to every other contributor's fail-closed ownership gate
-// (resolve-dev-loop-startup.mjs) before that gate is ever hit.
-async function claimTarget(target, repo, { env, runChild }) {
-  const options = { repo, addAssignees: ["@me"], removeAssignees: [] };
+// The two sanctioned mutations this script performs: claim/unclaim `@me` on a
+// Next Up item. Claiming makes the claim visible to every other contributor's
+// fail-closed ownership gate (resolve-dev-loop-startup.mjs); unclaiming backs
+// off a lost claim-contested tiebreak (see resolveNextUpHead below).
+async function editTargetAssignees(target, repo, { addAssignees = [], removeAssignees = [] }, { env, runChild }) {
+  const options = { repo, addAssignees, removeAssignees };
   if (target.kind === "pr") {
     await editPr({ ...options, pr: target.number }, { env, ghCommand: "gh", run: runChild });
   } else {
     await editIssue({ ...options, issue: target.number }, { env, ghCommand: "gh", run: runChild });
   }
+}
+const claimTarget = (target, repo, ctx) => editTargetAssignees(target, repo, { addAssignees: ["@me"] }, ctx);
+const unclaimTarget = (target, repo, ctx) => editTargetAssignees(target, repo, { removeAssignees: ["@me"] }, ctx);
+
+// `gh ... --add-assignee` is not compare-and-swap: two loopers racing to claim
+// the same unassigned item can both land as assignees. Deterministic tiebreak
+// among a contested claim's contenders (viewer + the other human logins that
+// showed up on re-read) — case-insensitive lexicographically-smallest login
+// wins, so every racer computes the same winner independently.
+function pickTiebreakWinner(logins) {
+  return [...logins].sort((a, b) => {
+    const [al, bl] = [a.toLowerCase(), b.toLowerCase()];
+    return al < bl ? -1 : al > bl ? 1 : 0;
+  })[0];
 }
 
 // Zero in-progress: the live continue path falls through to the "Next Up"
@@ -262,6 +279,32 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
     }
     if (ownership.state === OWNERSHIP_STATE.UNASSIGNED) {
       await claimTarget(target, args.repo, { env, runChild });
+      // Post-claim re-verify: the claim above is not compare-and-swap, so
+      // another looper may have claimed concurrently. Re-read (failing that
+      // read fails this whole run closed, same as any other gh read failure
+      // here) and resolve a contested claim with the deterministic tiebreak
+      // instead of trusting the claim call alone.
+      if (!viewerLoginResolved) {
+        viewerLogin = await resolveViewerLogin({ env, runChild });
+        viewerLoginResolved = true;
+      }
+      const postClaimAssignees = await fetchAssignees(target, args.repo, { env, runChild });
+      const postClaimOwnership = classifyOwnership(postClaimAssignees, viewerLogin);
+      if (postClaimOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
+        const winner = pickTiebreakWinner([viewerLogin, ...postClaimOwnership.foreignLogins]);
+        if (winner.toLowerCase() !== viewerLogin.toLowerCase()) {
+          // Lost: back off so the winner ends up the sole assignee. The
+          // winner's own re-read (or, failing that, everyone's sole-owner
+          // startup gate) is what actually converges ownership.
+          await unclaimTarget(target, args.repo, { env, runChild });
+          skipped.push({
+            target,
+            reason: `${describeItem(item)} claim contested by ${postClaimOwnership.foreignLogins.join(", ")}; lost the tiebreak — skipped (claim_contested_lost_tiebreak).`,
+          });
+          continue;
+        }
+        // Won: proceed below.
+      }
     }
     return {
       ok: true,

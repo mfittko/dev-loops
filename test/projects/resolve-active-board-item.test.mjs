@@ -21,18 +21,26 @@ after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 //
 // Ownership gate (#1377): `assignees` maps an issue/PR number to its current
 // assignees (defaults to `[]`, i.e. unassigned, for any number not listed).
-// `viewerLogin` answers `gh api user`. `claims` (mutated in place) records
-// every `issue edit --add-assignee @me` / `pr edit --add-assignee @me` call
-// the resolver makes, so tests can assert exactly which items got claimed.
+// `assigneesSequence` maps a number to an ARRAY of assignee-lists consumed in
+// order across successive view calls for that number (last entry repeats once
+// exhausted) — lets a test simulate a concurrent claim race: first read
+// unassigned, second read (the post-claim re-verify) shows a contender who
+// claimed concurrently. Falls back to `assignees` when no sequence is given.
+// `viewerLoginError` forces `gh api user` to fail (viewer-login resolution
+// failure). `claims` (mutated in place) records every `issue/pr edit
+// --add-assignee|--remove-assignee @me` call as `{kind, number, action}`.
 function boardRunChild({
   columns = {},
   itemsError = false,
   optionNames = ["Backlog", "Next Up", "In Progress", "Done"],
   assignees = {},
+  assigneesSequence = {},
   viewerLogin = "test-viewer",
+  viewerLoginError = false,
   claims = [],
 } = {}) {
   let itemsQueryCount = 0;
+  const viewCallCounts = {};
   const options = optionNames.map((name, i) => ({ id: `O_${i}`, name }));
   const nodes = [];
   for (const [status, items] of Object.entries(columns)) {
@@ -62,15 +70,24 @@ function boardRunChild({
       return json({ node: { fields: { nodes: [{ name: "Status", options }], pageInfo: { hasNextPage: false, endCursor: null } } } });
     }
     if (argv[0] === "api" && argv[1] === "user") {
+      if (viewerLoginError) return { code: 1, stdout: "", stderr: "gh: not authenticated\n" };
       return { code: 0, stdout: JSON.stringify({ login: viewerLogin }), stderr: "" };
     }
     if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "view") {
       const number = Number(argv[2]);
-      return { code: 0, stdout: JSON.stringify({ assignees: assignees[number] ?? [] }), stderr: "" };
+      const seq = assigneesSequence[number];
+      let list = assignees[number] ?? [];
+      if (Array.isArray(seq)) {
+        const idx = viewCallCounts[number] ?? 0;
+        viewCallCounts[number] = idx + 1;
+        list = seq[Math.min(idx, seq.length - 1)] ?? [];
+      }
+      return { code: 0, stdout: JSON.stringify({ assignees: list }), stderr: "" };
     }
     if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "edit") {
       const number = Number(argv[2]);
-      claims.push({ kind: argv[0], number });
+      const action = argv.includes("--remove-assignee") ? "remove-assignee" : "add-assignee";
+      claims.push({ kind: argv[0], number, action });
       return { code: 0, stdout: "{}", stderr: "" };
     }
     // items query — fail only the second one (Next Up), leaving In Progress OK
@@ -190,7 +207,7 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
       claims,
     }));
     assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
-    assert.deepEqual(claims, [{ kind: "issue", number: 7 }]);
+    assert.deepEqual(claims, [{ kind: "issue", number: 7, action: "add-assignee" }]);
   });
 
   it("does NOT claim an item already assigned to the viewer", async () => {
@@ -220,7 +237,7 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
     assert.equal(r.source, "next-up");
     assert.equal(r.skipped.length, 1);
     assert.match(r.skipped[0].reason, /issue #7 \(Foreign\) is assigned to someone-else, not the current viewer/);
-    assert.deepEqual(claims, [{ kind: "issue", number: 8 }]);
+    assert.deepEqual(claims, [{ kind: "issue", number: 8, action: "add-assignee" }]);
   });
 
   it("fails closed when every Next Up item is owned by another human", async () => {
@@ -254,6 +271,94 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
     assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
     assert.deepEqual(claims, []);
     assert.equal(apiUserCalls, 0);
+  });
+
+  it("resolves the current viewer's login only once, even across multiple candidates", async () => {
+    let apiUserCalls = 0;
+    const claims = [];
+    const child = boardRunChild({
+      columns: { "In Progress": [], "Next Up": [
+        { issueNumber: 7, title: "Foreign" },
+        { issueNumber: 8, title: "Free" },
+      ] },
+      assignees: { 7: [{ login: "someone-else" }], 8: [] },
+      claims,
+    });
+    const wrapped = async (cmd, argv) => {
+      if (argv[0] === "api" && argv[1] === "user") apiUserCalls += 1;
+      return child(cmd, argv);
+    };
+    await runArgs(wrapped);
+    assert.equal(apiUserCalls, 1);
+  });
+
+  it("post-claim re-verify: claim contested but the viewer wins the deterministic tiebreak -> proceeds, no self-unassign", async () => {
+    const claims = [];
+    const r = await runArgs(boardRunChild({
+      columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      // First read: unassigned -> claim. Second read (post-claim re-verify):
+      // another looper landed "zzz-other" concurrently. "test-viewer" sorts
+      // before "zzz-other", so the viewer wins the tiebreak.
+      assigneesSequence: { 7: [[], [{ login: "test-viewer" }, { login: "zzz-other" }]] },
+      viewerLogin: "test-viewer",
+      claims,
+    }));
+    assert.deepEqual(r, { ok: true, target: { kind: "issue", number: 7 }, source: "next-up" });
+    assert.deepEqual(claims, [{ kind: "issue", number: 7, action: "add-assignee" }]);
+  });
+
+  it("post-claim re-verify: claim contested and the viewer LOSES the tiebreak -> self-unassigns, skips with claim_contested_lost_tiebreak, and picks the next item", async () => {
+    const claims = [];
+    const r = await runArgs(boardRunChild({
+      columns: { "In Progress": [], "Next Up": [
+        { issueNumber: 7, title: "Contested" },
+        { issueNumber: 8, title: "Free" },
+      ] },
+      // "aaa-other" sorts before "test-viewer" -> the viewer loses.
+      assigneesSequence: { 7: [[], [{ login: "test-viewer" }, { login: "aaa-other" }]] },
+      assignees: { 8: [] },
+      viewerLogin: "test-viewer",
+      claims,
+    }));
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.target, { kind: "issue", number: 8 });
+    assert.equal(r.skipped.length, 1);
+    assert.match(r.skipped[0].reason, /issue #7 \(Contested\) claim contested by aaa-other/);
+    assert.match(r.skipped[0].reason, /claim_contested_lost_tiebreak/);
+    assert.deepEqual(claims, [
+      { kind: "issue", number: 7, action: "add-assignee" },
+      { kind: "issue", number: 7, action: "remove-assignee" },
+      { kind: "issue", number: 8, action: "add-assignee" },
+    ]);
+  });
+
+  it("post-claim re-read failure fails closed (does not silently trust the claim call alone)", async () => {
+    const child = boardRunChild({
+      columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+      assignees: { 7: [] },
+    });
+    let viewCallsFor7 = 0;
+    const wrapped = async (cmd, argv) => {
+      if (argv[0] === "issue" && argv[1] === "view" && Number(argv[2]) === 7) {
+        viewCallsFor7 += 1;
+        if (viewCallsFor7 === 2) {
+          return { code: 1, stdout: "", stderr: "boom: gh outage" };
+        }
+      }
+      return child(cmd, argv);
+    };
+    await assert.rejects(() => runArgs(wrapped), /gh issue view 7 failed/);
+  });
+
+  it("fails closed when the viewer login cannot be resolved (distinct reason from an assignee-read failure)", async () => {
+    await assert.rejects(
+      () => runArgs(boardRunChild({
+        columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+        assignees: { 7: [{ login: "someone-else" }] },
+        viewerLoginError: true,
+      })),
+      /Unable to resolve the current GitHub viewer login/,
+    );
   });
 });
 
