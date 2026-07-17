@@ -27,7 +27,7 @@ import {
   ownershipNeedsViewerLogin,
 } from "@dev-loops/core/github/ownership-helpers";
 import { resolveLinkedIssuesFromPr } from "./detect-pr-gate-coordination-state.mjs";
-import { loadDevLoopConfig, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { detectScope } from "./detect-change-scope.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { validatePlanFile } from "../refine/validate-plan-file.mjs";
@@ -710,8 +710,8 @@ export function buildSpikeInput({ spikeFilePath }) {
 // the common names.
 const ISSUELESS_BASE_REF_CANDIDATES = ["origin/HEAD", "origin/main", "origin/master", "main", "master"];
 
-function resolveIssuelessMergeBase(cwd) {
-  for (const ref of ISSUELESS_BASE_REF_CANDIDATES) {
+function resolveIssuelessMergeBase(cwd, candidates) {
+  for (const ref of candidates) {
     try {
       return execFileSync("git", ["merge-base", ref, "HEAD"], {
         cwd,
@@ -723,6 +723,13 @@ function resolveIssuelessMergeBase(cwd) {
     }
   }
   return null;
+}
+
+/** Non-empty trimmed `workflow.baseBranch`, or `null` when unset/malformed —
+ * mirrors resolveBaseBranch's own "config wins" validity check. */
+function configuredBaseBranch(config) {
+  const raw = config?.workflow?.baseBranch;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
 }
 
 /**
@@ -753,12 +760,21 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
   if (!threshold) {
     return { eligible: false, reason: "light_mode_disabled" };
   }
-  const mergeBase = resolveIssuelessMergeBase(cwd);
+  // A configured workflow.baseBranch (#1368) takes priority over the generic
+  // candidate list — the whole point of the config knob is that the default
+  // branch is NOT the right merge-base (e.g. a spike branch that must never
+  // measure scope against main). Unset stays the exact prior candidate list
+  // and order (byte-for-byte no-regression).
+  const configuredBase = configuredBaseBranch(config);
+  const candidates = configuredBase
+    ? [`origin/${configuredBase}`, configuredBase]
+    : ISSUELESS_BASE_REF_CANDIDATES;
+  const mergeBase = resolveIssuelessMergeBase(cwd, candidates);
   if (mergeBase === null) {
     return {
       eligible: false,
       reason: "scope_detection_failed",
-      detail: `no merge-base with any default-branch candidate (${ISSUELESS_BASE_REF_CANDIDATES.join(", ")})`,
+      detail: `no merge-base with any default-branch candidate (${candidates.join(", ")})`,
     };
   }
   // detectScope with only `base` diffs base..working-tree in one measure
@@ -848,9 +864,15 @@ export function summarizeCanonicalState(bundle) {
       : false,
   };
 }
-export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdapter(), env, cwd, asyncStartMode = "required" } = {}) {
+export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdapter(), env, cwd, asyncStartMode = "required", config } = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
   const effectiveCwd = cwd ?? adapter.getCwd();
+  // A configured workflow.baseBranch (#1368) is surfaced in the worktree
+  // nextAction hint below as an explicit `--base origin/<baseBranch>` — unset
+  // is omitted entirely since ensure-worktree.mjs already auto-detects the
+  // same default itself (see resolveBaseBranch).
+  const configuredBase = configuredBaseBranch(config);
+  const worktreeHintBaseFlag = configuredBase ? ` --base origin/${resolveBaseBranch(config, { cwd: effectiveCwd })}` : "";
   // Normalize a non-object input (e.g. `--input null`, which parses to a legal
   // JSON null) to {} so the destructure below cannot throw before routing can
   // fail closed with a structured reconcile bundle.
@@ -928,8 +950,8 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
       const allPaths = parseAllWorktreePaths(worktreeOutput);
       if (!isUnderWorktreePath(effectiveCwd)) {
         const reason = mainPath !== null && isMainCheckout(effectiveCwd, mainPath)
-          ? `Local implementation requires worktree isolation. Current directory is the main git checkout (${mainPath}). Run \`node scripts/loop/ensure-worktree.mjs --repo-root ${mainPath} --issue <n>\` to create+provision the worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`
-          : "Local implementation requires worktree isolation. Current directory is not under tmp/worktrees/. Run `node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>` to create+provision a worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.";
+          ? `Local implementation requires worktree isolation. Current directory is the main git checkout (${mainPath}). Run \`node scripts/loop/ensure-worktree.mjs --repo-root ${mainPath} --issue <n>${worktreeHintBaseFlag}\` to create+provision the worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`
+          : `Local implementation requires worktree isolation. Current directory is not under tmp/worktrees/. Run \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` to create+provision a worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`;
         return {
           ok: true,
           bundleKind: "needs_reconcile",
@@ -941,7 +963,7 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
         };
       }
       if (!isListedWorktree(effectiveCwd, allPaths)) {
-        const reason = `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\` and re-run.`;
+        const reason = `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run.`;
         return {
           ok: true,
           bundleKind: "needs_reconcile",
@@ -1047,7 +1069,11 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       env: adapter.getEnv(),
     });
   }
-  const result = buildResolveDevLoopStartupResult(input, { asyncStartMode, adapter });
+  const result = buildResolveDevLoopStartupResult(input, {
+    asyncStartMode,
+    adapter,
+    config: configErrors.length === 0 ? devLoopConfig : undefined,
+  });
   if (result.ok === false) {
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });
     return;
