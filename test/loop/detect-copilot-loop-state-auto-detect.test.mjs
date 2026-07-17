@@ -533,6 +533,98 @@ test("detect-copilot-loop-state keeps zero-suite current-head CI at none under r
 });
 
 
+test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fallback when only the loop's own gate-evidence check is red (#1358 regression: the exact #1383 deadlock)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-gate-evidence-"));
+
+  try {
+    const emptyThreads = JSON.stringify({
+      data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } },
+    });
+
+    const { env } = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({
+          isDraft: false,
+          state: "OPEN",
+          number: 17,
+          headRefOid: "newsha",
+          reviews: [
+            {
+              id: "r-1",
+              author: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              submittedAt: "2026-06-02T08:00:00Z",
+              commit: { oid: "oldsha-1" },
+            },
+            {
+              id: "r-2",
+              author: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              submittedAt: "2026-06-02T09:00:00Z",
+              commit: { oid: "oldsha-2" },
+            },
+            {
+              id: "r-3",
+              author: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              submittedAt: "2026-06-02T10:00:00Z",
+              commit: { oid: "oldsha-3" },
+            },
+            {
+              id: "r-4",
+              author: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              submittedAt: "2026-06-02T11:00:00Z",
+              commit: { oid: "oldsha-4" },
+            },
+            {
+              id: "r-5",
+              author: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              submittedAt: "2026-06-02T12:00:00Z",
+              commit: { oid: "oldsha-5" },
+            },
+          ],
+          // Mirrors the live #1383 rollup exactly: gate-evidence is the only red
+          // check, every other check (including CI test suites) is green.
+          statusCheckRollup: [
+            { status: "COMPLETED", conclusion: "FAILURE", name: "gate-evidence" },
+            { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
+            { status: "COMPLETED", conclusion: "SUCCESS", name: "test-core" },
+          ],
+        }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: emptyThreads + "\n",
+      },
+      // No check-runs/status refresh calls: fallbackCiStatus is "crediblyGreen"
+      // (not the literal "success" the refresh guard requires), so the current-head
+      // refresh never fires — gate-evidence alone must not trigger it either.
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0, `stderr: ${result.stderr}`);
+
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.snapshot.ciStatus, "crediblyGreen");
+    assert.deepEqual(output.snapshot.excludedFailureDetails, ["gate-evidence"]);
+    // This is the exact #1383 deadlock: at the round cap with clean threads, a
+    // red gate-evidence check must fall through to the clean fallback (which can
+    // post pre_approval_gate) instead of hard-stopping at ROUND_CAP_REACHED.
+    assert.equal(output.state, "round_cap_clean_fallback");
+    assert.equal(output.terminal, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fallback when new commits land after resolved comments", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-rerequest-"));
 
