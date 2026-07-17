@@ -488,7 +488,8 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       });
     }
     // Only assigned_to_me and assigned_to_copilot pass the gate above. The pure
-    // routing evaluator's issueAssignmentState variation parameter only
+    // routing evaluator's issueAssignmentState authoritative issue-state input
+    // (not a variation parameter — see public-dev-loop-contract.md) only
     // distinguishes copilot vs not-copilot (DEV_LOOP_ISSUE_ASSIGNMENT_STATE has
     // no assigned_to_me value) — assigned_to_me is passed through as
     // "unassigned" for that purpose; the gate above already proved the viewer

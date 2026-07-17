@@ -1091,6 +1091,31 @@ test("--issue assigned_to_other fails closed naming the foreign assignee (no rea
   }
 });
 
+test("--issue: a claim-contested race's raced-past loser sees only the tiebreak winner and fails closed foreign (convergence backstop)", async () => {
+  // Shape of the interleaving this pins: the pickup tiebreak winner removed
+  // the loser's login (resolve-active-board-item.mjs), so by the time the
+  // raced-past loser reaches its own startup gate, gh reports only the
+  // winner as assignee — never both, never the loser itself.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-issue-raced-past-loser-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await stubNoLinkedPr(tempDir, 511);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "tiebreak-winner" }] }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "raced-past-loser" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /Issue #511 is assigned to tiebreak-winner, not the current viewer/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("--issue unassigned fails closed naming the exact claim command (no readiness bundle)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-issue-unassigned-"));
   try {
