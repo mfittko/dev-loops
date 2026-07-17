@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { parsePrNumber, requireOptionValue, runChild } from "../_cli-primitives.mjs";
+import { parseArgs } from "node:util";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --findings <json>
 Post (or idempotently update) a visible, marker-tagged PR issue comment that lists the
@@ -107,7 +108,6 @@ export function parseFindings(raw) {
 }
 
 export function parsePostGateFindingsCliArgs(argv) {
-  const args = [...argv];
   const options = {
     help: false,
     repo: undefined,
@@ -116,45 +116,58 @@ export function parsePostGateFindingsCliArgs(argv) {
     headSha: undefined,
     findings: undefined,
   };
-  while (args.length > 0) {
-    const token = args.shift();
-    if (token === "--help" || token === "-h") {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      gate: { type: "string" },
+      "head-sha": { type: "string" },
+      findings: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
       options.help = true;
       return options;
     }
-    if (token === "--repo") {
-      options.repo = validateRepo(requireOptionValue(args, "--repo", parseError).trim());
+    if (token.name === "repo") {
+      options.repo = validateRepo(requireTokenValue(token, parseError).trim());
       continue;
     }
-    if (token === "--pr") {
-      options.pr = parsePrNumber(requireOptionValue(args, "--pr", parseError), parseError);
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token === "--gate") {
-      const gate = normalizeGate(requireOptionValue(args, "--gate", parseError));
+    if (token.name === "gate") {
+      const gate = normalizeGate(requireTokenValue(token, parseError));
       if (!gate) throw parseError("--gate must be draft_gate or pre_approval_gate");
       options.gate = gate;
       continue;
     }
-    if (token === "--head-sha") {
-      const sha = normalizeHeadSha(requireOptionValue(args, "--head-sha", parseError));
+    if (token.name === "head-sha") {
+      const sha = normalizeHeadSha(requireTokenValue(token, parseError));
       if (!sha) throw parseError("--head-sha must be a 7-64 character hex SHA");
       options.headSha = sha;
       continue;
     }
-    if (token === "--findings") {
-      options.findings = requireOptionValue(args, "--findings", parseError);
+    if (token.name === "findings") {
+      options.findings = requireTokenValue(token, parseError);
       continue;
     }
-    if (token === "--jq") {
-      options.jq = requireOptionValue(args, "--jq", parseError);
-      continue;
-    }
-    if (token === "--silent" || token === "-s") {
-      options.silent = true;
-      continue;
-    }
-    throw parseError(`Unknown argument: ${token}`);
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const missing = ["repo", "pr", "gate", "headSha", "findings"]
     .filter(k => options[k] === undefined);

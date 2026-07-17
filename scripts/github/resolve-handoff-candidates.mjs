@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import { readFile as fsReadFile } from "node:fs/promises";
 import path from "node:path";
+import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   loadDevLoopConfig,
   resolveHumanHandoffConfig,
 } from "@dev-loops/core/config";
-import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: resolve-handoff-candidates.mjs --repo <owner/name> --pr <number> [--changed-files <a,b,c>] [--pr-author <login>]
 Resolve an ordered, deduped list of human-handoff reviewer/assignee candidates
@@ -48,38 +49,57 @@ Exit codes:
 
 const parseError = buildParseError(USAGE);
 
-function nextValue(args, i, flag) {
-  const value = args[i];
-  if (typeof value !== "string" || value.length === 0 || value.startsWith("--")) {
-    throw parseError(`Missing value for ${flag}`);
-  }
-  return value;
-}
-
 const RECENT_COMMITTERS_LIMIT = 50;
 const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
 // Bot author handles to exclude from recent-committers.
 const BOT_PATTERN = /\[bot\]$|^(?:dependabot|github-actions|copilot|renovate)$/i;
 
 export function parseResolveCandidatesCliArgs(argv) {
-  const args = [...argv];
-  if (args.includes("--help") || args.includes("-h")) {
-    return { help: true };
-  }
   const options = { help: false, repo: undefined, pr: undefined, changedFiles: undefined, prAuthor: undefined };
-  for (let i = 0; i < args.length; i += 1) {
-    const token = args[i];
-    if (token === "--repo") { options.repo = nextValue(args, ++i, "--repo"); continue; }
-    if (token === "--pr") { options.pr = parsePrNumber(nextValue(args, ++i, "--pr"), parseError); continue; }
-    if (token === "--changed-files") {
-      options.changedFiles = nextValue(args, ++i, "--changed-files")
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      "changed-files": { type: "string" },
+      "pr-author": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
+      options.help = true;
+      return options;
+    }
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "changed-files") {
+      options.changedFiles = requireTokenValue(token, parseError)
         .split(",").map((s) => s.trim()).filter((s) => s.length > 0);
       continue;
     }
-    if (token === "--pr-author") { options.prAuthor = nextValue(args, ++i, "--pr-author").trim().replace(/^@/, ""); continue; }
-    if (token === "--jq") { options.jq = nextValue(args, ++i, "--jq"); continue; }
-    if (token === "--silent" || token === "-s") { options.silent = true; continue; }
-    throw parseError(`Unknown argument: ${token}`);
+    if (token.name === "pr-author") {
+      options.prAuthor = requireTokenValue(token, parseError).trim().replace(/^@/, "");
+      continue;
+    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
     throw parseError("Resolving handoff candidates requires both --repo <owner/name> and --pr <number>");
