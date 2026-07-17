@@ -13,6 +13,7 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
+import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
@@ -31,6 +32,18 @@ pre_approval_gate comment.
 Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
+Optional:
+  --skip-fanout-ledger-check  Skip the fan-out findings-log ledger/provenance/
+                              angle-coverage layer of requireFanoutEvidence
+                              enforcement. That evidence lives in a gitignored,
+                              worktree-local tmp/ file only the machine that ran
+                              the review has on disk, so a stateless remote
+                              verifier (the gate-evidence CI check; a gh-less API
+                              session) can never see it. The comment-derived
+                              executionMode/inlineReason check (including the
+                              light-mode inline exception) still applies. Intended
+                              for server-side/CI callers only; client-side callers
+                              should omit this flag to keep full enforcement.
 Output (stdout, JSON; always includes preMergeGateCheck):
   {
     "ok": true,
@@ -102,6 +115,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       "require-before-merge": { type: "boolean" },
+      "skip-fanout-ledger-check": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -112,6 +126,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
     help: false,
     repo: undefined,
     pr: undefined,
+    skipFanoutLedgerCheck: false,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -132,6 +147,10 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
+    if (token.name === "skip-fanout-ledger-check") {
+      options.skipFanoutLedgerCheck = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     if (token.name === "require-before-merge") {
       throw parseError(`--require-before-merge has been removed: gate evidence enforcement is now always-on by default. Omit the flag.`);
@@ -148,8 +167,20 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
   }
   return options;
 }
-async function runGhJson(args, { env, ghCommand, runChild = defaultRunChild }) {
-  const result = await runChild(ghCommand, args, env);
+// restFallback, when provided, is invoked ONLY when spawning the `gh` binary
+// itself fails (ENOENT — the binary is not on PATH); a `gh` invocation that runs
+// and fails for any other reason (auth, rate limit, a real 404) is a genuine
+// error and is never silently retried through the REST fallback (#1358).
+async function runGhJson(args, { env, ghCommand, runChild = defaultRunChild, restFallback = null }) {
+  let result;
+  try {
+    result = await runChild(ghCommand, args, env);
+  } catch (error) {
+    if (restFallback && isGhBinaryMissing(error)) {
+      return await restFallback();
+    }
+    throw error;
+  }
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     throw new Error(`gh command failed: ${detail}`);
@@ -238,7 +269,7 @@ function normalizeGateMarkerSummary(summary) {
     updatedAt: summary.updatedAt,
   };
 }
-export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null) {
+export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false } = {}) {
   const failures = [];
   const warnings = [];
   if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
@@ -279,6 +310,17 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
         failures.push(
           `${gate.name}: requireFanoutEvidence is enabled but executionMode is "${gate.executionMode ?? "unset"}" (expected "fanout_fanin"); inline gate verdicts are not accepted`,
         );
+        continue;
+      }
+      // A stateless remote verifier (the gate-evidence CI check, or a gh-less API
+      // session) never has the gitignored, worktree-local tmp/gate-findings ledger
+      // on disk — only the machine that ran the review does. skipFanoutLedgerCheck
+      // scopes enforcement down to what IS remotely verifiable from the PR's public
+      // comment history: the comment-derived executionMode/inlineReason check above
+      // (including the light-mode inline exception). The deeper ledger/provenance/
+      // angle-coverage layer stays client-side-only (docs/gate-review-sub-loop-contract.md's
+      // existing "not un-forgeable" caveat covers that gap).
+      if (skipFanoutLedgerCheck) {
         continue;
       }
       if (!gate.ledgerExists) {
@@ -558,8 +600,14 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
     error.staleRunner = staleRunnerDetection;
     throw error;
   }
-  const prPayload = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], { env, ghCommand, runChild });
-  const commentsPayload = normalizeIssueCommentsPayload(await runGhJson(["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`], { env, ghCommand, runChild }));
+  const prPayload = await runGhJson(
+    ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"],
+    { env, ghCommand, runChild, restFallback: () => restFetchPrView(options.repo, options.pr, env) },
+  );
+  const commentsPayload = normalizeIssueCommentsPayload(await runGhJson(
+    ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
+    { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(`repos/${options.repo}/issues/${options.pr}/comments?per_page=100`, env) },
+  ));
   const currentHeadSha = typeof prPayload?.headRefOid === "string" && prPayload.headRefOid.trim().length > 0
     ? prPayload.headRefOid.trim()
     : null;
@@ -571,7 +619,10 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   // as a PR review rather than an issue comment (root cause 3 from issue #692).
   let prReviews = [];
   try {
-    const reviewsRaw = await runGhJson(["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`], { env, ghCommand, runChild });
+    const reviewsRaw = await runGhJson(
+      ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
+      { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(`repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`, env) },
+    );
     prReviews = normalizePrReviewsPayload(reviewsRaw);
   } catch {
     // Graceful fallback: PR reviews fetch failure is non-fatal.
@@ -601,7 +652,10 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   );
   if (config != null && resolveRequireFanoutEvidence(config) && resolveLightMode(config) != null && anyInlineVerdict) {
     try {
-      const lightFacts = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefOid,labels"], { env, ghCommand, runChild });
+      const lightFacts = await runGhJson(
+        ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefOid,labels"],
+        { env, ghCommand, runChild, restFallback: () => restFetchPrView(options.repo, options.pr, env) },
+      );
       baseRef = typeof lightFacts?.baseRefOid === "string" && lightFacts.baseRefOid.trim().length > 0
         ? lightFacts.baseRefOid.trim()
         : null;
@@ -676,7 +730,7 @@ async function main() {
         ? [`exit signal recorded for run ${result.staleRunner.activeRun?.runId}: refuse to merge`]
         : [],
     };
-    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement);
+    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true });
     const output = { ...result, preMergeGateCheck, staleRunnerCheck };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({

@@ -11,6 +11,7 @@ import {
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { isGhBinaryMissing, restGraphqlJson } from "./_gh-rest-fallback.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 export const REVIEW_THREADS_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!) {",
@@ -116,27 +117,39 @@ export function parseCaptureCliArgs(argv) {
   }
   return options;
 }
+// Falls back to a direct GraphQL POST (GH_TOKEN/GITHUB_TOKEN) ONLY when spawning
+// the `gh` binary itself fails (ENOENT — not on PATH), so a gh-less session can
+// still verify review-thread resolution state (#1358). Any other `gh` failure
+// (auth, rate limit) surfaces as a real error, unchanged.
 export async function fetchGithubReviewThreadsPayload(
   { repo, pr },
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
 ) {
   const { owner, name } = parseRepoSlug(repo);
-  const result = await runChild(
-    ghCommand,
-    [
-      "api",
-      "graphql",
-      "--field",
-      `owner=${owner}`,
-      "--field",
-      `name=${name}`,
-      "--field",
-      `pr=${pr}`,
-      "--field",
-      `query=${REVIEW_THREADS_QUERY}`,
-    ],
-    env,
-  );
+  let result;
+  try {
+    result = await runChild(
+      ghCommand,
+      [
+        "api",
+        "graphql",
+        "--field",
+        `owner=${owner}`,
+        "--field",
+        `name=${name}`,
+        "--field",
+        `pr=${pr}`,
+        "--field",
+        `query=${REVIEW_THREADS_QUERY}`,
+      ],
+      env,
+    );
+  } catch (error) {
+    if (isGhBinaryMissing(error)) {
+      return await restGraphqlJson(REVIEW_THREADS_QUERY, { owner, name, pr }, env);
+    }
+    throw error;
+  }
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     throw new Error(`gh command failed: ${detail}`);

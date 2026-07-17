@@ -1,0 +1,51 @@
+name: Gate evidence
+
+# Server-side enforcement of the draft_gate / pre_approval_gate contract
+# (skills/docs/merge-preconditions.md, MERGE-PRECOND-REQUIRED items 3-4). Runs on
+# GitHub's own token, so an API-driven ready/merge transition (gh CLI, MCP/REST,
+# web UI) cannot bypass the gates the client-side tooling already enforces.
+#
+# Skipped entirely while the PR is a draft (draft_gate is not required yet, and a
+# draft PR cannot be merged regardless); GitHub Actions treats a skipped job on a
+# required check as passing, so this never blocks draft work.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  gate-evidence:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      # --skip-fanout-ledger-check: the fan-out findings-log ledger is a
+      # gitignored, worktree-local tmp/ file that only the machine that ran the
+      # review has on disk, so this stateless runner can never see it. This check
+      # still enforces the part that IS remotely verifiable: a clean draft_gate
+      # verdict, and a clean pre_approval_gate verdict on the current head,
+      # including the documented light-mode inline exception.
+      - name: Verify draft_gate / pre_approval_gate evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/github/detect-checkpoint-evidence.mjs \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --skip-fanout-ledger-check

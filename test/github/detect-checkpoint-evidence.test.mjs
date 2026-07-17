@@ -16,7 +16,9 @@ import {
   parseDetectCheckpointEvidenceCliArgs,
   buildPreMergeGateCheck,
   buildFanoutEnforcement,
+  detectCheckpointEvidence,
 } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { fetchGithubReviewThreadsPayload } from "../../scripts/github/capture-review-threads.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -203,6 +205,138 @@ test("parseDetectCheckpointEvidenceCliArgs rejects malformed arguments determini
     () => parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--require-before-merge"]),
     /--require-before-merge has been removed/i,
   );
+});
+
+test("parseDetectCheckpointEvidenceCliArgs defaults skipFanoutLedgerCheck to false and honors --skip-fanout-ledger-check", () => {
+  const defaultOpts = parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17"]);
+  assert.equal(defaultOpts.skipFanoutLedgerCheck, false);
+
+  const opts = parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--skip-fanout-ledger-check"]);
+  assert.equal(opts.skipFanoutLedgerCheck, true);
+});
+
+// --- gh-less REST/GraphQL fallback (issue #1358, AC4) ---
+// A session with no `gh` binary on PATH (spawn ENOENT) must still be able to read
+// gate evidence given a GH_TOKEN/GITHUB_TOKEN, via the REST/GraphQL fallback.
+
+function enoentRunChild(command) {
+  return async (cmd) => {
+    if (cmd === command) {
+      throw Object.assign(new Error(`spawn ${command} ENOENT`), { code: "ENOENT" });
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+}
+
+test("detectCheckpointEvidence falls back to the REST API when the gh binary is missing (ENOENT) given a token", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gh-less-"));
+  const originalFetch = globalThis.fetch;
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const fetchCalls = [];
+    globalThis.fetch = async (url) => {
+      fetchCalls.push(String(url));
+      if (String(url).includes("/pulls/17") && !String(url).includes("/reviews")) {
+        return { ok: true, status: 200, statusText: "OK", headers: { get: () => null }, json: async () => ({ head: { sha: "abc1234" } }) };
+      }
+      if (String(url).includes("/issues/17/comments")) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: { get: () => null },
+          json: async () => ([
+            {
+              id: 42,
+              body: [
+                "Gate review: draft_gate",
+                "Reviewed head SHA: abc1234",
+                "Verdict: clean",
+                "Findings summary: no issues found",
+                "Next action: mark ready for review",
+              ].join("\n"),
+              updated_at: "2026-05-29T21:00:00Z",
+              html_url: "https://github.com/owner/repo/pull/17#issuecomment-42",
+            },
+            {
+              id: 43,
+              body: [
+                "Gate review: pre_approval_gate",
+                "Reviewed head SHA: abc1234",
+                "Verdict: clean",
+                "Findings summary: no issues found",
+                "Next action: await final human approval",
+              ].join("\n"),
+              updated_at: "2026-05-29T22:00:00Z",
+              html_url: "https://github.com/owner/repo/pull/17#issuecomment-43",
+            },
+          ]),
+        };
+      }
+      if (String(url).includes("/pulls/17/reviews")) {
+        return { ok: true, status: 200, statusText: "OK", headers: { get: () => null }, json: async () => [] };
+      }
+      throw new Error(`unexpected fetch call in test: ${url}`);
+    };
+
+    const result = await detectCheckpointEvidence(
+      { repo: "owner/repo", pr: 17 },
+      { env: { GH_TOKEN: "test-token" }, ghCommand: "gh", runChild: enoentRunChild("gh"), cwd: tempDir },
+    );
+
+    assert.equal(result.currentHeadSha, "abc1234");
+    assert.equal(result.draftGate.verdict, "clean");
+    assert.equal(result.preApprovalGate.verdict, "clean");
+    assert.ok(fetchCalls.some((u) => u.includes("/pulls/17")), JSON.stringify(fetchCalls));
+    assert.ok(fetchCalls.some((u) => u.includes("/issues/17/comments")), JSON.stringify(fetchCalls));
+  } finally {
+    globalThis.fetch = originalFetch;
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fetchGithubReviewThreadsPayload falls back to the GraphQL REST endpoint when the gh binary is missing (ENOENT)", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    const fetchCalls = [];
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => null },
+        json: async () => ({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
+      };
+    };
+
+    const payload = await fetchGithubReviewThreadsPayload(
+      { repo: "owner/repo", pr: 17 },
+      { env: { GITHUB_TOKEN: "test-token" }, ghCommand: "gh", runChild: enoentRunChild("gh") },
+    );
+
+    assert.deepEqual(payload.data.repository.pullRequest.reviewThreads.nodes, []);
+    assert.equal(fetchCalls[0].url, "https://api.github.com/graphql");
+    assert.equal(JSON.parse(fetchCalls[0].options.body).variables.pr, 17);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("detectCheckpointEvidence surfaces a real gh error (not ENOENT) instead of silently falling back to REST", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gh-real-error-"));
+  try {
+    const runChild = async () => ({ code: 1, stdout: "", stderr: "gh: authentication required" });
+    await assert.rejects(
+      () => detectCheckpointEvidence(
+        { repo: "owner/repo", pr: 17 },
+        { env: {}, ghCommand: "gh", runChild, cwd: tempDir },
+      ),
+      /gh command failed/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("detect-checkpoint-evidence summarizes the newest valid live gate comments and passes pre-merge check", async () => {
@@ -896,6 +1030,70 @@ test("buildPreMergeGateCheck passes when requireFanoutEvidence and executionMode
       { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: true },
     ],
   });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.failures, []);
+});
+
+// --- skipFanoutLedgerCheck: remote-verifier mode (issue #1358) ---
+// A stateless remote verifier (the gate-evidence CI check; a gh-less API session)
+// never has the gitignored, worktree-local tmp/gate-findings ledger on disk. This
+// mode skips ONLY the ledger/provenance/angle-coverage layer, keeping the
+// comment-derived executionMode/inlineReason check (and the light-mode inline
+// exception) enforced exactly as before.
+
+test("buildPreMergeGateCheck skipFanoutLedgerCheck: PASSES a fanout_fanin verdict with a missing ledger (ledger not remotely verifiable)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/gate-findings/o-r/pr-17/pre_approval_gate-abc1234.json", ledgerExists: false },
+    ],
+  }, { skipFanoutLedgerCheck: true });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.failures, []);
+});
+
+test("buildPreMergeGateCheck skipFanoutLedgerCheck: still FAILS an inline_single_agent verdict that is not light-accepted", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "inline_single_agent", ledgerPath: "tmp/x.json", ledgerExists: false },
+    ],
+  }, { skipFanoutLedgerCheck: true });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("pre_approval_gate") && f.includes("inline_single_agent")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck skipFanoutLedgerCheck: still respects the light-mode inline exception without requiring a ledger", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: true,
+    hasFullLabel: false,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "inline_single_agent",
+        inlineReason: "docs-only micro change",
+        scopeUnderThreshold: true,
+        ledgerPath: "tmp/x.json",
+        ledgerExists: false,
+      },
+    ],
+  }, { skipFanoutLedgerCheck: true });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.failures, []);
+});
+
+test("buildPreMergeGateCheck skipFanoutLedgerCheck: also skips requireFanoutProvenance/angle-coverage failures", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      { name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerPath: "tmp/b.json", ledgerExists: false, provenance: null, mandatoryAngles: ["scope"], anglePool: ["scope", "safety"] },
+    ],
+  }, { skipFanoutLedgerCheck: true });
   assert.equal(result.ok, true);
   assert.deepEqual(result.failures, []);
 });
