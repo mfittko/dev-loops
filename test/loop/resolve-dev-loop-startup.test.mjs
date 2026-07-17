@@ -825,71 +825,54 @@ test("resolver does not block non-local_implementation strategies from main chec
   }
 });
 
-test("buildAutoResolvedInput returns warnings array for failed detection", () => {
+// The next few tests deliberately target a nonexistent issue/PR (999999) with
+// NO gh stub: the real `gh` binary fails every read against it, so the
+// ownership gate's assignees read defaults to an empty list (today's
+// warn+default posture for that READ) and the gate — which applies uniformly
+// regardless of why the artifact looks unassigned — then fails closed with
+// the not-claimed error (#1377). These pin that fail-closed shape; the
+// warnings-array and linkage-default assertions these tests used to make on a
+// successful return now live on the copilot/external-author tests below,
+// which stub the assignment read to reach a normal return.
+test("buildAutoResolvedInput fails closed (not-claimed) when the issue read fails and defaults to unassigned", () => {
   const tmp = stampRepoWithOrigin();
   try {
-    const result = buildAutoResolvedInput({ issue: 999999, cwd: tmp });
-    assert.equal(result.intent, "start_issue_locally");
-    assert.equal(result.artifactState, "not_applicable");
-    assert.equal(result.issueLinkageResolution, "resolved_no_open_pr");
-    assert.equal(result.issueReadiness, "needs_clarification");
-    assert.equal(result.issueAssignmentState, "unassigned");
-    assert.equal(result.loopState, "issue_intake_start");
-    assert.ok(Array.isArray(result.warnings));
-    assert.ok(result.warnings.length >= 1);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("buildAutoResolvedInput sets linkedPr null when detection fails", () => {
-  const tmp = stampRepoWithOrigin();
-  try {
-    const result = buildAutoResolvedInput({ issue: 999999, cwd: tmp });
-    assert.equal(result.currentState.target.linkedPr, null);
-    assert.equal(result.issueLinkageResolution, "resolved_no_open_pr");
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("buildAutoResolvedInput for PR returns pr_followup_start", () => {
-  const tmp = stampRepoWithOrigin();
-  try {
-    const result = buildAutoResolvedInput({ pr: 999999, cwd: tmp });
-    assert.equal(result.intent, "continue_on_pr");
-    assert.equal(result.loopState, "pr_followup_start");
-    assert.equal(result.artifactState, "open");
-    assert.equal(result.currentState.target.kind, "pr");
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("buildAutoResolvedInput returns valid targetPreference", () => {
-  const tmp = stampRepoWithOrigin();
-  try {
-    const result = buildAutoResolvedInput({ issue: 999999, cwd: tmp });
-    assert.ok(
-      result.targetPreference === "prefer_local" || result.targetPreference === "prefer_github_first",
+    assert.throws(
+      () => buildAutoResolvedInput({ issue: 999999, cwd: tmp }),
+      /Issue #999999 is not claimed by any contributor.*edit-issue\.mjs.*--issue 999999 --add-assignee @me/s,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test("buildAutoResolvedInput with local-first tracker source keeps issue-backed startup state", () => {
+test("buildAutoResolvedInput for a PR fails closed (not-claimed) when the PR read fails and defaults to unassigned", () => {
   const tmp = stampRepoWithOrigin();
   try {
-    const result = buildAutoResolvedInput({
-      issue: 999999,
-      cwd: tmp,
-      targetPreference: "prefer_local",
-      inputSource: "tracker",
-    });
-    assert.equal(result.currentState.target.kind, "issue");
-    assert.equal(result.loopState, "issue_intake_start");
-    assert.equal(result.issueLinkageResolution, "resolved_no_open_pr");
+    assert.throws(
+      () => buildAutoResolvedInput({ pr: 999999, cwd: tmp }),
+      /PR #999999 is not claimed by any contributor.*edit-pr\.mjs.*--pr 999999 --add-assignee @me/s,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("buildAutoResolvedInput with local-first tracker source still hits the ownership gate (fails closed, not a phase-doc bypass)", () => {
+  const tmp = stampRepoWithOrigin();
+  try {
+    // inputSource "tracker" (vs "phase-docs") keeps this on the issue-backed
+    // path where the ownership gate applies — proving the tracker source
+    // itself doesn't bypass the gate.
+    assert.throws(
+      () => buildAutoResolvedInput({
+        issue: 999999,
+        cwd: tmp,
+        targetPreference: "prefer_local",
+        inputSource: "tracker",
+      }),
+      /Issue #999999 is not claimed by any contributor/,
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -994,10 +977,16 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
       'process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/dev-loops", issue: 735, hasOpenLinkedPr: true, prNumber: 740 }));',
       "utf8",
     );
-    // Stub gh pr view to return Copilot author
+    // Stub gh pr view to return Copilot author. The ownership gate also reads
+    // the issue's own assignees + viewer login (order-independent "claims"
+    // matching): stub it as assigned to the viewer so the gate passes and the
+    // linked-PR authorship path below is reached.
     const ghStub = await writeGhStubHelper(tempDir, [
       { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN" }) },
-    ]);
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
     const result = await runNode(["--issue", "735"], {
       cwd: tempDir,
       env: {
@@ -1033,7 +1022,10 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
     );
     const ghStub = await writeGhStubHelper(tempDir, [
       { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "some-human-dev" }, state: "OPEN" }) },
-    ]);
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
     const result = await runNode(["--issue", "735"], {
       cwd: tempDir,
       env: {
@@ -1049,6 +1041,295 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
     assert.equal(parsed.canonicalStateSummary.ownership, "external_human");
     assert.equal(parsed.canonicalStateSummary.nextActor, "external_human");
     assert.equal(parsed.canonicalStateSummary.target.pr, 740);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Single-contributor ownership gate (issue #1377): unassigned work is
+// impossible by construction — the resolver requires assigned_to_me and
+// fails closed on anything else (assigned_to_other, unassigned), naming a
+// distinct remedy in each case. assigned_to_copilot keeps its existing flow.
+// ---------------------------------------------------------------------------
+
+async function initRepoWithOrigin(tempDir) {
+  execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+}
+
+// Shadow detect-linked-issue-pr.mjs with a canned "no linked PR" result so the
+// ownership-gate tests don't also need to stub that helper's own gh calls.
+async function stubNoLinkedPr(tempDir, issue) {
+  await mkdir(path.join(tempDir, "scripts", "github"), { recursive: true });
+  await writeFile(
+    path.join(tempDir, "scripts/github/detect-linked-issue-pr.mjs"),
+    `process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/dev-loops", issue: ${issue}, hasOpenLinkedPr: false, prNumber: null }));`,
+    "utf8",
+  );
+}
+
+test("--issue assigned_to_other fails closed naming the foreign assignee (no readiness bundle)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-issue-other-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await stubNoLinkedPr(tempDir, 511);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /Issue #511 is assigned to foreign-dev, not the current viewer/);
+    assert.match(result.stderr, /Have the owner unassign it, or pick a different item/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--issue unassigned fails closed naming the exact claim command (no readiness bundle)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-issue-unassigned-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await stubNoLinkedPr(tempDir, 511);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(
+      result.stderr,
+      /Issue #511 is not claimed by any contributor.*Claim it first: node scripts\/github\/edit-issue\.mjs --repo mfittko\/dev-loops --issue 511 --add-assignee @me/s,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--issue assigned to the viewer (assigned_to_me) proceeds", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-issue-me-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await stubNoLinkedPr(tempDir, 511);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.selectedStrategy, "local_implementation");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("DEVLOOPS_OWNERSHIP_BYPASS=1 skips the ownership gate for read-only inspection (e.g. info.mjs)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-bypass-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await stubNoLinkedPr(tempDir, 511);
+    // Foreign-owned and unclaimed would normally fail closed; the bypass lets a
+    // read-only preview through without ever calling gh api user.
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_OWNERSHIP_BYPASS: "1" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--issue assigned_to_copilot is unchanged: proceeds and never resolves a viewer login", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-issue-copilot-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await stubNoLinkedPr(tempDir, 511);
+    // No "api user" entry at all: if the copilot short-circuit regressed and
+    // the gate tried to resolve a viewer login anyway, the unmatched claims-mode
+    // call would fail closed and this test would catch that regression.
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "copilot-swe-agent" }] }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--issue fails closed with a distinct reason when the viewer login cannot be resolved", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-issue-viewer-fail-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await stubNoLinkedPr(tempDir, 511);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "someone" }] }) },
+      { assertArgs: ["api", "user"], exitCode: 1, stderr: "gh: not authenticated\n" },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /Unable to resolve the current GitHub viewer login/);
+    assert.match(result.stderr, /cannot verify or claim single-contributor ownership/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr assigned_to_other fails closed naming the foreign assignee", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-pr-other-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
+      },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /PR #740 is assigned to foreign-dev, not the current viewer/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr unassigned fails closed naming the exact claim command", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-pr-unassigned-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(
+      result.stderr,
+      /PR #740 is not claimed by any contributor.*Claim it first: node scripts\/github\/edit-pr\.mjs --repo mfittko\/dev-loops --pr 740 --add-assignee @me/s,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr assigned to the viewer proceeds", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-pr-me-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+      },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr continuation fails closed when the PR's linked issue is assigned to another human", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-pr-linked-issue-other-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          assignees: [{ login: "test-viewer" }],
+          closingIssuesReferences: [{ number: 511 }],
+          body: "",
+        }),
+      },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /PR #740's linked issue #511 is assigned to foreign-dev, not the current viewer/);
+    assert.match(result.stderr, /the issue owner owns the whole loop/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr continuation proceeds when the linked issue is merely unassigned (only foreign ownership blocks)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ownership-pr-linked-issue-unassigned-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          assignees: [{ login: "test-viewer" }],
+          closingIssuesReferences: [{ number: 511 }],
+          body: "",
+        }),
+      },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
