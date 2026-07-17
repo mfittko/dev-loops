@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
-import { collapseToTarget, main, runCli } from "../../scripts/projects/resolve-active-board-item.mjs";
+import { collapseToTarget, main, runCli, attemptClaimAndArbitrate } from "../../scripts/projects/resolve-active-board-item.mjs";
 
 // Isolated default cwd (no .devloops): main() resolves statusColumns from cwd,
 // so tests must never read THIS repo's real config as a hidden dependency —
@@ -496,6 +496,84 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
       { kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] },
       { kind: "issue", number: 7, action: "remove-assignee", logins: ["@me"] },
     ]);
+  });
+});
+
+// Focused unit coverage for the extracted per-candidate helper, called
+// directly (no board/GraphQL fixture needed) since it only shells out to
+// `gh issue|pr view|edit` and `gh api user`.
+function directRunChild({ postClaimAssignees, viewerLogin = "test-viewer", claims = [] } = {}) {
+  return async (_cmd, argv) => {
+    if (argv[0] === "api" && argv[1] === "user") {
+      return { code: 0, stdout: JSON.stringify({ login: viewerLogin }), stderr: "" };
+    }
+    if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "view") {
+      return { code: 0, stdout: JSON.stringify({ assignees: postClaimAssignees }), stderr: "" };
+    }
+    if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "edit") {
+      claims.push({ action: argv.includes("--remove-assignee") ? "remove-assignee" : "add-assignee" });
+      return { code: 0, stdout: "{}", stderr: "" };
+    }
+    throw new Error(`directRunChild: unexpected call: ${argv.join(" ")}`);
+  };
+}
+
+describe("resolve-active-board-item attemptClaimAndArbitrate (extracted helper)", () => {
+  const target = { kind: "issue", number: 7 };
+
+  it("sole owner post-claim -> outcome owned, no claimNote", async () => {
+    const result = await attemptClaimAndArbitrate(target, "o/r", {
+      env: {},
+      runChild: directRunChild({ postClaimAssignees: [{ login: "test-viewer" }] }),
+      itemLabel: "issue #7 (Head)",
+      viewerLoginBox: { login: null, resolved: false },
+    });
+    assert.deepEqual(result, { outcome: "owned" });
+  });
+
+  it("contested, viewer wins the tiebreak -> outcome owned with claimNote", async () => {
+    const claims = [];
+    const result = await attemptClaimAndArbitrate(target, "o/r", {
+      env: {},
+      runChild: directRunChild({
+        postClaimAssignees: [{ login: "test-viewer" }, { login: "zzz-other" }],
+        claims,
+      }),
+      itemLabel: "issue #7 (Head)",
+      viewerLoginBox: { login: null, resolved: false },
+    });
+    assert.equal(result.outcome, "owned");
+    assert.match(result.claimNote, /claim_contested_won_tiebreak/);
+    assert.deepEqual(claims, [{ action: "add-assignee" }, { action: "remove-assignee" }]);
+  });
+
+  it("contested, viewer loses the tiebreak -> outcome skip, self-unassigns", async () => {
+    const claims = [];
+    const result = await attemptClaimAndArbitrate(target, "o/r", {
+      env: {},
+      runChild: directRunChild({
+        postClaimAssignees: [{ login: "test-viewer" }, { login: "aaa-other" }],
+        claims,
+      }),
+      itemLabel: "issue #7 (Head)",
+      viewerLoginBox: { login: null, resolved: false },
+    });
+    assert.equal(result.outcome, "skip");
+    assert.match(result.skipReason, /claim_contested_lost_tiebreak/);
+    assert.deepEqual(claims, [{ action: "add-assignee" }, { action: "remove-assignee" }]);
+  });
+
+  it("our claim not visible post-read (only another human) -> outcome skip, never removes the other login", async () => {
+    const claims = [];
+    const result = await attemptClaimAndArbitrate(target, "o/r", {
+      env: {},
+      runChild: directRunChild({ postClaimAssignees: [{ login: "someone-else" }], claims }),
+      itemLabel: "issue #7 (Head)",
+      viewerLoginBox: { login: null, resolved: false },
+    });
+    assert.equal(result.outcome, "skip");
+    assert.match(result.skipReason, /claim_not_visible_post_read/);
+    assert.deepEqual(claims, [{ action: "add-assignee" }, { action: "remove-assignee" }]);
   });
 });
 
