@@ -8,14 +8,14 @@ import { z } from "zod";
 
 import { DevLoopConfigSchema } from "@dev-loops/core/config";
 
-// Docs-accuracy guard for docs/ui-review-recipe-contract.md (#1122): every
+// Docs-accuracy guard for skills/docs/ui-review-recipe-contract.md: every
 // uiReview.*/worktree.* config key the recipe-contract doc names must exist in
 // the shipped zod schema, and every schema leaf must be documented. This fails
 // CI on doc drift in EITHER direction — a bogus documented key, or a schema key
 // the doc forgot.
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const DOC_PATH = path.join(REPO_ROOT, "docs", "ui-review-recipe-contract.md");
+const DOC_PATH = path.join(REPO_ROOT, "skills", "docs", "ui-review-recipe-contract.md");
 
 // zod v4 wrappers that carry an innerType we peel through to the core type.
 const WRAPPERS = new Set(["optional", "default", "nullable", "nonoptional", "readonly", "catch"]);

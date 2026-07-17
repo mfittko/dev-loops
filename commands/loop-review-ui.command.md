@@ -9,7 +9,7 @@ Run the `dev-loop` skill with the public intent `review PR $ARGUMENTS in a UI lo
 **Arguments:**
 - `<pr>` — the pull request to review, as a number or URL. Required; with no argument the loop cannot resolve a target and stops.
 
-**What it does:** reviews the PR by proving the change in the running app from an isolated worktree, not by reading the diff alone. It resolves state, provisions a worktree for the PR head and boots the app, authenticates and drives the changed UI flows, diagnoses captured failures against the diff, reports, then tears down — the running-app sibling of the standard `review` angle. It needs a per-project run/auth recipe in `.devloops`; see the [UI-Review Run/Auth Recipe Contract](../docs/ui-review-recipe-contract.md).
+**What it does:** reviews the PR by proving the change in the running app from an isolated worktree, not by reading the diff alone. It resolves state, provisions a worktree for the PR head and boots the app, authenticates and drives the changed UI flows, diagnoses captured failures against the diff, reports, then tears down — the running-app sibling of the standard `review` angle. It needs a per-project run/auth recipe in `.devloops`; see the [UI-Review Run/Auth Recipe Contract](../skills/docs/ui-review-recipe-contract.md).
 
 **Stop conditions (fails closed with a stated reason):** the target is the primary checkout; no run recipe is declared; a run-recipe `cwd` resolves outside the worktree; a destructive dev-DB migration is not acknowledged; the readiness probe times out; the dev-login recipe cannot authenticate; or the live head has advanced since diagnose.
 

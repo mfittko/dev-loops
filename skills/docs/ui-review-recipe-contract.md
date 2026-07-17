@@ -322,6 +322,6 @@ from the schema or if the schema gains a key not listed here.
 
 ## See also
 
-- [UI Validation Contract](./ui-validation-contract.md)
-- [UI Artifact Contract](./ui-artifact-contract.md)
-- [Worktree Usage Guidance](./worktree-guidance.md)
+- [UI Validation Contract](../../docs/ui-validation-contract.md)
+- [UI Artifact Contract](../../docs/ui-artifact-contract.md)
+- [Worktree Usage Guidance](../../docs/worktree-guidance.md)
