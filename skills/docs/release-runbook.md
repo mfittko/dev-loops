@@ -5,7 +5,10 @@ manual step.** Everything after the tag is hands-off.
 
 ## Procedure
 
-1. On `main` (merged, green), bump the version and add the matching
+1. On `main` (merged, green), bump the version, run
+   `node scripts/claude/generate-claude-assets.mjs` (stamps the bumped version
+   into the generated `npx dev-loops@<version>` pins and the plugin manifest;
+   a stale manifest fails `verify` at publish), and add the matching
    `## <version> - <date>` section to `CHANGELOG.md` (the empty `## Unreleased`
    heading stays above the latest version).
 2. Tag the release commit and push the tag:
