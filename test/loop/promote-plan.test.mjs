@@ -401,4 +401,73 @@ describe("promote-plan CLI", () => {
     assert.equal(result.code, 1);
     assert.match(result.stderr, /requires --plan-file/u);
   });
+
+  // ── --base resolution (#1368) ─────────────────────────────────────────────
+
+  test("no --base and no .devloops: resolves via resolveBaseBranch to the repo's auto-detected default branch (unset-no-regression)", async () => {
+    const { tempDir, repoDir, planPath, ghStub } = await setup();
+    try {
+      // gitInit() creates the repo on "main" — auto-detect must land on "main",
+      // the same value the prior hardcoded default always used.
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--json"], {
+        cwd: repoDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      const ghLog = (await readFile(ghStub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+      const call = JSON.parse(ghLog[0]);
+      const baseIdx = call.indexOf("--base");
+      assert.notEqual(baseIdx, -1, `expected --base in gh call: ${call.join(" ")}`);
+      assert.equal(call[baseIdx + 1], "main");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("configured workflow.baseBranch (.devloops) flows through to the create-pr --base when --base is omitted", async () => {
+    const { tempDir, repoDir, planPath, ghStub } = await setup();
+    try {
+      await writeFile(
+        path.join(repoDir, ".devloops"),
+        "version: 1\nworkflow:\n  baseBranch: integration/develop\n",
+        "utf8",
+      );
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--json"], {
+        cwd: repoDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      const ghLog = (await readFile(ghStub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+      const call = JSON.parse(ghLog[0]);
+      const baseIdx = call.indexOf("--base");
+      assert.notEqual(baseIdx, -1, `expected --base in gh call: ${call.join(" ")}`);
+      // gh/PR base is the bare configured name — no origin/ prefix (that
+      // prefix is worktree-creation-only; see ensure-worktree.mjs).
+      assert.equal(call[baseIdx + 1], "integration/develop");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicit --base still wins over both config and auto-detect", async () => {
+    const { tempDir, repoDir, planPath, ghStub } = await setup();
+    try {
+      await writeFile(
+        path.join(repoDir, ".devloops"),
+        "version: 1\nworkflow:\n  baseBranch: integration/develop\n",
+        "utf8",
+      );
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--base", "explicit-override", "--json"], {
+        cwd: repoDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      const ghLog = (await readFile(ghStub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+      const call = JSON.parse(ghLog[0]);
+      const baseIdx = call.indexOf("--base");
+      assert.equal(call[baseIdx + 1], "explicit-override");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
