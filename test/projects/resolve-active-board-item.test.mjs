@@ -372,6 +372,25 @@ describe("resolve-active-board-item Next Up single-contributor ownership gate (#
     ]);
   });
 
+  it("post-claim viewer-login resolution failure fails closed AND best-effort self-unclaims (no orphaned claim left behind)", async () => {
+    // All-unassigned scan → the viewer login is first resolved AFTER the
+    // claim; a failure there must not strand the just-made claim.
+    const claims = [];
+    await assert.rejects(
+      () => runArgs(boardRunChild({
+        columns: { "In Progress": [], "Next Up": [{ issueNumber: 7, title: "Head" }] },
+        assignees: { 7: [] },
+        viewerLoginError: true,
+        claims,
+      })),
+      /Unable to resolve the current GitHub viewer login/,
+    );
+    assert.deepEqual(claims, [
+      { kind: "issue", number: 7, action: "add-assignee", logins: ["@me"] },
+      { kind: "issue", number: 7, action: "remove-assignee", logins: ["@me"] },
+    ]);
+  });
+
   it("fails closed when the viewer login cannot be resolved (distinct reason from an assignee-read failure)", async () => {
     await assert.rejects(
       () => runArgs(boardRunChild({

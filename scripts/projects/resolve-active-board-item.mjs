@@ -304,7 +304,13 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
       // contested claim with the deterministic tiebreak instead of trusting
       // the claim call alone.
       if (!viewerLoginResolved) {
-        viewerLogin = await resolveViewerLogin({ env, runChild });
+        try {
+          viewerLogin = await resolveViewerLogin({ env, runChild });
+        } catch (err) {
+          // Don't leave an orphaned self-claim behind on an aborted pick.
+          await bestEffortSelfUnclaim(target, args.repo, { env, runChild });
+          throw err;
+        }
         viewerLoginResolved = true;
       }
       let postClaimAssignees;
