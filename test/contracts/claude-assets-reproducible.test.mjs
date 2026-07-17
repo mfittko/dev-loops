@@ -188,3 +188,53 @@ test("every canonical agent and non-doc skill has a generated counterpart", () =
     assert.ok(targets.includes(expected), `expected generated asset ${expected}`);
   }
 });
+
+test("a malformed plugin manifest fails asset generation loudly instead of writing garbage", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-assets-plugin-bad-"));
+  try {
+    fs.writeFileSync(path.join(tmpRoot, "package.json"), JSON.stringify({ name: "x", version: "9.9.9" }) + "\n", "utf8");
+    fs.mkdirSync(path.join(tmpRoot, ".claude", ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, ".claude", ".claude-plugin", "plugin.json"), "{not json", "utf8");
+    assert.throws(() => collectGeneratedAssets({ repoRoot: tmpRoot }), SyntaxError);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("plugin manifest version is a generated asset stamped from package.json (#1348)", () => {
+  // Real repo: the manifest must be emitted with the package version.
+  const assets = collectGeneratedAssets({ repoRoot });
+  const manifest = assets.find((a) => a.target === ".claude/.claude-plugin/plugin.json");
+  assert.ok(manifest, "plugin manifest must be a generated asset");
+  const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  assert.equal(JSON.parse(manifest.content).version, pkg.version);
+
+  // Consumer-shaped tree with a STALE committed manifest: checkAssets must flag it
+  // out-of-date, and a plain generate must bring it in sync with zero manual edits.
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-assets-plugin-"));
+  try {
+    fs.writeFileSync(path.join(tmpRoot, "package.json"), JSON.stringify({ name: "x", version: "9.9.9" }) + "\n", "utf8");
+    fs.mkdirSync(path.join(tmpRoot, ".claude", ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, ".claude", ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "dev-loops", version: "0.0.1", description: "d" }, null, 2) + "\n",
+      "utf8",
+    );
+    const tmpAssets = collectGeneratedAssets({ repoRoot: tmpRoot });
+    const drifted = checkAssets(tmpAssets, { repoRoot: tmpRoot });
+    assert.ok(
+      drifted.some((d) => d.target === ".claude/.claude-plugin/plugin.json" && d.reason === "out-of-date"),
+      `stale manifest version must be flagged, got ${JSON.stringify(drifted)}`,
+    );
+    writeAssets(tmpAssets, { repoRoot: tmpRoot });
+    const onDisk = JSON.parse(fs.readFileSync(path.join(tmpRoot, ".claude", ".claude-plugin", "plugin.json"), "utf8"));
+    assert.equal(onDisk.version, "9.9.9");
+    assert.equal(onDisk.name, "dev-loops", "non-version manifest fields stay hand-authored");
+    assert.ok(
+      !checkAssets(tmpAssets, { repoRoot: tmpRoot }).some((d) => d.target === ".claude/.claude-plugin/plugin.json"),
+      "freshly generated manifest must be clean",
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});

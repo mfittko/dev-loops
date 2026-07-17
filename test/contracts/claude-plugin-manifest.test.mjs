@@ -25,7 +25,7 @@ test("plugin manifest version is kept in sync with the root package.json version
   assert.equal(
     manifest.version,
     pkg.version,
-    "plugin.json version must match package.json version — bump both together",
+    "plugin.json version must match package.json version — run `node scripts/claude/generate-claude-assets.mjs` and commit the regenerated manifest",
   );
 });
 

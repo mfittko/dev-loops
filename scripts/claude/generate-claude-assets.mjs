@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * Generate the Claude Code asset tree (.claude/agents, .claude/skills) from the canonical
- * Pi sources (agents/*.agent.md, skills/<name>/SKILL.md). The sources remain the single
- * source of truth; the generated tree is committed and kept in sync by `--check` (CI/test).
+ * Generate the Claude Code asset tree (.claude/agents, .claude/skills, and the plugin
+ * manifest version in .claude/.claude-plugin/plugin.json) from the canonical Pi sources
+ * (agents/*.agent.md, skills/<name>/SKILL.md) and the root package.json version. The sources
+ * remain the single source of truth; the generated tree is committed and kept in sync by
+ * `--check` (CI/test).
  *
  * Usage:
  *   node scripts/claude/generate-claude-assets.mjs            Write the .claude tree.
@@ -32,6 +34,19 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
   const pkgPath = path.join(repoRoot, "package.json");
   if (fs.existsSync(pkgPath)) {
     version = JSON.parse(fs.readFileSync(pkgPath, "utf8")).version ?? "latest";
+  }
+
+  // The plugin manifest's version must equal the package version (locked by the
+  // claude-plugin-manifest contract test). Emitting the manifest as a generated asset makes a
+  // release bump self-syncing and lets --check catch a stale manifest at asset-check time.
+  // Non-version fields stay hand-authored: the committed manifest is the source, only the
+  // version field is stamped.
+  const manifestRel = ".claude/.claude-plugin/plugin.json";
+  const manifestAbs = path.join(repoRoot, manifestRel);
+  if (fs.existsSync(manifestAbs) && version !== "latest") {
+    const manifest = JSON.parse(fs.readFileSync(manifestAbs, "utf8"));
+    manifest.version = version;
+    assets.push({ target: manifestRel, content: JSON.stringify(manifest, null, 2) + "\n" });
   }
 
   const agentsDir = path.join(repoRoot, "agents");
