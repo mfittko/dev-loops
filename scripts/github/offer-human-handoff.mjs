@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { resolveHandoffCandidates } from "./resolve-handoff-candidates.mjs";
-import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: offer-human-handoff.mjs --repo <owner/name> --pr <number> [--assign <login>...] [--request-review <login>...] [--changed-files <csv>] [--pr-author <login>]
 Human-handoff offer at the pre-approval / merge-handoff boundary (#920, Request B
@@ -37,45 +38,74 @@ Exit codes:
 
 const parseError = buildParseError(USAGE);
 
-function nextValue(args, i, flag) {
-  const value = args[i];
-  if (typeof value !== "string" || value.length === 0 || value.startsWith("--")) {
-    throw parseError(`Missing value for ${flag}`);
-  }
-  return value;
-}
-
 // A login flag value with the leading `@` stripped and trimmed. Reject an empty
 // result (e.g. `--assign @`) so a blank login can never reach `gh pr edit
 // --add-assignee ""`.
-function loginValue(args, i, flag) {
-  const login = nextValue(args, i, flag).trim().replace(/^@/, "").trim();
-  if (login === "") throw parseError(`${flag} requires a non-empty login`);
+function loginValue(token) {
+  const login = requireTokenValue(token, parseError).trim().replace(/^@/, "").trim();
+  if (login === "") throw parseError(`${token.rawName} requires a non-empty login`);
   return login;
 }
 
 export function parseOfferCliArgs(argv) {
-  const args = [...argv];
-  if (args.includes("--help") || args.includes("-h")) return { help: true };
   const options = {
     help: false, repo: undefined, pr: undefined,
     assign: [], requestReview: [], changedFiles: undefined, prAuthor: undefined,
   };
-  for (let i = 0; i < args.length; i += 1) {
-    const token = args[i];
-    if (token === "--repo") { options.repo = nextValue(args, ++i, "--repo"); continue; }
-    if (token === "--pr") { options.pr = parsePrNumber(nextValue(args, ++i, "--pr"), parseError); continue; }
-    if (token === "--assign") { options.assign.push(loginValue(args, ++i, "--assign")); continue; }
-    if (token === "--request-review") { options.requestReview.push(loginValue(args, ++i, "--request-review")); continue; }
-    if (token === "--changed-files") {
-      options.changedFiles = nextValue(args, ++i, "--changed-files")
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      pr: { type: "string" },
+      assign: { type: "string", multiple: true },
+      "request-review": { type: "string", multiple: true },
+      "changed-files": { type: "string" },
+      "pr-author": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
+      options.help = true;
+      return options;
+    }
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "assign") {
+      options.assign.push(loginValue(token));
+      continue;
+    }
+    if (token.name === "request-review") {
+      options.requestReview.push(loginValue(token));
+      continue;
+    }
+    if (token.name === "changed-files") {
+      options.changedFiles = requireTokenValue(token, parseError)
         .split(",").map((s) => s.trim()).filter((s) => s.length > 0);
       continue;
     }
-    if (token === "--pr-author") { options.prAuthor = nextValue(args, ++i, "--pr-author").trim().replace(/^@/, ""); continue; }
-    if (token === "--jq") { options.jq = nextValue(args, ++i, "--jq"); continue; }
-    if (token === "--silent" || token === "-s") { options.silent = true; continue; }
-    throw parseError(`Unknown argument: ${token}`);
+    if (token.name === "pr-author") {
+      options.prAuthor = requireTokenValue(token, parseError).trim().replace(/^@/, "");
+      continue;
+    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
+    throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.pr === undefined) {
     throw parseError("Offering human handoff requires both --repo <owner/name> and --pr <number>");

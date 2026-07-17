@@ -412,7 +412,7 @@ For each delegated task:
 - require the subagent to report blockers, verification results, and changed files
 - avoid circular delegation and overlapping scopes
 <!-- pi-only -->
-- resolve the subagent's model via `resolveRoleModel(config, { role, harness: "pi" })` (`role` = the delegate name, e.g. `developer`/`quality`/`docs`/`fixer`/`refiner`) and pass it at dispatch **only when non-null**; this is a routine **role** dispatch, so leave `kind` unset (a gate review-angle fan-out passes `kind: "angle"` instead — see the reviewer step below). Built-in Pi tiers are `null`, so this is a no-op until an operator sets `models.tiers.<alias>.pi`. See [Main-agent delegation contract](../docs/main-agent-contract.md). (Under Claude the tier is baked into the agent's `model:` frontmatter, so no dispatch-time model param is needed.)
+- resolve the subagent's model via `resolveRoleModel(config, { role, harness: "pi" })` (`role` = the delegate name, e.g. `developer`/`quality`/`docs`/`fixer`/`refiner`) and pass it at dispatch **only when non-null**; this is a routine **role** dispatch, so leave `kind` unset (a gate inspection-angle fan-out passes `kind: "angle"` instead — see the reviewer step below). Built-in Pi tiers are `null`, so this is a no-op until an operator sets `models.tiers.<alias>.pi`. See [Main-agent delegation contract](../docs/main-agent-contract.md). (Under Claude the tier is baked into the agent's `model:` frontmatter, so no dispatch-time model param is needed.)
 <!-- /pi-only -->
 
 ### Status monitoring
