@@ -488,6 +488,11 @@
         "devModeDefault": {
           "type": "boolean",
           "description": "Default new loops to dev mode."
+        },
+        "baseBranch": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-level base/integration branch override (bare name, e.g. \"main\" or \"spike/foo\"). When set, worktree creation and PR targeting use it instead of the auto-detected default branch. Unset = auto-detect (origin/HEAD, else main/master)."
         }
       },
       "additionalProperties": false,
