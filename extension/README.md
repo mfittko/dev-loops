@@ -148,6 +148,7 @@ workflow:
   requireRetrospective: true
   requireDraftFirst: true
   devModeDefault: true
+  baseBranch: spike/shakapacker-to-vite  # operate against a non-main integration branch
 ```
 
 ### Model tiers (`models.tiers` / `models.roleTiers`)
@@ -205,12 +206,15 @@ workflow:
   requireRetrospective: false
   requireDraftFirst: false
   devModeDefault: false
+  # baseBranch: unset by default — the loop auto-detects the repo's default
+  # branch (origin/HEAD, else main/master).
 ```
 
 - `requireRetrospective` — when enabled by repo settings, the next qualifying GitHub-first async start/resume must honor the retrospective checkpoint gate
 - `requireRetrospectiveGate` — **removed (issue #1077)**. The retrospective is now advisory: it always runs and returns findings to the conductor via the envelope's `retrospectiveFindings` field and an advisory PR comment, never blocking merge or any transition. There is no longer a merge-gate config key for the retrospective.
 - `requireDraftFirst` — marks draft-first PR creation as required workflow policy for repos that opt in
 - `devModeDefault` — declares that local implementation should default to formal dev mode; this is config-only for now and establishes source-of-truth config plus docs for future runtime consumers
+- `baseBranch` — repo-level base/integration branch override (bare name, e.g. `main` or `spike/shakapacker-to-vite`). When set, a full dev-loop (worktree creation, PR targeting, issue-less scope measurement) operates against it instead of the auto-detected default branch — the knob a phased migration (or any work that must stack on one long-lived integration branch and never touch `main`) needs. Unset (the default) keeps auto-detecting `origin/HEAD`, else `main`/`master`. Resolved by `resolveBaseBranch(config, { cwd })` from `@dev-loops/core/config`; `scripts/loop/ensure-worktree.mjs` and `scripts/github/create-pr.mjs` stay config-agnostic — the resolved base is injected as an explicit `--base` by the resolver's `nextAction` hint and the `local-implementation` SKILL's PR-create step.
 
 ### Config precedence
 
