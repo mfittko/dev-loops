@@ -101,7 +101,9 @@ async function runResolverForTarget(target, { repoRoot = process.cwd() } = {}) {
     throw new Error("Cannot resolve handoff envelope: target repo is required");
   }
   const args = ["scripts/loop/resolve-dev-loop-startup.mjs", "--pr", String(target.pr)];
-  const env = { ...process.env, ...runContextEnv("viewer-operator-tool") };
+  // Read-only envelope preview: never claims and must render PRs the operator
+  // does not own, so the ownership gate is bypassed like every inspection path.
+  const env = { ...process.env, ...runContextEnv("viewer-operator-tool"), DEVLOOPS_OWNERSHIP_BYPASS: "1" };
   const { stdout, stderr } = await execFile("node", args, { cwd: repoRoot, timeout: 30000, env });
   try {
     return JSON.parse(stdout);
