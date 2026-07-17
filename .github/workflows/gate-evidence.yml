@@ -2,8 +2,10 @@ name: Gate evidence
 
 # Server-side enforcement of the draft_gate / pre_approval_gate contract
 # (skills/docs/merge-preconditions.md, MERGE-PRECOND-REQUIRED items 3-4). Runs on
-# GitHub's own token, so an API-driven ready/merge transition (gh CLI, MCP/REST,
-# web UI) cannot bypass the gates the client-side tooling already enforces.
+# GitHub's own token so that — once an operator makes this a required check in
+# branch protection on the default branch — an API-driven ready/merge transition
+# (gh CLI, MCP/REST, web UI) cannot bypass the gates the client-side tooling
+# already enforces. Until then it runs and reports but does not block merge.
 #
 # Skipped entirely while the PR is a draft (draft_gate is not required yet, and a
 # draft PR cannot be merged regardless); GitHub Actions treats a skipped job on a
