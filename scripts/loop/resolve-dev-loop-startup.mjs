@@ -65,6 +65,11 @@ Required (exactly one):
   --plan-file <path>  Path to a phase-doc-format plan to start locally
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
+  --ui-review    With --pr only: route the PR to the ui_review strategy
+                 (running-app review from an isolated worktree) instead of
+                 the default continue_on_pr/copilot_pr_followup path.
+                 Rejected without --pr, or combined with --issue/--input/
+                 --plan-file/--spike.
   --lightweight  With --issue: use the PR body as the spec-of-record
                  (canonicalSpecSource: pr_body) — no phase/plan doc minted or
                  committed. Same gate sequence; only the backing artifact
@@ -165,6 +170,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     planFile: undefined,
     spike: undefined,
     lightweight: false,
+    uiReview: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -176,6 +182,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       "plan-file": { type: "string" },
       spike: { type: "string" },
       lightweight: { type: "boolean" },
+      "ui-review": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -217,12 +224,23 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       options.lightweight = true;
       continue;
     }
+    if (token.name === "ui-review") {
+      options.uiReview = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const modeCount = [options.inputPath, options.issue, options.pr, options.planFile, options.spike].filter(v => v !== undefined).length;
   if (modeCount > 1) {
     throw parseError("--issue, --pr, --input, --plan-file, and --spike are mutually exclusive; provide exactly one");
+  }
+  // --ui-review is a PR-only selector: valid only alongside --pr, never with
+  // --issue/--input/--plan-file/--spike, and never alone. Checked ahead of the
+  // "no mode selected" error below so its rejection reason names --ui-review
+  // specifically rather than falling through to the generic message.
+  if (options.uiReview && options.pr === undefined) {
+    throw parseError("--ui-review is only valid with --pr <n> (rejected with --issue, --input, --plan-file, --spike, or with no --pr).");
   }
   // --lightweight is normally a MODIFIER (not a 6th mode): it makes the PR body
   // the spec-of-record for the --issue local path. Used ALONE (modeCount === 0,
@@ -389,7 +407,7 @@ function normalizeConfigInputSource(value) {
   if (value === "tracker") return "tracker";
   return "tracker";
 }
-export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, env = process.env }) {
+export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, env = process.env }) {
   // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
   // (PR + linked-issue checks); reset it per invocation so a long-lived
   // process (or test) never reuses a stale login across resolutions.
@@ -577,13 +595,18 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     }
   }
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);
+  // `--ui-review` (issue #1362) routes the PR to the ui_review strategy
+  // instead of the default continue_on_pr/copilot_pr_followup path; every
+  // other field (ownership/nextActor/artifactState/etc.) stays identical —
+  // only intent + loopState change, and only when the flag is set, so the
+  // plain --pr path is byte-unchanged.
   return {
-    intent: "continue_on_pr",
+    intent: uiReview ? "review_pr_ui" : "continue_on_pr",
     mode: "bounded_handoff",
     targetPreference: resolvedTargetPreference,
     artifactState,
     issueLinkageResolution: "not_applicable",
-    loopState: "pr_followup_start",
+    loopState: uiReview ? "pr_ui_review_start" : "pr_followup_start",
     currentState: {
       target: { kind: "pr", issue: null, pr, linkedPr: null, branch: null, phase: null },
       ownership: "copilot",
@@ -1071,6 +1094,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       pr: options.pr,
       cwd: sessionCwd,
       targetPreference,
+      uiReview: options.uiReview,
       env: adapter.getEnv(),
     });
   }

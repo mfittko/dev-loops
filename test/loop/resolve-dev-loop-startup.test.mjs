@@ -60,6 +60,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     planFile: undefined,
     spike: undefined,
     lightweight: false,
+    uiReview: false,
   });
   assert.deepEqual(parseResolveDevLoopStartupCliArgs(["--help"]), {
     help: true,
@@ -69,6 +70,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     planFile: undefined,
     spike: undefined,
     lightweight: false,
+    uiReview: false,
   });
 });
 
@@ -86,6 +88,35 @@ test("parseResolveDevLoopStartupCliArgs parses --pr", () => {
   assert.equal(opts.inputPath, undefined);
   assert.equal(opts.issue, undefined);
   assert.equal(opts.pr, 507);
+});
+
+test("parseResolveDevLoopStartupCliArgs parses --pr --ui-review", () => {
+  const opts = parseResolveDevLoopStartupCliArgs(["--pr", "507", "--ui-review"]);
+  assert.equal(opts.help, false);
+  assert.equal(opts.pr, 507);
+  assert.equal(opts.uiReview, true);
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --ui-review without --pr", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--ui-review"]),
+    /--ui-review is only valid with --pr/i,
+  );
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --ui-review combined with --issue/--input/--plan-file/--spike", () => {
+  for (const args of [
+    ["--issue", "511", "--ui-review"],
+    ["--input", "state.json", "--ui-review"],
+    ["--plan-file", "p.md", "--ui-review"],
+    ["--spike", "s.md", "--ui-review"],
+  ]) {
+    assert.throws(
+      () => parseResolveDevLoopStartupCliArgs(args),
+      /--ui-review is only valid with --pr/i,
+      `expected rejection for ${JSON.stringify(args)}`,
+    );
+  }
 });
 
 test("parseResolveDevLoopStartupCliArgs rejects --issue combined with --pr", () => {
@@ -1358,6 +1389,63 @@ test("--pr assigned to the viewer proceeds", async () => {
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
+    // Byte-unchanged plain --pr path (issue #1362): --ui-review must never
+    // change the default routing outcome when the flag is absent.
+    assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
+    assert.equal(parsed.canonicalStateSummary.loopState, "pr_followup_start");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr --ui-review routes to the ui_review strategy end-to-end (issue #1362)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ui-review-pr-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+      },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--ui-review"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.selectedStrategy, "ui_review");
+    assert.equal(parsed.canonicalStateSummary.loopState, "pr_ui_review_start");
+    assert.equal(parsed.canonicalStateSummary.requiresAsyncDispatch, false);
+    assert.deepEqual(parsed.requiredReads, [
+      "skills/docs/public-dev-loop-contract.md",
+      "skills/ui-review/SKILL.md",
+    ]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr --ui-review still fails closed on foreign PR ownership (no bypass, issue #1362)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ui-review-pr-foreign-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
+      },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--ui-review"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /PR #740 is assigned to foreign-dev, not the current viewer/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
