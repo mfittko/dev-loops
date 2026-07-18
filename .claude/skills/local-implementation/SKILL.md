@@ -72,14 +72,18 @@ When the local spec already lives in a tracker issue:
 For the `local_implementation` strategy, before any planning or implementation mutation, you MUST run the pre-flight gate:
 
 ```sh
-node scripts/loop/pre-flight-gate.mjs --expected-branch <working-branch> --check-subagents
+dev-loops loop pre-flight-gate --expected-branch <working-branch> --check-subagents
 ```
+
+(source-repo fallback: `node scripts/loop/pre-flight-gate.mjs --expected-branch <working-branch> --check-subagents`)
 
 Before creating or reusing a worktree for local implementation, use the canonical lifecycle entrypoint (`WORKTREE-CREATE-PROVISION`, see [Worktree usage guidance](../../docs/worktree-guidance.md#create-or-reuse--provision-ensure-worktreemjs)):
 
 ```sh
-node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>
+dev-loops loop ensure-worktree --repo-root <main> --issue <n>
 ```
+
+(source-repo fallback: `node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>`)
 
 This validates worktree isolation (current directory under `tmp/worktrees/`) and branch identity (current branch matches the working branch); `--check-subagents` only reports subagent availability and is advisory (fails-open, does not block the gate). If the gate fails, **stop and fix the violation** before proceeding — do not bypass it in normal workflow execution.
 
