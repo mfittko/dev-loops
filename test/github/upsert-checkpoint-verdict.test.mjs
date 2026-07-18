@@ -3269,11 +3269,11 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
   }
 });
 
-test("upsert-checkpoint-verdict --findings-json structured verdict carries the gateEvidenceNote on the summary line (parity with free-text, #898)", async () => {
-  // Parity check for the Copilot review finding: in structured (--findings-json)
-  // mode the `**Findings summary:**` line must also carry coordination's
-  // gateEvidenceNote (here the round-exhaustion / pre_approval_gate fallback
-  // note), exactly like the free-text appendGateEvidenceNote path. The same PR
+test("upsert-checkpoint-verdict --findings-json structured verdict renders the gateEvidenceNote on its own labeled line (parity with free-text)", async () => {
+  // In structured (--findings-json) mode the coordination gateEvidenceNote (here
+  // the round-exhaustion / pre_approval_gate fallback note) renders on its own
+  // `**Gate evidence note:**` line — NOT spliced with `;` into the
+  // `**Findings summary:**` line — exactly like the free-text path. The same PR
   // state as the free-text round-cap test drives coordination to emit the note.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-note-"));
   const roundExhaustionNote = "Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.";
