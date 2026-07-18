@@ -41,26 +41,6 @@ export function partitionEntriesByCheckName(entries, targetName) {
   return { matched, rest };
 }
 
-/**
- * Promote an ordinary "success" CI status to "crediblyGreen" when the only
- * reason it isn't literally all-green is a known loop-derived check (e.g.
- * `gate-evidence`) that was excluded before computing it. A genuine
- * failure/pending/none is never promoted — this only relabels an
- * already-"success" verdict so callers can tell "all green" apart from
- * "green except our own excluded, self-referential check" while still
- * treating both as non-blocking.
- *
- * @param {"success"|"failure"|"pending"|"none"} status
- * @param {Array<string>} excludedFailureDetails
- * @returns {"success"|"failure"|"pending"|"none"|"crediblyGreen"}
- */
-export function promoteExcludedCleanCiStatus(status, excludedFailureDetails) {
-  if (status === "success" && Array.isArray(excludedFailureDetails) && excludedFailureDetails.length > 0) {
-    return "crediblyGreen";
-  }
-  return status;
-}
-
 function normalizeHeadScopedCiStatus(status) {
   return VALID_HEAD_SCOPED_CI_STATUSES.has(status) ? status : "none";
 }
@@ -314,10 +294,15 @@ export function normalizeHeadScopedCiContract({
  * Derive a loop-safe CI status from a PR `statusCheckRollup` snapshot: the
  * `LOOP_DERIVED_CI_CHECK_NAME` entry (`gate-evidence`) is excluded from the
  * status computation before it can block, and surfaced separately so a
- * genuinely failing check right beside it can never be masked.
+ * genuinely failing check right beside it can never be masked. Every reason
+ * gate-evidence can be red (missing draft_gate/pre_approval evidence,
+ * unresolved threads, a stale runner) is independently tracked elsewhere in
+ * the loop snapshot, so excluding it here loses no real signal: `status`
+ * stays a plain "success" (not an "unconfirmed" crediblyGreen) when it is the
+ * only excluded failure and everything else is green.
  *
  * @param {Array<object>} rollup
- * @returns {{ status: "success"|"failure"|"pending"|"none"|"crediblyGreen", excludedFailureDetails: Array<string> }}
+ * @returns {{ status: "success"|"failure"|"pending"|"none", excludedFailureDetails: Array<string> }}
  */
 export function deriveLoopCiStatusFromRollup(rollup) {
   const { matched, rest } = partitionEntriesByCheckName(rollup, LOOP_DERIVED_CI_CHECK_NAME);
@@ -325,5 +310,5 @@ export function deriveLoopCiStatusFromRollup(rollup) {
   const excludedFailureDetails = matched.length > 0 && normalizeStatusCheckRollupStatus(matched) === "failure"
     ? [LOOP_DERIVED_CI_CHECK_NAME]
     : [];
-  return { status: promoteExcludedCleanCiStatus(status, excludedFailureDetails), excludedFailureDetails };
+  return { status, excludedFailureDetails };
 }

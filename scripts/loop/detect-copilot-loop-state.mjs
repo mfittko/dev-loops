@@ -27,7 +27,6 @@ import {
   normalizeHeadScopedCiContract,
   deriveLoopCiStatusFromRollup,
   partitionEntriesByCheckName,
-  promoteExcludedCleanCiStatus,
   LOOP_DERIVED_CI_CHECK_NAME,
 } from "@dev-loops/core/loop/copilot-ci-status";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -230,8 +229,10 @@ async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }
   let checkRunsSignal = null;
   let checkRunsCount = null;
   // Failing-ness of the excluded gate-evidence run (#1358), tracked separately
-  // from the pre-existing PR-visibility exclusion (#740) so only OUR
-  // exclusion can promote the merged status to crediblyGreen below.
+  // from the pre-existing PR-visibility exclusion (#740) — excluding it never
+  // masks a real failure and (unlike #740) never needs a crediblyGreen relabel
+  // either, since every reason it can be red is independently tracked
+  // elsewhere in the loop snapshot (#1387).
   let loopDerivedFailureDetails = [];
   if (checkRunsResult.code === 0) {
     try {
@@ -290,7 +291,7 @@ async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }
     checkRunsUnsupportedCompleted: checkRunsSignal?.unsupportedCompleted ?? false,
   }).overallStatus;
   return {
-    status: promoteExcludedCleanCiStatus(mergedStatus, loopDerivedFailureDetails),
+    status: mergedStatus,
     observedZeroSuitesAndStatuses: checkRunsCount === 0 && statusesCount === 0,
     failureDetails: checkRunsSignal?.failureDetails ?? [],
     excludedFailureDetails: checkRunsSignal?.excludedFailureDetails ?? [],

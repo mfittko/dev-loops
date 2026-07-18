@@ -11,7 +11,6 @@ import {
   normalizeHeadScopedCiContract,
   deriveLoopCiStatusFromRollup,
   partitionEntriesByCheckName,
-  promoteExcludedCleanCiStatus,
   LOOP_DERIVED_CI_CHECK_NAME,
 } from "../src/loop/copilot-ci-status.mjs";
 
@@ -227,22 +226,17 @@ test("partitionEntriesByCheckName splits rollup entries by name/context", () => 
   assert.equal(rest[0].name, "test-scripts");
 });
 
-test("promoteExcludedCleanCiStatus promotes success to crediblyGreen only when excluded failures exist", () => {
-  assert.equal(promoteExcludedCleanCiStatus("success", ["gate-evidence"]), "crediblyGreen");
-  assert.equal(promoteExcludedCleanCiStatus("success", []), "success");
-  assert.equal(promoteExcludedCleanCiStatus("failure", ["gate-evidence"]), "failure");
-  assert.equal(promoteExcludedCleanCiStatus("pending", ["gate-evidence"]), "pending");
-  assert.equal(promoteExcludedCleanCiStatus("none", ["gate-evidence"]), "none");
-});
-
-test("deriveLoopCiStatusFromRollup: gate-evidence as the ONLY failing check yields crediblyGreen and excludes it", () => {
+// #1387: gate-evidence red-alone must derive plain "success", not an
+// "unconfirmed" crediblyGreen — every reason it can be red is independently
+// tracked elsewhere in the loop snapshot, so excluding it loses no signal.
+test("deriveLoopCiStatusFromRollup: gate-evidence as the ONLY failing check yields success and excludes it", () => {
   const result = deriveLoopCiStatusFromRollup([
     { name: "gate-evidence", status: "COMPLETED", conclusion: "FAILURE" },
     { name: "test-scripts", status: "COMPLETED", conclusion: "SUCCESS" },
     { name: "test-core", status: "COMPLETED", conclusion: "SUCCESS" },
   ]);
 
-  assert.equal(result.status, "crediblyGreen");
+  assert.equal(result.status, "success");
   assert.deepEqual(result.excludedFailureDetails, ["gate-evidence"]);
 });
 

@@ -603,9 +603,24 @@ test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fa
         assertArgs: ["api", "graphql"],
         stdout: emptyThreads + "\n",
       },
-      // No check-runs/status refresh calls: fallbackCiStatus is "crediblyGreen"
-      // (not the literal "success" the refresh guard requires), so the current-head
-      // refresh never fires — gate-evidence alone must not trigger it either.
+      // fallbackCiStatus is now the literal "success" (#1387: gate-evidence-only
+      // red no longer promotes to crediblyGreen), so the current-head refresh
+      // DOES fire here (all reviews are off the current head) — mirror the same
+      // gate-evidence-red/rest-green shape at the check-runs layer.
+      {
+        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        stdout: JSON.stringify({
+          check_runs: [
+            { status: "COMPLETED", conclusion: "FAILURE", name: "gate-evidence" },
+            { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
+            { status: "COMPLETED", conclusion: "SUCCESS", name: "test-core" },
+          ],
+        }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        stdout: '{"statuses":[]}\n',
+      },
     ]);
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
@@ -613,11 +628,13 @@ test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fa
     assert.equal(result.code, 0, `stderr: ${result.stderr}`);
 
     const output = JSON.parse(result.stdout);
-    assert.equal(output.snapshot.ciStatus, "crediblyGreen");
+    assert.equal(output.snapshot.ciStatus, "success");
     assert.deepEqual(output.snapshot.excludedFailureDetails, ["gate-evidence"]);
     // This is the exact #1383 deadlock: at the round cap with clean threads, a
     // red gate-evidence check must fall through to the clean fallback (which can
-    // post pre_approval_gate) instead of hard-stopping at ROUND_CAP_REACHED.
+    // post pre_approval_gate) instead of hard-stopping at ROUND_CAP_REACHED. Its
+    // ciStatus is plain "success" (#1387), not an "unconfirmed" crediblyGreen,
+    // so it also clears the round-cap-clean-fallback CI-confirmation gate.
     assert.equal(output.state, "round_cap_clean_fallback");
     assert.equal(output.terminal, true);
   } finally {
