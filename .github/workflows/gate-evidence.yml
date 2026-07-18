@@ -26,10 +26,11 @@ name: Gate evidence
 # don't re-fire when a thread is opened/resolved, a review is submitted, or a
 # standalone review comment opens a thread. Closed by also re-firing on
 # pull_request_review (submitted), pull_request_review_thread
-# (resolved/unresolved), and pull_request_review_comment (created) — all fire
-# on the base repo's own token regardless of whether the PR head is a fork,
-# and all carry the same `pull_request` object (number, draft, head.sha, ...)
-# this workflow already reads.
+# (resolved/unresolved), and pull_request_review_comment (created) — all three
+# are triggered by base-repo actions and run in the base-repo context, so they
+# get this workflow's declared permissions (including `statuses: write`) even
+# when the PR head is a fork, and all carry the same `pull_request` object
+# (number, draft, head.sha, ...) that this workflow already reads.
 #
 # Head-SHA mismatch on those three event types: unlike `pull_request` (whose
 # implicit job check-run GitHub auto-associates with the PR's head commit),
