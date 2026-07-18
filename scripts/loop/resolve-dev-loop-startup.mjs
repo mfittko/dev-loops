@@ -85,7 +85,7 @@ Optional modifier:
                  its maxFiles/maxLines threshold; fails closed with a distinct
                  reason (light mode disabled / scope undetectable / over
                  threshold) requiring --issue above the threshold — unless
-                 localImplementation.issueless.enabled is set, which sanctions
+                 localImplementation.issueless is set, which sanctions
                  issue-less PR-first at ANY change scope (the whole eligibility
                  gate is skipped; gate dispatch still resolves review depth
                  from scope on its own).
@@ -823,7 +823,7 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
  *
  * Read-only: no tracker mutation, no GitHub calls, no issue/PR number. Gated
  * by {@link resolveIssuelessLightweightEligibility} — unless
- * `localImplementation.issueless.enabled` (#1349) sanctions any-scope
+ * `localImplementation.issueless` (#1349) sanctions any-scope
  * issue-less PR-first, in which case the eligibility gate is skipped entirely.
  * Otherwise an ineligible change
  * throws so the CLI fails closed (exit 1, no readiness bundle) with a message
@@ -836,7 +836,7 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
  * @returns {object} startup input with canonicalSpecSource: "pr_body"
  */
 export function buildLightweightIssuelessInput({ config, cwd }) {
-  // localImplementation.issueless.enabled (#1349) sanctions issue-less
+  // localImplementation.issueless (#1349) sanctions issue-less
   // PR-first at ANY change scope — for consumers whose spec of record lives
   // in an external tracker and who cannot mint a GitHub issue for big work.
   // Review depth is unaffected: gate dispatch re-measures scope itself and
@@ -845,12 +845,12 @@ export function buildLightweightIssuelessInput({ config, cwd }) {
     const eligibility = resolveIssuelessLightweightEligibility(config, cwd);
     if (!eligibility.eligible) {
       if (eligibility.reason === "light_mode_disabled") {
-        throw new Error("--lightweight without --issue (issue-less PR-first) requires localImplementation.lightMode.enabled in .devloops; enable light mode, set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.");
+        throw new Error("--lightweight without --issue (issue-less PR-first) requires localImplementation.lightMode.enabled in .devloops; enable light mode, set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.");
       }
       if (eligibility.reason === "scope_detection_failed") {
-        throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.`);
+        throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
       }
-      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.`);
+      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
     }
   }
   return {

@@ -179,7 +179,7 @@ exception path that MUST NOT become the normal default for mutating local work.
 
 ## Non-goals
 
-- No Windows symlink support (`linkOnInit` assumes POSIX).
+- No Windows symlink support (a `mode: link` entry assumes POSIX).
 - No default provisioning file list — provisioning is opt-in per repo.
 - Not a `node_modules` mirroring mechanism — deps belong to `npm ci`-in-worktree.
 - No expansion of this guidance into a second backlog or planning system.

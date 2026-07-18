@@ -760,31 +760,27 @@ function normalizeAngleEntries(raw) {
  * gives the same angle name divergent overrides across gates, so this is
  * unambiguous in practice.
  *
- * A DISABLED entry (`enabled: false`) is skipped rather than returned: the
- * same angle name can be a real, enabled angle with its own persona/prompt on
- * one gate while merely disabled (a bare `enabled:false` placeholder, no
- * override fields) on another — e.g. a gate that inherited the name via
- * merge-by-name (D3) and dropped it. Returning that placeholder would shadow
- * the other gate's real override. Only when EVERY gate's entry for this name
- * is disabled do we fall back to returning the first (still informational,
- * e.g. for a caller that wants to know the entry exists even if inert).
+ * A DISABLED entry (`enabled: false`) is skipped, never returned: the same
+ * angle name can be a real, enabled angle with its own persona/prompt on one
+ * gate while merely disabled (a bare `enabled:false` placeholder, no override
+ * fields) on another — e.g. a gate that inherited the name via merge-by-name
+ * (D3) and dropped it. Returning that placeholder would shadow the other
+ * gate's real override. Both callers of this function (resolveReviewerRole,
+ * resolveRoleModel's angle path) only ever look up a name already present in
+ * SOME gate's enabled, resolved angle list (`resolveGateAngles`), so a name
+ * disabled everywhere and enabled nowhere is never actually queried — there
+ * is no "return the disabled entry as a last resort" case to serve.
  * @param {DevLoopConfig} config
  * @param {string} name
  * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string}|null}
  */
 function findAngleEntry(config, name) {
-  let disabledFallback = null;
   for (const gate of ["draft", "preApproval", "spike"]) {
     const entries = normalizeAngleEntries(config?.gates?.[gate]?.angles);
-    const found = entries.find((e) => e.name === name);
-    if (!found) continue;
-    if (found.enabled === false) {
-      disabledFallback ??= found;
-      continue;
-    }
-    return found;
+    const found = entries.find((e) => e.name === name && e.enabled !== false);
+    if (found) return found;
   }
-  return disabledFallback;
+  return null;
 }
 
 /**

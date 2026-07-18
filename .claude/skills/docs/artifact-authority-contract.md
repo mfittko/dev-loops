@@ -57,18 +57,18 @@ Key contract:
 - <!-- rule: ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS --> The PR body MUST carry the same invariants a durable spec would: **Objective/why, in-scope + explicit non-goals, testable acceptance criteria, definition of done, open questions/risks** — unconditionally, whether or not the work is tracker-backed. The `Closes #N` linkage (GitHub's other closing keywords count too) is conditional on artifact backing (operator ruling, issue #1210): REQUIRED when the work originates from a GitHub issue (`--issue --lightweight`), ABSENT BY DESIGN when the PR is the sole artifact with no backing issue (`--lightweight` alone, issue-less PR-first) — an issue-less PR body MUST NOT carry a closing reference to an issue that doesn't back it. `scripts/loop/validate-pr-body-spec.mjs` (reusing the generic markdown logic of `@dev-loops/core/loop/issue-refinement-artifact`, `validatePrBodySpec`) validates these and fails closed with a distinct reason per violated invariant — `missing_closing_issue_reference` without the linkage in tracker-backed mode, `closes_wrong_issue` when an `--expected-issue` is given and doesn't match, `unexpected_closing_issue_reference` when a closing reference is present under explicit issue-less mode (`--no-issue`) — so the lightweight path's issue-tracking state never silently diverges from PR state (issue #1181).
 - This flips the promotion invariant below (P4, "the PR body carries the committed plan-doc **path**"): under lightweight there is no committed plan doc — the PR body **is** the spec, not a pointer to one.
 - The explicit `--lightweight` flag is the primary, deterministic trigger. The secondary heuristic (chore/fix commit type + no `--plan-file` + small change) is a documented manual signal for when to reach for the flag; it is not an automatic selector.
-- <!-- rule: ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE --> `--lightweight` MUST be rejected when combined with `--plan-file` (they are opposites: `--plan-file` commits a durable plan doc as the spec, `--lightweight` makes the PR body the spec). It composes with `--issue` (tracker-backed) or stands alone (issue-less PR-first, #1210 — gated on `localImplementation.lightMode` being enabled and the change scope staying within its threshold, unless `localImplementation.issueless.enabled` (#1349) sanctions issue-less PR-first at any change scope for consumers whose spec of record lives in an external tracker; review depth stays scope-driven — gate dispatch still resolves inline vs full fan-out from the light-mode threshold, and over-threshold PRs keep the full-PR Copilot round cap); it MUST be rejected when combined with any other mode flag (`--pr`, `--input`, `--spike`).
+- <!-- rule: ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE --> `--lightweight` MUST be rejected when combined with `--plan-file` (they are opposites: `--plan-file` commits a durable plan doc as the spec, `--lightweight` makes the PR body the spec). It composes with `--issue` (tracker-backed) or stands alone (issue-less PR-first, #1210 — gated on `localImplementation.lightMode` being enabled and the change scope staying within its threshold, unless `localImplementation.issueless` (#1349) sanctions issue-less PR-first at any change scope for consumers whose spec of record lives in an external tracker; review depth stays scope-driven — gate dispatch still resolves inline vs full fan-out from the light-mode threshold, and over-threshold PRs keep the full-PR Copilot round cap); it MUST be rejected when combined with any other mode flag (`--pr`, `--input`, `--spike`).
 - Pre-approval acceptance-criteria verification reads the AC/DoD/invariants directly from the PR body rather than a linked issue body; see [Acceptance Criteria Verification](acceptance-criteria-verification.md).
 
 ### Mode selection table
 
 | Mode | Canonical artifact | GitHub issue required | Settings value |
 |---|---|---|---|
-| Tracker-first | GitHub issue | Yes | `strategy.default: github-first` |
-| Local-planning (shipped default) | Markdown plan file | No | `strategy.default: local-first` |
-| Lightweight (PR-body-as-spec) | GitHub PR description | Conditional — `--issue` when tracker-backed; absent for issue-less PR-first (#1210), gated on `localImplementation.lightMode` + change-scope threshold, or any-scope with `localImplementation.issueless.enabled` (#1349) | modifier: `--lightweight` (`canonicalSpecSource: pr_body`) |
+| Tracker-first | GitHub issue | Yes | `strategy: github-first` |
+| Local-planning (shipped default) | Markdown plan file | No | `strategy: local-first` |
+| Lightweight (PR-body-as-spec) | GitHub PR description | Conditional — `--issue` when tracker-backed; absent for issue-less PR-first (#1210), gated on `localImplementation.lightMode` + change-scope threshold, or any-scope with `localImplementation.issueless` (#1349) | modifier: `--lightweight` (`canonicalSpecSource: pr_body`) |
 
-`inputSource.default` further disambiguates local-first startup:
+`inputSource` further disambiguates local-first startup:
 | inputSource | Meaning |
 |---|---|
 | `tracker` (default) | Local agent implements from the GitHub issue body; no phase doc created |
@@ -76,24 +76,22 @@ Key contract:
 
 ## Settings mechanism
 
-The repo's default artifact-authority posture is declared by `strategy.default`, set in `.devloops` at repo root and resolved against the layered config defaults:
+The repo's default artifact-authority posture is declared by `strategy`, set in `.devloops` at repo root and resolved against the layered config defaults:
 
 ```yaml
 # .devloops
-strategy:
-  default: local-first    # local-planning (markdown plan file)
-  # default: github-first # tracker-first (GitHub issue required)
-inputSource:
-  default: tracker        # spec source for local-first: tracker (issue body) or phase-docs
+strategy: local-first    # local-planning (markdown plan file)
+# strategy: github-first # tracker-first (GitHub issue required)
+inputSource: tracker     # spec source for local-first: tracker (issue body) or phase-docs
 ```
 
-The `strategy.default` key carries two jobs:
+The `strategy` key carries two jobs:
 1. It declares the repo's default artifact-authority posture (local-planning under `local-first`, tracker-first under `github-first`).
 2. It sets the routing preference (`targetPreference`) in dev-loop startup — `prefer_local` under `local-first`, `prefer_github_first` under `github-first`.
 
-The authoritative artifact for a given run is selected by the explicit startup input. `scripts/loop/resolve-dev-loop-startup.mjs` takes `--issue` / `--pr` / `--input` / `--plan-file` (mutually exclusive), and `strategy.default` supplies the default routing preference; it does not force the artifact per invocation.
+The authoritative artifact for a given run is selected by the explicit startup input. `scripts/loop/resolve-dev-loop-startup.mjs` takes `--issue` / `--pr` / `--input` / `--plan-file` (mutually exclusive), and `strategy` supplies the default routing preference; it does not force the artifact per invocation.
 
-The `inputSource.default` key disambiguates local-first startup:
+The `inputSource` key disambiguates local-first startup:
 - `tracker` (default): the local agent implements from the GitHub issue body; the issue is the canonical spec
 - `phase-docs`: the local agent implements from persisted phase docs; no tracker issue required
 
@@ -101,12 +99,12 @@ The `inputSource.default` key disambiguates local-first startup:
 
 The effective default for a consumer comes from the config-merge layering in `packages/core/src/config/config.mjs`. Precedence, low to high:
 
-1. `BUILT_IN_DEFAULTS` (frozen in `config.mjs`) — `strategy.default: local-first`. This is the code-level fallback when no other layer sets the key.
-2. Extension-packaged defaults (`packages/core/src/config/extension-defaults.yaml`, loaded as the `extensionDefaults` layer) — `strategy.default: local-first`. This is the opinion the package ships and the layer that wins over the built-in fallback.
+1. `BUILT_IN_DEFAULTS` (frozen in `config.mjs`) — `strategy: local-first`. This is the code-level fallback when no other layer sets the key.
+2. Extension-packaged defaults (`packages/core/src/config/extension-defaults.yaml`, loaded as the `extensionDefaults` layer) — `strategy: local-first`. This is the opinion the package ships and the layer that wins over the built-in fallback.
 3. Repo-local `.pi/dev-loop/defaults.*` (legacy) — applied when present.
 4. Repo `.devloops` at repo root — the per-repo override, highest precedence. When `.devloops` is absent, the legacy `.pi/dev-loop/settings.*` / `overrides.*` apply at this position instead.
 
-With nothing but the shipped package in place, the extension layer resolves `strategy.default` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy.default: github-first` in its own `.devloops`.
+With nothing but the shipped package in place, the extension layer resolves `strategy` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy: github-first` in its own `.devloops`.
 
 Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`). They differ in how they load, per the precedence list above: `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`; `.pi/dev-loop/settings.*` (and the older `overrides.*`) load only when no `.devloops` is present — when `.devloops` exists it is authoritative and those files are ignored (with a deprecation warning).
 
@@ -114,9 +112,9 @@ Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no lo
 
 <!-- rule: ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED -->
 `ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED`: The strategy enum MUST accept only `github-first` or `local-first` and MUST fail closed on any other value (`packages/core/src/config/config.mjs`). These are not valid artifact authority mode selectors:
-- `strategy.default: copilot` — not a valid mode
+- `strategy: copilot` — not a valid mode
 - Free-form string values — MUST fail closed
-- Omitting `strategy.default` from every layer — resolves to `local-first` from `BUILT_IN_DEFAULTS`
+- Omitting `strategy` from every layer — resolves to `local-first` from `BUILT_IN_DEFAULTS`
 
 ## Local-first plan-file flow end to end
 
@@ -152,7 +150,7 @@ The shipped extension layer pairs local-first with a low-noise posture, in `pack
 
 | Key | Shipped value | Why |
 |---|---|---|
-| `strategy.default` | `local-first` | The shipped default posture (decision #7) |
+| `strategy` | `local-first` | The shipped default posture (decision #7) |
 | `autonomy.humanMergeOnly` | `true` | Local-first never auto-merges; a human always merges |
 | `queue.maxAutoFiledIssues` | `1` | Local-first is PR-first, so auto-filing issues is near-zero; a low cap keeps tracker noise minimal |
 | `gates.postFindingsComments` | `true` | Gate findings live on the PR (the spec-of-record and human-review surface) as evidence |
@@ -164,9 +162,9 @@ These values come from the existing config-merge layering, so no new resolver is
 dev-loops runs **local-planning**, set in its repo-root `.devloops`.
 
 - **Mode:** Local-planning
-- **Settings:** repo-root `.devloops` sets `strategy.default: local-first` and `inputSource.default: tracker`
+- **Settings:** repo-root `.devloops` sets `strategy: local-first` and `inputSource: tracker`
 - **Artifact authority:** the canonical spec for a work item is its plan artifact; the repo dogfoods the same local-first posture the package ships as default
-- **Per-run input:** with `inputSource.default: tracker`, a local-first session can still implement from a GitHub issue body when one is supplied (the issue is the spec source for that run); `phase-docs` switches the source to a committed plan file
+- **Per-run input:** with `inputSource: tracker`, a local-first session can still implement from a GitHub issue body when one is supplied (the issue is the spec source for that run); `phase-docs` switches the source to a committed plan file
 - **Why local-planning:** the repo runs the local-first plan-file flow (plan-file → refine → review → promote) on its own work so the shipped default posture is exercised end to end.
 
 ## Relationship to other docs

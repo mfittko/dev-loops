@@ -150,9 +150,9 @@ human action and this authorization step is **non-overridable**:
 This makes human-gated merge an enforced repo invariant, not a per-run default an
 explicit instruction can unlock.
 
-### `approval.humanHandoff` — offer to assign a human at the handoff (opt-in)
+### `approval` — offer to assign a human at the handoff (opt-in)
 
-When a repo sets `approval.humanHandoff.enabled: true` in `.devloops`, the loop
+When a repo sets `approval.enabled: true` in `.devloops`, the loop
 does not just park silently at the human-merge stop — at the
 `pre_approval_gate` / `waiting_for_merge_authorization` boundary it **offers**
 to route the PR to a contributor (pairs with `autonomy.humanMergeOnly`: when
@@ -161,10 +161,9 @@ default; no candidate sourcing when disabled.
 
 ```yaml
 approval:
-  humanHandoff:
-    enabled: true
-    candidatesFrom: [codeowners, recent-committers]
-    assignees: [alice, bob]
+  enabled: true
+  candidatesFrom: [codeowners, recent-committers]
+  assignees: [alice, bob]
 ```
 
 At the handoff boundary, resolve and surface candidates:

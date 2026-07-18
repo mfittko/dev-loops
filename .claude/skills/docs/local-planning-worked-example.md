@@ -2,7 +2,7 @@
 
 One plan file, `docs/phases/phase-42.md`, carried through every stage of the [Local-Planning Flow](local-planning-flow.md): authored, validated, refined in place, held at the local human-review checkpoint, then promoted to a draft PR. Each stage below shows the same file's content as it evolves. The contract details live in the [Artifact Authority Contract](artifact-authority-contract.md); this is a concrete trace of one file.
 
-The repo runs local-planning by default (`strategy.default: local-first`), and the plan lives under `docs/phases/`.
+The repo runs local-planning by default (`strategy: local-first`), and the plan lives under `docs/phases/`.
 
 ## Stage 1 — Authored
 

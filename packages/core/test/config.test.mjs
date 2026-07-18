@@ -2564,7 +2564,6 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     "renderer-security": ["review", "Review this change for renderer security"],
     "pr-checklist-matrix": ["review", "Verify before approval that the PR checklist"],
     "acceptance-criteria": ["review", "Verify that each acceptance criterion and definition-of-done item"],
-    "threat-model": ["review", "Adversarially threat-model this change"],
   };
   // Angles used by the shipped gates that never had a personas[angle] entry
   // pre-#1404 — must keep falling back to default-reviewer with a null prompt.
@@ -2584,6 +2583,22 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       assert.equal(role.persona, "default-reviewer", `${angle} persona`);
       assert.equal(role.prompt, null, `${angle} prompt`);
     }
+
+    // "threat-model" is genuinely disabled (dropped) from every one of this
+    // repo's shipped gates, same as pre-#1404 (it was likewise absent from
+    // every resolved angle pool there — its old top-level personas[angle]
+    // entry was reachable ONLY because that registry was global and
+    // independent of any gate's angle list, a property D3's per-gate angle
+    // entries deliberately don't reproduce for a name disabled everywhere:
+    // findAngleEntry has no live caller that queries a name outside some
+    // gate's enabled, resolved angle list). It still resolves via
+    // BUILTIN_PERSONAS (persona "review", no prompt there either) rather
+    // than the generic default-reviewer fallback, since it IS a known builtin
+    // persona name — just with no reachable prompt override anymore.
+    const threatModel = resolveReviewerRole(config, "threat-model");
+    assert.equal(threatModel.persona, "review");
+    assert.equal(threatModel.prompt, null);
+    assert.equal(threatModel.fallback, false);
   });
 });
 

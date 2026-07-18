@@ -117,7 +117,8 @@ GitHub API calls and no board mutations**. (It may still read the local
 
 ```yaml
 queue:
-  projectNumber: 7
+  board:
+    number: 7
   statusColumns:
     next_up: "Todo"
     in_progress: "Doing"
@@ -130,7 +131,8 @@ column (rarely needed):
 
 ```yaml
 queue:
-  projectNumber: 7
+  board:
+    number: 7
   stateColumnMap:
     blocked_needs_user_decision: next_up
 ```

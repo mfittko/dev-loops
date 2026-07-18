@@ -111,7 +111,7 @@ const DevLoopConfig = z.strictObject({
 When a gate specifies `angles: ["security", "style", "correctness"]`:
 
 1. Look up agent persona by role name — if a dedicated agent exists (e.g. `security-reviewer`), use it with its own system prompt and default model
-2. Apply model override from `models.roles[name]` if present — overrides the agent's default model
+2. Apply the angle's own `model` field from its `gates.<gate>.angles[]` entry if present — overrides the agent's default model
 3. Fallback: no agent persona found → default reviewer agent + role name injected as focus lens + any model override still applied
 
 This means angles are lenses first, optionally backed by dedicated agent personas. No config wiring needed for the binding itself — drop a persona definition in and it takes over automatically.
