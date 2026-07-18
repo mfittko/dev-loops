@@ -1,11 +1,12 @@
 // Doc-drift guard for the #1404 config-schema redesign: these keys were
-// REMOVED/renamed off `.devloops` input and NEVER reappear as a resolved-
-// output field name anywhere in this codebase (unlike mandatoryAngles,
-// copyOnInit, stopOnLowSignal, or workflow-handoff-contract.md's
-// excludeAngles, which are legitimate resolver-OUTPUT shapes some docs still
-// correctly name — those are deliberately excluded here to avoid false
-// positives). A match under docs/ or skills/ is unambiguously stale
-// `.devloops` INPUT teaching and must be fixed at the source, not tolerated.
+// REMOVED/renamed off `.devloops` input and are never legitimately referenced
+// as a resolved-OUTPUT field name in doc/skill/command PROSE (unlike
+// mandatoryAngles, copyOnInit, dynamicAngles, stopOnLowSignal, or
+// workflow-handoff-contract.md's excludeAngles, which ARE retained resolver-
+// output shapes some docs still correctly name — those are deliberately
+// excluded from the list below to avoid false positives). A match under
+// docs/, skills/, or commands/ is therefore unambiguously stale `.devloops`
+// INPUT teaching and must be fixed at the source, not tolerated.
 //
 // Scoped to the unambiguous subset only; see CHANGELOG.md's "upgrading your
 // .devloops" table for the full renamed/removed key list (some of those,
@@ -22,16 +23,17 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const REMOVED_INPUT_ONLY_KEYS = [
   "projectNumber",
   "boardTitle",
-  "copyOnInit",
-  "linkOnInit",
-  "dynamicAngles",
-  "additiveAngles",
   "localPlanning",
   // Removed NESTED forms — the parent key (`strategy`/`inputSource`) is retained
   // as a flat scalar, so only the dotted `.default` form is stale. Safe to guard
   // as a literal string (the dots are escaped below).
   "strategy.default",
   "inputSource.default",
+  // NOTE: copyOnInit/linkOnInit/dynamicAngles/additiveAngles are intentionally
+  // NOT guarded — they were removed as `.devloops` INPUT keys but survive as
+  // legitimate RESOLVED-OUTPUT field names (worktree resolver / resolveGateConfig),
+  // so a bare match can't be disambiguated from a correct output reference. Their
+  // input-side migration is enforced by review, not this guard (per the header).
 ];
 
 async function markdownAndHtmlFiles(dir) {
