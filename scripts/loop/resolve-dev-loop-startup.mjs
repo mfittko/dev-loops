@@ -729,9 +729,12 @@ function resolveIssuelessMergeBase(cwd, candidates) {
  * mirrors resolveBaseBranch's own "config wins" validity check. */
 function configuredBaseBranch(config) {
   const raw = config?.workflow?.baseBranch;
+  if (typeof raw !== "string" || raw.trim().length === 0) return null;
   // Reduce to a bare branch name (same as resolveBaseBranch) so the later
-  // `origin/${configuredBase}` candidate can't become `origin/origin/main`.
-  return typeof raw === "string" && raw.trim().length > 0 ? normalizeToBareBranch(raw.trim()) : null;
+  // `origin/${configuredBase}` candidate can't become `origin/origin/main`. A
+  // prefix-only value (e.g. "origin/") normalizes to empty — treat as unset.
+  const bare = normalizeToBareBranch(raw.trim());
+  return bare.length > 0 ? bare : null;
 }
 
 /**

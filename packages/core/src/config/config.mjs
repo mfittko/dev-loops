@@ -1796,7 +1796,10 @@ function autoDetectDefaultBranch(cwd) {
 export function resolveBaseBranch(config, { cwd = process.cwd() } = {}) {
   const configured = config?.workflow?.baseBranch;
   if (typeof configured === "string" && configured.trim().length > 0) {
-    return normalizeToBareBranch(configured.trim());
+    // A prefix-only value (e.g. "origin/", "refs/heads/") normalizes to empty —
+    // treat that as unset and fall through to auto-detect, never return "".
+    const bare = normalizeToBareBranch(configured.trim());
+    if (bare.length > 0) return bare;
   }
   return autoDetectDefaultBranch(cwd);
 }

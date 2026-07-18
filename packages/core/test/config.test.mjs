@@ -3886,6 +3886,14 @@ describe("resolveBaseBranch (#1368)", () => {
     assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "spike/vite" } }, { cwd }), "spike/vite");
   });
 
+  test("a prefix-only configured value (normalizes to empty) is treated as unset, never returns \"\"", () => {
+    // "origin/" / "refs/heads/" reduce to "" — must fall through to auto-detect
+    // (literal "main" fallback on a non-repo cwd), never yield an empty base.
+    const cwd = "/nonexistent-path-never-a-repo";
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "origin/" } }, { cwd }), "main");
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "refs/heads/" } }, { cwd }), "main");
+  });
+
   test("unset config auto-detects the repo's real default branch (main)", () => {
     const repo = makeGitRepo({ defaultBranch: "main" });
     try {

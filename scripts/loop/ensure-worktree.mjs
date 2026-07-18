@@ -49,8 +49,9 @@ Optional:
   -h, --help        Show this help.
 Output (stdout, JSON):
   { "ok": true, "path": <p>, "created": bool, "reused": bool,
-    "base": <ref>,   // present on create: the resolved base ref the worktree
-                     // was created off (origin/-prefixed default, or --base)
+    "base": <ref>,   // present on create: the ref the worktree was created off —
+                     // the origin/-prefixed resolved base (default or --base) for
+                     // a NEW branch, or the existing local branch when re-attached
     "provision": { "actions": [...], "summary": {...} } }
 
 ${JQ_OUTPUT_USAGE}`.trim();
