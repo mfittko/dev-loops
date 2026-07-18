@@ -10,6 +10,7 @@ import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { validatePlanFile } from "./validate-plan-file.mjs";
 import { extractSection, isDirectCliRun } from "./_refine-helpers.mjs";
 import { PLAN_FILE_REFINEMENT_SECTIONS } from "@dev-loops/core/loop/plan-file-intake-contract";
+import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import {
   evaluatePromoteEligibility,
   buildPromotionPrBody,
@@ -39,7 +40,9 @@ front-matter) opens nothing and reports the existing PR.
 Required:
   --plan-file <path>  Path to the refined plan file to promote
 Optional:
-  --base <branch>     Base branch for the PR (default: main)
+  --base <branch>     Base branch for the PR (default: resolved via
+                       resolveBaseBranch — .devloops workflow.baseBranch when
+                       configured, else the repo's auto-detected default branch)
   --branch <name>     Branch name to commit the plan on (default: derived from the plan path)
   --json              Machine-readable JSON output
   --help              Show this help
@@ -69,7 +72,11 @@ export function parsePromotePlanCliArgs(argv) {
     strict: false,
     tokens: true,
   });
-  const options = { help: false, planFile: undefined, base: "main", branch: undefined, json: false };
+  // base stays undefined (not a literal "main") when --base is omitted: runCli
+  // resolves the real default via resolveBaseBranch once repoRoot is known, so
+  // a configured workflow.baseBranch or a non-main auto-detected default both
+  // land correctly instead of a hardcoded "main" guess.
+  const options = { help: false, planFile: undefined, base: undefined, branch: undefined, json: false };
   for (const token of tokens) {
     if (token.kind === "positional") {
       throw parseError(`Unknown argument: ${token.value}`);
@@ -194,6 +201,14 @@ export async function runCli(argv = process.argv.slice(2), {
 
   // --- Promote path: commit the plan doc, open exactly one draft PR. ---
   const repoRoot = (await runChildFn("git", ["rev-parse", "--show-toplevel"], env)).stdout.trim();
+  // No explicit --base: resolve the effective base branch now that repoRoot is
+  // known (config-wins-else-auto-detect; unset config auto-detects exactly as
+  // the prior hardcoded "main" default did in a main-default repo).
+  let effectiveBase = options.base;
+  if (effectiveBase === undefined) {
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    effectiveBase = resolveBaseBranch(config, { cwd: repoRoot });
+  }
   // Normalize both sides through realpath so a /var -> /private/var (or similar)
   // symlink between the resolved plan path and git's toplevel does not yield a
   // spurious `../..` relative path.
@@ -281,7 +296,7 @@ export async function runCli(argv = process.argv.slice(2), {
     process.execPath,
     [
       CREATE_PR_PATH,
-      "--base", options.base,
+      "--base", effectiveBase,
       "--head", branch,
       "--title", `Promote plan: ${planDocRelPath}`,
       "--body", prBody,

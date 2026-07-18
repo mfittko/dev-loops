@@ -724,6 +724,70 @@ test("resolver returns needs_reconcile for local_implementation from main checko
   }
 });
 
+// ── nextAction worktree hint: workflow.baseBranch (#1368) ─────────────────
+
+test("resolver's worktree nextAction hint omits --base when workflow.baseBranch is unset (no-regression)", () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-base-unset-"));
+  try {
+    writeWorktreeEnv(tempDir);
+    const env = { ...process.env, PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}` };
+
+    const result = buildResolveDevLoopStartupResult(
+      {
+        currentState: {
+          target: { kind: "local_phase", issue: 497, phase: "issue-497" },
+          ownership: "local",
+          nextActor: "local",
+          status: "active",
+          authorization: "authorized",
+        },
+        loopState: "implementation_pending",
+        artifactState: "not_applicable",
+        issueLinkageResolution: "not_applicable",
+      },
+      { env, cwd: tempDir, config: { version: 1 } },
+    );
+
+    assert.equal(result.ok, true);
+    assert.match(result.nextAction, /ensure-worktree\.mjs --repo-root \S+ --issue <n>`/);
+    assert.doesNotMatch(result.nextAction, /--base/);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolver's worktree nextAction hint includes --base origin/<baseBranch> when configured", () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-base-set-"));
+  try {
+    writeWorktreeEnv(tempDir);
+    const env = { ...process.env, PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}` };
+
+    const result = buildResolveDevLoopStartupResult(
+      {
+        currentState: {
+          target: { kind: "local_phase", issue: 497, phase: "issue-497" },
+          ownership: "local",
+          nextActor: "local",
+          status: "active",
+          authorization: "authorized",
+        },
+        loopState: "implementation_pending",
+        artifactState: "not_applicable",
+        issueLinkageResolution: "not_applicable",
+      },
+      { env, cwd: tempDir, config: { version: 1, workflow: { baseBranch: "spike/shakapacker-to-vite" } } },
+    );
+
+    assert.equal(result.ok, true);
+    assert.match(
+      result.nextAction,
+      /ensure-worktree\.mjs --repo-root \S+ --issue <n> --base origin\/spike\/shakapacker-to-vite`/,
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("resolver resolves normally for local_implementation from worktree", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-wt-"));
   try {
@@ -1848,6 +1912,74 @@ test("resolveIssuelessLightweightEligibility scopes git merge-base/diff to the g
     process.chdir(originalCwd);
     await rm(outerDir, { recursive: true, force: true });
     await rm(innerRepoDir, { recursive: true, force: true });
+  }
+});
+
+// ── resolveIssuelessLightweightEligibility: workflow.baseBranch (#1368) ───
+
+/**
+ * A repo where "main" and a configured integration branch diverge enough that
+ * measuring scope against one vs. the other flips eligibility:
+ *   initial -> integration (BIG change, many lines) -> feature (small change)
+ * "main" never advances past initial, so merge-base(main, feature) = initial
+ * (diff includes the big integration change + the small one = over threshold).
+ * merge-base(integration, feature) = the integration commit itself (diff is
+ * only the small change = under threshold).
+ */
+async function initDivergedBaseBranchRepo(tempDir) {
+  initTempGitRepo(tempDir);
+  await writeFile(path.join(tempDir, "base.txt"), "line1\n", "utf8");
+  execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["branch", "-M", "main"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["checkout", "-b", "integration"], { cwd: tempDir, stdio: "ignore" });
+  const bigLines = Array.from({ length: 10 }, (_, i) => `big-line-${i}\n`).join("");
+  await writeFile(path.join(tempDir, "big.txt"), bigLines, "utf8");
+  execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["commit", "-m", "big integration change"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["checkout", "-b", "feature"], { cwd: tempDir, stdio: "ignore" });
+}
+
+test("resolveIssuelessLightweightEligibility: unset workflow.baseBranch measures scope against the default-branch candidates (main) — over threshold", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-basebranch-unset-"));
+  try {
+    await initDivergedBaseBranchRepo(tempDir);
+    await writeFile(path.join(tempDir, "small.txt"), "line1\n", "utf8");
+    execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "small feature change"], { cwd: tempDir, stdio: "ignore" });
+    const config = {
+      version: 1,
+      localImplementation: { lightMode: { enabled: true, maxFiles: 3, maxLines: 5 } },
+    };
+    const result = resolveIssuelessLightweightEligibility(config, tempDir);
+    // main never advanced past "initial": diff includes the big integration
+    // change too, well over the 5-line threshold.
+    assert.equal(result.eligible, false, JSON.stringify(result));
+    assert.equal(result.reason, "over_threshold");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveIssuelessLightweightEligibility: configured workflow.baseBranch overrides the candidate list, flipping eligibility", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-basebranch-set-"));
+  try {
+    await initDivergedBaseBranchRepo(tempDir);
+    await writeFile(path.join(tempDir, "small.txt"), "line1\n", "utf8");
+    execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "small feature change"], { cwd: tempDir, stdio: "ignore" });
+    const config = {
+      version: 1,
+      workflow: { baseBranch: "integration" },
+      localImplementation: { lightMode: { enabled: true, maxFiles: 3, maxLines: 5 } },
+    };
+    const result = resolveIssuelessLightweightEligibility(config, tempDir);
+    // Measured against "integration" (the configured base), the diff is only
+    // the small feature change — under the 5-line threshold.
+    assert.equal(result.eligible, true, JSON.stringify(result));
+    assert.equal(result.scope.linesChanged, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
   }
 });
 

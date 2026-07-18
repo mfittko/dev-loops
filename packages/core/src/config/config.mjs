@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { fileURLToPath } from "node:url";
@@ -212,6 +213,12 @@ const WorkflowConfig = z.strictObject({
   requireRetrospective: z.boolean().describe("Require a retrospective checkpoint before a loop completes."),
   requireDraftFirst: z.boolean().describe("Open pull requests as drafts and promote via the draft gate."),
   devModeDefault: z.boolean().describe("Default new loops to dev mode."),
+  // No default here and absent from BUILT_IN_DEFAULTS — unset means "keep
+  // auto-detecting the default branch" (see resolveBaseBranch), never a static
+  // "main". Bare branch name; consumers add the `origin/` remote-ref prefix
+  // where one is needed (worktree creation) and pass the bare name where one
+  // is not (gh/PR base).
+  baseBranch: z.string().trim().min(1).describe("Repo-level base/integration branch override (bare name, e.g. \"main\" or \"spike/foo\"). When set, worktree creation and PR targeting use it instead of the auto-detected default branch. Unset = auto-detect (origin/HEAD, else main/master).").optional(),
 });
 
 const LocalImplementationConfig = z.strictObject({
@@ -1730,6 +1737,85 @@ export function resolveWorkflowConfig(config, key) {
   }
 
   throw new Error(`Unknown workflow config key: ${key}`);
+}
+
+/** Best-effort `git` probe: stdout trimmed on success, `null` on any failure
+ * (missing repo, missing ref, git not on PATH, etc.) — never throws. */
+function tryGit(args, cwd) {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+// Last-resort literal when git auto-detection cannot resolve anything (e.g. no
+// git repo at cwd) — matches the branch name every prior hardcoded "main"/
+// "origin/main" call site already assumed.
+const AUTO_DETECT_BASE_BRANCH_FALLBACK = "main";
+
+/**
+ * Auto-detect the repo's default branch (bare name) at `cwd`: prefer the
+ * remote's advertised default (`origin/HEAD`, works for any branch name), else
+ * probe `main`/`master` as a remote-tracking or local ref, else fall back to
+ * the literal "main". Every probe is best-effort; a missing/unreadable repo
+ * degrades to the literal fallback rather than throwing.
+ * @param {string} cwd
+ * @returns {string}
+ */
+function autoDetectDefaultBranch(cwd) {
+  const originHead = tryGit(["rev-parse", "--abbrev-ref", "origin/HEAD"], cwd);
+  if (originHead && originHead.startsWith("origin/")) {
+    return originHead.slice("origin/".length);
+  }
+  for (const candidate of ["main", "master"]) {
+    if (tryGit(["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${candidate}`], cwd) !== null) return candidate;
+    if (tryGit(["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`], cwd) !== null) return candidate;
+  }
+  return AUTO_DETECT_BASE_BRANCH_FALLBACK;
+}
+
+/**
+ * Resolve the effective base/integration branch (bare name — never
+ * `origin/`-prefixed) for worktree creation, PR targeting, and merge-base
+ * scope measurement (#1368).
+ *
+ * `workflow.baseBranch` (a non-empty trimmed string) is the authoritative
+ * override; unset, malformed, or empty is treated identically to unset and
+ * falls back to the existing auto-detect: the remote's advertised default
+ * branch (`origin/HEAD`), else `main`/`master`, else the literal "main".
+ * Never throws.
+ *
+ * Callers own the `origin/` prefix: worktree creation prepends it (a remote
+ * ref), gh/PR base flags pass the bare name straight through.
+ *
+ * @param {DevLoopConfig|null|undefined} config
+ * @param {{ cwd?: string }} [options]
+ * @returns {string} bare branch name
+ */
+export function resolveBaseBranch(config, { cwd = process.cwd() } = {}) {
+  const configured = config?.workflow?.baseBranch;
+  if (typeof configured === "string" && configured.trim().length > 0) {
+    // A prefix-only value (e.g. "origin/", "refs/heads/") normalizes to empty —
+    // treat that as unset and fall through to auto-detect, never return "".
+    const bare = normalizeToBareBranch(configured.trim());
+    if (bare.length > 0) return bare;
+  }
+  return autoDetectDefaultBranch(cwd);
+}
+
+/**
+ * Reduce a configured base value to a BARE branch name. Callers prepend
+ * `origin/` for remote refs, so a configured `origin/main` /
+ * `refs/remotes/origin/main` / `refs/heads/main` must be stripped to `main`
+ * first — otherwise the worktree base double-prefixes to `origin/origin/main`.
+ * A branch name that merely contains a slash (e.g. `spike/vite`) is left intact.
+ */
+export function normalizeToBareBranch(value) {
+  return value
+    .replace(/^refs\/remotes\/origin\//, "")
+    .replace(/^refs\/heads\//, "")
+    .replace(/^origin\//, "");
 }
 
 /**

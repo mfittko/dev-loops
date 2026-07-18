@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +37,7 @@ import {
   FANOUT_PROVENANCE_MIN_REVIEWERS,
   resolveGatePostFindingsComments,
   resolveRoleModel,
+  resolveBaseBranch,
 } from "../src/config/config.mjs";
 // ============================================================================
 // Schema validation tests (S1–S26)
@@ -3839,5 +3842,98 @@ describe("models.tiers / models.roleTiers schema validation", () => {
       DevLoopConfigSchema.safeParse({ version: 1, models: { tiers: { mid: { claude: "y" } } } }).success,
       true,
     );
+  });
+});
+
+// ── resolveBaseBranch (#1368) ──────────────────────────────────────────────
+
+/** A real (tiny) git repo with one commit, so origin/HEAD auto-detect works. */
+function makeGitRepo({ defaultBranch = "main" } = {}) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "base-branch-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  git("init", "-q", "-b", defaultBranch);
+  git("config", "user.email", "t@t.t");
+  git("config", "user.name", "t");
+  writeFileSync(path.join(root, "README"), "x");
+  git("add", "-A");
+  git("commit", "-q", "-m", "init");
+  // A self-referential "origin" makes `origin/HEAD` resolvable offline.
+  git("remote", "add", "origin", root);
+  git("fetch", "-q", "origin");
+  git("remote", "set-head", "origin", defaultBranch);
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+describe("resolveBaseBranch (#1368)", () => {
+  test("configured workflow.baseBranch wins outright, no git probe needed", () => {
+    const config = { version: 1, workflow: { baseBranch: "spike/shakapacker-to-vite" } };
+    assert.equal(resolveBaseBranch(config, { cwd: "/nonexistent-path-never-a-repo" }), "spike/shakapacker-to-vite");
+  });
+
+  test("trims a configured value with incidental whitespace", () => {
+    const config = { version: 1, workflow: { baseBranch: "  develop  " } };
+    assert.equal(resolveBaseBranch(config, { cwd: "/nonexistent-path-never-a-repo" }), "develop");
+  });
+
+  test("normalizes a configured ref to a bare branch (no origin/origin double-prefix)", () => {
+    // A user may put a remote/full ref in config; callers prepend origin/, so it
+    // must reduce to a bare name first (origin/main -> main, not origin/origin/main).
+    const cwd = "/nonexistent-path-never-a-repo";
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "origin/main" } }, { cwd }), "main");
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "refs/heads/develop" } }, { cwd }), "develop");
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "refs/remotes/origin/release" } }, { cwd }), "release");
+    // A branch name that merely contains a slash is left intact.
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "spike/vite" } }, { cwd }), "spike/vite");
+  });
+
+  test("a prefix-only configured value (normalizes to empty) is treated as unset, never returns \"\"", () => {
+    // "origin/" / "refs/heads/" reduce to "" — must fall through to auto-detect
+    // (literal "main" fallback on a non-repo cwd), never yield an empty base.
+    const cwd = "/nonexistent-path-never-a-repo";
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "origin/" } }, { cwd }), "main");
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "refs/heads/" } }, { cwd }), "main");
+  });
+
+  test("unset config auto-detects the repo's real default branch (main)", () => {
+    const repo = makeGitRepo({ defaultBranch: "main" });
+    try {
+      assert.equal(resolveBaseBranch({ version: 1 }, { cwd: repo.root }), "main");
+      assert.equal(resolveBaseBranch(undefined, { cwd: repo.root }), "main");
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  test("unset config auto-detects a non-main default branch (master)", () => {
+    const repo = makeGitRepo({ defaultBranch: "master" });
+    try {
+      assert.equal(resolveBaseBranch({ version: 1 }, { cwd: repo.root }), "master");
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  test("malformed/empty configured value is treated as unset (falls back to auto-detect)", () => {
+    const repo = makeGitRepo({ defaultBranch: "main" });
+    try {
+      assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "" } }, { cwd: repo.root }), "main");
+      assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "   " } }, { cwd: repo.root }), "main");
+      assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: null } }, { cwd: repo.root }), "main");
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  test("no resolvable repo at cwd falls back to the literal \"main\" (never throws)", () => {
+    assert.equal(resolveBaseBranch({ version: 1 }, { cwd: "/nonexistent-path-never-a-repo" }), "main");
+  });
+
+  test("single config value derives both the origin/-prefixed worktree form and the bare gh/PR form", () => {
+    const config = { version: 1, workflow: { baseBranch: "spike/shakapacker-to-vite" } };
+    const bare = resolveBaseBranch(config, { cwd: "/nonexistent-path-never-a-repo" });
+    // Worktree creation prepends origin/ (a remote ref); gh/PR base flags pass
+    // the bare name straight through — both derive from this one resolved value.
+    assert.equal(`origin/${bare}`, "origin/spike/shakapacker-to-vite");
+    assert.equal(bare, "spike/shakapacker-to-vite");
   });
 });

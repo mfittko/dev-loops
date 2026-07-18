@@ -42,10 +42,15 @@ test("parseEnsureWorktreeCliArgs: rejects both selectors", () => {
   );
 });
 
-test("parseEnsureWorktreeCliArgs: defaults base to origin/main", () => {
+test("parseEnsureWorktreeCliArgs: leaves base undefined when --base is omitted (ensureWorktree auto-detects it)", () => {
   const o = parseEnsureWorktreeCliArgs(["--repo-root", "/r", "--issue", "909"]);
-  assert.equal(o.base, "origin/main");
+  assert.equal(o.base, undefined);
   assert.equal(o.issue, 909);
+});
+
+test("parseEnsureWorktreeCliArgs: an explicit --base always wins", () => {
+  const o = parseEnsureWorktreeCliArgs(["--repo-root", "/r", "--issue", "909", "--base", "origin/develop"]);
+  assert.equal(o.base, "origin/develop");
 });
 
 // ---------------------------------------------------------------------------
@@ -73,6 +78,52 @@ test("ensure: creates at the canonical namespaced path and provisions", async ()
     assert.ok(res.provision && typeof res.provision.summary === "object");
     assert.equal(res.provision.summary.copied, 1);
     assert.equal(readFileSync(path.join(res.path, "secret.env"), "utf8"), "hi");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Base branch resolution (#1368): unset --base auto-detects the repo's real
+// default branch instead of a hardcoded "origin/main"; an explicit --base
+// (as the resolver/skill injects for a configured workflow.baseBranch) wins.
+// ---------------------------------------------------------------------------
+
+test("ensure: no --base auto-detects the repo's real default branch (unset-config no-regression)", async () => {
+  const repo = makeRepo();
+  try {
+    // makeRepo() creates the repo on "main" — auto-detect must land on
+    // "origin/main", the same value the old hardcoded default always used.
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1368 });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    // Regression-catch the missing origin/ prefix: the auto-detected default must
+    // be the origin/-prefixed ref, not a bare local "main". (A self-referential
+    // origin re-syncs origin/main to local main on every fetch, so a SHA compare
+    // can't distinguish them — assert the resolved base ref directly.)
+    assert.equal(res.base, "origin/main", "auto-detected default base must be origin/-prefixed");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: an explicit --base (a configured workflow.baseBranch) wins over auto-detect", async () => {
+  const repo = makeRepo();
+  try {
+    // A second branch simulating a configured integration branch, distinct
+    // from the repo's actual default ("main") that auto-detect would pick.
+    // Re-fetch so origin/spike/... exists, mirroring the real `origin/<baseBranch>`
+    // ref the resolver injects via an explicit --base.
+    repo.git("branch", "spike/shakapacker-to-vite");
+    repo.git("fetch", "-q", "origin");
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1369, base: "origin/spike/shakapacker-to-vite" });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    // Confirm the worktree was actually created off the explicit base, not
+    // the auto-detected default.
+    const log = repo.git("-C", res.path, "log", "-1", "--format=%H");
+    const baseLog = repo.git("log", "-1", "--format=%H", "spike/shakapacker-to-vite");
+    assert.equal(log, baseLog);
   } finally {
     repo.cleanup();
   }

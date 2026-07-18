@@ -15,7 +15,7 @@
  * - Does NOT run npm install (out of scope).
  *
  * Prints a JSON result to stdout:
- *   { ok, path, created|reused, provision: { actions, summary } }
+ *   { ok, path, created|reused, base?, provision: { actions, summary } }
  * (`provision` is the full provisionWorktree() result, not just its summary.)
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
@@ -25,6 +25,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
+import { resolveBaseBranch } from "@dev-loops/core/config";
 import { provisionWorktree } from "./provision-worktree.mjs";
 import { canonicalize } from "./_worktree-path.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -40,10 +41,17 @@ Required:
   --pr <n>          PR number (resolves the canonical path).
 Optional:
   --branch <name>   Branch to create/check out (default: <kind>-<n>).
-  --base <ref>      Base ref for a new worktree (default: origin/main).
+  --base <ref>      Base ref for a new worktree (default: origin/<repo's
+                     auto-detected default branch — origin/HEAD, else
+                     main/master; .devloops workflow.baseBranch, when
+                     configured, is injected here by the caller as an
+                     explicit --base, not self-loaded).
   -h, --help        Show this help.
 Output (stdout, JSON):
   { "ok": true, "path": <p>, "created": bool, "reused": bool,
+    "base": <ref>,   // present on create: the ref the worktree was created off —
+                     // the origin/-prefixed resolved base (default or --base) for
+                     // a NEW branch, or the existing local branch when re-attached
     "provision": { "actions": [...], "summary": {...} } }
 
 ${JQ_OUTPUT_USAGE}`.trim();
@@ -63,7 +71,11 @@ export function parseEnsureWorktreeCliArgs(argv) {
     issue: undefined,
     pr: undefined,
     branch: undefined,
-    base: "origin/main",
+    // Undefined (not a literal "origin/main"): ensureWorktree() resolves the
+    // real default via resolveBaseBranch when no --base is given, so a
+    // master-default (or configured-base, injected via explicit --base by the
+    // caller) repo gets the right ref instead of a hardcoded "main" guess.
+    base: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -161,7 +173,7 @@ function parseWorktreeList(porcelain) {
 }
 
 export async function ensureWorktree(
-  { repoRoot, issue, pr, branch, base = "origin/main" },
+  { repoRoot, issue, pr, branch, base },
   { gitCommand = "git", provision = provisionWorktree } = {},
 ) {
   const root = path.resolve(repoRoot);
@@ -169,6 +181,12 @@ export async function ensureWorktree(
   const number = issue !== undefined ? issue : pr;
   const target = resolveWorktreePath({ repoRoot: root, kind, number });
   const wantBranch = branch || `${kind}-${number}`;
+  // No explicit --base: auto-detect the real default branch at `root` (origin/HEAD,
+  // else main/master) instead of a hardcoded "origin/main" guess. This script stays
+  // a config-agnostic primitive — it never loads .devloops itself; a configured
+  // workflow.baseBranch reaches here only via an explicit --base the resolver/skill
+  // injects (which always wins over this auto-detected default).
+  const effectiveBase = base || `origin/${resolveBaseBranch(undefined, { cwd: root })}`;
 
   // Idempotency / conflict check BEFORE any mutation.
   const list = parseWorktreeList(runGit(gitCommand, ["worktree", "list", "--porcelain"], root));
@@ -189,21 +207,28 @@ export async function ensureWorktree(
   // Create. fetch is best-effort (offline reuse of a local base ref still works),
   // but `git worktree add` failing is a HARD error.
   try {
-    runGit(gitCommand, ["fetch", remoteFromBase(base)], root);
+    runGit(gitCommand, ["fetch", remoteFromBase(effectiveBase)], root);
   } catch (err) {
     process.stderr.write(`[ensure-worktree] WARN fetch failed (continuing): ${(err.stderr ?? err.message ?? "").toString().trim()}\n`);
   }
   // The branch may already exist (worktree removed but branch left behind). `git
   // worktree add -b` fails on an existing branch, so attach to it instead; only
   // create-from-base when the branch is genuinely new.
+  // Report the ref the worktree was created off: an already-existing branch is
+  // re-attached; a genuinely new branch is created from `effectiveBase` (the
+  // origin/-prefixed auto-detected default, or an explicit --base). Lets
+  // callers/tests confirm the origin/ prefix was applied to the default.
+  let createdBase;
   if (branchExists(gitCommand, wantBranch, root)) {
+    createdBase = wantBranch;
     runGit(gitCommand, ["worktree", "add", target, wantBranch], root);
   } else {
-    runGit(gitCommand, ["worktree", "add", "-b", wantBranch, target, base], root);
+    createdBase = effectiveBase;
+    runGit(gitCommand, ["worktree", "add", "-b", wantBranch, target, effectiveBase], root);
   }
 
   const summary = await provision({ worktreePath: target, repoRoot: root });
-  return { ok: true, path: target, created: true, reused: false, provision: summary };
+  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary };
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
