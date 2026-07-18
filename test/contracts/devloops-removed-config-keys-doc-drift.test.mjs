@@ -27,6 +27,11 @@ const REMOVED_INPUT_ONLY_KEYS = [
   "dynamicAngles",
   "additiveAngles",
   "localPlanning",
+  // Removed NESTED forms — the parent key (`strategy`/`inputSource`) is retained
+  // as a flat scalar, so only the dotted `.default` form is stale. Safe to guard
+  // as a literal string (the dots are escaped below).
+  "strategy.default",
+  "inputSource.default",
 ];
 
 async function markdownAndHtmlFiles(dir) {
@@ -36,15 +41,16 @@ async function markdownAndHtmlFiles(dir) {
     .map((e) => path.join(e.parentPath, e.name));
 }
 
-test("docs/ and skills/ never reference a removed .devloops-input-only config key (#1404)", async () => {
+test("docs/, skills/, and commands/ never reference a removed .devloops-input-only config key (#1404)", async () => {
   const files = [
     ...(await markdownAndHtmlFiles(path.join(repoRoot, "docs"))),
     ...(await markdownAndHtmlFiles(path.join(repoRoot, "skills"))),
+    ...(await markdownAndHtmlFiles(path.join(repoRoot, "commands"))),
   ];
   // Word-boundary match on the trailing edge only: `localPlanning` must not
   // false-positive on `localPlanningStatus` (an unrelated reviewer-loop-state
   // field name that happens to share the prefix).
-  const patterns = REMOVED_INPUT_ONLY_KEYS.map((key) => ({ key, re: new RegExp(`${key}(?![A-Za-z])`) }));
+  const patterns = REMOVED_INPUT_ONLY_KEYS.map((key) => ({ key, re: new RegExp(`${key.replace(/\./g, "\\.")}(?![A-Za-z])`) }));
 
   const offenders = [];
   for (const file of files) {

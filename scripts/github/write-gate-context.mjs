@@ -13,7 +13,7 @@
  * `resolveGateAnglesDynamic(config, gate, { diff })` from @dev-loops/core/config:
  * it honors the mandatory-angle floor (mandatory angles are always merged back
  * after dynamic selection, filtered by excludeAngles) and falls back to the
- * static configured pool when `dynamicAngles` is off or no diff is available.
+ * static configured pool when dynamic angle resolution is off or no diff is available.
  * This module maps that resolver's output into the persisted artifact:
  *   resolvedAngles  = resolver.recommendedAngles
  *   rationale       = resolver.skippedAngles (action 'dropped', reason from
@@ -896,7 +896,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  *
  * Angle selection is delegated entirely to `resolveGateAnglesDynamic` (the
  * single source of truth, which honors the mandatory-angle floor and falls back
- * to the static configured pool when `dynamicAngles` is off or no diff is
+ * to the static configured pool when dynamic angle resolution is off or no diff is
  * given). This function only maps that result into the artifact and writes it.
  *
  * @param {object} input
@@ -1108,7 +1108,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the
     // programmatic buildGateContext API uses (resolveGateAnglesDynamic). This
-    // keeps the CLI consistent with the API: dynamicAngles trims to the
+    // keeps the CLI consistent with the API: dynamic angle resolution trims to the
     // mandatory floor + diff-selected candidates when a diff is present, and
     // falls back to the static configured pool otherwise. When --angles IS
     // supplied, it is a verbatim override (dynamic resolution bypassed).
