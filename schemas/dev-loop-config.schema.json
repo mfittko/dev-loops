@@ -708,33 +708,6 @@
           },
           "additionalProperties": false,
           "description": "Tracker board identifier; supersedes the deprecated queue.board."
-        },
-        "fieldMappings": {
-          "type": "object",
-          "properties": {
-            "next_up": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Provider status value for the next_up (pickup) logical column."
-            },
-            "in_progress": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Provider status value for the in_progress logical column."
-            },
-            "ready_for_review": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Provider status value for the ready_for_review logical column."
-            },
-            "done": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Provider status value for the done logical column."
-            }
-          },
-          "additionalProperties": false,
-          "description": "Logical column -> provider-native status value."
         }
       },
       "additionalProperties": false,

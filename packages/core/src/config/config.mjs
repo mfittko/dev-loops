@@ -311,15 +311,21 @@ const LocalImplementationConfig = z.strictObject({
 });
 
 // GitHub Projects board identifier: exactly one of number/title (two parallel
-// keys folded into one selector object).
-const QueueBoardConfig = z
-  .strictObject({
-    number: z.number().int().positive().describe("GitHub Projects board number.").optional(),
-    title: z.string().trim().min(1).describe("GitHub Projects board title.").optional(),
-  })
-  .refine((v) => typeof v.number === "number" || typeof v.title === "string", {
-    message: "queue.board must set number or title",
-  });
+// keys folded into one selector object). `ownerKey` names the config key in
+// the refine failure message — each usage site gets its own accurate
+// message rather than a shared one that could name the wrong key.
+function boardRefConfig(ownerKey) {
+  return z
+    .strictObject({
+      number: z.number().int().positive().describe("GitHub Projects board number.").optional(),
+      title: z.string().trim().min(1).describe("GitHub Projects board title.").optional(),
+    })
+    .refine((v) => typeof v.number === "number" || typeof v.title === "string", {
+      message: `${ownerKey} must set number or title`,
+    });
+}
+
+const QueueBoardConfig = boardRefConfig("queue.board");
 
 /** Queue mode config */
 const QueueConfig = z.strictObject({
@@ -333,17 +339,6 @@ const QueueConfig = z.strictObject({
   archiveOlderThanDays: z.number().int().positive().describe("Archive done board items older than this many days.").optional(),
 });
 
-// Logical board columns a tracker's fieldMappings maps to provider-native
-// status values (issue #1408). Keys are the real logical columns from
-// `../loop/queue-board-sync.mjs`'s `LOGICAL_COLUMN` — `next_up` is the
-// fail-closed PICKUP column `resolve-active-board-item.mjs` reads (load-bearing).
-const TrackerFieldMappingsConfig = z.strictObject({
-  next_up: z.string().trim().min(1).describe("Provider status value for the next_up (pickup) logical column.").optional(),
-  in_progress: z.string().trim().min(1).describe("Provider status value for the in_progress logical column.").optional(),
-  ready_for_review: z.string().trim().min(1).describe("Provider status value for the ready_for_review logical column.").optional(),
-  done: z.string().trim().min(1).describe("Provider status value for the done logical column.").optional(),
-});
-
 /**
  * Tracker config (issue #1408, the tracker-agnostic seam). `provider` is a
  * free-form registry key (not a zod enum): an unknown provider fails closed
@@ -351,12 +346,21 @@ const TrackerFieldMappingsConfig = z.strictObject({
  * seam/resolver must not preclude a consumer registering an external
  * provider post-1.0 (`plugin`, reserved, not implemented in this pass).
  * `board` supersedes the deprecated `queue.board` (see resolveTrackerBoard).
+ *
+ * No generic `fieldMappings` (logical-column -> provider-status) key here:
+ * the github provider's logical-column -> Status mapping IS the existing,
+ * already-load-bearing `queue.statusColumns` (read by `loadStateColumnMap` in
+ * `../loop/queue-board-sync.mjs`; `next_up` is the fail-closed pickup column
+ * `resolve-active-board-item.mjs` reads). Adding a second, inert mapping key
+ * here would collide with that live one rather than replace it. A future
+ * external provider defines its OWN logical -> status mapping (its shape is
+ * provider-specific) when one is actually implemented — YAGNI to generalize
+ * this now for a provider that does not exist yet.
  */
 const TrackerConfig = z.strictObject({
   provider: z.string().trim().min(1).describe("Tracker provider registry key. Built-in: \"github\" (default).").optional(),
   plugin: z.string().trim().min(1).describe("Reserved: module specifier for an external tracker provider plugin (post-1.0, not implemented in this pass).").optional(),
-  board: QueueBoardConfig.describe("Tracker board identifier; supersedes the deprecated queue.board.").optional(),
-  fieldMappings: TrackerFieldMappingsConfig.describe("Logical column -> provider-native status value.").optional(),
+  board: boardRefConfig("tracker.board").describe("Tracker board identifier; supersedes the deprecated queue.board.").optional(),
 });
 
 /**
@@ -657,10 +661,10 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
   }),
   tracker: Object.freeze({
     provider: "github",
-    // tracker.board/fieldMappings are intentionally absent from defaults —
-    // board is an explicit operator opt-in (mirrors queue.board), and
-    // fieldMappings absent means "use the provider's own default column
-    // names" (DEFAULT_STATE_COLUMN_NAMES for the github provider).
+    // tracker.board is intentionally absent from defaults — setting it is an
+    // explicit operator opt-in (mirrors queue.board). The logical-column ->
+    // Status mapping is queue.statusColumns (see TrackerConfig above), not a
+    // tracker-owned default.
   }),
   internalPathPatterns: Object.freeze([
     "^scripts/",
@@ -2298,18 +2302,4 @@ export function resolveTrackerBoard(config) {
   if (isPlainObject(config?.tracker?.board)) return config.tracker.board;
   if (isPlainObject(config?.queue?.board)) return config.queue.board;
   return null;
-}
-
-/**
- * Resolve the tracker's logical-column -> provider-status field mappings
- * (issue #1408). Returns only the entries actually configured; callers merge
- * this over their own provider-default column names (e.g.
- * `DEFAULT_STATE_COLUMN_NAMES` in `../loop/queue-board-sync.mjs`).
- *
- * @param {DevLoopConfig} config
- * @returns {{ next_up?: string, in_progress?: string, ready_for_review?: string, done?: string }}
- */
-export function resolveTrackerFieldMappings(config) {
-  const raw = config?.tracker?.fieldMappings;
-  return isPlainObject(raw) ? { ...raw } : {};
 }

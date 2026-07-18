@@ -40,7 +40,6 @@ import {
   resolveBaseBranch,
   resolveTrackerProvider,
   resolveTrackerBoard,
-  resolveTrackerFieldMappings,
 } from "../src/config/config.mjs";
 // ============================================================================
 // Schema validation tests (S1–S26)
@@ -1377,25 +1376,29 @@ describe("tracker config (#1408)", () => {
     );
   });
 
-  test("resolveTrackerFieldMappings returns only configured logical-column overrides", () => {
-    assert.deepEqual(resolveTrackerFieldMappings({}), {});
-    assert.deepEqual(
-      resolveTrackerFieldMappings({ tracker: { fieldMappings: { next_up: "Ready" } } }),
-      { next_up: "Ready" },
-    );
+  test("tracker.provider accepts any non-empty string (schema does not preclude an external provider)", () => {
+    const result = FileConfigSchema.safeParse({ version: 1, tracker: { provider: "jira" } });
+    assert.ok(result.success);
   });
 
-  test("tracker.fieldMappings rejects an unknown logical column", () => {
+  test("tracker has no fieldMappings key — the github provider's logical-column mapping is queue.statusColumns", () => {
     const result = FileConfigSchema.safeParse({
       version: 1,
-      tracker: { fieldMappings: { todo: "Backlog" } },
+      tracker: { fieldMappings: { next_up: "Ready" } },
     });
     assert.ok(!result.success);
   });
 
-  test("tracker.provider accepts any non-empty string (schema does not preclude an external provider)", () => {
-    const result = FileConfigSchema.safeParse({ version: 1, tracker: { provider: "jira" } });
-    assert.ok(result.success);
+  test("tracker.board validation error names tracker.board, not queue.board", () => {
+    const result = FileConfigSchema.safeParse({ version: 1, tracker: { board: {} } });
+    assert.ok(!result.success);
+    assert.ok(result.error.issues.some((i) => i.message === "tracker.board must set number or title"));
+  });
+
+  test("queue.board validation error still names queue.board", () => {
+    const result = FileConfigSchema.safeParse({ version: 1, queue: { board: {} } });
+    assert.ok(!result.success);
+    assert.ok(result.error.issues.some((i) => i.message === "queue.board must set number or title"));
   });
 
   test("strategy: \"github-first\" is accepted as a deprecated alias for tracker-first, with a warning", async () => {
