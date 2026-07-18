@@ -29,10 +29,12 @@ import { DEFAULT_STATE_COLUMN_NAMES } from "../loop/queue-board-sync.mjs";
  */
 export function createGithubTrackerAdapter({ env = process.env, ghCommand = "gh", run } = {}) {
   const deps = { env, ghCommand, ...(run ? { run } : {}) };
-  // detectLinkedIssuePr's DI param is historically named `runChild` (not
-  // `run`, unlike the other issue-ops functions) — pass the same injected
-  // runner under both names so a caller-supplied `run` reaches it too.
-  const linkedPrDeps = { env, ghCommand, ...(run ? { runChild: run } : {}) };
+  // detectLinkedIssuePr and the projects/*.mjs board primitives all name
+  // their DI param `runChild` (not `run`, unlike the other issue-ops
+  // functions) — pass the same injected runner under both names so a
+  // caller-supplied `run` reaches every dependency, not just issue-ops.
+  const runChildDeps = { env, ...(run ? { runChild: run } : {}) };
+  const linkedPrDeps = { ...runChildDeps, ghCommand };
 
   function parseRef(urlOrRef) {
     const trimmed = String(urlOrRef ?? "").trim();
@@ -100,10 +102,15 @@ export function createGithubTrackerAdapter({ env = process.env, ghCommand = "gh"
   }
 
   async function listQueueItems(board) {
-    const result = await listQueueItemsMain({ repo: board.repo, project: board.project }, { env });
+    const result = await listQueueItemsMain({ repo: board.repo, project: board.project }, runChildDeps);
     return result.items ?? [];
   }
 
+  // `board.columnNames` is the github provider's logical-column -> Status
+  // mapping — callers source it from the existing, already-load-bearing
+  // `queue.statusColumns` config (via `loadStateColumnMap` in
+  // `../loop/queue-board-sync.mjs`), not a tracker-owned config key; unset
+  // falls back to the provider's own defaults (DEFAULT_STATE_COLUMN_NAMES).
   async function setItemStatus(board, item, logicalColumn) {
     const columnNames = { ...DEFAULT_STATE_COLUMN_NAMES, ...(board.columnNames ?? {}) };
     const toColumn = columnNames[logicalColumn];
@@ -111,7 +118,7 @@ export function createGithubTrackerAdapter({ env = process.env, ghCommand = "gh"
       throw new Error(`setItemStatus: no display column configured for logical column "${logicalColumn}"`);
     }
     const itemRef = String(item?.itemId ?? item?.number ?? item);
-    await moveQueueItemMain({ repo: board.repo, project: board.project, item: itemRef, toColumn }, { env });
+    await moveQueueItemMain({ repo: board.repo, project: board.project, item: itemRef, toColumn }, runChildDeps);
   }
 
   return createTrackerAdapter({

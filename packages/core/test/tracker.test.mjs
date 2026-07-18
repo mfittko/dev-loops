@@ -164,6 +164,93 @@ test("github adapter listIssues and commentIssue wrap the underlying gh calls", 
   assert.equal(comment.commentUrl, "https://github.com/acme/widgets/issues/1#issuecomment-1");
 });
 
+test("github adapter editIssue remaps the interface's flat assignees to gh's --add-assignee (load-bearing: claiming an issue)", async () => {
+  let capturedArgs;
+  const run = async (_cmd, args) => {
+    capturedArgs = args;
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const adapter = createGithubTrackerAdapter({ run });
+  const result = await adapter.editIssue(
+    { repo: "acme/widgets", id: 42 },
+    { title: "New title", assignees: ["alice", "bob"] },
+  );
+  assert.deepEqual(capturedArgs, [
+    "issue", "edit", "42", "--repo", "acme/widgets",
+    "--title", "New title",
+    "--add-assignee", "alice",
+    "--add-assignee", "bob",
+  ]);
+  assert.deepEqual(result.edited, ["title", "add-assignee"]);
+});
+
+// ── GitHub adapter board facade (partial capability: listQueueItems/setItemStatus) ──
+
+function userPayload() {
+  return { data: { user: { id: "U_kgDOABC123" } } };
+}
+function listUserProjectsResponse(projects) {
+  return { data: { user: { projectsV2: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: projects } } } };
+}
+function getFieldsResponse(fields) {
+  return { data: { node: { fields: { nodes: fields, pageInfo: { hasNextPage: false } } } } };
+}
+const STATUS_FIELD = {
+  id: "PVTSSF_status",
+  name: "Status",
+  options: [
+    { id: "opt1", name: "Backlog" },
+    { id: "opt2", name: "Next Up" },
+    { id: "opt3", name: "In Progress" },
+    { id: "opt4", name: "Done" },
+  ],
+};
+const EXISTING_PROJECT = { id: "PVT_proj1", number: 1, title: "Dev Loop Queue", url: "https://x" };
+function getItemsByContentResponse(items) {
+  return { data: { node: { items: { nodes: items, pageInfo: { hasNextPage: false, endCursor: null } } } } };
+}
+function makeItemNode(itemId, content, status) {
+  const fieldValues = status != null ? { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: status }] } : { nodes: [] };
+  return { id: itemId, fieldValues, content };
+}
+function makeContent(number, repo = "acme/widgets") {
+  return { __typename: "Issue", number, repository: { nameWithOwner: repo } };
+}
+
+function sequentialRun(responses) {
+  let i = 0;
+  return async () => {
+    if (i >= responses.length) throw new Error(`unexpected extra gh call #${i + 1}`);
+    const resp = responses[i++];
+    return { code: 0, stdout: JSON.stringify(resp), stderr: "" };
+  };
+}
+
+test("github adapter setItemStatus maps a logical column to the configured Status display name and coerces item.itemId to a string ref", async () => {
+  const run = sequentialRun([
+    userPayload(),
+    listUserProjectsResponse([EXISTING_PROJECT]),
+    getFieldsResponse([STATUS_FIELD]),
+    // The item is already at "In Progress" — the no-op/unchanged branch,
+    // reached without needing a mutation-call stub.
+    getItemsByContentResponse([makeItemNode("PVTI_1", makeContent(10), "In Progress")]),
+  ]);
+  const adapter = createGithubTrackerAdapter({ run });
+  const board = { repo: "acme/widgets", project: "1", columnNames: { in_progress: "In Progress" } };
+  // item.itemId is the identity setItemStatus coerces to the --item ref
+  // (matches move-queue-item's stable-node-id contract); a bare issueNumber
+  // fallback (item.number) exists for callers without a node id.
+  await adapter.setItemStatus(board, { itemId: "PVTI_1", number: 10 }, "in_progress");
+});
+
+test("github adapter setItemStatus throws when the board has no display column for the logical column (reachable fail-closed branch)", async () => {
+  const adapter = createGithubTrackerAdapter({ run: async () => { throw new Error("gh must not be called"); } });
+  await assert.rejects(
+    () => adapter.setItemStatus({ repo: "acme/widgets", project: "1", columnNames: {} }, { itemId: "PVTI_1" }, "not_a_real_column"),
+    /no display column configured for logical column "not_a_real_column"/,
+  );
+});
+
 // ── Registry ─────────────────────────────────────────────────────────────
 
 test("resolveTrackerAdapter defaults to the github provider", () => {
