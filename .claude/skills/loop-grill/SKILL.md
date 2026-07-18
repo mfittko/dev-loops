@@ -10,7 +10,7 @@ user-invocable: false
 
 A standalone, on-demand pre-loop grilling skill. Run it against an issue or a local plan file **before** the dev loop starts to surface underspecified acceptance criteria, fuzzy scope boundaries, unresolved primary actors, and undocumented hard-to-reverse decisions.
 
-It is entirely separate from the in-loop docs-grill (`docs/docs-grill-step.md`), which audits code/doc drift while the loop runs. This skill operates on the *spec* before any implementation begins.
+It is entirely separate from the in-loop docs-grill (`skills/docs/docs-grill-step.md`), which audits code/doc drift while the loop runs. This skill operates on the *spec* before any implementation begins.
 
 ## State machine
 
@@ -211,7 +211,7 @@ Running `/loop-grill` twice on the same target must not accumulate duplicate sec
 ## Non-goals
 
 - Auto-triggering from `issue_intake` — this is on-demand only.
-- Replacing or modifying the in-loop docs-grill (`docs/docs-grill-step.md`, `scripts/loop/docs-grill-contract.mjs`) — different concern, different firing surface.
+- Replacing or modifying the in-loop docs-grill (`skills/docs/docs-grill-step.md`, `scripts/loop/docs-grill-contract.mjs`) — different concern, different firing surface.
 - Full DDD `CONTEXT.md` management.
 - Scheduling or storing grill runs — stateless and on-demand.
 - Any CI/CD integration.
