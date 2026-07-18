@@ -81,23 +81,9 @@ Required reading:
 
 ## Tracker-first
 
-**Strategy:** `tracker_first` (reserved for future `dev-loop` routing when tracker context detected)
+**Decision: won't-do.** There is no `tracker_first` route in `resolve-dev-loop-startup.mjs`, and none is planned. Tracker-backed work is shipped as an **input-source** addition to the existing `local_implementation` strategy (see [Tracker-backed local implementation input-source contract](public-dev-loop-contract.md#tracker-backed-local-implementation-input-source-contract) and the [Local Implementation SKILL](../local-implementation/SKILL.md#tracker-backed-local-implementation)) — not a separate routing family or public workflow entrypoint. That framing is coherent and shipped; a peer `tracker_first` strategy is not needed on top of it.
 
-**Purpose:** Tracker-first workflow for story/epic tracker items that follow a PR-based GitHub execution path.
-
-**Routing status:** Routing integration in `resolve-dev-loop-startup.mjs` is deferred (no `tracker_first` route exists yet). This briefing documents the intended contract surface; the state machine and detector are implemented and tested.
-
-**Key artifacts:**
-- Tracker issue (canonical spec)
-- [Tracker-First Loop State](tracker-first-loop-state.md) — state machine doc
-- `detect-tracker-first-loop-state.mjs` — loop state detector
-- `detect-tracker-pr-state.mjs` — PR-level state detector
-
-**Routing:** `dev-loop` will resolve to tracker-first when a tracker context is detected (issue has tracker labels, is a tracker-backed issue). Fail-closed: unknown tracker state → `needs_triage`.
-
-**State vocabulary:** `drafting`, `needs_triage`, `in_progress`, `in_review`, `merge_ready`, `blocked`, `completed`, `unknown`
-
-**Interface contract:** Same as Copilot loop: `{ ok, state, snapshot, allowedTransitions, nextAction }`
+**Standalone tooling (not routed by `dev-loop`):** [Tracker-First Loop State](tracker-first-loop-state.md) documents a PR-level and loop-level state machine with its own detectors (`detect-tracker-first-loop-state.mjs`, `detect-tracker-pr-state.mjs`). These are implemented and tested, but `resolve-dev-loop-startup.mjs` never dispatches to them and the `dev-loops` CLI wrapper does not expose them under `loop loop-state` (that command maps to the Copilot loop detector instead). Treat them as standalone, directly-invoked tools, not as part of the routed strategy list above.
 
 ## Wait / watch
 
