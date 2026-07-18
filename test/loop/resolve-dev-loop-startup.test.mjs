@@ -1022,6 +1022,59 @@ test("runCli --issue uses config inputSource=phase-docs to choose phase-doc loca
   }
 });
 
+// resolveTargetPreference (the raw .devloops/.pi scraper) must recognize both
+// the canonical "tracker-first" value (#1408 rename) and the deprecated
+// "github-first" alias as the tracker-first posture. Proven the same way as
+// the local-first/phase-docs test above, but INVERTED: with strategy set to
+// either value, targetPreference resolves to prefer_github_first (not
+// prefer_local), so the phase-docs local-startup SHORT-CIRCUIT above must NOT
+// fire — the tracker-read path runs instead (gh IS called, and
+// issueLinkageResolution advances past "not_applicable").
+for (const strategyValue of ["tracker-first", "github-first"]) {
+  test(`runCli --issue recognizes strategy: ${strategyValue} as the tracker-first posture (#1408)`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-tracker-first-strategy-"));
+    try {
+      execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+      await mkdir(path.join(tempDir, "scripts", "github"), { recursive: true });
+      await writeFile(
+        path.join(tempDir, "scripts/github/detect-linked-issue-pr.mjs"),
+        'process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/dev-loops", issue: 511, hasOpenLinkedPr: false, prNumber: null }));',
+        "utf8",
+      );
+      await writeFile(
+        path.join(tempDir, ".devloops"),
+        `version: 1\nstrategy: ${strategyValue}\ninputSource: phase-docs\n`,
+        "utf8",
+      );
+
+      const ghStub = await writeGhStubHelper(tempDir, [], { repeatLastOnOverflow: true, logCalls: true });
+      const result = await runNode(["--issue", "511"], {
+        cwd: tempDir,
+        env: {
+          ...ghStub.env,
+          // Satisfy the async-start contract explicitly (CI has no ambient
+          // DEVLOOPS_RUN_ID; without this the CLI fails closed and the
+          // tracker-read path is never reached).
+          DEVLOOPS_RUN_ID: "test-run-123",
+          DEVLOOPS_WORKTREE_BYPASS: "1",
+          DEVLOOPS_OWNERSHIP_BYPASS: "1",
+        },
+      });
+
+      assert.equal(result.code, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      // Reached the tracker-read path, not the local-phase short-circuit
+      // (which would leave this "not_applicable" and make zero gh calls).
+      assert.equal(parsed.bundle.issueLinkageResolution, "resolved_no_open_pr");
+      const ghLog = await readFile(ghStub.ghLogPath, "utf8");
+      assert.notEqual(ghLog.trim(), "", "expected the tracker-read path to call gh, not short-circuit to local_phase");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
 test("local-first phase-doc intake fires no tracker artifact / Copilot call before promotion (#953 AC3)", async () => {
   // local-first comes from the shipped extension defaults (settings only sets
   // inputSource), proving the low-noise intake holds with the shipped posture.

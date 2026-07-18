@@ -5,6 +5,10 @@ import { parse as parseYaml } from "yaml";
 // Read .devloops (and extension variants) queue settings, mirroring the
 // resolution used by ensure-queue-board.mjs. Returns { project }, { title },
 // and/or { olderThanDays } when configured; never throws on a missing/bad file.
+//
+// `tracker.board` (issue #1408, the tracker-agnostic seam) takes priority over
+// the deprecated `queue.board` — same precedence as loadBoardConfig in
+// ../loop/queue-board-sync.mjs and resolveTrackerBoard in ../config/config.mjs.
 function resolveSettings(cwd) {
   const basePath = path.join(cwd, ".devloops");
   const extensions = ["", ".yaml", ".yml", ".json"];
@@ -13,9 +17,8 @@ function resolveSettings(cwd) {
       const raw = readFileSync(basePath + ext, "utf-8");
       const settings = ext === ".json" ? JSON.parse(raw) : parseYaml(raw);
       const queue = settings?.queue;
-      if (!queue) return null;
       const out = {};
-      const board = queue.board;
+      const board = settings?.tracker?.board ?? queue?.board;
       if (board && typeof board === "object") {
         if (typeof board.number === "number" && Number.isInteger(board.number) && board.number > 0) {
           out.project = board.number;
@@ -23,6 +26,7 @@ function resolveSettings(cwd) {
           out.title = board.title.trim();
         }
       }
+      if (!queue) return Object.keys(out).length > 0 ? out : null;
       if (typeof queue.archiveOlderThanDays === "number" && Number.isInteger(queue.archiveOlderThanDays) && queue.archiveOlderThanDays > 0) {
         out.olderThanDays = queue.archiveOlderThanDays;
       }

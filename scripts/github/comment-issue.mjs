@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { commentIssue as coreCommentIssue } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -102,46 +102,11 @@ export function parseCommentIssueCliArgs(argv) {
   return options;
 }
 
-async function resolveBody(options) {
-  if (options.bodyFile === undefined) {
-    if (options.body.trim().length === 0) {
-      throw new Error("--body must not be empty");
-    }
-    return options.body;
-  }
-  const source = options.bodyFile === "-" ? 0 : options.bodyFile;
-  const body = await readFile(source, "utf8");
-  if (body.trim().length === 0) {
-    throw new Error(`--body-file ${options.bodyFile} is empty`);
-  }
-  return body;
-}
-
 // Post the comment via `gh issue comment`, then read its URL back from
 // `gh issue comment` output. `gh issue comment` prints the new comment URL on
 // success — capture it so callers don't need a follow-up read.
 export async function commentIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
-  const body = await resolveBody(options);
-  const result = await run(
-    ghCommand,
-    ["issue", "comment", String(options.issue), "--repo", options.repo, "--body", body],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh issue comment failed: ${detail}`);
-  }
-  // `gh issue comment` prints the created comment's URL (the last non-empty line
-  // of stdout). Surface it so the caller has the comment URL without a re-read.
-  const commentUrl = result.stdout
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .pop() ?? null;
-  if (commentUrl === null || !/^https?:\/\//u.test(commentUrl)) {
-    throw new Error(`gh issue comment did not return a comment URL (got: ${result.stdout.trim() || "<empty>"})`);
-  }
-  return { ok: true, repo: options.repo, issue: options.issue, commentUrl };
+  return coreCommentIssue(options, { env, ghCommand, run });
 }
 
 export async function runCli(

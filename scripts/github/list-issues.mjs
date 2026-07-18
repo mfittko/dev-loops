@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { listIssues as coreListIssues } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -107,51 +108,8 @@ export function parseListIssuesCliArgs(argv) {
   return options;
 }
 
-// Returns a well-typed issue, or null if the gh entry is missing/invalid in any
-// required field. Callers filter the nulls so the emitted shape stays
-// well-typed (documented output) and --jq filters never hit null number/title/state.
-function normalizeIssue(raw) {
-  if (!Number.isInteger(raw?.number) || typeof raw?.title !== "string" || typeof raw?.state !== "string") {
-    return null;
-  }
-  return {
-    number: raw.number,
-    title: raw.title,
-    // gh reports issue state UPPERCASE (OPEN/CLOSED); normalize to lowercase to
-    // match the --state flag vocabulary.
-    state: raw.state.toLowerCase(),
-    labels: Array.isArray(raw?.labels)
-      ? raw.labels.map((l) => (typeof l?.name === "string" ? l.name : null)).filter((n) => n !== null)
-      : [],
-  };
-}
-
 export async function listIssues(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
-  const args = [
-    "issue",
-    "list",
-    "--repo",
-    options.repo,
-    "--state",
-    options.state,
-    "--limit",
-    String(options.limit),
-    "--json",
-    "number,title,state,labels",
-  ];
-  for (const label of options.labels) {
-    args.push("--label", label);
-  }
-  const result = await run(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh issue list failed: ${detail}`);
-  }
-  const payload = parseJsonText(result.stdout, { label: "gh issue list" });
-  if (!Array.isArray(payload)) {
-    throw new Error("gh issue list did not return a JSON array");
-  }
-  return { ok: true, issues: payload.map(normalizeIssue).filter((issue) => issue !== null) };
+  return coreListIssues(options, { env, ghCommand, run });
 }
 
 export async function runCli(

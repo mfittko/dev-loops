@@ -2,6 +2,7 @@
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { buildCreateArgs as coreBuildCreateArgs, createIssue as coreCreateIssue } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -29,8 +30,6 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
-
-const ISSUE_URL_NUMBER_PATTERN = /\/issues\/(\d+)(?:\D|$)/u;
 
 export function parseCreateIssueCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -147,38 +146,11 @@ export function parseCreateIssueCliArgs(argv) {
 // Build the `gh issue create` args. A --body-file path is forwarded straight to
 // gh so large bodies avoid command-length limits.
 export function buildCreateArgs(options) {
-  const args = ["issue", "create", "--repo", options.repo, "--title", options.title];
-  if (options.body !== undefined) {
-    args.push("--body", options.body);
-  } else {
-    args.push("--body-file", options.bodyFile);
-  }
-  if (options.milestone !== undefined) {
-    args.push("--milestone", options.milestone);
-  }
-  for (const l of options.labels) {
-    args.push("--label", l);
-  }
-  for (const u of options.assignees) {
-    args.push("--assignee", u);
-  }
-  return args;
+  return coreBuildCreateArgs(options);
 }
 
 export async function createIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
-  const args = buildCreateArgs(options);
-  const result = await run(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh issue create failed: ${detail}`);
-  }
-  // gh prints the created issue URL to stdout.
-  const url = (result.stdout ?? "").trim();
-  const match = ISSUE_URL_NUMBER_PATTERN.exec(url);
-  if (!match) {
-    throw new Error(`gh issue create returned no parseable issue URL: ${url || "<empty>"}`);
-  }
-  return { ok: true, issueNumber: Number(match[1]), url };
+  return coreCreateIssue(options, { env, ghCommand, run });
 }
 
 export async function runCli(

@@ -21,6 +21,7 @@
     "./debt/shape": "./src/debt/shape.mjs",
     "./debt/signal": "./src/debt/debt-signal.mjs",
     "./github/copilot-helpers": "./src/github/copilot-helpers.mjs",
+    "./github/issue-ops": "./src/github/issue-ops.mjs",
     "./github/ownership-helpers": "./src/github/ownership-helpers.mjs",
     "./github/repo-slug": "./src/github/repo-slug.mjs",
     "./github/review-threads": "./src/github/review-threads.mjs",
@@ -69,6 +70,7 @@
     "./projects/move-queue-item": "./src/projects/move-queue-item.mjs",
     "./projects/resolve-project": "./src/projects/resolve-project.mjs",
     "./harness": "./src/harness/index.mjs",
+    "./tracker": "./src/tracker/index.mjs",
     "./loop/worktree-guard": "./src/loop/worktree-guard.mjs",
     "./loop/tracker-first-loop-state": "./src/loop/tracker-first-loop-state.mjs"
   },

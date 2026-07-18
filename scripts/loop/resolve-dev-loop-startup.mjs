@@ -372,7 +372,11 @@ function resolveTargetPreference(cwd) {
         }
       }
       if (val === "local-first") return "prefer_local";
-      if (val === "github-first") return "prefer_github_first";
+      // "tracker-first" is the canonical value (#1408, the tracker-agnostic
+      // seam); "github-first" is still accepted here as the deprecated alias
+      // (this scraper reads the raw file directly, bypassing config.mjs's
+      // own alias normalization, so it must recognize both literals itself).
+      if (val === "tracker-first" || val === "github-first") return "prefer_github_first";
     } catch {
     }
   }
@@ -389,13 +393,13 @@ function resolveTargetPreference(cwd) {
         const parsed = JSON.parse(raw);
         const val = parsed?.strategy;
         if (val === "local-first") return "prefer_local";
-        if (val === "github-first") return "prefer_github_first";
+        if (val === "tracker-first" || val === "github-first") return "prefer_github_first";
         continue;
       }
       const match = raw.match(/^strategy:\s*["']?([^"'\s]+)["']?/m);
       if (match) {
         if (match[1] === "local-first") return "prefer_local";
-        if (match[1] === "github-first") return "prefer_github_first";
+        if (match[1] === "tracker-first" || match[1] === "github-first") return "prefer_github_first";
       }
     } catch {
     }

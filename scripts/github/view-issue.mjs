@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { viewIssue as coreViewIssue, VIEW_ISSUE_DEFAULT_FIELDS } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -9,8 +10,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 // checkbox sync and gate angles that need the linked issue. Callers needing a
 // different set pass --json <fields> (a comma list, same vocabulary as
 // `gh issue view --json`).
-const DEFAULT_FIELDS =
-  "number,title,body,state,author,labels,url,createdAt,updatedAt";
+const DEFAULT_FIELDS = VIEW_ISSUE_DEFAULT_FIELDS;
 
 const USAGE = `Usage: view-issue.mjs --repo <owner/name> --issue <number> [--json <fields>]
 Read issue facts (body/state/author/labels/etc.). Thin wrapper over
@@ -105,20 +105,7 @@ export function parseViewIssueCliArgs(argv) {
 }
 
 export async function viewIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
-  const result = await run(
-    ghCommand,
-    ["issue", "view", String(options.issue), "--repo", options.repo, "--json", options.fields],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh issue view failed: ${detail}`);
-  }
-  const issue = parseJsonText(result.stdout, { label: "gh issue view" });
-  if (issue === null || typeof issue !== "object" || Array.isArray(issue)) {
-    throw new Error("gh issue view did not return a JSON object");
-  }
-  return { ok: true, issue };
+  return coreViewIssue(options, { env, ghCommand, run });
 }
 
 export async function runCli(

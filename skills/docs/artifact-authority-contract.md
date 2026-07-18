@@ -64,7 +64,7 @@ Key contract:
 
 | Mode | Canonical artifact | GitHub issue required | Settings value |
 |---|---|---|---|
-| Tracker-first | GitHub issue | Yes | `strategy: github-first` |
+| Tracker-first | GitHub issue | Yes | `strategy: tracker-first` (`github-first` is a deprecated accepted alias) |
 | Local-planning (shipped default) | Markdown plan file | No | `strategy: local-first` |
 | Lightweight (PR-body-as-spec) | GitHub PR description | Conditional — `--issue` when tracker-backed; absent for issue-less PR-first (#1210), gated on `localImplementation.lightMode` + change-scope threshold, or any-scope with `localImplementation.issueless` (#1349) | modifier: `--lightweight` (`canonicalSpecSource: pr_body`) |
 
@@ -80,14 +80,14 @@ The repo's default artifact-authority posture is declared by `strategy`, set in 
 
 ```yaml
 # .devloops
-strategy: local-first    # local-planning (markdown plan file)
-# strategy: github-first # tracker-first (GitHub issue required)
-inputSource: tracker     # spec source for local-first: tracker (issue body) or phase-docs
+strategy: local-first     # local-planning (markdown plan file)
+# strategy: tracker-first # tracker-first (GitHub issue required; "github-first" is a deprecated accepted alias)
+inputSource: tracker      # spec source for local-first: tracker (issue body) or phase-docs
 ```
 
 The `strategy` key carries two jobs:
-1. It declares the repo's default artifact-authority posture (local-planning under `local-first`, tracker-first under `github-first`).
-2. It sets the routing preference (`targetPreference`) in dev-loop startup — `prefer_local` under `local-first`, `prefer_github_first` under `github-first`.
+1. It declares the repo's default artifact-authority posture (local-planning under `local-first`, tracker-first under `tracker-first`).
+2. It sets the routing preference (`targetPreference`) in dev-loop startup — `prefer_local` under `local-first`, `prefer_github_first` under `tracker-first`.
 
 The authoritative artifact for a given run is selected by the explicit startup input. `scripts/loop/resolve-dev-loop-startup.mjs` takes `--issue` / `--pr` / `--input` / `--plan-file` (mutually exclusive), and `strategy` supplies the default routing preference; it does not force the artifact per invocation.
 
@@ -104,14 +104,14 @@ The effective default for a consumer comes from the config-merge layering in `pa
 3. Repo-local `.pi/dev-loop/defaults.*` (legacy) — applied when present.
 4. Repo `.devloops` at repo root — the per-repo override, highest precedence. When `.devloops` is absent, the legacy `.pi/dev-loop/settings.*` / `overrides.*` apply at this position instead.
 
-With nothing but the shipped package in place, the extension layer resolves `strategy` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy: github-first` in its own `.devloops`.
+With nothing but the shipped package in place, the extension layer resolves `strategy` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy: tracker-first` in its own `.devloops` (`github-first` is a deprecated accepted alias, normalized with a load-time warning).
 
 Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`). They differ in how they load, per the precedence list above: `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`; `.pi/dev-loop/settings.*` (and the older `overrides.*`) load only when no `.devloops` is present — when `.devloops` exists it is authoritative and those files are ignored (with a deprecation warning).
 
 ### Explicit non-knobs
 
 <!-- rule: ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED -->
-`ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED`: The strategy enum MUST accept only `github-first` or `local-first` and MUST fail closed on any other value (`packages/core/src/config/config.mjs`). These are not valid artifact authority mode selectors:
+`ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED`: The strategy enum MUST accept only `tracker-first` or `local-first` (plus the deprecated accepted alias `github-first`, normalized to `tracker-first` with a warning) and MUST fail closed on any other value (`packages/core/src/config/config.mjs`). These are not valid artifact authority mode selectors:
 - `strategy: copilot` — not a valid mode
 - Free-form string values — MUST fail closed
 - Omitting `strategy` from every layer — resolves to `local-first` from `BUILT_IN_DEFAULTS`
@@ -155,7 +155,7 @@ The shipped extension layer pairs local-first with a low-noise posture, in `pack
 | `queue.maxAutoFiledIssues` | `1` | Local-first is PR-first, so auto-filing issues is near-zero; a low cap keeps tracker noise minimal |
 | `gates.postFindingsComments` | `true` | Gate findings live on the PR (the spec-of-record and human-review surface) as evidence |
 
-These values come from the existing config-merge layering, so no new resolver is involved: `BUILT_IN_DEFAULTS` keeps the github-first posture (`humanMergeOnly: false`, `maxAutoFiledIssues: 10`), and the extension layer sets the local-first values above. A repo `.devloops` can override any of them.
+These values come from the existing config-merge layering, so no new resolver is involved: `BUILT_IN_DEFAULTS` keeps the tracker-first posture (`humanMergeOnly: false`, `maxAutoFiledIssues: 10`), and the extension layer sets the local-first values above. A repo `.devloops` can override any of them.
 
 ## dev-loops own mode
 
@@ -177,6 +177,7 @@ dev-loops runs **local-planning**, set in its repo-root `.devloops`.
 | [Local-Planning Worked Example](local-planning-worked-example.md) | One plan file shown through every stage, with the file content evolving |
 | [Spike-mode Contract](spike-mode-contract.md) | Time-boxed exploratory runs; a graduated spike emits a plan file that enters this local-planning tier |
 | [Tracker-First Loop State](tracker-first-loop-state.md) | Defines the PR-level state machine for tracker-first PR workflows; that is execution state, separate from artifact authority |
+| [Tracker Seam Contract](tracker-seam-contract.md) | Defines the `Tracker` provider interface/registry (issue #1408) — which provider backs "GitHub issue"; orthogonal to this doc's artifact-authority model |
 | [Main Agent Contract](main-agent-contract.md) | Defines the delegation boundary; artifact authority defines which artifacts govern work |
 | AGENTS.md | Repo constitution; cites the work-origin rule and points to this contract |
 | [Dev Loop Skill](../dev-loop/SKILL.md) | Public entrypoint skill; cites the work-origin rule and points to this contract |
@@ -187,7 +188,6 @@ dev-loops runs **local-planning**, set in its repo-root `.devloops`.
 
 ## Non-goals
 
-- Defining tracker adapters or multi-tracker support
+- Defining the `Tracker` provider interface/registry or multi-tracker support — that is the [Tracker Seam Contract](tracker-seam-contract.md) (issue #1408); this doc owns only the artifact-authority MODEL (which artifact is canonical), not which provider backs "GitHub issue"
 - Specifying how PRs map to issues in detail (that is the [Public Dev Loop Contract](public-dev-loop-contract.md))
 - Changing the dev-loop startup resolver behavior
-- Adding tracker-specific settings beyond `inputSource` — further tracker adapters or multi-tracker support remain out of scope

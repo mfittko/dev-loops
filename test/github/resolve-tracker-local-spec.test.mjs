@@ -59,7 +59,7 @@ test("resolve-tracker-local-spec resolves repo and issue inputs through gh issue
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["issue", "view", "85", "--repo", "owner/repo", "--json", "number,title,body,url,state"],
+        assertArgs: ["issue", "view", "85", "--repo", "owner/repo", "--json", "number,title,body,url,state,assignees"],
         stdout: `${JSON.stringify({
           number: 85,
           title: "Tracker-backed local contract",
@@ -173,6 +173,32 @@ test("resolve-tracker-local-spec normalizes repo slug in gh call and output", as
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+test("resolve-tracker-local-spec fails closed with a clear, actionable error when .devloops sets an unknown tracker.provider", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-resolve-tracker-local-spec-unknown-provider-"));
+
+  try {
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\ntracker:\n  provider: bogus\n",
+      "utf8",
+    );
+
+    const result = await runNode(["--repo", "owner/repo", "--issue", "85"], { cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    // Names the offending provider and confirms only "github" is built in —
+    // does not require the reader to know resolveTrackerAdapter internals.
+    assert.match(payload.error, /Unknown tracker\.provider "bogus"/);
+    assert.match(payload.error, /Registered: github/);
+    assert.equal("usage" in payload, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("resolve-tracker-local-spec reports gh failures without usage for runtime errors", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-resolve-tracker-local-spec-ghfail-"));
 
@@ -191,7 +217,7 @@ test("resolve-tracker-local-spec reports gh failures without usage for runtime e
     assert.equal(result.stdout, "");
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
-    assert.match(payload.error, /gh command failed: issue not found/);
+    assert.match(payload.error, /gh issue view failed: issue not found/);
     assert.equal("usage" in payload, false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });

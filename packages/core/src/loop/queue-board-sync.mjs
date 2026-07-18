@@ -172,7 +172,10 @@ function readDevloopsSettings(repoRoot) {
     try {
       const raw = readFileSync(base + ext, "utf8");
       const settings = ext === ".json" ? JSON.parse(raw) : parseYaml(raw);
-      return { settings: settings?.queue ?? null };
+      // `tracker` (issue #1408, the tracker-agnostic seam) is surfaced
+      // alongside `queue` so loadBoardConfig can prefer tracker.board over
+      // the deprecated queue.board without a second file read.
+      return { settings: settings?.queue ?? null, tracker: settings?.tracker ?? null };
     } catch (err) {
       if (err?.code === "ENOENT") {
         // try next extension
@@ -184,24 +187,35 @@ function readDevloopsSettings(repoRoot) {
   if (foundError) {
     return { error: foundError.message };
   }
-  return { settings: null };
+  return { settings: null, tracker: null };
+}
+
+/** Read a board selector ({number} or {title}) into the loadBoardConfig
+ * result shape, or null when neither is set. */
+function boardSelector(board) {
+  if (!board || typeof board !== "object") return null;
+  if (typeof board.number === "number" && board.number > 0) {
+    return { enabled: true, projectNumber: board.number };
+  }
+  if (typeof board.title === "string" && board.title.trim().length > 0) {
+    return { enabled: true, boardTitle: board.title.trim() };
+  }
+  return null;
 }
 
 export function loadBoardConfig(repoRoot) {
-  const { settings: queue, error } = readDevloopsSettings(repoRoot);
+  const { settings: queue, tracker, error } = readDevloopsSettings(repoRoot);
   if (error) {
     return { enabled: false, reason: `config read/parse error: ${error}` };
   }
+  // tracker.board (canonical) takes priority over the deprecated queue.board
+  // (issue #1408) — see resolveTrackerBoard in ../config/config.mjs for the
+  // equivalent resolution against the validated, loaded config.
+  const trackerBoard = boardSelector(tracker?.board);
+  if (trackerBoard) return trackerBoard;
   if (!queue) return { enabled: false };
-  const board = queue.board;
-  if (board && typeof board === "object") {
-    if (typeof board.number === "number" && board.number > 0) {
-      return { enabled: true, projectNumber: board.number };
-    }
-    if (typeof board.title === "string" && board.title.trim().length > 0) {
-      return { enabled: true, boardTitle: board.title.trim() };
-    }
-  }
+  const queueBoard = boardSelector(queue.board);
+  if (queueBoard) return queueBoard;
   return { enabled: false };
 }
 

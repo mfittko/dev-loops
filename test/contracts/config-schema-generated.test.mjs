@@ -109,7 +109,7 @@ test("generated schema accepts a bare-string angle (gates.<gate>.angles[]) — r
   );
   // enum enforcement: the matcher must reject an out-of-enum value (guards the
   // helper from silently ignoring `enum`, which would let it false-pass).
-  assert.ok(matchesSchema(schema, { version: 1, strategy: "github-first" }), "valid enum value must match");
+  assert.ok(matchesSchema(schema, { version: 1, strategy: "tracker-first" }), "valid enum value must match");
   assert.ok(!matchesSchema(schema, { version: 1, strategy: "bogus" }), "out-of-enum strategy must NOT match");
 });
 
