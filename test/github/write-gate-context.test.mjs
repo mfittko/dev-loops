@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 
 import {
   assertWorktreeAtHead,
@@ -71,16 +71,55 @@ async function makeBaseDiffRepo() {
   return { repoRoot, baseSha, headSha };
 }
 
+// Builds the unified gates.<gate>.angles array (D3: one array-of-objects,
+// string sugar for plain entries) from the old flat angles/mandatoryAngles/
+// excludeAngles lists these fixtures were originally written against, so the
+// many call sites below (which still pass the old-shaped override keys)
+// don't all need per-call editing.
+function buildAngleEntries({ angles, mandatoryAngles = [], excludeAngles = [] }) {
+  const excluded = new Set(excludeAngles);
+  const mandatorySet = new Set(mandatoryAngles);
+  const entries = [];
+  const seen = new Set();
+  for (const name of angles) {
+    seen.add(name);
+    if (mandatorySet.has(name) || excluded.has(name)) {
+      const entry = { name };
+      if (mandatorySet.has(name)) entry.mandatory = true;
+      if (excluded.has(name)) entry.enabled = false;
+      entries.push(entry);
+    } else {
+      entries.push(name);
+    }
+  }
+  // A mandatory/excluded angle not already in `angles` still needs a phantom
+  // entry (mandatoryAngles/excludeAngles used to be independent lists).
+  for (const name of [...mandatoryAngles, ...excludeAngles]) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const entry = { name };
+    if (mandatorySet.has(name)) entry.mandatory = true;
+    if (excluded.has(name)) entry.enabled = false;
+    entries.push(entry);
+  }
+  return entries;
+}
+
 function draftConfig(overrides = {}) {
+  const {
+    dynamicAngles = true,
+    excludeAngles = [],
+    mandatoryAngles = ["gate-evidence"],
+    angles = ["scope", "coverage", "correctness", "docs", "link-check", "config-drift"],
+    ...rest
+  } = overrides;
   return {
     version: 1,
     gates: {
       draft: {
-        angles: ["scope", "coverage", "correctness", "docs", "link-check", "config-drift"],
-        mandatoryAngles: ["gate-evidence"],
-        excludeAngles: [],
-        dynamicAngles: true,
-        ...overrides,
+        angles: buildAngleEntries({ angles, mandatoryAngles, excludeAngles }),
+        dynamic: { subtractive: dynamicAngles },
+        ...rest,
       },
     },
   };
@@ -117,20 +156,23 @@ async function makeDocsOnlyDiffRepo() {
 // programmatic buildGateContext path (which receives the same loaded config) see
 // identical config and must resolve identical angle sets.
 async function writeDraftDevLoops(repoRoot, overrides = {}) {
-  const draft = {
-    angles: ["scope", "coverage", "correctness", "docs", "link-check", "config-drift"],
-    mandatoryAngles: ["gate-evidence"],
-    excludeAngles: [],
-    dynamicAngles: true,
-    ...overrides,
-  };
-  const lines = ["version: 1", "gates:", "  draft:"];
-  lines.push(`    dynamicAngles: ${draft.dynamicAngles}`);
-  lines.push(`    excludeAngles: ${JSON.stringify(draft.excludeAngles)}`);
-  lines.push("    angles:");
-  for (const a of draft.angles) lines.push(`      - ${a}`);
-  lines.push("    mandatoryAngles:");
-  for (const m of draft.mandatoryAngles) lines.push(`      - ${m}`);
+  const {
+    angles = ["scope", "coverage", "correctness", "docs", "link-check", "config-drift"],
+    mandatoryAngles = ["gate-evidence"],
+    excludeAngles = [],
+    dynamicAngles = true,
+  } = overrides;
+  const entries = buildAngleEntries({ angles, mandatoryAngles, excludeAngles });
+  const lines = ["version: 1", "gates:", "  draft:", "    dynamic:", `      subtractive: ${dynamicAngles}`, "    angles:"];
+  for (const entry of entries) {
+    if (typeof entry === "string") {
+      lines.push(`      - ${entry}`);
+      continue;
+    }
+    lines.push(`      - name: ${entry.name}`);
+    if (entry.mandatory) lines.push("        mandatory: true");
+    if (entry.enabled === false) lines.push("        enabled: false");
+  }
   await writeFile(path.join(repoRoot, ".devloops"), `${lines.join("\n")}\n`, "utf8");
 }
 
@@ -652,10 +694,8 @@ test("buildGateContext maps pre_approval_gate to the preApproval config key", as
       version: 1,
       gates: {
         preApproval: {
-          angles: ["dry", "kiss", "docs"],
-          mandatoryAngles: ["renderer-security"],
-          excludeAngles: [],
-          dynamicAngles: true,
+          angles: ["dry", "kiss", "docs", { name: "renderer-security", mandatory: true }],
+          dynamic: { subtractive: true },
         },
       },
     };
@@ -1003,13 +1043,11 @@ test("CLI without --angles resolves angles dynamically (trims for a docs-only di
     // DOCS_ONLY_DIFF behavior) — proves the dynamic resolver RAN on the CLI path,
     // not just returned the static pool verbatim.
     assert.ok(!artifact.resolvedAngles.includes("coverage"), "non-docs candidate trimmed");
-    // Resolved set is a subset of the configured pool + mandatory.
-    for (const a of artifact.resolvedAngles) {
-      assert.ok(
-        ["scope", "coverage", "correctness", "docs", "link-check", "config-drift", "gate-evidence"].includes(a),
-        `resolved angle ${a} is from the pool/mandatory`,
-      );
-    }
+    // "correctness" is likewise a LOGIC_CHANGE-only candidate, dropped for a
+    // docs-only diff — this repo's shipped extension-defaults.yaml also
+    // configures the draft gate (merged by name, D3), so the resolved set is
+    // no longer a narrow fixed list; assert the invariant that matters instead.
+    assert.ok(!artifact.resolvedAngles.includes("correctness"), "non-docs candidate trimmed");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -1139,9 +1177,13 @@ test("CLI without --base and without --angles: static fallback pool + CLI/API pa
 
     assert.ok(cliArtifact, "artifact written for the no-base/no-angles invocation");
     assert.equal(cliArtifact.scope.diffSource, "none");
-    assert.deepEqual(cliArtifact.resolvedAngles, [
-      "gate-evidence", "scope", "coverage", "correctness", "docs", "link-check", "config-drift",
-    ], "diff=null -> static fallback pool (mandatory floor + configured angles), despite dynamicAngles:true");
+    // diff=null -> static fallback pool (mandatory floor + configured angles),
+    // despite dynamicAngles:true. This repo's own shipped extension-defaults.yaml
+    // also configures the draft gate (merged by name, D3), so the resolved set
+    // is a superset of this fixture's own angles rather than an exact list.
+    for (const a of ["gate-evidence", "scope", "coverage", "correctness", "docs", "link-check", "config-drift"]) {
+      assert.ok(cliArtifact.resolvedAngles.includes(a), `${a} present in the static fallback pool`);
+    }
 
     // CLI/API parity: buildGateContext with the same loaded config and diff:null
     // must resolve the identical angle set as the CLI path.
@@ -1172,9 +1214,9 @@ test("writeDraftDevLoops honors an excludeAngles override (emitted excludeAngles
     // diff=null -> static fallback pool. If excludeAngles were still ignored in
     // the emitted .devloops YAML, "coverage" would leak into resolvedAngles.
     assert.ok(!cliArtifact.resolvedAngles.includes("coverage"), "excludeAngles override must be honored by the loaded config");
-    assert.deepEqual(cliArtifact.resolvedAngles, [
-      "gate-evidence", "scope", "correctness", "docs", "link-check", "config-drift",
-    ]);
+    for (const a of ["gate-evidence", "scope", "correctness", "docs", "link-check", "config-drift"]) {
+      assert.ok(cliArtifact.resolvedAngles.includes(a), `${a} present in the static fallback pool`);
+    }
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -1253,15 +1295,23 @@ test("CLI without --angles + malformed .devloops: warns to stderr and proceeds w
 test("CLI without --angles + a gate with no configured angles/mandatoryAngles: warns of zero resolved angles and still writes the artifact (warn-and-proceed, not fail-closed)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-emptyresolved-"));
   try {
-    // draft gate explicitly configured with EMPTY angles + mandatoryAngles
-    // (overriding the extension-defaults angle pool): resolveGateAnglesDynamic
-    // resolves an empty recommendedAngles — the hollow gate-evidence path this
-    // warning exists to flag.
+    // draft gate explicitly configured with EMPTY angles (overriding the
+    // extension-defaults angle pool): resolveGateAnglesDynamic resolves an
+    // empty recommendedAngles — the hollow gate-evidence path this warning
+    // exists to flag. Angle arrays merge BY NAME across layers (D3), so an
+    // empty `angles: []` here is a no-op against the shipped extension
+    // defaults' non-empty draft pool — reaching a genuinely empty resolved
+    // set requires disabling every angle that pool actually configures.
+    const { config: shippedConfig } = await loadDevLoopConfig({ repoRoot });
+    const shippedDraftAngles = resolveGateAngles(shippedConfig, "draft") ?? [];
+    const disableLines = shippedDraftAngles.map((name) => `      - name: ${name}\n        enabled: false`);
     await writeFile(
       path.join(repoRoot, ".devloops"),
       [
         "version: 1", "gates:", "  draft:",
-        "    angles: []", "    mandatoryAngles: []", "    excludeAngles: []", "    dynamicAngles: false",
+        "    angles:",
+        ...disableLines,
+        "    dynamic:", "      subtractive: false",
       ].join("\n") + "\n",
       "utf8",
     );

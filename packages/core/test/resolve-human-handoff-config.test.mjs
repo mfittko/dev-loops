@@ -16,14 +16,14 @@ test("resolveHumanHandoffConfig: defaults to disabled no-op when absent", () => 
 
 test("resolveHumanHandoffConfig: disabled => sources/assignees forced empty even if present", () => {
   const out = resolveHumanHandoffConfig({
-    approval: { humanHandoff: { enabled: false, candidatesFrom: ["codeowners"], assignees: ["alice"] } },
+    approval: { enabled: false, candidatesFrom: ["codeowners"], assignees: ["alice"] },
   });
   assert.deepEqual(out, { enabled: false, candidatesFrom: [], assignees: [] });
 });
 
 test("resolveHumanHandoffConfig: enabled parses sources + assignees", () => {
   const out = resolveHumanHandoffConfig({
-    approval: { humanHandoff: { enabled: true, candidatesFrom: ["codeowners", "recent-committers"], assignees: [" alice ", "@bob", ""] } },
+    approval: { enabled: true, candidatesFrom: ["codeowners", "recent-committers"], assignees: [" alice ", "@bob", ""] },
   });
   assert.deepEqual(out, {
     enabled: true,
@@ -34,24 +34,24 @@ test("resolveHumanHandoffConfig: enabled parses sources + assignees", () => {
 
 test("resolveHumanHandoffConfig: normalizes assignees — strips @, trims, drops empties", () => {
   const out = resolveHumanHandoffConfig({
-    approval: { humanHandoff: { enabled: true, assignees: ["@", "", "alice", " @bob ", "@ "] } },
+    approval: { enabled: true, assignees: ["@", "", "alice", " @bob ", "@ "] },
   });
   assert.deepEqual(out.assignees, ["alice", "bob"]);
 });
 
 test("resolveHumanHandoffConfig: enabled with no sources/assignees => empty arrays", () => {
-  const out = resolveHumanHandoffConfig({ approval: { humanHandoff: { enabled: true } } });
+  const out = resolveHumanHandoffConfig({ approval: { enabled: true } });
   assert.deepEqual(out, { enabled: true, candidatesFrom: [], assignees: [] });
 });
 
-test("BUILT_IN_DEFAULTS: approval.humanHandoff is disabled", () => {
-  assert.equal(BUILT_IN_DEFAULTS.approval.humanHandoff.enabled, false);
+test("BUILT_IN_DEFAULTS: approval is disabled", () => {
+  assert.equal(BUILT_IN_DEFAULTS.approval.enabled, false);
 });
 
-test("FileConfigSchema: approval.humanHandoff section parses", () => {
+test("FileConfigSchema: approval section parses", () => {
   const result = FileConfigSchema.safeParse({
     version: 1,
-    approval: { humanHandoff: { enabled: true, candidatesFrom: ["codeowners"], assignees: ["alice"] } },
+    approval: { enabled: true, candidatesFrom: ["codeowners"], assignees: ["alice"] },
   });
   assert.equal(result.success, true);
 });
@@ -59,7 +59,7 @@ test("FileConfigSchema: approval.humanHandoff section parses", () => {
 test("FileConfigSchema: rejects unknown candidatesFrom source", () => {
   const result = FileConfigSchema.safeParse({
     version: 1,
-    approval: { humanHandoff: { candidatesFrom: ["bogus"] } },
+    approval: { candidatesFrom: ["bogus"] },
   });
   assert.equal(result.success, false);
 });

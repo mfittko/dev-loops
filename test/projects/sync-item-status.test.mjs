@@ -113,7 +113,7 @@ describe("sync-item-status", () => {
       try {
         writeFileSync(
           path.join(tempDir, ".devloops"),
-          "version: 1\nqueue:\n  projectNumber: 3\n",
+          "version: 1\nqueue:\n  board:\n    number: 3\n",
           "utf8",
         );
         const result = await main(

@@ -326,7 +326,7 @@ function withTempDevloops(contents, fn) {
 
 describe("archive-done resolves the configured done column (#1143)", () => {
   it("archives items in the overridden statusColumns.done column (\"Complete\"), not the literal \"Done\"", async () => {
-    await withTempDevloops('queue:\n  projectNumber: 1\n  statusColumns:\n    done: "Complete"\n', async (cwd) => {
+    await withTempDevloops('queue:\n  board:\n    number: 1\n  statusColumns:\n    done: "Complete"\n', async (cwd) => {
       const nodes = [rawItemNode("A", 1, { closed: true, closedAt: "2026-01-01T00:00:00Z", status: "Complete" })];
       const responses = [
         { payload: userPayload() },
@@ -348,7 +348,7 @@ describe("archive-done resolves the configured done column (#1143)", () => {
   });
 
   it("does NOT archive an item still literally in \"Done\" when statusColumns.done is renamed", async () => {
-    await withTempDevloops('queue:\n  projectNumber: 1\n  statusColumns:\n    done: "Complete"\n', async (cwd) => {
+    await withTempDevloops('queue:\n  board:\n    number: 1\n  statusColumns:\n    done: "Complete"\n', async (cwd) => {
       // Stale item sitting in the old literal "Done" column must be left alone —
       // the configured column ("Complete") is the only one archive-done matches.
       const nodes = [rawItemNode("A", 1, { closed: true, closedAt: "2026-01-01T00:00:00Z", status: "Done" })];
@@ -410,7 +410,7 @@ describe("archive-done — resolveSettings", () => {
 
   it("reads archiveOlderThanDays and boardTitle from queue", () => {
     withTempDevloops(
-      "queue:\n  boardTitle: \"dev-loops Queue\"\n  archiveOlderThanDays: 14\n",
+      "queue:\n  board:\n    title: \"dev-loops Queue\"\n  archiveOlderThanDays: 14\n",
       (dir) => {
         const s = resolveSettings(dir);
         assert.strictEqual(s.title, "dev-loops Queue");
@@ -421,7 +421,7 @@ describe("archive-done — resolveSettings", () => {
 
   it("prefers projectNumber over boardTitle for board resolution", () => {
     withTempDevloops(
-      "queue:\n  projectNumber: 5\n  boardTitle: \"ignored\"\n",
+      "queue:\n  board:\n    number: 5\n    title: \"ignored\"\n",
       (dir) => {
         const s = resolveSettings(dir);
         assert.strictEqual(s.project, 5);
@@ -432,7 +432,7 @@ describe("archive-done — resolveSettings", () => {
 
   it("ignores a non-positive archiveOlderThanDays", () => {
     withTempDevloops(
-      "queue:\n  boardTitle: \"b\"\n  archiveOlderThanDays: 0\n",
+      "queue:\n  board:\n    title: \"b\"\n  archiveOlderThanDays: 0\n",
       (dir) => {
         const s = resolveSettings(dir);
         assert.strictEqual(s.olderThanDays, undefined);

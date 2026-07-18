@@ -191,7 +191,7 @@ describe("reconcile-queue main (#1069)", () => {
   it("resolves .devloops boardTitle when --project is omitted and forwards projectTitle to list/move", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "reconcile-board-"));
     try {
-      writeFileSync(path.join(dir, ".devloops"), 'queue:\n  boardTitle: "My Board"\n');
+      writeFileSync(path.join(dir, ".devloops"), 'queue:\n  board:\n    title: "My Board"\n');
 
       const listArgs = [];
       const moveCalls = [];

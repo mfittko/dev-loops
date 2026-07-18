@@ -139,7 +139,7 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
     const dir = mkdtempSync(nodePath.join(tmpdir(), "parked-unrefined-parkcol-"));
     try {
       const { writeFileSync } = await import("node:fs");
-      writeFileSync(nodePath.join(dir, ".devloops"), 'queue:\n  projectNumber: 7\n  nonSuccessStatus: "Parked"\n', "utf-8");
+      writeFileSync(nodePath.join(dir, ".devloops"), 'queue:\n  board:\n    number: 7\n  nonSuccessStatus: "Parked"\n', "utf-8");
       const child = boardRunChild({
         optionNames: ["Backlog", "Parked", "Next Up", "In Progress", "Done"],
         // The un-refined issue lives ONLY in the renamed park column; if the

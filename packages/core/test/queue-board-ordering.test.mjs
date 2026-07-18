@@ -28,7 +28,7 @@ test("resolveNextUpOrder returns configured:false when board not configured", as
 });
 
 test("resolveNextUpOrder returns ok:true, configured:true, empty order for a genuinely empty Next Up", async () => {
-  const dir = await makeRepo("queue:\n  projectNumber: 3\n");
+  const dir = await makeRepo("queue:\n  board:\n    number: 3\n");
   try {
     const result = await resolveNextUpOrder(
       "owner/repo",
@@ -47,7 +47,7 @@ test("resolveNextUpOrder returns ok:true, configured:true, empty order for a gen
 });
 
 test("resolveNextUpOrder returns order from mocked list helper", async () => {
-  const dir = await makeRepo("queue:\n  projectNumber: 3\n");
+  const dir = await makeRepo("queue:\n  board:\n    number: 3\n");
   try {
     const result = await resolveNextUpOrder(
       "owner/repo",
@@ -137,7 +137,7 @@ function makeGhStub({ projects, statusOptions, items }) {
 }
 
 test("resolveNextUpOrder resolves Next Up from a title-only config (real list-queue-items path)", async () => {
-  const dir = await makeRepo('queue:\n  boardTitle: "dev-loops Queue"\n');
+  const dir = await makeRepo('queue:\n  board:\n    title: "dev-loops Queue"\n');
   try {
     const statusOptions = [
       { id: "opt_next", name: "Next Up" },
@@ -176,7 +176,7 @@ test("resolveNextUpOrder resolves Next Up from a title-only config (real list-qu
 test("resolveNextUpOrder yields a clean reason (not '--project is required') when the board title is unresolvable", async () => {
   // Distinct repo + title so the module-level resolveProjectNumber cache from
   // the prior test does not satisfy this lookup.
-  const dir = await makeRepo('queue:\n  boardTitle: "Missing Board"\n');
+  const dir = await makeRepo('queue:\n  board:\n    title: "Missing Board"\n');
   try {
     const runChild = makeGhStub({
       // No project matching the configured title → resolveProjectNumber throws
@@ -199,7 +199,7 @@ test("resolveNextUpOrder yields a clean reason (not '--project is required') whe
 });
 
 test("resolveNextUpOrder queries the configured statusColumns.next_up display name (#1098)", async () => {
-  const dir = await makeRepo('queue:\n  projectNumber: 3\n  statusColumns:\n    next_up: "Todo"\n');
+  const dir = await makeRepo('queue:\n  board:\n    number: 3\n  statusColumns:\n    next_up: "Todo"\n');
   try {
     const result = await resolveNextUpOrder(
       "owner/repo",
@@ -220,7 +220,7 @@ test("resolveNextUpOrder queries the configured statusColumns.next_up display na
 });
 
 test("resolveNextUpOrder reports ok:false on list query error (fail-closed at driver)", async () => {
-  const dir = await makeRepo("queue:\n  projectNumber: 3\n");
+  const dir = await makeRepo("queue:\n  board:\n    number: 3\n");
   try {
     const result = await resolveNextUpOrder(
       "owner/repo",

@@ -111,14 +111,14 @@ test("loginFromCommitEmail: noreply carries login; else local-part", () => {
 // ---------------------------------------------------------------------------
 
 const enabled = (sources, assignees = []) => ({
-  approval: { humanHandoff: { enabled: true, candidatesFrom: sources, assignees } },
+  approval: { enabled: true, candidatesFrom: sources, assignees },
 });
 
 test("disabled config => no-op offer (no candidates, no sourcing)", async () => {
   let ran = false;
   const out = await resolveHandoffCandidates(
     { repo: "o/n", pr: 1, changedFiles: ["src/a.mjs"], prAuthor: "me" },
-    { config: { approval: { humanHandoff: { enabled: false, candidatesFrom: ["codeowners"], assignees: ["alice"] } } },
+    { config: { approval: { enabled: false, candidatesFrom: ["codeowners"], assignees: ["alice"] } },
       run: fakeRun(() => { ran = true; return null; }), readFile: async () => { throw new Error("nope"); } },
   );
   assert.equal(out.enabled, false);

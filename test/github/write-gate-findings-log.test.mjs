@@ -18,11 +18,17 @@ const ANGLE_CONTRACT_DEVLOOPS = [
   "version: 1",
   "gates:",
   "  draft:",
-  "    angles: [scope, coverage]",
-  "    mandatoryAngles: [pr-description]",
+  "    angles:",
+  "      - scope",
+  "      - coverage",
+  "      - name: pr-description",
+  "        mandatory: true",
   "  preApproval:",
-  "    angles: [dry, kiss]",
-  "    mandatoryAngles: [pr-checklist-matrix]",
+  "    angles:",
+  "      - dry",
+  "      - kiss",
+  "      - name: pr-checklist-matrix",
+  "        mandatory: true",
   "",
 ].join("\n");
 
@@ -667,9 +673,16 @@ test("checkProvenanceAngleCoverage: additiveAngles widens the enforcement pool t
       "gates:",
       "  anglePool: [dry, catalog-extra]",
       "  preApproval:",
-      "    angles: [dry]",
-      "    mandatoryAngles: []",
-      "    additiveAngles: true",
+      "    angles:",
+      "      - dry",
+      // The shipped extension-defaults.yaml also configures preApproval with a
+      // mandatory pr-checklist-matrix angle, merged by name (D3) — disable it
+      // here so this test's minimal contract (dry + the additive catalog) is
+      // the whole mandatory-angle picture.
+      "      - name: pr-checklist-matrix",
+      "        enabled: false",
+      "    dynamic:",
+      "      additive: true",
       "",
     ].join("\n"), "utf8");
     const result = await checkProvenanceAngleCoverage(

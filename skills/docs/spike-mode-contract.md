@@ -105,10 +105,8 @@ gates:
     angles:
       - scope
       - docs
-    excludeAngles: []
     required: false
     requireCi: false
-    mandatoryAngles: []
 ```
 
 | Knob | Spike value | Production draft/pre-approval | Why for a spike |

@@ -193,11 +193,14 @@ export function loadBoardConfig(repoRoot) {
     return { enabled: false, reason: `config read/parse error: ${error}` };
   }
   if (!queue) return { enabled: false };
-  if (typeof queue.projectNumber === "number" && queue.projectNumber > 0) {
-    return { enabled: true, projectNumber: queue.projectNumber };
-  }
-  if (typeof queue.boardTitle === "string" && queue.boardTitle.trim().length > 0) {
-    return { enabled: true, boardTitle: queue.boardTitle.trim() };
+  const board = queue.board;
+  if (board && typeof board === "object") {
+    if (typeof board.number === "number" && board.number > 0) {
+      return { enabled: true, projectNumber: board.number };
+    }
+    if (typeof board.title === "string" && board.title.trim().length > 0) {
+      return { enabled: true, boardTitle: board.title.trim() };
+    }
   }
   return { enabled: false };
 }

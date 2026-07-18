@@ -354,18 +354,18 @@ function resolveTargetPreference(cwd) {
       const raw = readFileSync(devloopsPath, "utf8");
       let val;
       if (devloopsPath.endsWith(".json")) {
-        val = JSON.parse(raw)?.strategy?.default;
+        val = JSON.parse(raw)?.strategy;
       } else if (devloopsPath.endsWith(".yaml") || devloopsPath.endsWith(".yml")) {
-        const m = raw.match(/strategy:\s*\n\s*default:\s*["']?([^"'\s]+)["']?/);
+        const m = raw.match(/^strategy:\s*["']?([^"'\s]+)["']?/m);
         val = m ? m[1] : undefined;
       } else {
         // Bare file (no recognized extension) — YAML first, JSON fallback
-        const m = raw.match(/strategy:\s*\n\s*default:\s*["']?([^"'\s]+)["']?/);
+        const m = raw.match(/^strategy:\s*["']?([^"'\s]+)["']?/m);
         if (m) {
           val = m[1];
         } else {
           try {
-            val = JSON.parse(raw)?.strategy?.default;
+            val = JSON.parse(raw)?.strategy;
           } catch {
             // Not valid JSON either — fall through
           }
@@ -387,12 +387,12 @@ function resolveTargetPreference(cwd) {
       const raw = readFileSync(settingsPath, "utf8");
       if (settingsPath.endsWith(".json")) {
         const parsed = JSON.parse(raw);
-        const val = parsed?.strategy?.default;
+        const val = parsed?.strategy;
         if (val === "local-first") return "prefer_local";
         if (val === "github-first") return "prefer_github_first";
         continue;
       }
-      const match = raw.match(/strategy:\s*\n\s*default:\s*["']?([^"'\s]+)["']?/);
+      const match = raw.match(/^strategy:\s*["']?([^"'\s]+)["']?/m);
       if (match) {
         if (match[1] === "local-first") return "prefer_local";
         if (match[1] === "github-first") return "prefer_github_first";
@@ -1041,12 +1041,12 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     ? resolveWorkflowConfig(devLoopConfig, "asyncStartMode")
     : "required";
   const targetPreference = configErrors.length === 0
-    ? devLoopConfig?.strategy?.default === "local-first"
+    ? devLoopConfig?.strategy === "local-first"
       ? "prefer_local"
       : "prefer_github_first"
     : "prefer_local";
   const inputSource = configErrors.length === 0
-    ? normalizeConfigInputSource(devLoopConfig?.inputSource?.default)
+    ? normalizeConfigInputSource(devLoopConfig?.inputSource)
     : "tracker";
   let input;
   if (options.spike !== undefined) {

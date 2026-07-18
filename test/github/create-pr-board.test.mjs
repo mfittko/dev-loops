@@ -67,7 +67,7 @@ async function withTempDir(fn) {
 }
 
 async function writeDevloopsProjectNumber(tempDir, projectNumber) {
-  await writeFile(path.join(tempDir, ".devloops"), `queue:\n  projectNumber: ${projectNumber}\n`, "utf8");
+  await writeFile(path.join(tempDir, ".devloops"), `queue:\n  board:\n    number: ${projectNumber}\n`, "utf8");
 }
 
 // --- enqueueIssuelessLightweightPr unit tests (AC1, AC3, AC4) ---

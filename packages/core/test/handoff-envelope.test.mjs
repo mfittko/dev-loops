@@ -722,8 +722,7 @@ test("gate-config: excludes filtered angles", () => {
     ...defaultSettings,
     gates: {
       draft: {
-        angles: ["scope", "coverage", "deep"],
-        excludeAngles: ["deep"],
+        angles: ["scope", "coverage", { name: "deep", enabled: false }],
         requireCi: true,
         blockCleanOnFindingSeverities: ["must-fix"],
       },

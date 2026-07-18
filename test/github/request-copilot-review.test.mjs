@@ -1129,9 +1129,10 @@ test("request-copilot-review respects low-signal refinement config before auto r
       "",
       "refinement:",
       "  maxCopilotRounds: 2",
-      "  stopOnLowSignal: true",
-      "  lowSignalRoundThreshold: 1",
-      "  lowSignalMaxComments: 1",
+      "  lowSignal:",
+      "    enabled: true",
+      "    roundThreshold: 1",
+      "    maxComments: 1",
       "",
     ].join("\n"), "utf8");
 

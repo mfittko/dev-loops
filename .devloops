@@ -1,10 +1,8 @@
 version: 1
 
-strategy:
-  default: local-first
+strategy: local-first
 
-inputSource:
-  default: tracker
+inputSource: tracker
 
 refinement:
   maxCopilotRounds: 2
@@ -16,7 +14,8 @@ gates:
   # own gates; dynamic angle resolution (below) scopes the fan-out per change.
   requireFanoutEvidence: true
   draft:
-    dynamicAngles: true
+    dynamic:
+      subtractive: true
     angles:
       - scope
       - coverage
@@ -31,23 +30,26 @@ gates:
       - state-concurrency
       - config-drift
       - gate-evidence
-      - pr-description
+      - name: pr-description
+        mandatory: true
       - pr-comments
       - contradiction-lens
       - code-conformance
       - semantic-drift
     requireCi: true
-    mandatoryAngles:
-      - pr-description
     blockCleanOnFindingSeverities:
       - must-fix
       - worth-fixing-now
   preApproval:
-    dynamicAngles: true
+    dynamic:
+      subtractive: true
+    # Mandatory angles always run in the fan-out (never dropped by dynamic
+    # resolution); fully configurable — set `mandatory: true` on any angle.
     angles:
       - dry
       - kiss
-      - yagni
+      - name: yagni
+        mandatory: true
       - srp
       - soc
       - deep
@@ -57,19 +59,14 @@ gates:
       - isp
       - dip
       - renderer-security
-      - pr-checklist-matrix
-      - acceptance-criteria
-      - contradiction-lens
+      - name: pr-checklist-matrix
+        mandatory: true
+      - name: acceptance-criteria
+        mandatory: true
+      - name: contradiction-lens
+        mandatory: true
       - correctness-final
       - ui-validation
-    # Mandatory angles always run in the fan-out (never dropped by dynamic
-    # resolution); fully configurable — add/remove any angle from the pool.
-    mandatoryAngles:
-      - pr-checklist-matrix
-      - acceptance-criteria
-      - yagni
-      - contradiction-lens
-
     blockCleanOnFindingSeverities:
       - must-fix
       - worth-fixing-now
@@ -86,7 +83,8 @@ localImplementation:
     maxLines: 20 # micro-PR ceiling (#1043)
 
 queue:
-  boardTitle: "dev-loops Queue"
+  board:
+    title: "dev-loops Queue"
   maxParallel: 3
   maxAutoFiledIssues: 10
   reDispatchMaxRetries: 1

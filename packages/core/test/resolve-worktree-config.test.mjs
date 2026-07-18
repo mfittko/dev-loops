@@ -15,9 +15,15 @@ test("resolveWorktreeConfig: defaults to empty arrays when absent", () => {
   assert.deepEqual(resolveWorktreeConfig(null), { copyOnInit: [], linkOnInit: [] });
 });
 
-test("resolveWorktreeConfig: trims and drops empty entries", () => {
+test("resolveWorktreeConfig: trims and drops empty entries, splitting by mode", () => {
   const out = resolveWorktreeConfig({
-    worktree: { copyOnInit: [" config/app.yml ", ""], linkOnInit: ["data/big"] },
+    worktree: {
+      entries: [
+        { path: " config/app.yml ", mode: "copy" },
+        { path: "", mode: "copy" },
+        { path: "data/big", mode: "link" },
+      ],
+    },
   });
   assert.deepEqual(out, { copyOnInit: ["config/app.yml"], linkOnInit: ["data/big"] });
 });
@@ -25,7 +31,7 @@ test("resolveWorktreeConfig: trims and drops empty entries", () => {
 test("FileConfigSchema: worktree section parses", () => {
   const r = FileConfigSchema.safeParse({
     version: 1,
-    worktree: { copyOnInit: ["config/app.yml"], linkOnInit: ["data/big"] },
+    worktree: { entries: [{ path: "config/app.yml", mode: "copy" }, { path: "data/big", mode: "link" }] },
   });
   assert.ok(r.success, JSON.stringify(r.error?.issues));
 });
@@ -36,6 +42,13 @@ test("FileConfigSchema: empty worktree is valid", () => {
 
 test("FileConfigSchema: rejects unknown worktree keys", () => {
   assert.ok(!FileConfigSchema.safeParse({ version: 1, worktree: { nope: [] } }).success);
+});
+
+test("FileConfigSchema: rejects an unknown mode on a worktree entry", () => {
+  assert.ok(!FileConfigSchema.safeParse({
+    version: 1,
+    worktree: { entries: [{ path: "config/app.yml", mode: "sync" }] },
+  }).success);
 });
 
 test("loadDevLoopConfig: absent worktree section is a valid no-op", async () => {
@@ -55,7 +68,7 @@ test("loadDevLoopConfig: worktree section loads from .devloops", async () => {
   try {
     writeFileSync(
       path.join(dir, ".devloops"),
-      "version: 1\nworktree:\n  copyOnInit:\n    - config/app.yml\n  linkOnInit:\n    - data/big\n",
+      "version: 1\nworktree:\n  entries:\n    - path: config/app.yml\n      mode: copy\n    - path: data/big\n      mode: link\n",
     );
     const { config, errors } = await loadDevLoopConfig({ repoRoot: dir });
     assert.deepEqual(errors, []);

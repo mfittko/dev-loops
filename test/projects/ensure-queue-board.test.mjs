@@ -586,7 +586,8 @@ describe("ensure-queue-board", () => {
         writeFileSync(path.join(tmp, ".devloops"), [
           "version: 1",
           "queue:",
-          "  projectNumber: 42",
+          "  board:",
+          "    number: 42",
         ].join("\n"));
         const result = resolveSettings(tmp);
         assert.deepEqual(result, { project: 42 });
@@ -601,7 +602,8 @@ describe("ensure-queue-board", () => {
         writeFileSync(path.join(tmp, ".devloops.yaml"), [
           "version: 1",
           "queue:",
-          "  boardTitle: From Yaml",
+          "  board:",
+          "    title: From Yaml",
         ].join("\n"));
         const result = resolveSettings(tmp);
         assert.deepEqual(result, { title: "From Yaml" });
@@ -616,7 +618,7 @@ describe("ensure-queue-board", () => {
         writeFileSync(path.join(tmp, ".devloops.json"), JSON.stringify({
           version: 1,
           queue: {
-            projectNumber: 99,
+            board: { number: 99 },
           },
         }));
         const result = resolveSettings(tmp);
@@ -632,7 +634,8 @@ describe("ensure-queue-board", () => {
         writeFileSync(path.join(tmp, ".devloops.yml"), [
           "version: 1",
           "queue:",
-          "  boardTitle: From Yml",
+          "  board:",
+          "    title: From Yml",
         ].join("\n"));
         const result = resolveSettings(tmp);
         assert.deepEqual(result, { title: "From Yml" });
@@ -647,7 +650,8 @@ describe("ensure-queue-board", () => {
         writeFileSync(path.join(tmp, ".devloops"), [
           "version: 1",
           "queue:",
-          "  boardTitle: My Board",
+          "  board:",
+          "    title: My Board",
         ].join("\n"));
         const result = resolveSettings(tmp);
         assert.deepEqual(result, { title: "My Board" });
