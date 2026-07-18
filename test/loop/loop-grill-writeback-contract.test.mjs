@@ -128,3 +128,15 @@ test("results-comment fixture carries the required title and no bare non-issue #
   assert.match(resultsComment, /🔬 Grill \/ refinement results/);
   assert.doesNotMatch(resultsComment, BARE_NON_ISSUE_HASH_RE, "results comment must carry no bare non-issue #N");
 });
+
+test("each write-back hygiene detector independently fires on its own defect (non-vacuous)", () => {
+  // assertWriteBackClean short-circuits on the first failing assert, so the
+  // unfixed-body test only proves RATIONALE_SECTION_RE rejects. Pin each of the
+  // other two detectors directly so a silently-broken regex (one that never
+  // matches) can't leave every fixture green.
+  assert.match("## Refinement notes (auto)", RATIONALE_SECTION_RE);
+  assert.match("Suggested: cap it here, or fail closed instead.", UNRESOLVED_OPTION_RE);
+  assert.match("Considered defect #1 (truncation).", BARE_NON_ISSUE_HASH_RE);
+  // And the bare-#N detector must NOT trip on a backticked genuine issue ref.
+  assert.doesNotMatch("tracked in `#1389`", BARE_NON_ISSUE_HASH_RE);
+});
