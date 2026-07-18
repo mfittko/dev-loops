@@ -1,3 +1,13 @@
+// Determinism convention (issue #1405): fixtures in this file use fixed,
+// self-consistent timestamps (comment `updated_at`, gate-marker dates,
+// etc.). Never compare a fixture against the real wall clock — that means
+// no bare, argument-less Date constructor call and no reading the current
+// epoch millis off the Date global directly. Production seams that need
+// "now" (`detectStaleRunner` in scripts/loop/_stale-runner-detection.mjs;
+// `claimRunnerOwnership` / `assertRunnerOwnership` in
+// scripts/loop/_pr-runner-coordination.mjs) already accept an injected
+// `now`; pass a fixed value through it instead. Enforced mechanically by
+// test/github/deterministic-fixture-time.test.mjs.
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
