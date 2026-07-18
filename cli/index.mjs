@@ -100,6 +100,11 @@ const SUBCOMMAND_ROUTES = {
     "debt-remediate":       "scripts/loop/debt-remediate.mjs",
     "pre-flight-gate":      "scripts/loop/pre-flight-gate.mjs",
     "ensure-worktree":      "scripts/loop/ensure-worktree.mjs",
+    "ui-review-provision":  "scripts/loop/ui-review-provision.mjs",
+    "ui-review-drive":      "scripts/loop/ui-review-drive.mjs",
+    "ui-review-diagnose":   "scripts/loop/ui-review-diagnose.mjs",
+    "ui-review-report":     "scripts/loop/ui-review-report.mjs",
+    "ui-review-teardown":   "scripts/loop/ui-review-teardown.mjs",
   },
   pr: {
     create:             "scripts/github/create-pr.mjs",
@@ -181,6 +186,11 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "debt-remediate": "File debt remediation issues",
     "pre-flight-gate": "Gate local implementation mutations before planning or editing",
     "ensure-worktree": "Create/reuse and provision a loop-owned worktree",
+    "ui-review-provision": "Provision an isolated worktree + boot the app for a UI review",
+    "ui-review-drive": "Drive a headless browser through the PR's changed UI surfaces",
+    "ui-review-diagnose": "Classify UI-review drive errors and anchor findings to the diff",
+    "ui-review-report": "Post the UI-review findings as a pending PR review",
+    "ui-review-teardown": "Tear down the UI-review worktree/app and emit the side-effect ledger",
   },
   pr: {
     create: "Create PR (always draft, self-assigned by default)",
