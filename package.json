@@ -91,7 +91,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0-rc.3",
   "files": [
     "cli/",
     "lib/",

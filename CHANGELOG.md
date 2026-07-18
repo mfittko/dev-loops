@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.0.0-rc.3 - 2026-07-19
+
 ### Changed (breaking — `.devloops` config shape, #1404)
 
 Pre-1.0 config-schema redesign: gate-review angle identity, which used to be
@@ -64,6 +66,52 @@ accepted as deprecated aliases (normalized with a load-time warning —
 are two separate migrations, see the #1404 table above for the latter).
 Behavior with the shipped `github` default is unchanged. See
 [Tracker Seam Contract](skills/docs/tracker-seam-contract.md).
+
+### Changed (breaking — gate-tooling `--head-sha` contract, #1407)
+
+`write-gate-findings-log.mjs`, `upsert-checkpoint-verdict.mjs`, and the
+plugin-bundled `post-gate-verdict-fallback.mjs` now require the FULL head
+commit SHA (40/64 hex) for the primary `--head-sha` and fail closed on a
+short prefix — a prefix used to silently write a findings-log ledger and
+gate marker the pre-merge reader (which resolves the full `headRefOid`)
+could never find. Provenance-only fields (`carriedFromHead`, `resolvedIn`)
+still accept a 7-64 hex prefix.
+
+### Changed (self-contained plugin docs, #1381)
+
+The dev-loops contract/step docs referenced from bundled skills moved from
+repo-root `docs/` into `skills/docs/` (18 docs + the outer-loop-state-graph
+pointer), so every link in the installed `.claude/` plugin resolves
+in-plugin — no more dead cross-plugin-root `docs/…` links and no reliance
+on the source repo being reachable. The installed-layout link guard now
+scans `.claude/skills/**` and keeps a per-entry-verified consumer-artifact
+exemption (`PLAN.md`, `AGENTS.md`, `IMPLEMENTATION_*`, `phase-x.md`).
+
+### Fixed (gate evidence)
+
+- The required `gate-evidence` commit status no longer deadlocks pre-approval:
+  it is excluded from the loop's CI-status derivation, and an evidence state
+  that is merely not-yet-established reports **pending** instead of failure
+  (#1412).
+- `gate-evidence` re-fires on review-thread state changes, closing the
+  thread-axis stale-green window (#1385); the API-driven ready/merge bypass
+  is closed server-side (#1383).
+- Posted gate comments fail closed instead of truncating (#1394).
+
+### Added
+
+- Single-contributor ownership: runners claim an artifact at pickup and fail
+  closed on foreign or unclaimed artifacts (#1378).
+- ui-review route activated end-to-end (CLI subcommands + `--ui-review`
+  selector, #1362); UI-review recipe contract bundled into the plugin (#1382).
+- `workflow.baseBranch` — configurable integration branch (#1386);
+  `extraAngles` additive gate-config operator (#1395).
+- CLI: `pre-flight-gate`, `ensure-worktree`, and issue edit/create routed as
+  `dev-loops` subcommands (#1391); `edit-comment` wrapper (#1393); zero-dep
+  preflight for deps-less plugin checkouts (#1384).
+- Sanctioned same-head PR-body-fix retry path for gate reviewers (#1380).
+- `verify` lints GitHub Actions workflows with actionlint (#1409); `git stash`
+  is refused in the shared-`.git` worktree layout (#1406).
 
 ## 1.0.0-rc.2 - 2026-07-17
 
