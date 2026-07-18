@@ -90,21 +90,21 @@ stateDiagram-v2
       </div>
 -->
 
-The loop also sharpens its own inputs over time. Grilling turns a raw issue into a locked spec before any work starts, the review angles and the review/fix rounds tighten the change while it's in flight, and after merge a retrospective records advisory findings the conductor opens as new tracked issues that feed the next grill.
+The loop also sharpens its own inputs over time. Grilling turns a raw issue into a locked spec before any work starts, the review angles and the review/fix rounds tighten the change while it's in flight, and after merge a retrospective records advisory findings the conductor can open as new tracked issues that feed the next grill.
 
 ```mermaid
 flowchart LR
   A[Grill the issue] --> B[Review / fix rounds]
   B --> C[Merge]
   C --> D[Retrospective]
-  D -->|conductor opens| E[Follow-up issues]
+  D -->|conductor can open| E[Follow-up issues]
   E --> A
 ```
 
-*Diagram 2 — Self-improving. Grilling locks the spec, review and fix rounds tighten the change, and a post-merge retrospective records advisory findings the conductor opens as new follow-up issues.*
+*Diagram 2 — Self-improving. Grilling locks the spec, review and fix rounds tighten the change, and a post-merge retrospective records advisory findings the conductor can open as new follow-up issues.*
 
 <!-- figure
-      <div class="flow" role="img" aria-label="Self-improving: grilling the issue leads to review and fix rounds, then merge, then a post-merge retrospective whose advisory findings the conductor opens as follow-up issues feeding back into grilling.">
+      <div class="flow" role="img" aria-label="Self-improving: grilling the issue leads to review and fix rounds, then merge, then a post-merge retrospective whose advisory findings the conductor can open as follow-up issues feeding back into grilling.">
         <div class="node start">Grill&nbsp;the&nbsp;issue</div>
         <div class="edge"><span class="arrow">&rarr;</span></div>
         <div class="node">Review&nbsp;/&nbsp;fix&nbsp;rounds</div>
@@ -112,7 +112,7 @@ flowchart LR
         <div class="node">Merge</div>
         <div class="edge"><span class="arrow">&rarr;</span></div>
         <div class="node accent">Retrospective&nbsp;(advisory)</div>
-        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">conductor&nbsp;opens&nbsp;follow-ups</span></div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">conductor&nbsp;can&nbsp;open&nbsp;follow-ups</span></div>
         <div class="node">Back&nbsp;to&nbsp;grilling</div>
       </div>
 -->

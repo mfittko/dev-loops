@@ -258,7 +258,7 @@ stateDiagram-v2
 
 ## The loop improves itself
 
-The same machinery that ships a change also sharpens the next one. Grilling refines a raw issue into a locked spec before any code is written. The fan-out review angles (Diagram 3), extendable per repository, and the review-fix rounds tighten the change while it is in flight. After merge, a retrospective records advisory findings on the change; where they warrant it, the conductor opens follow-ups as new tracked issues, carrying improvement from one change into the next.
+The same machinery that ships a change also sharpens the next one. Grilling refines a raw issue into a locked spec before any code is written. The fan-out review angles (Diagram 3), extendable per repository, and the review-fix rounds tighten the change while it is in flight. After merge, a retrospective records advisory findings on the change; where they warrant it, the conductor can open follow-ups as new tracked issues, carrying improvement from one change into the next.
 
 ```mermaid
 stateDiagram-v2
@@ -269,7 +269,7 @@ stateDiagram-v2
   FanOutReview --> ReviewFixConverge
   ReviewFixConverge --> Merge
   Merge --> Retrospective
-  Retrospective --> FollowUps: conductor opens, as warranted
+  Retrospective --> FollowUps: conductor can open, as warranted
   FollowUps --> GrillRefine
 ```
 
@@ -288,7 +288,7 @@ stateDiagram-v2
         <div class="node">Merge</div>
         <div class="edge"><span class="arrow">&rarr;</span></div>
         <div class="node accent">Retrospective&nbsp;(advisory)</div>
-        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">conductor opens, then back to grilling</span></div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">conductor can open, then back to grilling</span></div>
         <div class="node">Follow-ups&nbsp;(new&nbsp;tracked&nbsp;issues)</div>
       </div>
 -->
