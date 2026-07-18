@@ -105,8 +105,13 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
       ["issue", "edit", "--help"],
       ["issue", "create", "--help"],
     ]) {
+      // execFileSync throws on a non-zero exit, so reaching here already means
+      // the command succeeded; additionally assert it printed real help (a
+      // command exiting 0 with empty/wrong output would otherwise slip past the
+      // ERR_MODULE_NOT_FOUND-only check).
       const output = execFileSync("node", [devLoopsBin, ...args], { cwd: installDir }).toString();
       assert.doesNotMatch(output, /ERR_MODULE_NOT_FOUND/, `dev-loops ${args.join(" ")} failed to resolve @dev-loops/core`);
+      assert.match(output, /Usage/i, `dev-loops ${args.join(" ")} printed no Usage/help output`);
     }
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
