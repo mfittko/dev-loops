@@ -64,10 +64,14 @@ practice:
 - **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
   GitHub's own token for every non-draft PR, re-firing on push, ready-for-review,
-  a submitted review, and thread resolve/unresolve — so a newly-opened
-  unresolved thread re-evaluates the check instead of leaving a SHA-pinned green
-  stale on the thread axis. This is what closes the ready/merge bypass — a
-  direct GitHub API call (MCP/REST, web UI, a raw `gh` invocation outside the
+  a submitted review, thread resolve/unresolve, and a standalone review comment
+  — so a newly-opened unresolved thread re-evaluates the check instead of
+  leaving a SHA-pinned green stale on the thread axis. The `gate-evidence`
+  context itself is always an explicit commit status posted to the PR's actual
+  head SHA (not the triggering job's own check-run, which for the
+  review/thread/comment event types would land on the base branch's latest
+  commit instead of the PR head). This is what closes the ready/merge bypass —
+  a direct GitHub API call (MCP/REST, web UI, a raw `gh` invocation outside the
   hook) skips the client-side path entirely but still cannot merge without a
   green `gate-evidence` check **once branch protection on `main` requires it**.
   Until an operator adds it to branch protection, the check runs and reports on
