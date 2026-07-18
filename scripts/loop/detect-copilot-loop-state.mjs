@@ -270,16 +270,32 @@ async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }
   }
   let commitStatus = null;
   let statusesCount = null;
+  // Same gate-evidence exclusion as the check-runs path above, mirrored for the
+  // commit-status API: since #1385 turned gate-evidence into an explicit
+  // StatusContext (not a check-run), its FAILURE state must not leak into
+  // commitStatus either, or a red gate-evidence-only PR stays stuck at
+  // currentHeadCiStatus: "failure" forever (it can never go green without the
+  // very verdict this loop is trying to post). normalizeHeadScopedCommitStatus
+  // iterates whatever `.statuses` array it's given rather than trusting a
+  // precomputed combined field, so filtering the array first is sufficient —
+  // no separate recompute path needed.
+  let commitStatusExcludedFailureDetails = [];
   if (statusesResult.code === 0) {
     try {
       const payload = JSON.parse(statusesResult.stdout);
       if (Array.isArray(payload?.statuses)) {
-        commitStatus = normalizeHeadScopedCommitStatus(payload);
+        const { matched: loopDerivedStatuses, rest: nonLoopDerivedStatuses } =
+          partitionEntriesByCheckName(payload.statuses, LOOP_DERIVED_CI_CHECK_NAME);
+        commitStatusExcludedFailureDetails = normalizeHeadScopedCommitStatus({ statuses: loopDerivedStatuses }) === "failure"
+          ? [LOOP_DERIVED_CI_CHECK_NAME]
+          : [];
+        commitStatus = normalizeHeadScopedCommitStatus({ statuses: nonLoopDerivedStatuses });
         statusesCount = payload.statuses.length;
       }
     } catch {
       commitStatus = null;
       statusesCount = null;
+      commitStatusExcludedFailureDetails = [];
     }
   }
   if (checkRunsSignal === null && commitStatus === null) {
@@ -294,7 +310,9 @@ async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }
     status: mergedStatus,
     observedZeroSuitesAndStatuses: checkRunsCount === 0 && statusesCount === 0,
     failureDetails: checkRunsSignal?.failureDetails ?? [],
-    excludedFailureDetails: checkRunsSignal?.excludedFailureDetails ?? [],
+    excludedFailureDetails: [
+      ...new Set([...(checkRunsSignal?.excludedFailureDetails ?? []), ...commitStatusExcludedFailureDetails]),
+    ],
   };
 }
 function hasLocalValidationForCurrentHead(localValidationHeadSha, currentHeadSha) {
