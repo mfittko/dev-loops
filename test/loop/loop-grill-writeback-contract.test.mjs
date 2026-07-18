@@ -12,12 +12,15 @@ const stateGraphDoc = readFileSync(
   "utf8",
 );
 
-// Same detection regexes the SKILL.md write-back contract describes, used here
-// to prove the fixtures below actually exercise the three hygiene rules rather
-// than only pinning prose. Not a production module (only-the-write-back scope):
-// the grill itself is agent-executed prose, so this is the test's own proxy.
+// Proxy detectors for the three write-back hygiene RULES the SKILL.md contract
+// describes in prose — the contract states the rules narratively, not as regexes,
+// so these are the test's own approximations, used to prove the fixtures below
+// actually exercise each rule rather than only pinning doc text. Not a production
+// module: the grill itself is agent-executed prose. The unresolved-option proxy
+// uses the dotAll (`s`) flag so "Suggested: … or …" split across a markdown list
+// (newlines) still trips it.
 const RATIONALE_SECTION_RE = /^#{1,6}\s*(?:🔬\s*)?(?:refinement notes|grill findings|grill\s*\/\s*refinement results)\b/im;
-const UNRESOLVED_OPTION_RE = /\bsuggested:.*\bor\b|\boption a or b\b/i;
+const UNRESOLVED_OPTION_RE = /\bsuggested:.*\bor\b|\boption a or b\b/is;
 const BARE_NON_ISSUE_HASH_RE = /(?<![\w`])#\d+(?!\d)/;
 
 function assertWriteBackClean(body) {

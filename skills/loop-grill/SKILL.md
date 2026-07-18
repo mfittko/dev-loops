@@ -122,7 +122,7 @@ Synthesize the answers into the body as sharpened `## Acceptance criteria`, `## 
 - This makes re-runs idempotent — no accumulated noise, no duplicate sections.
 - If parsing a section boundary fails, **abort with an error** rather than silently truncating.
 
-The body carries ONLY the synthesized sharpened sections. Do NOT write a `## Grill findings` section and do NOT embed the raw Q&A table in the body (`GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`).
+The synthesized sections carry no rationale scaffolding: do NOT write a `## Grill findings` section and do NOT embed the raw Q&A table in the body (`GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`). (The full rewrite below defines the complete set of content the locked body keeps — context, decided approach, and the canonical sections — so this is a "no embed", not a "sections only".)
 
 If a body migrated from older embed behavior still carries a `## Grill findings` section, **remove** it as part of write-back — strip from that heading through the next `##`-level heading (exclusive) or end of file, using the same replace-section boundary logic. This is a removal-only migration, never a re-introduction of the embed.
 
