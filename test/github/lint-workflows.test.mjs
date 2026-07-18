@@ -78,6 +78,8 @@ test("main() exits non-zero when actionlint runs against the invalid-on-trigger 
 test("ci.yml's pinned actionlint version + checksum match lint-workflows.mjs", () => {
   const ciYml = readFileSync(CI_YML_PATH, "utf8");
 
-  assert.match(ciYml, new RegExp(`ACTIONLINT_VERSION: "${ACTIONLINT_VERSION}"`));
-  assert.match(ciYml, new RegExp(`ACTIONLINT_SHA256: "${ACTIONLINT_LINUX_AMD64_SHA256}"`));
+  // Literal substring checks, not RegExp: the version string contains `.`
+  // metacharacters, so a RegExp would match unintended values (e.g. "1X7X12").
+  assert.ok(ciYml.includes(`ACTIONLINT_VERSION: "${ACTIONLINT_VERSION}"`), "ci.yml ACTIONLINT_VERSION must match the lint-workflows.mjs export");
+  assert.ok(ciYml.includes(`ACTIONLINT_SHA256: "${ACTIONLINT_LINUX_AMD64_SHA256}"`), "ci.yml ACTIONLINT_SHA256 must match the lint-workflows.mjs export");
 });
