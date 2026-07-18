@@ -9,6 +9,7 @@ Start here for repository documentation.
 - [Conductor Routing Contract](./conductor-routing-contract.md) — canonical outer-loop routing contract
 - [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) — canonical family-local PR lifecycle contract
 - [Artifact Authority Contract](../skills/docs/artifact-authority-contract.md) — canonical artifact-selection model (tracker-first, local-planning, and PR-body-as-spec) and the local-first plan-file flow
+- [Tracker Seam Contract](../skills/docs/tracker-seam-contract.md) — the `Tracker` provider interface/registry (issue #1408); GitHub is the built-in default, external providers are a post-1.0 drop-in
 - [Local-Planning Flow](../skills/docs/local-planning-flow.md) — operator sequence for the local-first plan-file flow
 - [Local-Planning Worked Example](../skills/docs/local-planning-worked-example.md) — one plan file through every stage of the flow
 - [Spike-mode Contract](../skills/docs/spike-mode-contract.md) — operator sequence for time-boxed exploratory runs: start from a question, reach findings, then discard or graduate into a plan file
