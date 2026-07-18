@@ -21,7 +21,7 @@ board and Status field already exist.
 When --link-repo is provided, links the project to the given repository after creation.
 
 When --project is not provided, resolves from .devloops at repo root
-queue.projectNumber or queue.boardTitle.
+queue.board.number or queue.board.title.
 
 Output (stdout):
   JSON: { ok: true, project: { id, number, title, url, statusFieldId, linkedRepo } }

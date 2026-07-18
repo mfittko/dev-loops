@@ -15,8 +15,8 @@ Add an existing issue or PR to a GitHub Projects V2 board.
 Options:
   --repo <owner/name>         Required. Repository containing the issue/PR.
   --project <number|id>       Project number (integer) or node ID. When omitted,
-                              resolved from .devloops queue.projectNumber /
-                              queue.boardTitle.
+                              resolved from .devloops queue.board.number /
+                              queue.board.title.
   --item <number>             Required. Issue or PR number to add.
   --column <name>             Initial Status column (default: "Backlog").
   --status <name>             Back-compat alias for --column.

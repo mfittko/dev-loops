@@ -19,7 +19,7 @@ Behavior:
     occurrence wins — never forwarded to \`gh\`): when an explicit \`--body\`/
     \`--body-file\` also carries no \`Closes #N\`/\`Fixes #N\`, the new PR is issue-less
     lightweight and is auto-enqueued as a board PR item in the configured In Progress column
-    (reuses \`queue.projectNumber\` / \`queue.boardTitle\` from \`.devloops\`, same as the queue
+    (reuses \`queue.board.number\` / \`queue.board.title\` from \`.devloops\`, same as the queue
     scripts). Requires an explicit \`--repo owner/name\` (space or = form). A trailing stdout
     line reports the outcome: \`{"board":{"enqueued":bool,...}}\`. No board configured, no
     \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
@@ -103,8 +103,8 @@ function parsePrNumberFromOutput(stdout) {
   return match ? Number(match[1]) : null;
 }
 // Auto-enqueue an issue-less lightweight PR as a board PR item in the configured
-// In Progress column. Reuses the same .devloops queue.projectNumber /
-// queue.boardTitle resolution and add-queue-item's idempotent add — never
+// In Progress column. Reuses the same .devloops queue.board.number /
+// queue.board.title resolution and add-queue-item's idempotent add — never
 // reimplements the board API calls. Never throws: an unconfigured board, a
 // missing --repo, an unparsed PR number, or an enqueue failure are all
 // non-fatal no-ops reported in the returned shape.

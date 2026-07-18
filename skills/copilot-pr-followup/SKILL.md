@@ -441,7 +441,7 @@ After the retrospective checkpoint write, run the post-merge board archive as a 
 node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name> || true
 ```
 
-Board and threshold resolve from `.devloops` (`queue.projectNumber`/`queue.boardTitle`, `queue.archiveOlderThanDays`, default 7d), using local `gh` auth — no CI, cron, or PAT. This step is best-effort and NON-FATAL: ignore any failure and never let it block the merge or the retrospective.
+Board and threshold resolve from `.devloops` (`queue.board.number`/`queue.board.title`, `queue.archiveOlderThanDays`, default 7d), using local `gh` auth — no CI, cron, or PAT. This step is best-effort and NON-FATAL: ignore any failure and never let it block the merge or the retrospective.
 
 The deterministic mechanism that converges merged→Done is `dev-loops queue reconcile` — idempotent, run best-effort at loop startup — so the merge lands on the "Done" column without a remembered manual step. The manual sync below is now an optional fallback (e.g. to converge immediately without waiting for the next startup reconcile):
 

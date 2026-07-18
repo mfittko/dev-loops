@@ -28,7 +28,7 @@ Options:
   --project <number|id|board-uri>     Project number, node ID, or board URI
                                       (e.g. https://github.com/users/me/projects/3).
                                       When omitted, resolved from .devloops
-                                      queue.projectNumber / queue.boardTitle.
+                                      queue.board.number / queue.board.title.
   --item <number|node-id>             Flag form: item to reorder.
   --after <number|node-id>            Flag form: position after this item. When omitted, move to top.
   --dry-run                           Print the intended GraphQL mutation(s) without executing.

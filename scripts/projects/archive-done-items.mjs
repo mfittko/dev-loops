@@ -17,7 +17,7 @@ Options:
   --project <number|id|board-uri>     Project number, node ID, or board URI
                                       (e.g. https://github.com/users/me/projects/3).
                                       When omitted, resolved from .devloops
-                                      queue.projectNumber / queue.boardTitle.
+                                      queue.board.number / queue.board.title.
   --older-than <duration>             Closed-for threshold. Format: <n><unit> where unit is
                                       h (hours), d (days), or w (weeks). Default resolves
                                       from .devloops queue.archiveOlderThanDays, else 7d.
@@ -362,7 +362,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     : null;
   if (!projectRef && !projectTitle) {
     throw Object.assign(
-      new Error("--project is required (or configure queue.projectNumber / queue.boardTitle in .devloops)"),
+      new Error("--project is required (or configure queue.board.number / queue.board.title in .devloops)"),
       { code: "INVALID_PROJECT" },
     );
   }
@@ -442,7 +442,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
   }
 
   // Resolve board + threshold defaults from .devloops when the flags are absent.
-  // Precedence: explicit --project flag > queue.projectNumber/boardTitle.
+  // Precedence: explicit --project flag > queue.board.number/title.
   //             explicit --older-than flag > queue.archiveOlderThanDays > 7d.
   const settings = resolveSettings(cwd);
   if (args.project === undefined && settings) {

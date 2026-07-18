@@ -2440,6 +2440,129 @@ describe("role resolution", () => {
 
 });
 
+// ============================================================================
+// Byte-identical shipped-config parity guard (post #1404 config-schema
+// redesign): D3's merge-by-name change means gates.<gate>.angles no longer
+// wholesale-replaces the extension-defaults angle list across layers — a
+// consumer .devloops must now explicitly disable a shipped angle it doesn't
+// want (enabled: false), or the angle silently merges back in by name. Pins
+// this repo's own shipped .devloops + extension-defaults.yaml against the
+// exact angle sets / mandatory sets / blockCleanOnFindingSeverities the
+// pre-redesign flat-key config resolved, so a future edit can't silently
+// regrow (or shrink) the effective gate-review surface.
+// ============================================================================
+
+describe("shipped .devloops + extension-defaults.yaml resolve byte-identically to pre-#1404 (D3 regression guard)", () => {
+  const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+
+  // The exact sets origin/main (pre-#1404, flat mandatoryAngles/excludeAngles
+  // keys, wholesale-replace merge) resolved for this repo's own shipped
+  // .devloops + extension-defaults.yaml. Order is NOT pinned — resolveGateAngles
+  // never documented a specific order, and D3's merge-by-name (target-then-
+  // append) inherently can't preserve a later layer's reordering of names the
+  // base layer already declared; only set membership is a real contract.
+  const PRE_1404_ANGLE_SETS = {
+    draft: [
+      "scope", "coverage", "correctness", "ci-guard", "contract-surface",
+      "input-validation", "determinism", "no-op", "link-check",
+      "packaging-runtime", "state-concurrency", "config-drift", "gate-evidence",
+      "pr-description", "pr-comments", "contradiction-lens", "code-conformance",
+      "semantic-drift",
+    ],
+    preApproval: [
+      "dry", "kiss", "yagni", "srp", "soc", "deep", "docs", "ocp", "lsp", "isp",
+      "dip", "renderer-security", "pr-checklist-matrix", "acceptance-criteria",
+      "contradiction-lens", "correctness-final", "ui-validation",
+    ],
+    spike: ["scope", "docs"],
+  };
+  const PRE_1404_MANDATORY_SETS = {
+    draft: ["pr-description"],
+    preApproval: ["pr-checklist-matrix", "acceptance-criteria", "yagni", "contradiction-lens"],
+    spike: [],
+  };
+  const PRE_1404_BLOCK_CLEAN = {
+    draft: ["must-fix", "worth-fixing-now"],
+    preApproval: ["must-fix", "worth-fixing-now"],
+    spike: ["must-fix"],
+  };
+
+  const sortedSet = (arr) => [...new Set(arr)].sort();
+
+  for (const gate of /** @type {const} */ (["draft", "preApproval", "spike"])) {
+    test(`${gate} gate: resolved angle set, mandatory set, and blockCleanOnFindingSeverities match pre-#1404`, async () => {
+      const { loadDevLoopConfig, resolveGateAngles, resolveGateConfig } = await import("../src/config/config.mjs");
+      const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+      assert.deepEqual(errors, []);
+      const angles = resolveGateAngles(config, gate);
+      const gateConfig = resolveGateConfig(config, gate);
+      assert.deepEqual(sortedSet(angles), sortedSet(PRE_1404_ANGLE_SETS[gate]), `${gate} angle set`);
+      assert.deepEqual(sortedSet(gateConfig.mandatoryAngles), sortedSet(PRE_1404_MANDATORY_SETS[gate]), `${gate} mandatory set`);
+      assert.deepEqual(sortedSet(gateConfig.blockCleanOnFindingSeverities), sortedSet(PRE_1404_BLOCK_CLEAN[gate]), `${gate} blockCleanOnFindingSeverities`);
+    });
+  }
+
+  // Every angle that had a real config.personas[angle] entry pre-#1404 (a
+  // persona + a written prompt, not just a BUILTIN_PERSONAS fallback) must
+  // still resolve to the SAME persona and a prompt with the same recognizable
+  // opening text now that the override lives on the gate's own angle entry.
+  // A dropped prompt (persona still matching by coincidence, e.g. both
+  // resolve to the generic "review" persona, while the prompt silently goes
+  // null) is exactly the class of regression this guards — acceptance-criteria
+  // was found missing its prompt this way during review.
+  const PRE_1404_PERSONA_PROMPTS = {
+    scope: ["review", "Check whether every changed file belongs in this PR"],
+    coverage: ["review", "Check whether tests cover the changed behavior adequately"],
+    correctness: ["review", "Check whether the implementation matches the acceptance criteria"],
+    "ci-guard": ["review", "Audit CI/workflow semantics for reproducibility"],
+    "contract-surface": ["review", "Review this change for public contract-surface drift"],
+    "input-validation": ["review", "Review this change for input-validation drift"],
+    determinism: ["review", "Review this change for determinism"],
+    "no-op": ["review", "Flag workflow or tool invocations that are effectively no-ops"],
+    "link-check": ["review", "Validate link and path correctness"],
+    "packaging-runtime": ["review", "Review this change for packaging/runtime asset contract gaps"],
+    "state-concurrency": ["review", "Review this change for state concurrency and locking risks"],
+    "config-drift": ["review", "Cross-check config, schema, and documentation for contract drift"],
+    "gate-evidence": ["review", "Verify that required workflow checkpoint evidence is present"],
+    "pr-description": ["review", "Review the PR description for completeness"],
+    "pr-comments": ["review", "Scan PR comments for unresolved issues"],
+    dry: ["review", "Flag duplicated logic, repeated patterns"],
+    kiss: ["review", "Flag over-engineering and unnecessary complexity"],
+    yagni: ["review", "Flag speculative features, future-proofing"],
+    srp: ["review", "Single Responsibility Principle"],
+    soc: ["review", "Separation of Concerns"],
+    deep: ["review", "Perform a structural code quality audit"],
+    docs: ["docs", "Review documentation correctness"],
+    ocp: ["review", "Open/Closed Principle"],
+    lsp: ["review", "Liskov Substitution Principle"],
+    isp: ["review", "Interface Segregation Principle"],
+    dip: ["review", "Dependency Inversion Principle"],
+    "renderer-security": ["review", "Review this change for renderer security"],
+    "pr-checklist-matrix": ["review", "Verify before approval that the PR checklist"],
+    "acceptance-criteria": ["review", "Verify that each acceptance criterion and definition-of-done item"],
+    "threat-model": ["review", "Adversarially threat-model this change"],
+  };
+  // Angles used by the shipped gates that never had a personas[angle] entry
+  // pre-#1404 — must keep falling back to default-reviewer with a null prompt.
+  const FALLBACK_ANGLES = ["contradiction-lens", "code-conformance", "semantic-drift", "correctness-final", "ui-validation"];
+
+  test("every pre-#1404 personas[angle] entry still resolves the same persona + prompt from its gate entry", async () => {
+    const { loadDevLoopConfig, resolveReviewerRole } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, []);
+    for (const [angle, [persona, promptStart]] of Object.entries(PRE_1404_PERSONA_PROMPTS)) {
+      const role = resolveReviewerRole(config, angle);
+      assert.equal(role.persona, persona, `${angle} persona`);
+      assert.ok(role.prompt && role.prompt.startsWith(promptStart), `${angle} prompt should start with ${JSON.stringify(promptStart)}, got ${JSON.stringify(role.prompt?.slice(0, 60))}`);
+    }
+    for (const angle of FALLBACK_ANGLES) {
+      const role = resolveReviewerRole(config, angle);
+      assert.equal(role.persona, "default-reviewer", `${angle} persona`);
+      assert.equal(role.prompt, null, `${angle} prompt`);
+    }
+  });
+});
+
 describe("shipped defaults docs and deep angle wiring", () => {
 
   test("D2: shipped defaults wire contract-surface by default and expose cluster-derived opt-in prompts", async () => {

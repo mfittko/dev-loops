@@ -138,7 +138,7 @@ with the existing project details.
 
 ## How dev-loop treats board state
 
-When a board is **configured** (`queue.projectNumber` or `queue.boardTitle` in `.devloops`),
+When a board is **configured** (`queue.board.number` or `queue.board.title` in `.devloops`),
 it is the **authoritative source of queue membership and ordering** — not just status.
 `dev-loops queue run` resolves the board's `Next Up` column and reconciles those items into
 `.pi/dev-loop-queue.json` (appending a queued entry for any `Next Up` issue not already

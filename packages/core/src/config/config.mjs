@@ -119,8 +119,14 @@ const RefinementConfig = z.strictObject({
 // — see the config-schema RFC). `mergeConfigLayers` merges these arrays BY
 // `name` across config layers (D3), so a later layer can add or disable a
 // single angle without restating the whole list.
-const GateAngleEntry = z.union([
-  z.string().trim().min(1).transform((name) => ({ name })),
+// A bare string is sugar for { name }; preprocessing the string→object wrap
+// BEFORE validation (rather than a z.union of the two shapes) means every
+// malformed angle entry validates against this ONE object schema, so a bad
+// field (e.g. `mandatory: "yes"`) reports its own actionable path/message
+// (`gates.draft.angles.1.mandatory: ...`) instead of zod's opaque
+// invalid_union "Invalid input" that swallows which branch failed why.
+const GateAngleEntry = z.preprocess(
+  (v) => (typeof v === "string" ? { name: v } : v),
   z.strictObject({
     name: z.string().trim().min(1),
     mandatory: z.boolean().optional().describe("Always run this angle, regardless of diff-based dynamic selection."),
@@ -130,7 +136,7 @@ const GateAngleEntry = z.union([
     model: z.string().trim().min(1).optional().describe("Concrete model override for this angle (highest precedence)."),
     tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle (used when `model` is absent)."),
   }),
-]);
+);
 
 const GateDynamicConfig = z.strictObject({
   subtractive: z.boolean().default(false).describe("Enable diff-driven dynamic angle PRUNING for this gate (was gates.<gate>.dynamicAngles)."),
@@ -546,6 +552,14 @@ const FileGatesConfig = z.strictObject({
 
 // ============================================================================
 // Full schema — families are optional (BUILT_IN_DEFAULTS provides fallback)
+//
+// Coordination note (#1408): the tracker-agnostic seam RFC lands a top-level
+// `tracker:` block (provider selector, `tracker.board.*` superseding
+// `queue.board`, a `tracker-first` strategy value) on this restructured
+// schema. Not added here — this issue is the config-shape redesign only —
+// but resolvers in this module take the effective config as a plain
+// parameter (no global/singleton reads), so #1408's tracker adapter and any
+// later multi-tracker layer stay additive on top of it.
 // ============================================================================
 
 /**
@@ -746,17 +760,32 @@ function normalizeAngleEntries(raw) {
  * gate in turn and returns the first match. The shipped default config never
  * gives the same angle name divergent overrides across gates, so this is
  * unambiguous in practice.
+ *
+ * A DISABLED entry (`enabled: false`) is skipped rather than returned: the
+ * same angle name can be a real, enabled angle with its own persona/prompt on
+ * one gate while merely disabled (a bare `enabled:false` placeholder, no
+ * override fields) on another — e.g. a gate that inherited the name via
+ * merge-by-name (D3) and dropped it. Returning that placeholder would shadow
+ * the other gate's real override. Only when EVERY gate's entry for this name
+ * is disabled do we fall back to returning the first (still informational,
+ * e.g. for a caller that wants to know the entry exists even if inert).
  * @param {DevLoopConfig} config
  * @param {string} name
  * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string}|null}
  */
 function findAngleEntry(config, name) {
+  let disabledFallback = null;
   for (const gate of ["draft", "preApproval", "spike"]) {
     const entries = normalizeAngleEntries(config?.gates?.[gate]?.angles);
     const found = entries.find((e) => e.name === name);
-    if (found) return found;
+    if (!found) continue;
+    if (found.enabled === false) {
+      disabledFallback ??= found;
+      continue;
+    }
+    return found;
   }
-  return null;
+  return disabledFallback;
 }
 
 /**
@@ -1146,7 +1175,15 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
     return merged;
   }
 
-  // Validate the file's structure before merging
+  // Validate the file's structure before merging. Pre-existing behavior
+  // (unrelated to the #1404 angle-entry redesign): a schema violation ANYWHERE
+  // in this layer's file drops the WHOLE layer (errors is populated, `merged`
+  // is returned unchanged) rather than merging the rest of the file's valid
+  // keys — a single typo'd angle field is exactly as disruptive as a
+  // completely broken file. `errors[].message` now names the offending
+  // path/field (see GateAngleEntry's preprocess-not-union shape), so the
+  // failure is at least actionable; the whole-layer-skip granularity itself
+  // is an existing, separate concern.
   const validation = FileConfigSchema.safeParse(data);
   if (!validation.success) {
     errors.push({
@@ -1714,16 +1751,13 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
 /**
  * Resolve review angles for a specific gate from the merged dev-loop config.
  *
- * Unions mandatoryAngles and extraAngles into the configured candidate
- * angles, filters through excludeAngles, and deduplicates:
- * `((angles ∪ extraAngles) ∪ mandatoryAngles) − excludeAngles` (#1392).
- * extraAngles is additive but NOT mandatory — a duplicate against angles or
- * mandatoryAngles is a no-op (deduplicated by the Set union, appears exactly
- * once, never errors, and does not change that angle's existing
- * mandatory/prunable status); a member also in excludeAngles is removed
- * (exclude applied last, same as any other angle). Returns null only when
- * angles, mandatoryAngles, and extraAngles are all absent/empty for the given
- * gate (caller falls back to skill-defined defaults).
+ * Unions the mandatory angle names (entries with `mandatory: true`) with the
+ * gate's full configured angle list, then removes disabled entries
+ * (`enabled: false`): `mandatoryAngles ∪ angles − disabled`, deduplicated (a
+ * mandatory angle also present in `angles` is a no-op — it appears exactly
+ * once and keeps its mandatory status). Returns null only when the gate has
+ * no configured `angles` at all (caller falls back to skill-defined
+ * defaults); an explicitly-empty `angles: []` returns `[]`.
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate

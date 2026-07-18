@@ -36,6 +36,15 @@ gates:
       - contradiction-lens
       - code-conformance
       - semantic-drift
+      # Shipped in extension-defaults.yaml's draft pool but intentionally not
+      # run by this repo's own draft gate (pre-1.0 config-schema redesign,
+      # #1404: gates.<gate>.angles now merges BY NAME across config layers —
+      # D3 — so dropping a shipped angle requires an explicit enabled:false
+      # entry here; omitting it entirely would let it merge back in).
+      - name: threat-model
+        enabled: false
+      - name: renderer-security
+        enabled: false
     requireCi: true
     blockCleanOnFindingSeverities:
       - must-fix
@@ -46,10 +55,18 @@ gates:
     # Mandatory angles always run in the fan-out (never dropped by dynamic
     # resolution); fully configurable — set `mandatory: true` on any angle.
     angles:
-      - dry
-      - kiss
+      - name: pr-checklist-matrix
+        mandatory: true
+      - name: acceptance-criteria
+        mandatory: true
+        persona: review
+        prompt: Verify that each acceptance criterion and definition-of-done item from the linked issue/PR is actually satisfied by the implementation — not merely listed. For every criterion, cite the concrete code/test/behavior evidence that meets it; flag any criterion that is unmet, only partially met, or unverifiable from the diff as a blocking finding. Confirm definition-of-done items (tests, docs, validation) are done and that declared non-goals are respected (no scope creep).
       - name: yagni
         mandatory: true
+      - name: contradiction-lens
+        mandatory: true
+      - dry
+      - kiss
       - srp
       - soc
       - deep
@@ -58,13 +75,9 @@ gates:
       - lsp
       - isp
       - dip
-      - renderer-security
-      - name: pr-checklist-matrix
-        mandatory: true
-      - name: acceptance-criteria
-        mandatory: true
-      - name: contradiction-lens
-        mandatory: true
+      - name: renderer-security
+        persona: review
+        prompt: Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
       - correctness-final
       - ui-validation
     blockCleanOnFindingSeverities:
