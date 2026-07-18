@@ -64,9 +64,16 @@ practice:
 - **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
   GitHub's own token for every non-draft PR, re-firing on push, ready-for-review,
-  a submitted review, thread resolve/unresolve, and a standalone review comment
-  — so a newly-opened unresolved thread re-evaluates the check instead of
-  leaving a SHA-pinned green stale on the thread axis. The `gate-evidence`
+  a submitted review, and a standalone review comment — so a newly-opened
+  unresolved thread re-evaluates the check instead of leaving a SHA-pinned green
+  stale on the thread axis. (There is no `pull_request_review_thread` Actions
+  trigger, so thread resolve/unresolve is not itself a re-fire event; a
+  newly-appearing unresolved thread arrives via a submitted review or a review
+  comment, both of which do re-fire. One narrow residual remains: a bare
+  "Unresolve conversation" UI action on an already-resolved thread, with no
+  accompanying review or comment, fires only that non-triggerable event and so
+  does not re-fire the check — bounded by the maintainer-gated merge, and
+  re-caught on the next push, review, or comment.) The `gate-evidence`
   context itself is always an explicit commit status posted to the PR's actual
   head SHA (not the triggering job's own check-run, which for the
   review/thread/comment event types would land on the base branch's latest

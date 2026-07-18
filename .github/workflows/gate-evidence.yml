@@ -29,7 +29,11 @@ name: Gate evidence
 # unresolved thread appears, which is the stale-green direction that matters
 # here. (GitHub Actions has no `pull_request_review_thread` workflow trigger —
 # thread resolve/unresolve is a webhook but not an `on:` event — so it is not
-# used; the two events above cover a newly-appearing unresolved thread.) Both
+# used; the two events above cover a newly-appearing unresolved thread. Narrow
+# residual: a bare "Unresolve conversation" UI action on an already-resolved
+# thread with no accompanying review/comment fires only that non-triggerable
+# event and is not re-caught until the next push/review/comment — bounded by the
+# maintainer-gated merge.) Both
 # are triggered by base-repo actions and run in the base-repo context, so they
 # get this workflow's declared permissions (including `statuses: write`) even
 # when the PR head is a fork, and both carry the same `pull_request` object
