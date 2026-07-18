@@ -1,3 +1,21 @@
+// Determinism (issue #1405). The root cause of the intermittent failures
+// here was NOT a fixture-vs-clock comparison but shared on-disk state: some
+// `runNode` calls omitted `cwd`, so the spawned CLI inherited the real
+// process cwd and resolved its runner-coordination file via
+// `git rev-parse --git-common-dir` — a path SHARED across every worktree
+// over this one `.git`. A stale leftover coordination file from another
+// run/worktree then flipped stale-runner age assertions. The fix: every
+// `runNode` that can reach coordination passes `cwd: tempDir` (a per-test
+// mkdtemp dir where `--git-common-dir` fails, so the coordination root
+// anchors to the isolated temp dir). Keep that invariant: any new spawn
+// that touches coordination MUST set `cwd: tempDir`.
+//
+// Related convention: never read the real wall clock here either — no bare,
+// argument-less Date constructor, and no read of the current epoch millis off the Date global. A production seam
+// that needs "now" (e.g. `claimRunnerOwnership`/`assertRunnerOwnership` in
+// scripts/loop/_pr-runner-coordination.mjs) already accepts an injected
+// `now`; pass a fixed value through it. Enforced mechanically by
+// test/github/deterministic-fixture-time.test.mjs.
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -112,7 +130,7 @@ test("reconcile-draft-gate fails closed when visible draft_gate evidence already
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -147,7 +165,7 @@ test("reconcile-draft-gate blocks while CI is still pending", async () => {
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -184,7 +202,7 @@ test("reconcile-draft-gate treats failing gh pr checks JSON output as blocked ev
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -221,7 +239,7 @@ test("reconcile-draft-gate surfaces gh pr checks stderr when exit code 1 has no 
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -255,7 +273,7 @@ test("reconcile-draft-gate blocks when no CI checks are reported", async () => {
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -430,7 +448,7 @@ test("reconcile-draft-gate skips the draft conversion mutation when the PR is al
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
@@ -512,7 +530,7 @@ test("reconcile-draft-gate does not mark ready when upsert throws and the PR was
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -594,7 +612,7 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -681,7 +699,7 @@ test("reconcile-draft-gate converts to draft, posts clean evidence, and marks re
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
