@@ -141,7 +141,7 @@ Preflight verdicts:
   - <!-- rule: INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED --> `INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED`: only surface timeout attention when the seam's durable watch budget is actually exhausted
   - for explicit inspect/status requests, report the still-waiting state and exit normally
 - carry that resolved repo slug through every later GitHub issue/PR command
-- before invoking `resolve-dev-loop-startup.mjs --issue <number>` for local implementation on this directly-targeted issue, claim ownership: `node scripts/github/edit-issue.mjs --repo <resolved-repo> --issue <number> --add-assignee @me` (skip if already assigned to the viewer). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee — see [Public Dev Loop Contract](public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup)
+- before invoking `resolve-dev-loop-startup.mjs --issue <number>` for local implementation on this directly-targeted issue, claim ownership: `dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee @me` (skip if already assigned to the viewer; source-repo fallback: `node scripts/github/edit-issue.mjs ...`). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee — see [Public Dev Loop Contract](public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup)
 
 ### From a plan-doc path
 
@@ -226,9 +226,10 @@ When an existing sub-issue tree needs **scope alignment, AC/DoD contracts, and d
 
 Before updating the GitHub issue body, show the diff and get explicit confirmation. Then use:
 ```sh
-node scripts/github/edit-issue.mjs --repo <resolved-repo> --issue <number> --body-file <updated-body-file>
-node scripts/github/edit-issue.mjs --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent
+dev-loops issue edit --repo <resolved-repo> --issue <number> --body-file <updated-body-file>
+dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent
 ```
+(source-repo fallback: `node scripts/github/edit-issue.mjs ...`)
 Verify assignment with:
 ```sh
 node scripts/github/view-issue.mjs --repo <resolved-repo> --issue <number> --json assignees

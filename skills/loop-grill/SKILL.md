@@ -131,8 +131,10 @@ Write the raw Q&A transcript ONLY to the gitignored, ephemeral, session-scoped a
 **Tracker-first write-back:** update the GitHub issue body using:
 
 ```
-node scripts/github/edit-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-path>
+dev-loops issue edit --repo <owner/repo> --issue <n> --body-file <tmp-path>
 ```
+
+(source-repo fallback: `node scripts/github/edit-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-path>`)
 
 The synthesized sections live in the issue body, not as a comment. Do not use `comment-issue.mjs` here — that creates a comment, not a body update.
 

@@ -93,6 +93,26 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
       const helpOutput = execFileSync("node", [cliPath, "--help"], { cwd: installDir }).toString();
       assert.match(helpOutput, /^Usage: dev-loops/);
     }
+
+    // 5. Run the newly-routed `dev-loops` CLI subcommands (issue #1369) from
+    // the installed tree — the same deps-less consumer context that broke
+    // on raw `node scripts/*.mjs` — and assert exit 0 + `@dev-loops/core`
+    // resolves (no ERR_MODULE_NOT_FOUND).
+    const devLoopsBin = path.join(installDir, "node_modules/dev-loops/cli/index.mjs");
+    for (const args of [
+      ["loop", "pre-flight-gate", "--help"],
+      ["loop", "ensure-worktree", "--help"],
+      ["issue", "edit", "--help"],
+      ["issue", "create", "--help"],
+    ]) {
+      // execFileSync throws on a non-zero exit, so reaching here already means
+      // the command succeeded; additionally assert it printed real help (a
+      // command exiting 0 with empty/wrong output would otherwise slip past the
+      // ERR_MODULE_NOT_FOUND-only check).
+      const output = execFileSync("node", [devLoopsBin, ...args], { cwd: installDir }).toString();
+      assert.doesNotMatch(output, /ERR_MODULE_NOT_FOUND/, `dev-loops ${args.join(" ")} failed to resolve @dev-loops/core`);
+      assert.match(output, /Usage/i, `dev-loops ${args.join(" ")} printed no Usage/help output`);
+    }
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
