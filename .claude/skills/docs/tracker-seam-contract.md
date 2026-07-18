@@ -146,4 +146,4 @@ shape; it does not need to change.
 |---|---|
 | [Artifact Authority Contract](artifact-authority-contract.md) | Defines which artifact is canonical (tracker-first / local-planning / lightweight); this doc defines which *provider* backs "tracker issue" |
 | [Tracker-First Story-to-PR Contract](tracker-first-loop-state.md) | PR-level state machine for tracker-driven PRs; provider-agnostic already (a plugin emits a raw state string the core normalizer understands) |
-| [Projects Queue Contract](../../docs/projects-queue-contract.md) | The GitHub Projects board contract the built-in `github` provider's Board capability wraps |
+| [Projects Queue Contract](./projects-queue-contract.md) | The GitHub Projects board contract the built-in `github` provider's Board capability wraps |

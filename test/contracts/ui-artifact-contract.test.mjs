@@ -7,7 +7,7 @@ const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), 'utf8');
 
 test('ui artifact contract doc defines named-state artifacts and auto-scoped CI enforcement', async () => {
   const [doc, indexDoc, localImplementationSkill, ciWorkflow] = await Promise.all([
-    readRepo('docs/ui-artifact-contract.md'),
+    readRepo('skills/docs/ui-artifact-contract.md'),
     readRepo('docs/index.md'),
     readRepo('skills/local-implementation/SKILL.md'),
     readRepo('.github/workflows/ci.yml'),
@@ -48,6 +48,6 @@ test('ui artifact contract doc defines named-state artifacts and auto-scoped CI 
   assert.match(doc, /missing or malformed/i);
   assert.match(doc, /viewer-smoke/i);
   assert.match(indexDoc, /ui-artifact-contract\.md/i);
-  assert.match(localImplementationSkill, /\.\.\/\.\.\/docs\/ui-artifact-contract\.md/i);
+  assert.match(localImplementationSkill, /\.\.\/docs\/ui-artifact-contract\.md/i);
   assert.match(ciWorkflow, /viewer-smoke:/i);
 });

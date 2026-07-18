@@ -160,7 +160,7 @@ message applies when that file has no pending entries.
 ### Issue-less lightweight PRs on the board
 
 An issue-less lightweight PR (`resolve-dev-loop-startup.mjs --lightweight` alone, per
-[ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE](../skills/docs/artifact-authority-contract.md#lightweight-pr-body-as-spec))
+[ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE](./artifact-authority-contract.md#lightweight-pr-body-as-spec))
 has no tracker issue, so it appears on the board as a **PR item only** — there is no
 issue-backed board entry to reconcile or close for it.
 `scripts/github/create-pr.mjs --lightweight` owns enqueuing that PR item on creation

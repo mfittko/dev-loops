@@ -7,9 +7,9 @@ const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), 'utf8');
 
 test('slides-story review loop doc carries the required headings/sections and cross-links', async () => {
   const [doc, indexDoc, uiDoc, template] = await Promise.all([
-    readRepo('docs/slides-story-review-loop.md'),
+    readRepo('skills/docs/slides-story-review-loop.md'),
     readRepo('docs/index.md'),
-    readRepo('docs/ui-designer-review-loop.md'),
+    readRepo('skills/docs/ui-designer-review-loop.md'),
     readRepo('skills/dev-loop/templates/slides-story-review.md'),
   ]);
 

@@ -2,10 +2,10 @@ import test from "node:test";
 
 import { assertNotRestated, assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
 
-// #1151: docs/worktree-guidance.md is the sole owner of all worktree rules;
+// #1151: skills/docs/worktree-guidance.md is the sole owner of all worktree rules;
 // the anti-patterns, main-agent, merge-preconditions, and local-implementation
 // docs reference these rules by ID instead of restating them.
-const OWNER = "docs/worktree-guidance.md";
+const OWNER = "skills/docs/worktree-guidance.md";
 const WORKTREE_RULE_IDS = [
   "WORKTREE-CANONICAL-PATH",
   "WORKTREE-CREATE-PROVISION",

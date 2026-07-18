@@ -8,7 +8,7 @@ This document defines the deterministic reviewer-side PR loop state machine.
 
 The reviewer loop captures observable PR/GitHub facts plus explicit local reviewer-loop metadata (planning/run/merge status) into one snapshot and deterministically maps that snapshot to exactly one current state.
 
-This document defines the reviewer-side review production/submission boundary. The broader family-local PR lifecycle that consumes this boundary is defined in [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md).
+This document defines the reviewer-side review production/submission boundary. The broader family-local PR lifecycle that consumes this boundary is defined in [PR Lifecycle Contract](./pr-lifecycle-contract.md).
 
 Implementation:
 
@@ -148,7 +148,7 @@ review artifact/verdict.
 ## Reviewer-Boundary Contract (Review vs Remediation)
 
 <!-- rule: REVIEWER-BOUNDARY-CONTRACT -->
-`REVIEWER-BOUNDARY-CONTRACT`: A pure internal reviewer pass MUST end in a concrete review result boundary (`submitted_review`) rather than generic post-review waiting. After submission, author/Copilot remediation belongs to a separate remediation/fix loop handoff boundary (see broader remediation-loop work in #26). A new review request after fixes MUST start a new reviewer-pass context (`review_requested`) rather than extending the old pass indefinitely. If a wait state is used, it MUST be an explicit named external-participant boundary (for example author/Copilot follow-up, human approval wait, or external Copilot review wait), never a catch-all continuation state for internal reviewer logic. See [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) for the family-local lifecycle that consumes this boundary.
+`REVIEWER-BOUNDARY-CONTRACT`: A pure internal reviewer pass MUST end in a concrete review result boundary (`submitted_review`) rather than generic post-review waiting. After submission, author/Copilot remediation belongs to a separate remediation/fix loop handoff boundary (see broader remediation-loop work in #26). A new review request after fixes MUST start a new reviewer-pass context (`review_requested`) rather than extending the old pass indefinitely. If a wait state is used, it MUST be an explicit named external-participant boundary (for example author/Copilot follow-up, human approval wait, or external Copilot review wait), never a catch-all continuation state for internal reviewer logic. See [PR Lifecycle Contract](./pr-lifecycle-contract.md) for the family-local lifecycle that consumes this boundary.
 
 - A newly opened or still-forming draft PR head is not automatically review-ready; while the intended initial slice is still being authored, treat that as external follow-up/remediation boundary work, not a formal reviewer-verdict moment.
 - Default forward-progress rule at this boundary: continue to the next relevant approval gate or explicit handoff boundary. Early stop is only valid for one of:
@@ -187,4 +187,4 @@ State distinctness, invalidation, terminal/handoff boundary, and fail-closed gua
 defined by [State Definitions](#state-definitions), [Required transitions](#required-transitions),
 and `REVIEWER-BOUNDARY-CONTRACT` above; this section does not restate them.
 
-- round-cap exhaustion in a concluded Copilot cycle is not a blanket stop: the post-convergence new-cycle re-request carve-out is owned by `COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md)
+- round-cap exhaustion in a concluded Copilot cycle is not a blanket stop: the post-convergence new-cycle re-request carve-out is owned by `COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)

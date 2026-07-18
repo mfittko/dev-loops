@@ -32,4 +32,4 @@ Branch guard: `node scripts/loop/pre-commit-branch-guard.mjs`
 ## Contracts
 
 [Public Dev Loop Contract](skills/docs/public-dev-loop-contract.md)
-[Worktree Guidance](docs/worktree-guidance.md)
+[Worktree Guidance](skills/docs/worktree-guidance.md)

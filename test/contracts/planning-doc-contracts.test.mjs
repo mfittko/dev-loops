@@ -104,7 +104,7 @@ test("local-implementation skill uses the refiner for phase planning and delegat
 test("planning guidance keeps sub-issue trees as the durable decomposition owner", async () => {
   const [localImplementationSkill, subIssueTreeContract, docsIndex] = await Promise.all([
     readRepo("skills/local-implementation/SKILL.md"),
-    readRepo("docs/sub-issue-tree-contract.md"),
+    readRepo("skills/docs/sub-issue-tree-contract.md"),
     readRepo("docs/index.md"),
   ]);
 
@@ -117,7 +117,7 @@ test("planning guidance keeps sub-issue trees as the durable decomposition owner
     /manage-sub-issues\.mjs/i,
     /When to use sub-issues vs plain related-issue references/i,
     /do not maintain.*checklist.*duplicates|not.*maintain.*ordered checklist.*duplicates/i,
-  ], "docs/sub-issue-tree-contract.md");
+  ], "skills/docs/sub-issue-tree-contract.md");
   assert.match(docsIndex, /sub-issue-tree-contract\.md/i);
 });
 
@@ -156,7 +156,7 @@ test("local workflow docs define tracker-backed local canonicality and no-dup ru
 
 test("worktree guidance docs define the canonical checkout-isolation contract", async () => {
   const [worktreeGuidance, agentsDoc, docsIndex] = await Promise.all([
-    readRepo("docs/worktree-guidance.md"),
+    readRepo("skills/docs/worktree-guidance.md"),
     readRepo("AGENTS.md"),
     readRepo("docs/index.md"),
   ]);
@@ -178,7 +178,7 @@ test("worktree guidance docs define the canonical checkout-isolation contract", 
     /git worktree remove --force/i,
     /git worktree prune/i,
     /worktrees are unavailable/i,
-  ], "docs/worktree-guidance.md");
+  ], "skills/docs/worktree-guidance.md");
 
   assert.match(agentsDoc, /docs\/worktree-guidance\.md/i);
   assert.match(docsIndex, /worktree-guidance\.md/i);

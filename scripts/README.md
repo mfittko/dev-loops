@@ -172,7 +172,7 @@ Failure behavior:
 ### `scripts/github/manage-sub-issues.mjs`
 
 Deterministic helper for reading, linking, ordering, and verifying GitHub sub-issue trees.
-Use this for epic/umbrella issue decomposition. See [Sub-Issue Tree Contract](../docs/sub-issue-tree-contract.md) for the full workflow.
+Use this for epic/umbrella issue decomposition. See [Sub-Issue Tree Contract](../skills/docs/sub-issue-tree-contract.md) for the full workflow.
 
 Commands:
 - `list` — list sub-issues of a parent issue in tree order
@@ -565,7 +565,7 @@ Failure behavior:
 Deterministic Copilot-loop state detector. Captures current loop state from observable PR/GitHub
 facts and interprets the snapshot into one explicit current state, allowed next transitions, and
 a recommended next action. This script is the orchestration authority for the async Copilot
-review/fix loop; see [Copilot Loop State Graph](../docs/copilot-loop-state-graph.md) for the full state-graph design.
+review/fix loop; see [Copilot Loop State Graph](../skills/docs/copilot-loop-state-graph.md) for the full state-graph design.
 
 Two modes:
 
@@ -611,7 +611,7 @@ Snapshot schema (`--input` mode or `snapshot` field in success output):
 
 Success output shape:
 - `{ "ok": true, "snapshot": { ... }, "state": "...", "allowedTransitions": [...], "nextAction": "...", "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false, "loopDisposition": "...", "terminal": true|false }`
-- `state` is one of the stable state names defined in [Copilot Loop State Graph](../docs/copilot-loop-state-graph.md)
+- `state` is one of the stable state names defined in [Copilot Loop State Graph](../skills/docs/copilot-loop-state-graph.md)
 - `allowedTransitions` is the list of states reachable from `state`
 - `nextAction` is a human-readable recommended next step
 - `autoRerequestEligible` is `true` only when a meaningful remediation event has made automatic re-request valid again
@@ -792,7 +792,7 @@ Failure behavior:
 Deterministic reviewer-loop state detector. Captures reviewer-side PR loop state from observable
 GitHub facts plus optional local reviewer-loop metadata and interprets that snapshot into one
 explicit current state, allowed next transitions, and a recommended next action. See
-[Reviewer Loop State Graph](../docs/reviewer-loop-state-graph.md) for the full reviewer-loop state graph and contracts.
+[Reviewer Loop State Graph](../skills/docs/reviewer-loop-state-graph.md) for the full reviewer-loop state graph and contracts.
 
 Two modes:
 

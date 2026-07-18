@@ -2,7 +2,7 @@
 // scripts/loop/slides-story-review-contract.mjs: this one codifies the keep/fix
 // rule for the autonomous docs-grill step (claims vs the actual contracts,
 // code-vs-doc drift, stale references, contract-surface accuracy). Pure module,
-// no I/O. See docs/docs-grill-step.md.
+// no I/O. See skills/docs/docs-grill-step.md.
 
 // What each finding asserts is wrong. `drift` covers any divergence between a
 // claim/reference and the contract surface it points at; `stale_reference`
@@ -25,7 +25,7 @@ export const DOCS_GRILL_DISPOSITIONS = Object.freeze([
 /**
  * Classify one docs-grill finding into its keep/fix disposition.
  *
- * The keep/fix rule (docs/docs-grill-step.md):
+ * The keep/fix rule (skills/docs/docs-grill-step.md):
  *   - real drift between code/behavior and a contract claim   -> record_finding
  *   - doc-only drift the loop can correct here                -> fix_in_place
  *   - doc-only drift too large for this branch                -> route_followup

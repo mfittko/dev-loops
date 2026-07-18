@@ -31,7 +31,7 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
   assert.ok(devLoopPreApproval.length > 0, "copilot-pr-followup pre-approval gate section not found inside Step 7");
   assert.match(copilotPrFollowupSkill, /Canonical owner for the internal `copilot_pr_followup` route behind the public `dev-loop` façade/i);
   assert.match(copilotPrFollowupSkill, /canonical internal owner of the shared post-PR mechanics/i);
-  assertRuleOwned("GATE-COMMENT-SCOPE-ONLY", "docs/gate-review-comment-contract.md");
+  assertRuleOwned("GATE-COMMENT-SCOPE-ONLY", "skills/docs/gate-review-comment-contract.md");
   const expectedDevLoopShape = [/Gate name:/i, /Trigger \/ boundary:/i, /Review angles:/i, /Pass criteria:/i, /Next step after passing:/i];
   for (const [label, section] of [
     ["copilot-pr-followup draft gate", devLoopDraftGate],
@@ -96,7 +96,7 @@ test("copilot-pr-followup skill keeps async watch persistence explicit", async (
   const [skillContent, scriptsReadme, stateGraph] = await Promise.all([
     readRepo("skills/copilot-pr-followup/SKILL.md"),
     readRepo("scripts/README.md"),
-    readRepo("docs/copilot-loop-state-graph.md"),
+    readRepo("skills/docs/copilot-loop-state-graph.md"),
   ]);
   assert.match(skillContent, /dev-loops loop watch-cycle/i);
   assert.match(skillContent, /zero-timeout `idle` probes are for explicit one-shot status\/reattach checks only/i);
@@ -107,7 +107,7 @@ test("copilot-pr-followup skill keeps async watch persistence explicit", async (
   assert.match(skillContent, /child async run exits[\s\S]*waiting_for_copilot_review[\s\S]*main session re-dispatches the same-PR follow-up path when feasible/i);
   assert.match(scriptsReadme, /`cycleDisposition: "pending"` with `terminal: false` means stay attached and run another watch boundary rather than exiting as clean success/i);
   assert.match(scriptsReadme, /handoff-only behavior must be explicitly requested/i);
-  assertRuleOwned("COPILOT-STATE-WATCH-PERSISTENCE", "docs/copilot-loop-state-graph.md");
+  assertRuleOwned("COPILOT-STATE-WATCH-PERSISTENCE", "skills/docs/copilot-loop-state-graph.md");
   assert.match(stateGraph, /COPILOT-STATE-WATCH-PERSISTENCE/);
 });
 test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merge-ready checks", async () => {
@@ -196,7 +196,7 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
   // The "must be entered and completed before merge-ready" requirement is owned by
   // GATE-COMMENT-FAIL-CLOSED (rule-ID reference asserted below) rather than pinned as
   // prose here; "not recoverable by asserting convergence" is now GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE (#1159).
-  assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "docs/gate-review-comment-contract.md");
+  assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "skills/docs/gate-review-comment-contract.md");
   assert.match(step7, /GATE-COMMENT-FAIL-CLOSED/, "pre-approval gate sequencing should reference the fail-closed rule ID");
   assertRuleOwned("GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE", "skills/copilot-pr-followup/SKILL.md");
   assert.match(
@@ -370,9 +370,9 @@ test("public dev-loop agent is a thin executable entrypoint that defers to the p
 });
 test("thin pointer docs reference canonical contract content", async () => {
   const [trackerPointer, trackerCanonical, conductorContent, ciContent, skillContent] = await Promise.all([
-    readRepo("docs/tracker-story-pr-contract.md"),
+    readRepo("skills/docs/tracker-story-pr-contract.md"),
     readRepo("skills/docs/tracker-first-loop-state.md"),
-    readRepo("docs/outer-loop-state-graph.md"),
+    readRepo("skills/docs/outer-loop-state-graph.md"),
     readRepo("skills/docs/copilot-ci-status-contract.md"),
     readCopilotSkillSurface(),
   ]);
@@ -389,17 +389,17 @@ test("thin pointer docs reference canonical contract content", async () => {
 });
 test("new See Also markdown links resolve from docs files", async () => {
   const linkTargetsByDoc = {
-    "docs/gate-review-comment-contract.md": [
-      "../skills/copilot-pr-followup/SKILL.md",
-      "../skills/final-approval/SKILL.md",
-      "../skills/docs/pr-lifecycle-contract.md",
+    "skills/docs/gate-review-comment-contract.md": [
+      "../copilot-pr-followup/SKILL.md",
+      "../final-approval/SKILL.md",
+      "./pr-lifecycle-contract.md",
       "./gate-review-sub-loop-contract.md",
     ],
-    "docs/gate-review-sub-loop-contract.md": [
+    "skills/docs/gate-review-sub-loop-contract.md": [
       "gate-review-comment-contract.md",
-      "../skills/docs/pr-lifecycle-contract.md",
-      "../skills/copilot-pr-followup/SKILL.md",
-      "../skills/local-implementation/SKILL.md",
+      "./pr-lifecycle-contract.md",
+      "../copilot-pr-followup/SKILL.md",
+      "../local-implementation/SKILL.md",
     ],
     "docs/index.md": [
       "../README.md",
@@ -429,7 +429,7 @@ test("docs index separates active docs and presentations", async () => {
   assert.match(content, /presentations\/style\.css/i);
 });
 test("checkpoint verdict comment contract owns its comment-field rules by ID (single owner)", () => {
-  const ownerPath = "docs/gate-review-comment-contract.md";
+  const ownerPath = "skills/docs/gate-review-comment-contract.md";
   for (const id of [
     "GATE-COMMENT-SCOPE-ONLY",
     "GATE-COMMENT-REQUIRED-FIELDS",
@@ -452,14 +452,14 @@ test("checkpoint verdict comment ownership stays explicit in the canonical inter
   assert.match(devLoopDraftGate, /Required PR comment/i);
   assert.match(devLoopDraftGate, /`draft_gate`/);
   assert.match(devLoopDraftGate, /head SHA/i);
-  assertRuleOwned("GATE-COMMENT-NON-SUBSTITUTION", "docs/gate-review-comment-contract.md");
+  assertRuleOwned("GATE-COMMENT-NON-SUBSTITUTION", "skills/docs/gate-review-comment-contract.md");
   assert.match(devLoopDraftGate, /GATE-COMMENT-NON-SUBSTITUTION/);
   // Comment field content, the draft-boundary requirement, and fail-closed behavior are
   // single-owner rules in the checkpoint verdict comment contract; this skill references
   // them by ID rather than restating the phrase-pinned prose (#1154).
-  assertRuleOwned("GATE-COMMENT-VALIDATION-REPORTING", "docs/gate-review-comment-contract.md");
-  assertRuleOwned("GATE-COMMENT-DRAFT-REQUIREMENTS", "docs/gate-review-comment-contract.md");
-  assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "docs/gate-review-comment-contract.md");
+  assertRuleOwned("GATE-COMMENT-VALIDATION-REPORTING", "skills/docs/gate-review-comment-contract.md");
+  assertRuleOwned("GATE-COMMENT-DRAFT-REQUIREMENTS", "skills/docs/gate-review-comment-contract.md");
+  assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "skills/docs/gate-review-comment-contract.md");
   assert.match(devLoopDraftGate, /GATE-COMMENT-VALIDATION-REPORTING/);
   assert.match(devLoopDraftGate, /GATE-COMMENT-DRAFT-REQUIREMENTS/);
   assert.match(devLoopDraftGate, /GATE-COMMENT-FAIL-CLOSED/);
@@ -475,7 +475,7 @@ test("checkpoint verdict comment ownership stays explicit in the canonical inter
   // owned by GATE-COMMENT-FAIL-CLOSED (asserted below); the "not recoverable by asserting
   // convergence" caution is now GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE (#1159).
   assertRuleOwned("GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE", "skills/copilot-pr-followup/SKILL.md");
-  assertRuleOwned("GATE-COMMENT-PREAPPROVAL-REQUIREMENTS", "docs/gate-review-comment-contract.md");
+  assertRuleOwned("GATE-COMMENT-PREAPPROVAL-REQUIREMENTS", "skills/docs/gate-review-comment-contract.md");
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-VALIDATION-REPORTING/);
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-PREAPPROVAL-REQUIREMENTS/);
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-FAIL-CLOSED/);
@@ -489,15 +489,15 @@ test("issue-intake skill documents epic decomposition with GitHub sub-issue tree
   assert.match(skillContent, /manage-sub-issues\.mjs reorder/i);
   assert.match(skillContent, /manage-sub-issues\.mjs verify/i);
   assert.match(skillContent, /manage-sub-issues\.mjs list/i);
-  assertRuleOwned("SUBISSUE-NO-ADHOC-BYPASS", "docs/sub-issue-tree-contract.md");
-  assertRuleOwned("SUBISSUE-LEAN-BODY-NO-DUPLICATE", "docs/sub-issue-tree-contract.md");
+  assertRuleOwned("SUBISSUE-NO-ADHOC-BYPASS", "skills/docs/sub-issue-tree-contract.md");
+  assertRuleOwned("SUBISSUE-LEAN-BODY-NO-DUPLICATE", "skills/docs/sub-issue-tree-contract.md");
   assert.match(skillContent, /SUBISSUE-NO-ADHOC-BYPASS/);
   assert.match(skillContent, /SUBISSUE-LEAN-BODY-NO-DUPLICATE/);
   assert.match(skillContent, /sub-issue-tree-contract\.md/i);
-  assert.match(skillContent, /\.\.\/\.\.\/docs\/sub-issue-tree-contract\.md/i);
+  assert.match(skillContent, /\.\/sub-issue-tree-contract\.md/i);
 });
 test("sub-issue tree contract documents the workflow, helper commands, and lean-body rule", async () => {
-  const contractContent = await readRepo("docs/sub-issue-tree-contract.md");
+  const contractContent = await readRepo("skills/docs/sub-issue-tree-contract.md");
   assert.match(contractContent, /manage-sub-issues\.mjs/i);
   assert.match(contractContent, /list/i);
   assert.match(contractContent, /add/i);

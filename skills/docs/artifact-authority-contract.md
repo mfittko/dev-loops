@@ -28,7 +28,7 @@ Key contract:
 - GitHub issue state is authoritative — not local notes or chat context
 - A linked PR is the single canonical follow-up artifact for the issue
 - When an open linked PR exists, reuse it rather than opening another
-- Follow-ups discovered while working a PR/loop are noted on the originating issue or PR body by default; a standalone issue is filed only when the follow-up is genuinely independent of the PR and outlives it (see [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md))
+- Follow-ups discovered while working a PR/loop are noted on the originating issue or PR body by default; a standalone issue is filed only when the follow-up is genuinely independent of the PR and outlives it (see [Sub-Issue Tree Contract](./sub-issue-tree-contract.md))
 - Implementation may proceed through either the GitHub-first routed path or the local implementation strategy (see [Public Dev Loop Contract](public-dev-loop-contract.md) `targetPreference`)
 
 ### Local-planning
@@ -138,7 +138,7 @@ In the CLI, a base-valid plan carrying only one refinement section is reported a
 
 ### P3 — Local refine + review checkpoint (#951)
 
-`scripts/refine/refine-plan-file.mjs` drives the refine step; the pure contract `@dev-loops/core/loop/plan-file-refine-contract` (`packages/core/src/loop/plan-file-refine-contract.mjs`) exports `refinePlanFileInPlace`, which writes the refiner payload back into the single canonical plan file in place — the `Acceptance criteria` and `Definition of done` sections, a `Coverage matrix` section (`COVERAGE_MATRIX_HEADING`), and a `Docs-grill findings` section (`DOCS_GRILL_FINDINGS_HEADING`) — then stops at the `local_human_review` checkpoint (`PLAN_FILE_REFINE_STOP.LOCAL_HUMAN_REVIEW`) with the intake state advanced to `plan_refined_ready_for_promotion`. The module performs no GitHub mutation, no network calls, and no filesystem I/O; the caller reads and writes the plan file. The docs-grill runs as a step within refinement: the CLI classifies each finding with `classifyDocsGrillFinding` (`scripts/loop/docs-grill-contract.mjs`) and the contract records the dispositions. See the [Docs-Grill Step](../../docs/docs-grill-step.md).
+`scripts/refine/refine-plan-file.mjs` drives the refine step; the pure contract `@dev-loops/core/loop/plan-file-refine-contract` (`packages/core/src/loop/plan-file-refine-contract.mjs`) exports `refinePlanFileInPlace`, which writes the refiner payload back into the single canonical plan file in place — the `Acceptance criteria` and `Definition of done` sections, a `Coverage matrix` section (`COVERAGE_MATRIX_HEADING`), and a `Docs-grill findings` section (`DOCS_GRILL_FINDINGS_HEADING`) — then stops at the `local_human_review` checkpoint (`PLAN_FILE_REFINE_STOP.LOCAL_HUMAN_REVIEW`) with the intake state advanced to `plan_refined_ready_for_promotion`. The module performs no GitHub mutation, no network calls, and no filesystem I/O; the caller reads and writes the plan file. The docs-grill runs as a step within refinement: the CLI classifies each finding with `classifyDocsGrillFinding` (`scripts/loop/docs-grill-contract.mjs`) and the contract records the dispositions. See the [Docs-Grill Step](./docs-grill-step.md).
 
 ### P4 — Promotion + authority transfer (#952)
 

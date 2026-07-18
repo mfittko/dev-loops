@@ -9,7 +9,7 @@ A sibling loop, the [Slides Content & Storytelling Review Loop](./slides-story-r
 - `dev-loop` remains the single public entrypoint.
 - This review loop is an internal capability behind `dev-loop`; it does not introduce a second public workflow name.
 - The loop depends on the reusable harness from [UI Smoke Harness](./ui-smoke-harness.md) and the artifact contract from [UI Artifact Contract](./ui-artifact-contract.md).
-- The loop is a **consumer** of those earlier slices. It does not redefine browser capture, artifact naming, or when UI e2e is required (that is path-triggered and fail-closed — see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)).
+- The loop is a **consumer** of those earlier slices. It does not redefine browser capture, artifact naming, or when UI e2e is required (that is path-triggered and fail-closed — see [UI e2e scoping step](./ui-e2e-scoping-step.md)).
 - This loop is an **optional** design-review pass; it is distinct from the required, auto-scoped UI e2e gate.
 
 ## Purpose

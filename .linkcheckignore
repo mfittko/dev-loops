@@ -1,2 +1,9 @@
 # Intentionally symbolic placeholder targets used in shipped docs/skills.
 docs/phases/phase-x.md # local-implementation skill documents a generic phase plan path
+
+# Bundled agent links point at the generated `.claude/agents/<name>.md` filename (source is
+# `agents/<name>.agent.md`); only the generated tree resolves them, so the source-tree checker
+# tolerates the miss here.
+agents/refiner.md # skills/docs/docs-grill-step.md links the generated refiner agent form
+agents/docs.md # skills/docs/docs-grill-step.md links the generated docs agent form
+agents/review.md # skills/docs/gate-review-sub-loop-contract.md + skills/copilot-pr-followup/SKILL.md link the generated review agent form

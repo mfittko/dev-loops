@@ -7,7 +7,7 @@ import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "./_gate-names.mjs";
 
 const USAGE = `Usage: verify-briefing-prefixes.mjs --head-sha <sha> [--help]
-Fan-in enforcement for GATE-EXEC-BRIEFING-PREFIX (docs/gate-review-sub-loop-contract.md):
+Fan-in enforcement for GATE-EXEC-BRIEFING-PREFIX (skills/docs/gate-review-sub-loop-contract.md):
 fails closed when a reviewer sentinel's (written by verify-fresh-review-context.mjs
 --prefix-hash/--prefix-file) recorded prefix hash matches no on-disk per-gate
 briefing-prefix record for this head, matches a DIFFERENT gate than the sentinel's

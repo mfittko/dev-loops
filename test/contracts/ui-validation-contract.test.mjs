@@ -6,11 +6,11 @@ const fromRepoRoot = (relativePath) => new URL(`../../${relativePath}`, import.m
 const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), "utf8");
 
 test("ui validation contract doc exists at the expected path", async () => {
-  await access(fromRepoRoot("docs/ui-validation-contract.md"));
+  await access(fromRepoRoot("skills/docs/ui-validation-contract.md"));
 });
 
 test("ui validation contract states the auto-scoped, fail-closed criterion (not opt-in-by-annotation)", async () => {
-  const contract = await readRepo("docs/ui-validation-contract.md");
+  const contract = await readRepo("skills/docs/ui-validation-contract.md");
 
   assert.match(contract, /`dev-loop`/i);
   // Inclusion is path-triggered + registry-backed, not annotation opt-in.
@@ -26,7 +26,7 @@ test("ui validation contract states the auto-scoped, fail-closed criterion (not 
 });
 
 test("ui validation contract carries the intro-deck worked example end to end", async () => {
-  const contract = await readRepo("docs/ui-validation-contract.md");
+  const contract = await readRepo("skills/docs/ui-validation-contract.md");
 
   assert.match(contract, /DECK_REGISTRY\["intro-deck"\]/i);
   assert.match(contract, /defineDeckSuite/i);

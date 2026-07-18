@@ -23,7 +23,7 @@ UI change and the gate passes through.
 
 The canonical owner of this criterion — globs, registries, fail-closed semantics,
 and the satisfiable CI jobs — is the standard step doc
-[UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md). The deterministic
+[UI e2e scoping step](./ui-e2e-scoping-step.md). The deterministic
 membership list lives in `packages/core/src/loop/ui-e2e-scoping.mjs`, and the gate
 precondition `ui_e2e_scoping` in `packages/core/src/loop/pr-gate-coordination.mjs`
 enforces it.

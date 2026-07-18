@@ -14,7 +14,7 @@ Canonical owner for the internal `local_implementation` route behind the public 
 Use it only after the public dispatcher has already resolved `selectedStrategy: local_implementation`. This skill owns the local phase procedure and artifact discipline for that route; it does not redefine the shipped runtime semantics of helper CLIs, shared loop logic, or extension commands.
 
 Read the authoritative public routing contract at [Public Dev Loop Contract](../docs/public-dev-loop-contract.md) and keep any repository-specific decisions grounded in [Project Plan](../../PLAN.md), durable phase docs, source, tests, config, and actual validation commands.
-For UI validation under `dev-loop`, see [UI Validation Contract](../../docs/ui-validation-contract.md), [UI Smoke Harness](../../docs/ui-smoke-harness.md), [UI Artifact Contract](../../docs/ui-artifact-contract.md), and [UI Designer Review Loop](../../docs/ui-designer-review-loop.md) (designer + `uiReviewMode: vision`) (these are repo-level docs present in the source checkout; they are not part of the bundled `../docs/` runtime contract surface for installed skill copies).
+For UI validation under `dev-loop`, see [UI Validation Contract](../docs/ui-validation-contract.md), [UI Smoke Harness](../docs/ui-smoke-harness.md), [UI Artifact Contract](../docs/ui-artifact-contract.md), and [UI Designer Review Loop](../docs/ui-designer-review-loop.md) (designer + `uiReviewMode: vision`).
 
 ## Minimal required project inputs
 
@@ -50,7 +50,7 @@ Non-durable spec-of-record (no committed plan artifact):
 
 - lightweight PR-body-as-spec sessions (`--lightweight`; the PR description is the canonical spec-of-record but NOT a durable committed artifact — the resolver output carries `canonicalSpecSource: pr_body` and the derived handoff envelope carries `specSource: pr_body`; no phase/plan doc minted or committed). Same gate sequence as the phase-doc path; only the backing artifact differs. See [Artifact Authority Contract](../docs/artifact-authority-contract.md) "Lightweight (PR-body-as-spec)".
 
-Tracker-backed local implementation stays inside the existing `local_implementation` path. For sub-issue tree decomposition, see [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md) (this is a source-repo reference; it is not part of the bundled `../docs/` runtime contract surface for installed skill copies). It does not introduce a new routing mode.
+Tracker-backed local implementation stays inside the existing `local_implementation` path. For sub-issue tree decomposition, see [Sub-Issue Tree Contract](../docs/sub-issue-tree-contract.md). It does not introduce a new routing mode.
 
 When the local spec already lives in a tracker issue:
 
@@ -77,7 +77,7 @@ dev-loops loop pre-flight-gate --expected-branch <working-branch> --check-subage
 
 (source-repo fallback: `node scripts/loop/pre-flight-gate.mjs --expected-branch <working-branch> --check-subagents`)
 
-Before creating or reusing a worktree for local implementation, use the canonical lifecycle entrypoint (`WORKTREE-CREATE-PROVISION`, see [Worktree usage guidance](../../docs/worktree-guidance.md#create-or-reuse--provision-ensure-worktreemjs)):
+Before creating or reusing a worktree for local implementation, use the canonical lifecycle entrypoint (`WORKTREE-CREATE-PROVISION`, see [Worktree usage guidance](../docs/worktree-guidance.md#create-or-reuse--provision-ensure-worktreemjs)):
 
 ```sh
 dev-loops loop ensure-worktree --repo-root <main> --issue <n>
@@ -123,7 +123,7 @@ Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review
 ## Light mode (small changes)
 
 <!-- rule: LOCAL-LIGHT-MODE-CONFIG-SURFACE -->
-`localImplementation.lightMode` (`.devloops` field; this repo sets `maxLines: 20`, `maxFiles: 2`) is this skill's config surface for light-mode gate dispatch. Gate-collapse mechanics, escalation, and dispatch resolution (`resolveGateDispatchMode`, `scripts/loop/resolve-gate-dispatch.mjs`) are owned by [Light-mode inline acceptance](../../docs/gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs); this skill MUST NOT redefine them.
+`localImplementation.lightMode` (`.devloops` field; this repo sets `maxLines: 20`, `maxFiles: 2`) is this skill's config surface for light-mode gate dispatch. Gate-collapse mechanics, escalation, and dispatch resolution (`resolveGateDispatchMode`, `scripts/loop/resolve-gate-dispatch.mjs`) are owned by [Light-mode inline acceptance](../docs/gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs); this skill MUST NOT redefine them.
 
 Use `scripts/loop/detect-change-scope.mjs` to determine scope:
 ```sh
@@ -497,9 +497,9 @@ After the phase plan passes review:
 5. Run the default pre-approval gate as a full review / fix loop on the branch before calling it review-complete, approval-ready, merge-ready, or ready for final handoff:
    - resolve review angles from config: `resolveGateAngles(config, "preApproval")` from `@dev-loops/core/config` (shipped defaults enable all 11 pre-approval gate angle families; consumer repos may opt out individual angles by setting `enabled: false` on that angle's entry); run via the chain prescription below
    - run the resolved angle-focused passes in parallel with fresh context when practical
-   - the sequential-fallback rule is owned by `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK` in [Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md); when it applies, record the fallback in `Phase Review` (`tmp/phases/phase-x/review.md`) (or the equivalent merged review artifact)
+   - the sequential-fallback rule is owned by `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md); when it applies, record the fallback in `Phase Review` (`tmp/phases/phase-x/review.md`) (or the equivalent merged review artifact)
    - for each angle, resolve its persona and prompt via `resolveReviewerRole(config, angle)` — start each reviewer in fresh context with a concise briefing including the angle-specific prompt, the branch/phase, intended behavior, acceptance criteria, relevant files or artifacts, and current validation status
-   - run the mandatory chain defined in [Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md). Retry rule: in subsequent cycles, only re-run reviewers that produced findings in the previous pass. Do not fork the parent session for parallel reviewers; write a compact handoff artifact under `tmp/` and point the reviewer at it.
+   - run the mandatory chain defined in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md). Retry rule: in subsequent cycles, only re-run reviewers that produced findings in the previous pass. Do not fork the parent session for parallel reviewers; write a compact handoff artifact under `tmp/` and point the reviewer at it.
    - when reviewer subagents stumble on raw source-tree reads (for example unresolved build artifacts or import assumptions), generate a deterministic diff/review artifact under `tmp/` and have reviewers inspect that artifact instead of the raw file set
    - synthesize actionable findings
    - apply accepted fixes on the same branch

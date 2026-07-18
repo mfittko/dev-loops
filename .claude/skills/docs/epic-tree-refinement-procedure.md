@@ -5,7 +5,7 @@ sub-issue tree (parent → children → grandchildren).
 
 Use it together with:
 - [Issue Intake Procedure](./issue-intake-procedure.md) — Phase 3b calls this procedure for epic decomposition
-- [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md) — authoritative sub-issue tooling (source-repo reference)
+- [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) — authoritative sub-issue tooling
 
 When you have a tree of GitHub issues that already exists and you need to align AC, DoD, scope
 boundaries, and delegation contracts across all levels, follow this procedure. It is deterministic
@@ -235,6 +235,6 @@ Wall-clock serial steps: 5 (not 17).
 |---|---|
 | [Issue Intake Procedure](./issue-intake-procedure.md) Phase 3b | *Creating* a new sub-issue tree from an umbrella issue |
 | **This procedure** | *Refining* an existing sub-issue tree to align scope, AC, DoD, and delegation contracts |
-| [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md) | Tooling for listing, attaching, ordering, and verifying sub-issue trees |
+| [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) | Tooling for listing, attaching, ordering, and verifying sub-issue trees |
 
 These are complementary. Phase 3b creates the structure; this procedure aligns the contracts.

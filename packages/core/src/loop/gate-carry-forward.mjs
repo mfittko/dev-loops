@@ -17,7 +17,7 @@
  * caller records the carried verdict with provenance pointing at the PRIOR head's
  * reviewer (that reviewer genuinely reviewed this angle's surface, which the delta
  * did not touch), clearly marked as carried — see
- * docs/gate-review-sub-loop-contract.md and write-gate-findings-log.mjs's
+ * skills/docs/gate-review-sub-loop-contract.md and write-gate-findings-log.mjs's
  * `carriedFromHead` provenance field.
  *
  * The angle -> review-surface mapping is DERIVED from the single source of truth

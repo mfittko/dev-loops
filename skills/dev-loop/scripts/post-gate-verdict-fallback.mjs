@@ -8,10 +8,8 @@
 // without the full helper's idempotent same-head update, stale-head detection,
 // gate-coordination validation, or internal-only PR short-circuit.
 //
-// Contract reference: docs/gate-review-comment-contract.md (rendered body must
-// remain parser-stable for gate name and head SHA). The skill-bundled copy at
-// skills/docs/gate-review-comment-contract.md inherits from the source-repo doc
-// and is not a separate contract surface.
+// Contract reference: skills/docs/gate-review-comment-contract.md (rendered body must
+// remain parser-stable for gate name and head SHA).
 //
 // Degraded semantics (vs. the full helper):
 //   - one-shot create only; no idempotent same-head update

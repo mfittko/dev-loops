@@ -186,7 +186,7 @@ const GIT_GLOBAL_OPTION_RUN =
  * containing "git stash" never match. `refs/stash` is a single ref shared by every worktree over
  * this repo's one `.git` directory, so a stash from one worktree can pop into another's — the
  * PreToolUse gate blocks it outright on the target repo (see
- * `docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout`).
+ * `skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout`).
  * @param {string} command @returns {boolean}
  */
 export function commandContainsGitStash(command) {
