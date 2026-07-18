@@ -1801,6 +1801,30 @@ describe("role resolution", () => {
     assert.equal(result.fallback, false);
   });
 
+  test("R24: an angle disabled on one gate does NOT shadow its real, enabled override on another gate (the shipped renderer-security case)", () => {
+    // Mirrors this repo's own shipped .devloops: draft disables
+    // renderer-security (a phantom enabled:false placeholder, no persona/
+    // prompt) while preApproval configures it as a real, enabled angle with
+    // its own persona/prompt. findAngleEntry searches draft first — if it
+    // returned the disabled draft placeholder instead of skipping it, this
+    // would resolve fallback:true / prompt:null instead of the real override.
+    const config = {
+      gates: {
+        draft: { angles: ["scope", { name: "renderer-security", enabled: false }] },
+        preApproval: { angles: ["dry", { name: "renderer-security", persona: "review", prompt: "Check renderer security." }] },
+      },
+    };
+    const role = resolveReviewerRole(config, "renderer-security");
+    assert.equal(role.persona, "review", "must resolve preApproval's real persona, not fall back");
+    assert.equal(role.prompt, "Check renderer security.", "must resolve preApproval's real prompt");
+    assert.equal(role.fallback, false, "must not report a fallback — a real override exists on preApproval");
+
+    // The disabled placeholder must still do its OWN job: dropping
+    // renderer-security from draft's own resolved angle list.
+    const draftAngles = resolveGateAngles(config, "draft");
+    assert.ok(!draftAngles.includes("renderer-security"), "renderer-security must stay excluded from draft's resolved angles");
+  });
+
   describe("model and config resolution", () => {
     test("resolveConductorModel returns model when present in config", () => {
       const result = resolveConductorModel({ version: 1, models: { conductor: "gpt-5" } });

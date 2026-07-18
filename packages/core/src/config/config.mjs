@@ -553,13 +553,12 @@ const FileGatesConfig = z.strictObject({
 // ============================================================================
 // Full schema — families are optional (BUILT_IN_DEFAULTS provides fallback)
 //
-// Coordination note (#1408): the tracker-agnostic seam RFC lands a top-level
-// `tracker:` block (provider selector, `tracker.board.*` superseding
-// `queue.board`, a `tracker-first` strategy value) on this restructured
-// schema. Not added here — this issue is the config-shape redesign only —
-// but resolvers in this module take the effective config as a plain
-// parameter (no global/singleton reads), so #1408's tracker adapter and any
-// later multi-tracker layer stay additive on top of it.
+// The `tracker:` config block is intentionally reserved here; a future
+// tracker-seam change adds it on top of this restructured schema. Not added
+// in this pass — this is the config-shape redesign only — but resolvers in
+// this module take the effective config as a plain parameter (no
+// global/singleton reads), so a later tracker adapter (and any multi-tracker
+// layer on top of it) stays additive.
 // ============================================================================
 
 /**

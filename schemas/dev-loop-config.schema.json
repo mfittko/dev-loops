@@ -166,45 +166,53 @@
               "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier.",
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "name": {
+                "oneOf": [
+                  {
                     "type": "string",
                     "minLength": 1
                   },
-                  "mandatory": {
-                    "description": "Always run this angle, regardless of diff-based dynamic selection.",
-                    "type": "boolean"
-                  },
-                  "enabled": {
-                    "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
-                    "type": "boolean"
-                  },
-                  "persona": {
-                    "description": "Reviewer persona for this angle.",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "prompt": {
-                    "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle.",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "model": {
-                    "description": "Concrete model override for this angle (highest precedence).",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "tier": {
-                    "description": "Model tier alias for this angle (used when `model` is absent).",
-                    "type": "string",
-                    "minLength": 1
+                  {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "mandatory": {
+                        "description": "Always run this angle, regardless of diff-based dynamic selection.",
+                        "type": "boolean"
+                      },
+                      "enabled": {
+                        "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
+                        "type": "boolean"
+                      },
+                      "persona": {
+                        "description": "Reviewer persona for this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "prompt": {
+                        "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "model": {
+                        "description": "Concrete model override for this angle (highest precedence).",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "tier": {
+                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false
                   }
-                },
-                "required": [
-                  "name"
-                ],
-                "additionalProperties": false
+                ]
               }
             },
             "dynamic": {
@@ -261,45 +269,53 @@
               "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier.",
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "name": {
+                "oneOf": [
+                  {
                     "type": "string",
                     "minLength": 1
                   },
-                  "mandatory": {
-                    "description": "Always run this angle, regardless of diff-based dynamic selection.",
-                    "type": "boolean"
-                  },
-                  "enabled": {
-                    "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
-                    "type": "boolean"
-                  },
-                  "persona": {
-                    "description": "Reviewer persona for this angle.",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "prompt": {
-                    "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle.",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "model": {
-                    "description": "Concrete model override for this angle (highest precedence).",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "tier": {
-                    "description": "Model tier alias for this angle (used when `model` is absent).",
-                    "type": "string",
-                    "minLength": 1
+                  {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "mandatory": {
+                        "description": "Always run this angle, regardless of diff-based dynamic selection.",
+                        "type": "boolean"
+                      },
+                      "enabled": {
+                        "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
+                        "type": "boolean"
+                      },
+                      "persona": {
+                        "description": "Reviewer persona for this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "prompt": {
+                        "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "model": {
+                        "description": "Concrete model override for this angle (highest precedence).",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "tier": {
+                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false
                   }
-                },
-                "required": [
-                  "name"
-                ],
-                "additionalProperties": false
+                ]
               }
             },
             "dynamic": {
@@ -356,45 +372,53 @@
               "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier.",
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "name": {
+                "oneOf": [
+                  {
                     "type": "string",
                     "minLength": 1
                   },
-                  "mandatory": {
-                    "description": "Always run this angle, regardless of diff-based dynamic selection.",
-                    "type": "boolean"
-                  },
-                  "enabled": {
-                    "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
-                    "type": "boolean"
-                  },
-                  "persona": {
-                    "description": "Reviewer persona for this angle.",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "prompt": {
-                    "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle.",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "model": {
-                    "description": "Concrete model override for this angle (highest precedence).",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "tier": {
-                    "description": "Model tier alias for this angle (used when `model` is absent).",
-                    "type": "string",
-                    "minLength": 1
+                  {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "mandatory": {
+                        "description": "Always run this angle, regardless of diff-based dynamic selection.",
+                        "type": "boolean"
+                      },
+                      "enabled": {
+                        "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
+                        "type": "boolean"
+                      },
+                      "persona": {
+                        "description": "Reviewer persona for this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "prompt": {
+                        "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "model": {
+                        "description": "Concrete model override for this angle (highest precedence).",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "tier": {
+                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false
                   }
-                },
-                "required": [
-                  "name"
-                ],
-                "additionalProperties": false
+                ]
               }
             },
             "dynamic": {

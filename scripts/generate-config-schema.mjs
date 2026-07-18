@@ -49,6 +49,25 @@ function stripSafeIntegerBounds(node) {
 }
 
 /**
+ * `gates.<gate>.angles[]` accepts a bare string (sugar for `{ name }`) via a
+ * `z.preprocess` string→object coercion — an opaque JS function `z.toJSONSchema`
+ * cannot express, so it silently emits ONLY the post-preprocess object shape,
+ * rejecting exactly the bare-string form the zod loader (and every shipped
+ * `.devloops`/extension-defaults.yaml angles list) actually accepts. Patch each
+ * gate's `angles[]` item schema to accept EITHER form.
+ * @param {Record<string, unknown>} schema
+ */
+function restoreBareStringAngleSugar(schema) {
+  const gates = /** @type {any} */ (schema)?.properties?.gates?.properties;
+  if (!gates) return;
+  for (const gate of ["draft", "preApproval", "spike"]) {
+    const anglesProp = gates[gate]?.properties?.angles;
+    if (!anglesProp || !anglesProp.items || anglesProp.items.oneOf) continue;
+    anglesProp.items = { oneOf: [{ type: "string", minLength: 1 }, anglesProp.items] };
+  }
+}
+
+/**
  * Build the JSON schema document from the zod file-level validator.
  * @returns {Record<string, unknown>}
  */
@@ -59,6 +78,7 @@ export function generateConfigJsonSchema() {
     reused: "defs",
   });
   stripSafeIntegerBounds(generated);
+  restoreBareStringAngleSugar(generated);
 
   const { $schema, ...body } = generated;
   return {
