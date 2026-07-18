@@ -406,14 +406,24 @@ test("summarizeCheckpointVerdictText keeps failing validation to a concise excer
 });
 
 
-test("summarizeCheckpointVerdictText preserves long single-line narratives instead of inventing a log summary", () => {
+test("summarizeCheckpointVerdictText fails closed instead of truncating a long single-line narrative", () => {
+  // Pre-fix, this rendered `summarized` ending in a `…[truncated N chars]`
+  // marker — audit-trail corruption in a posted gate comment. Content over the
+  // limit must now fail closed with an actionable error naming the field/limit.
   const narrative = "Passed reviewer note: keep the operator-facing summary readable even when Error and passed appear in the same explanatory sentence, because this is narrative text rather than a multiline validation log. ".repeat(3).trim();
-  const summarized = summarizeCheckpointVerdictText(narrative, 140);
+  assert.throws(
+    () => summarizeCheckpointVerdictText(narrative, 140),
+    /findings summary exceeds 140 chars \(\d+ chars\)/,
+  );
+});
 
-  assert.match(summarized, /^Passed reviewer note:/);
-  assert.match(summarized, /Error and passed appear/);
-  assert.doesNotMatch(summarized, /^validation: passed$/);
-  assert.match(summarized, /…\[truncated \d+ chars\]$/);
+test("summarizeCheckpointVerdictText renders at-limit content in full with no truncation marker", () => {
+  const narrative = "Passed reviewer note: keep the operator-facing summary readable even when Error and passed appear in the same explanatory sentence, because this is narrative text rather than a multiline validation log. ".repeat(3).trim();
+  const atLimit = narrative.slice(0, 140);
+  const summarized = summarizeCheckpointVerdictText(atLimit, 140);
+
+  assert.equal(summarized, atLimit.trim());
+  assert.doesNotMatch(summarized, /…\[truncated/);
 });
 
 
@@ -974,7 +984,13 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
         assertArgContains: [
           "body=### Gate review: `pre_approval_gate`",
-          "**Findings summary:** no issues found; Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.",
+          "**Findings summary:** no issues found",
+          "**Gate evidence note:** Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.",
+        ],
+        // The evidence note must render on its own labeled line — never spliced
+        // with `;` into the findings summary (pre-fix render).
+        assertArgNotContains: [
+          "**Findings summary:** no issues found; Copilot review rounds exhausted",
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
       },
@@ -2606,6 +2622,33 @@ test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates t
   );
 });
 
+test("parseUpsertCheckpointVerdictCliArgs fails closed instead of truncating an over-limit --inline-reason (#1388)", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go"];
+  const overLimitReason = "x".repeat(2001);
+  // Pre-fix, this silently truncated to 120 chars with a `…[truncated N chars]`
+  // marker spliced into the posted `**Execution mode:**` line.
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs([...base, "--inline-reason", overLimitReason]),
+    /--inline-reason exceeds 2000 chars \(2001 chars\)/,
+  );
+});
+
+test("parseUpsertCheckpointVerdictCliArgs accepts an at-limit --inline-reason in full with no truncation marker (#1388)", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go"];
+  const atLimitReason = "x".repeat(2000);
+  const options = parseUpsertCheckpointVerdictCliArgs([...base, "--inline-reason", atLimitReason]);
+  assert.equal(options.inlineReason, atLimitReason);
+  assert.doesNotMatch(options.inlineReason, /…\[truncated/);
+});
+
+test("parseUpsertCheckpointVerdictCliArgs fails closed instead of truncating an over-limit --next-action (#1388)", () => {
+  const overLimitNextAction = "x".repeat(2001);
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", overLimitNextAction, "--inline-reason", "small change"]),
+    /--next-action exceeds 2000 chars \(2001 chars\)/,
+  );
+});
+
 test("renderGateReviewCommentBody renders the execution-mode line round-trippable by the marker parser", async () => {
   const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
   const inlineBody = renderGateReviewCommentBody({
@@ -2676,6 +2719,24 @@ test("renderGateReviewCommentBody renders structured per-angle fan-in findings a
   assert.equal(parsed.contractComplete, true);
 });
 
+test("renderGateReviewCommentBody fails closed instead of truncating a structured findings render over the generous limit (#1388)", () => {
+  const findings = [];
+  for (let i = 0; i < 60; i += 1) {
+    findings.push({ severity: "worth-fixing-now", summary: `finding number ${i} with enough padding text to add up over many entries` });
+  }
+  assert.throws(
+    () => renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      verdict: "findings_present",
+      findingsSummary: "fallback",
+      nextAction: "address findings then re-gate",
+      structuredFindings: [{ angle: "correctness", verdict: "findings_present", findings }],
+    }),
+    /--findings-json structured findings render exceeds 2000 chars \(\d+ chars\)/,
+  );
+});
+
 test("renderGateReviewCommentBody falls back to free-text findings summary when no structured input is given (#898)", () => {
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
@@ -2688,6 +2749,64 @@ test("renderGateReviewCommentBody falls back to free-text findings summary when 
   });
   assert.match(body, /\*\*Findings summary:\*\* no issues found/);
   assert.doesNotMatch(body, /per-angle breakdown below/);
+});
+
+test("renderGateReviewCommentBody renders the gate evidence note on its own labeled line, never spliced with `;` into the findings summary (#1388)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "pre_approval_gate",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "no issues found.",
+    nextAction: "await final human approval",
+    executionMode: "inline_single_agent",
+    inlineReason: "single-agent run",
+    gateEvidenceNote: "Copilot review rounds exhausted (5/5); proceeding via fallback.",
+  });
+  assert.match(body, /\*\*Findings summary:\*\* no issues found\.\n/);
+  assert.match(body, /\n\*\*Gate evidence note:\*\* Copilot review rounds exhausted \(5\/5\); proceeding via fallback\.\n/);
+  // Pre-fix render spliced the note into the summary with `;`, producing
+  // double punctuation (`.;`) and hiding the machine-added note as prose.
+  assert.doesNotMatch(body, /\*\*Findings summary:\*\*[^\n]*;/);
+});
+
+test("renderGateReviewCommentBody omits the gate evidence note line entirely when no note is supplied", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "pre_approval_gate",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "await final human approval",
+  });
+  assert.doesNotMatch(body, /Gate evidence note/);
+});
+
+test("renderGateReviewCommentBody fails closed instead of truncating a gate evidence note over the generous limit (#1388)", () => {
+  const overLimitNote = "x".repeat(2001);
+  assert.throws(
+    () => renderGateReviewCommentBody({
+      gate: "pre_approval_gate",
+      headSha: "abc1234",
+      verdict: "clean",
+      findingsSummary: "no issues found",
+      nextAction: "await final human approval",
+      gateEvidenceNote: overLimitNote,
+    }),
+    /gate evidence note exceeds 2000 chars \(2001 chars\)/,
+  );
+});
+
+test("renderGateReviewCommentBody renders an at-limit gate evidence note in full with no truncation marker (#1388)", () => {
+  const atLimitNote = "x".repeat(2000);
+  const body = renderGateReviewCommentBody({
+    gate: "pre_approval_gate",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "await final human approval",
+    gateEvidenceNote: atLimitNote,
+  });
+  assert.match(body, new RegExp(`\\*\\*Gate evidence note:\\*\\* ${atLimitNote}\\n`));
+  assert.doesNotMatch(body, /…\[truncated/);
 });
 
 test("renderGateReviewCommentBody neutralizes bare @copilot/`/copilot`* tokens so the rendered body cannot arm the anti-summon guard", async () => {
@@ -3231,7 +3350,12 @@ test("upsert-checkpoint-verdict --findings-json structured verdict carries the g
           "body=### Gate review: `pre_approval_gate`",
           "**Execution mode:** fanout_fanin",
           "- `dry` → findings_present",
-          // The structured single-line digest carries the gateEvidenceNote.
+          // The structured single-line digest stays plain; the gateEvidenceNote
+          // renders on its own labeled line, not spliced into the digest.
+          "**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).",
+          `**Gate evidence note:** ${roundExhaustionNote}`,
+        ],
+        assertArgNotContains: [
           `**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`,
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
@@ -3255,10 +3379,11 @@ test("upsert-checkpoint-verdict --findings-json structured verdict carries the g
     assert.equal(out.executionMode, "fanout_fanin");
 
     // Unit-level parity + round-trip: rendering a structured body with the same
-    // gateEvidenceNote puts the note on the single-line digest AND the marker
-    // parser recovers that exact summary line (parse contract stays intact).
+    // gateEvidenceNote puts the note on its own labeled line (not spliced into
+    // the digest), and the marker parser still recovers the plain summary line
+    // (parse contract stays intact).
     const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
-    const expectedSummaryLine = `1 angle reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`;
+    const expectedSummaryLine = "1 angle reviewed; 1 finding (see per-angle breakdown below).";
     const body = renderGateReviewCommentBody({
       gate: "pre_approval_gate",
       headSha: "abc1234",
@@ -3271,7 +3396,9 @@ test("upsert-checkpoint-verdict --findings-json structured verdict carries the g
         { angle: "correctness", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: "minor nit worth noting" }] },
       ],
     });
-    assert.match(body, /\*\*Findings summary:\*\* 1 angle reviewed; 1 finding \(see per-angle breakdown below\)\.; Copilot review rounds exhausted/);
+    assert.match(body, /\*\*Findings summary:\*\* 1 angle reviewed; 1 finding \(see per-angle breakdown below\)\.\n/);
+    assert.match(body, /\n\*\*Gate evidence note:\*\* Copilot review rounds exhausted/);
+    assert.doesNotMatch(body, /\*\*Findings summary:\*\*[^\n]*; Copilot review rounds exhausted/);
     // The structured per-angle bullet is unchanged by carrying the note.
     assert.match(body, /\n- `correctness` → findings_present\n/);
     const parsed = parseGateReviewCommentMarkerBody(body);

@@ -147,22 +147,25 @@ function normalizeRequiredText(value, flag) {
   if (flag === "--findings-summary") {
     return summarizeCheckpointVerdictText(normalized);
   }
-  return smartTruncate(collapseWhitespace(normalized), MAX_GATE_COMMENT_TEXT_LENGTH);
+  return enforcePostedCommentLimit(collapseWhitespace(normalized), MAX_GATE_COMMENT_TEXT_LENGTH, flag);
 }
 function collapseWhitespace(value) {
   return String(value).replace(/\s+/gu, " ").trim();
 }
-function smartTruncate(value, limit) {
+// Content rendered into an ACTUAL posted gate comment (operator --inline-reason,
+// --next-action, findings summary, gate evidence note, structured findings render)
+// is NEVER truncated — a silent/marker-bearing truncation reads as audit-trail
+// corruption. Render in full up to a generous limit; beyond it, fail closed with
+// an actionable error naming the over-long field and its limit, so the caller
+// shortens the text before retrying.
+function enforcePostedCommentLimit(value, limit, fieldLabel) {
   const text = String(value);
-  if (text.length <= limit) {
-    return text;
+  if (text.length > limit) {
+    throw new Error(
+      `${fieldLabel} exceeds ${limit} chars (${text.length} chars); a posted gate comment is never truncated — shorten ${fieldLabel} and retry.`,
+    );
   }
-  const truncated = text.slice(0, limit);
-  const lastSpace = truncated.lastIndexOf(" ");
-  const breakPoint = lastSpace > Math.floor(limit * 0.7) ? lastSpace : limit;
-  const retained = truncated.slice(0, breakPoint);
-  const omitted = text.length - retained.length;
-  return `${retained}…[truncated ${omitted} chars]`;
+  return text;
 }
 function pushUnique(values, value) {
   if (value.length > 0 && !values.includes(value)) {
@@ -244,11 +247,11 @@ export function summarizeCheckpointVerdictText(value, limit = MAX_GATE_COMMENT_T
   }
   const flat = collapseWhitespace(normalized);
   if (!/[\r\n]/u.test(normalized)) {
-    return smartTruncate(flat, limit);
+    return enforcePostedCommentLimit(flat, limit, "findings summary");
   }
   const lines = normalized.split(/\r?\n/u);
   const verboseSummary = buildVerboseValidationSummary(lines);
-  return smartTruncate(verboseSummary ?? flat, limit);
+  return enforcePostedCommentLimit(verboseSummary ?? flat, limit, "findings summary");
 }
 export function parseUpsertCheckpointVerdictCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -400,7 +403,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       if (reason.length === 0) {
         throw parseError("--inline-reason must be a non-empty string");
       }
-      options.inlineReason = smartTruncate(reason, MAX_GATE_COMMENT_EXCERPT_LENGTH);
+      options.inlineReason = enforcePostedCommentLimit(reason, MAX_GATE_COMMENT_TEXT_LENGTH, "--inline-reason");
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -440,20 +443,6 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     throw parseError(error instanceof Error ? error.message : String(error));
   }
   return options;
-}
-function appendGateEvidenceNote(summary, note) {
-  const normalizedSummary = summarizeCheckpointVerdictText(summary);
-  const normalizedNote = typeof note === "string" ? collapseWhitespace(note) : "";
-  if (normalizedNote.length === 0) {
-    return normalizedSummary;
-  }
-  if (normalizedSummary.length === 0) {
-    return smartTruncate(normalizedNote, MAX_GATE_COMMENT_TEXT_LENGTH);
-  }
-  if (normalizedSummary.includes(normalizedNote)) {
-    return normalizedSummary;
-  }
-  return smartTruncate(`${normalizedSummary}; ${normalizedNote}`, MAX_GATE_COMMENT_TEXT_LENGTH);
 }
 const STRUCTURED_FINDINGS_SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
 // Sanitize free text for a single-line markdown bullet. Collapse whitespace
@@ -686,7 +675,7 @@ function renderStructuredFindings(angles) {
       lines.push(`  - [${severity}] ${summary}${location}${dispositionSuffix}`);
     }
   }
-  return smartTruncate(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH);
+  return enforcePostedCommentLimit(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-json structured findings render");
 }
 // Build the single-line digest shown on the `**Findings summary:**` line when a
 // structured per-angle block is rendered. The marker/parse contract requires this
@@ -731,16 +720,9 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
   // with newlines preserved (NOT collapsed to a run-on line).
   const angles = normalizeStructuredFindings(structuredFindings);
   if (angles) {
-    // Build the single-line digest and append the gate-evidence note (parity with
-    // the free-text appendGateEvidenceNote path), so a structured verdict carries
-    // the gate-evidence note (e.g. the round-cap / round-exhaustion fallback note)
-    // on the `**Findings summary:**` line just like a free-text verdict does.
-    // appendGateEvidenceNote keeps this a single, length-bounded line, preserving
-    // the marker/parse contract. The per-angle bullets below are unaffected.
-    const structuredSummary = appendGateEvidenceNote(buildStructuredFindingsDigest(angles), gateEvidenceNote ?? null);
     lines.push(
       "",
-      `**Findings summary:** ${structuredSummary}`,
+      `**Findings summary:** ${buildStructuredFindingsDigest(angles)}`,
       "",
       renderStructuredFindings(angles),
     );
@@ -748,6 +730,18 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
     lines.push(
       "",
       `**Findings summary:** ${findingsSummary}`,
+    );
+  }
+  // The gate-evidence note (e.g. the round-cap / round-exhaustion fallback note)
+  // renders as its own labeled line — never spliced with `;` into the findings
+  // summary, which would read as double punctuation and make machine-added text
+  // indistinguishable from operator prose. Parity: both the structured and
+  // free-text findings-summary paths get this same treatment.
+  const normalizedGateEvidenceNote = typeof gateEvidenceNote === "string" ? collapseWhitespace(gateEvidenceNote) : "";
+  if (normalizedGateEvidenceNote.length > 0) {
+    lines.push(
+      "",
+      `**Gate evidence note:** ${enforcePostedCommentLimit(normalizedGateEvidenceNote, MAX_GATE_COMMENT_TEXT_LENGTH, "gate evidence note")}`,
     );
   }
   lines.push(
@@ -1231,10 +1225,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       if (trimmedEnd.length === 0) {
         throw new Error(`--findings-file "${options.findingsFile}" is empty or contains only whitespace`);
       }
-      const note = typeof coordination.gateEvidenceNote === "string" ? collapseWhitespace(coordination.gateEvidenceNote) : "";
-      const separator = trimmedEnd.includes("\n") ? "\n\n" : "; ";
-      const annotated = note.length > 0 ? `${trimmedEnd}${separator}${note}` : trimmedEnd;
-      options.findingsSummary = smartTruncate(annotated, MAX_GATE_COMMENT_TEXT_LENGTH);
+      // The gate evidence note is NOT spliced into the file content here — it
+      // renders as its own `**Gate evidence note:**` line (see
+      // renderGateReviewCommentBody), driven by coordination.gateEvidenceNote
+      // passed straight through below.
+      options.findingsSummary = enforcePostedCommentLimit(trimmedEnd, MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-file content");
     } catch (err) {
       throw new Error(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1242,19 +1237,19 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // The findings-summary the comment is compared/round-tripped against. With a
   // structured render this is the single-line digest (what the marker parser
   // recovers from the `**Findings summary:**` line); otherwise the free-text path.
+  // Note: this never includes the gate evidence note (that renders on its own
+  // line and is not part of the parsed/compared findings-summary field), so a
+  // gate-evidence-note-only change across same-head calls does not by itself
+  // force a re-post — a known, narrow ceiling of the current parser contract,
+  // which this fix does not extend.
   const effectiveFindingsSummary = structuredFindings
-    ? appendGateEvidenceNote(buildStructuredFindingsDigest(structuredFindings), coordination.gateEvidenceNote ?? null)
-    : (options.findingsFile
-      ? options.findingsSummary
-      : appendGateEvidenceNote(options.findingsSummary, coordination.gateEvidenceNote ?? null));
+    ? buildStructuredFindingsDigest(structuredFindings)
+    : options.findingsSummary;
   const desiredBody = renderGateReviewCommentBody({
     ...options,
     headSha: canonicalHeadSha,
     findingsSummary: effectiveFindingsSummary,
     structuredFindings,
-    // In structured mode the renderer rebuilds the digest internally and appends
-    // this note, so the rendered `**Findings summary:**` line matches
-    // effectiveFindingsSummary (the value used for the noop/round-trip compare).
     gateEvidenceNote: coordination.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
   });
