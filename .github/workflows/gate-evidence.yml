@@ -130,6 +130,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # set +e: nothing here may abort before the gh api POST below. Under
+          # the Actions default shell (bash -eo pipefail) a non-zero jq/head in
+          # the pipeline would otherwise exit the step with no status posted,
+          # leaving the required check pending forever instead of failing closed.
+          set +e
           evidence_state="$(jq -r '.evidenceState // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
           case "$evidence_state" in
             satisfied) state="success" ;;
