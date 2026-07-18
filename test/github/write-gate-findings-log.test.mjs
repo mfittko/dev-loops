@@ -50,7 +50,7 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     "--repo", "owner/repo",
     "--pr", "42",
     "--gate", "draft_gate",
-    "--head-sha", "abc1234567890abcdef",
+    "--head-sha", "abc1234567890abcdef000000000000000000000",
     "--verdict", "findings_present",
     "--findings", '[{"severity":"must-fix","angle":"scope","summary":"bad scope"}]',
   ]);
@@ -58,7 +58,7 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     repo: "owner/repo",
     pr: 42,
     gate: "draft_gate",
-    headSha: "abc1234567890abcdef",
+    headSha: "abc1234567890abcdef000000000000000000000",
     verdict: "findings_present",
     findings: '[{"severity":"must-fix","angle":"scope","summary":"bad scope"}]',
     tmpRoot: "tmp",
@@ -70,7 +70,7 @@ test("parseWriteGateFindingsLogCliArgs accepts custom tmp-root", () => {
     "--repo", "owner/repo",
     "--pr", "1",
     "--gate", "pre_approval_gate",
-    "--head-sha", "deadbeef1234567890",
+    "--head-sha", "deadbeef12345678900000000000000000000000",
     "--verdict", "clean",
     "--findings", "[]",
     "--tmp-root", "custom-tmp",
@@ -82,7 +82,7 @@ test("parseWriteGateFindingsLogCliArgs rejects invalid gate", () => {
   assert.throws(() => {
     parseWriteGateFindingsLogCliArgs([
       "--repo", "a/b", "--pr", "1", "--gate", "bad_gate",
-      "--head-sha", "abc12345", "--verdict", "clean", "--findings", "[]",
+      "--head-sha", "abc1234500000000000000000000000000000000", "--verdict", "clean", "--findings", "[]",
     ]);
   }, /gate/);
 });
@@ -91,7 +91,7 @@ test("parseWriteGateFindingsLogCliArgs rejects invalid verdict", () => {
   assert.throws(() => {
     parseWriteGateFindingsLogCliArgs([
       "--repo", "a/b", "--pr", "1", "--gate", "draft_gate",
-      "--head-sha", "abc12345", "--verdict", "invalid", "--findings", "[]",
+      "--head-sha", "abc1234500000000000000000000000000000000", "--verdict", "invalid", "--findings", "[]",
     ]);
   }, /verdict/);
 });
@@ -111,7 +111,7 @@ test("writeGateFindingsLog rejects non-array findings JSON", async () => {
       repo: "a/b",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: '{"not":"array"}',
     });
@@ -134,7 +134,7 @@ test("writeGateFindingsLog writes valid JSON log", async () => {
       repo: "owner/repo",
       pr: 42,
       gate: "draft_gate",
-      headSha: "abc1234567890abcdef",
+      headSha: "abc1234567890abcdef000000000000000000000",
       verdict: "findings_present",
       findings: JSON.stringify([
         { severity: "must-fix", angle: "scope", summary: "Scope too broad", disposition: "accepted-for-fix", files: ["src/a.mjs"] },
@@ -144,16 +144,16 @@ test("writeGateFindingsLog writes valid JSON log", async () => {
     });
 
     assert.equal(result.ok, true);
-    assert.ok(result.path.includes("draft_gate-abc1234567890abcdef.json"));
+    assert.ok(result.path.includes("draft_gate-abc1234567890abcdef000000000000000000000.json"));
 
-    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", "draft_gate-abc1234567890abcdef.json");
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", "draft_gate-abc1234567890abcdef000000000000000000000.json");
     const raw = await readFile(fullPath, "utf8");
     const parsed = JSON.parse(raw);
 
     assert.equal(parsed.repo, "owner/repo");
     assert.equal(parsed.pr, 42);
     assert.equal(parsed.gate, "draft_gate");
-    assert.equal(parsed.headSha, "abc1234567890abcdef");
+    assert.equal(parsed.headSha, "abc1234567890abcdef000000000000000000000");
     assert.equal(parsed.verdict, "findings_present");
     assert.ok(parsed.loggedAt);
     assert.equal(parsed.findings.length, 2);
@@ -172,14 +172,14 @@ test("writeGateFindingsLog handles empty findings array", async () => {
       repo: "owner/repo",
       pr: 1,
       gate: "pre_approval_gate",
-      headSha: "deadbeef1234567890",
+      headSha: "deadbeef12345678900000000000000000000000",
       verdict: "clean",
       findings: "[]",
       tmpRoot: tmpDir,
     });
 
     assert.equal(result.ok, true);
-    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-1", "pre_approval_gate-deadbeef1234567890.json");
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-1", "pre_approval_gate-deadbeef12345678900000000000000000000000.json");
     const raw = await readFile(fullPath, "utf8");
     const parsed = JSON.parse(raw);
     assert.equal(parsed.findings.length, 0);
@@ -195,7 +195,7 @@ test("writeGateFindingsLog rejects invalid severity", async () => {
       repo: "a/b",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: JSON.stringify([{ severity: "bad-sev", angle: "scope", summary: "x" }]),
     });
@@ -208,7 +208,7 @@ test("writeGateFindingsLog rejects finding without angle", async () => {
       repo: "a/b",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: JSON.stringify([{ severity: "must-fix", summary: "x" }]),
     });
@@ -221,7 +221,7 @@ test("writeGateFindingsLog rejects finding without summary", async () => {
       repo: "a/b",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: JSON.stringify([{ severity: "must-fix", angle: "scope" }]),
     });
@@ -235,7 +235,7 @@ test("writeGateFindingsLog includes disposition when present", async () => {
       repo: "owner/repo",
       pr: 99,
       gate: "pre_approval_gate",
-      headSha: "ccccccccccccccccc",
+      headSha: "ccccccccccccccccc00000000000000000000000",
       verdict: "findings_present",
       findings: JSON.stringify([
         { severity: "must-fix", angle: "scope", summary: "Must fix", disposition: "accepted-for-fix" },
@@ -245,7 +245,7 @@ test("writeGateFindingsLog includes disposition when present", async () => {
       tmpRoot: tmpDir,
     });
 
-    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-99", "pre_approval_gate-ccccccccccccccccc.json");
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-99", "pre_approval_gate-ccccccccccccccccc00000000000000000000000.json");
     const raw = await readFile(fullPath, "utf8");
     const parsed = JSON.parse(raw);
     assert.equal(parsed.findings[0].disposition, "accepted-for-fix");
@@ -262,7 +262,7 @@ test("writeGateFindingsLog rejects invalid disposition", async () => {
       repo: "a/b",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: JSON.stringify([{ severity: "must-fix", angle: "scope", summary: "x", disposition: "bad" }]),
     });
@@ -275,7 +275,7 @@ test("writeGateFindingsLog rejects malformed repo format in buildLogPath", async
       repo: "no-slash",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: "[]",
     });
@@ -289,7 +289,7 @@ test("writeGateFindingsLog includes resolvedIn when present", async () => {
       repo: "owner/repo",
       pr: 99,
       gate: "pre_approval_gate",
-      headSha: "ccccccccccccccccc",
+      headSha: "ccccccccccccccccc00000000000000000000000",
       verdict: "clean",
       findings: JSON.stringify([
         { severity: "must-fix", angle: "scope", summary: "Fixed", resolvedIn: "bbbbbbbbbbbbbbb" },
@@ -297,7 +297,7 @@ test("writeGateFindingsLog includes resolvedIn when present", async () => {
       tmpRoot: tmpDir,
     });
 
-    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-99", "pre_approval_gate-ccccccccccccccccc.json");
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-99", "pre_approval_gate-ccccccccccccccccc00000000000000000000000.json");
     const raw = await readFile(fullPath, "utf8");
     const parsed = JSON.parse(raw);
     assert.equal(parsed.findings[0].resolvedIn, "bbbbbbbbbbbbbbb");
@@ -313,7 +313,7 @@ test("writeGateFindingsLog accepts operator_acknowledged disposition", async () 
       repo: "owner/repo",
       pr: 99,
       gate: "pre_approval_gate",
-      headSha: "dddddddddddddddd",
+      headSha: "dddddddddddddddd000000000000000000000000",
       verdict: "findings_present",
       findings: JSON.stringify([
         { severity: "must-fix", angle: "scope", summary: "Ack", disposition: "operator_acknowledged" },
@@ -321,7 +321,7 @@ test("writeGateFindingsLog accepts operator_acknowledged disposition", async () 
       tmpRoot: tmpDir,
     });
 
-    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-99", "pre_approval_gate-dddddddddddddddd.json");
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-99", "pre_approval_gate-dddddddddddddddd000000000000000000000000.json");
     const raw = await readFile(fullPath, "utf8");
     const parsed = JSON.parse(raw);
     assert.equal(parsed.findings[0].disposition, "operator_acknowledged");
@@ -335,7 +335,7 @@ test("writeGateFindingsLog rejects invalid resolvedIn (not a hex SHA)", async ()
       repo: "a/b",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: JSON.stringify([{ severity: "must-fix", angle: "scope", summary: "x", resolvedIn: "not-a-sha" }]),
     });
@@ -348,7 +348,7 @@ test("writeGateFindingsLog rejects repo with dot segment", async () => {
       repo: "./repo",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: "[]",
     });
@@ -361,7 +361,7 @@ test("writeGateFindingsLog rejects repo with double-dot segment", async () => {
       repo: "owner/..",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: "[]",
     });
@@ -374,7 +374,7 @@ test("writeGateFindingsLog rejects repo with whitespace in segment", async () =>
       repo: "owner/repo name",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: "[]",
     });
@@ -387,7 +387,7 @@ test("writeGateFindingsLog rejects repo with backslash in segment", async () => 
       repo: "owner/re\\po",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: "[]",
     });
@@ -400,7 +400,7 @@ test("writeGateFindingsLog rejects empty-string disposition", async () => {
       repo: "a/b",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: JSON.stringify([{ severity: "must-fix", angle: "scope", summary: "x", disposition: "" }]),
     });
@@ -413,7 +413,7 @@ test("writeGateFindingsLog rejects empty-string resolvedIn", async () => {
       repo: "a/b",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: JSON.stringify([{ severity: "must-fix", angle: "scope", summary: "x", resolvedIn: "" }]),
     });
@@ -495,7 +495,7 @@ test("writeGateFindingsLog records provenance in the ledger when passed", async 
       repo: "owner/repo",
       pr: 7,
       gate: "pre_approval_gate",
-      headSha: "abc1234567890abcdef",
+      headSha: "abc1234567890abcdef000000000000000000000",
       verdict: "clean",
       findings: "[]",
       // Angles must cover the shipped extension-defaults preApproval mandatory
@@ -505,7 +505,7 @@ test("writeGateFindingsLog records provenance in the ledger when passed", async 
       provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
       tmpRoot: tmpDir,
     }, { repoRoot: tmpDir });
-    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "pre_approval_gate-abc1234567890abcdef.json");
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "pre_approval_gate-abc1234567890abcdef000000000000000000000.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
     assert.equal(parsed.provenance.distinctReviewers, 3);
     assert.equal(parsed.provenance.perAngle.length, 3);
@@ -521,12 +521,12 @@ test("writeGateFindingsLog omits provenance key entirely when absent (byte-ident
       repo: "owner/repo",
       pr: 8,
       gate: "draft_gate",
-      headSha: "abc1234567890abcdef",
+      headSha: "abc1234567890abcdef000000000000000000000",
       verdict: "clean",
       findings: "[]",
       tmpRoot: tmpDir,
     });
-    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-8", "draft_gate-abc1234567890abcdef.json");
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-8", "draft_gate-abc1234567890abcdef000000000000000000000.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
     assert.equal("provenance" in parsed, false);
   } finally {
@@ -540,7 +540,7 @@ test("writeGateFindingsLog rejects malformed provenance", async () => {
       repo: "a/b",
       pr: 1,
       gate: "draft_gate",
-      headSha: "abc12345",
+      headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
       findings: "[]",
       provenance: JSON.stringify({ distinctReviewers: -1, perAngle: [] }),
@@ -563,7 +563,7 @@ test("writeGateFindingsLog rejects a fanout_fanin ledger missing a mandatory ang
   await withAngleContractRepo(async (repoRoot) => {
     await assert.rejects(
       () => writeGateFindingsLog({
-        repo: "a/b", pr: 1, gate: "draft_gate", headSha: "abc12345", verdict: "clean", findings: "[]",
+        repo: "a/b", pr: 1, gate: "draft_gate", headSha: "abc1234500000000000000000000000000000000", verdict: "clean", findings: "[]",
         provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "scope", reviewer: "r1" }] }),
       }, { repoRoot }),
       /missing mandatory angle\(s\) for draft_gate: pr-description/,
@@ -600,7 +600,7 @@ test("writeGateFindingsLog surfaces the foreign-angle warning on the result when
     const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-warn-"));
     try {
       const result = await writeGateFindingsLog({
-        repo: "a/b", pr: 1, gate: "pre_approval_gate", headSha: "abc12345", verdict: "clean", findings: "[]",
+        repo: "a/b", pr: 1, gate: "pre_approval_gate", headSha: "abc1234500000000000000000000000000000000", verdict: "clean", findings: "[]",
         provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "dry", reviewer: "r1" }, { angle: "pr-checklist-matrix" }, { angle: "made-up-angle" }] }),
         tmpRoot,
       }, { repoRoot });

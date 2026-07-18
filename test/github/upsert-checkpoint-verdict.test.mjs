@@ -135,7 +135,7 @@ async function writeGhStub(_tempDir, entries) {
 function buildGateCoordinationEntries({
   repo = "owner/repo",
   pr = 17,
-  headSha = "abc1234",
+  headSha = "abc1234000000000000000000000000000000000",
   isDraft = true,
   statusCheckRollup = [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "FAILURE" }],
   reviews = [],
@@ -178,7 +178,7 @@ function buildGateCoordinationEntries({
 
 function buildGateComment({
   gate = "draft_gate",
-  headSha = "abc1234",
+  headSha = "abc1234000000000000000000000000000000000",
   verdict = "clean",
   findingsSummary = "no issues found",
   nextAction = "mark ready for review",
@@ -213,14 +213,14 @@ test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments determinis
     "--repo", "owner/repo",
     "--pr", "17",
     "--gate", "draft_gate",
-    "--head-sha", "ABC1234",
+    "--head-sha", "ABC1234000000000000000000000000000000000",
     "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
     "--findings-summary", "no issues found",
     "--next-action", "mark ready for review",
     "--inline-reason", "tiny docs change",
   ]);
-  assert.equal(parsed.headSha, "abc1234");
+  assert.equal(parsed.headSha, "abc1234000000000000000000000000000000000");
 
   assert.throws(
     () => parseUpsertCheckpointVerdictCliArgs([
@@ -233,7 +233,7 @@ test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments determinis
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ]),
-    /7-64 character hexadecimal SHA/i,
+    /FULL head commit SHA|40 or 64 hex/i,
   );
 });
 
@@ -242,7 +242,7 @@ test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file without --find
     "--repo", "owner/repo",
     "--pr", "17",
     "--gate", "draft_gate",
-    "--head-sha", "abc1234",
+    "--head-sha", "abc1234000000000000000000000000000000000",
     "--verdict", "findings_present",
     "--findings-file", "/tmp/findings.md",
     "--next-action", "stay draft and fix",
@@ -258,7 +258,7 @@ test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file with --finding
     "--repo", "owner/repo",
     "--pr", "17",
     "--gate", "draft_gate",
-    "--head-sha", "abc1234",
+    "--head-sha", "abc1234000000000000000000000000000000000",
     "--verdict", "findings_present",
     "--findings-summary", "fallback text",
     "--findings-file", "/tmp/findings.md",
@@ -271,21 +271,21 @@ test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file with --finding
 
 test("parseUpsertCheckpointVerdictCliArgs rejects --force as a removed policy flag", () => {
   assert.throws(
-    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "merge", "--force", "--force-reason", "  CI\ncancelled  "]),
+    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "merge", "--force", "--force-reason", "  CI\ncancelled  "]),
     /--force has been removed/,
   );
 });
 
 test("parseUpsertCheckpointVerdictCliArgs rejects --force without --force-reason as removed flag", () => {
   assert.throws(
-    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "merge", "--force"]),
+    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "merge", "--force"]),
     /--force has been removed/,
   );
 });
 
 test("parseUpsertCheckpointVerdictCliArgs rejects --force-reason without --force as removed flag", () => {
   assert.throws(
-    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "merge", "--force-reason", "CI cancelled due to infra"]),
+    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "merge", "--force-reason", "CI cancelled due to infra"]),
     /--force-reason has been removed/,
   );
 });
@@ -304,7 +304,7 @@ test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", as
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
-      headSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
       verdict: "clean",
       findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
       findingsSummary: "all good",
@@ -331,7 +331,7 @@ test("upsertCheckpointVerdict refuses draft_gate for a tracker-backed draft PR w
           number: 50,
           state: "OPEN",
           isDraft: true,
-          headRefOid: "abc1234",
+          headRefOid: "abc1234000000000000000000000000000000000",
           mergeStateStatus: "CLEAN",
           body: "Closes #900\n\nTracker-backed PR; see linked issue for spec.",
           closingIssuesReferences: [{ number: 900 }],
@@ -341,7 +341,7 @@ test("upsertCheckpointVerdict refuses draft_gate for a tracker-backed draft PR w
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/50/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql", "pr=50"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
-      { assertArgs: ["pr", "view", "50", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "50", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/50/comments?per_page=100"], stdout: "[]\n" },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/50/reviews?per_page=100"], stdout: "[]\n" },
       // No Acceptance criteria / DoD section — the linked issue fails the refinement check.
@@ -355,7 +355,7 @@ test("upsertCheckpointVerdict refuses draft_gate for a tracker-backed draft PR w
         repo: "owner/repo",
         pr: 50,
         gate: "draft_gate",
-        headSha: "abc1234",
+        headSha: "abc1234000000000000000000000000000000000",
         verdict: "clean",
         findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
         findingsSummary: "no issues found",
@@ -370,7 +370,7 @@ test("upsertCheckpointVerdict refuses draft_gate for a tracker-backed draft PR w
 
 test("parseUpsertCheckpointVerdictCliArgs rejects --force with blank --force-reason as removed flag", () => {
   assert.throws(
-    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "merge", "--force", "--force-reason", "\n"]),
+    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "merge", "--force", "--force-reason", "\n"]),
     /--force has been removed/,
   );
 });
@@ -448,7 +448,7 @@ test("an over-limit posted-comment arg (--inline-reason) fails closed with the u
   // Error — so formatCliError renders the same { ok:false, error, usage } envelope
   // as any other argument-validation failure instead of a usage-less one.
   const args = [
-    "--repo", "o/n", "--pr", "7", "--head-sha", "abc1234",
+    "--repo", "o/n", "--pr", "7", "--head-sha", "abc1234000000000000000000000000000000000",
     "--verdict", "clean", "--findings-summary", "ok", "--next-action", "done",
     "--execution-mode", "inline_single_agent",
     "--inline-reason", "x".repeat(2001),
@@ -505,7 +505,7 @@ test("summarizeCheckpointVerdictText does not treat markdown headings as shell c
 test("upsert-checkpoint-verdict rejects --force on draft_gate create", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-draft-"));
   try {
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "Tests pass", "--next-action", "Mark ready for review", "--force", "--force-reason", "CI cancelled due to infrastructure"]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "Tests pass", "--next-action", "Mark ready for review", "--force", "--force-reason", "CI cancelled due to infrastructure"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
@@ -517,7 +517,7 @@ test("upsert-checkpoint-verdict rejects --force on draft_gate create", async () 
 test("upsert-checkpoint-verdict rejects --force on pre_approval_gate create", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-preapproval-"));
   try {
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "Tests pass.", "--findings-severity-counts", JSON.stringify({"must-fix":0,"worth-fixing-now":0}), "--next-action", "Approve and merge", "--force", "--force-reason", "CI cancelled due to infrastructure"]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "Tests pass.", "--findings-severity-counts", JSON.stringify({"must-fix":0,"worth-fixing-now":0}), "--next-action", "Approve and merge", "--force", "--force-reason", "CI cancelled due to infrastructure"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
@@ -528,8 +528,8 @@ test("upsert-checkpoint-verdict rejects --force on pre_approval_gate create", as
 
 test("upsert-checkpoint-verdict keeps CI-blocked gate upserts fail-closed", async () => {
   const scenarios = [
-    { gate: "draft_gate", isDraft: true, headSha: "abc1234", verdict: "clean", findingsSummary: "Tests pass", nextAction: "Mark ready for review", findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 } },
-    { gate: "pre_approval_gate", isDraft: false, headSha: "abc1234", verdict: "findings_present", findingsSummary: "CI failed", nextAction: "Fix CI and re-run", findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 1 } },
+    { gate: "draft_gate", isDraft: true, headSha: "abc1234000000000000000000000000000000000", verdict: "clean", findingsSummary: "Tests pass", nextAction: "Mark ready for review", findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 } },
+    { gate: "pre_approval_gate", isDraft: false, headSha: "abc1234000000000000000000000000000000000", verdict: "findings_present", findingsSummary: "CI failed", nextAction: "Fix CI and re-run", findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 1 } },
   ];
   for (const scenario of scenarios) {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), `dev-loops-upsert-gate-review-fail-closed-${scenario.gate}-`));
@@ -554,7 +554,7 @@ test("upsert-checkpoint-verdict keeps CI-blocked gate upserts fail-closed", asyn
 test("upsert-checkpoint-verdict --force rejected before update", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-update-"));
   try {
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "CI green", "--next-action", "merge", "--force", "--force-reason", "CI cancelled"]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "CI green", "--next-action", "merge", "--force", "--force-reason", "CI cancelled"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
@@ -566,7 +566,7 @@ test("upsert-checkpoint-verdict --force rejected before update", async () => {
 test("upsert-checkpoint-verdict --force rejected before noop", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-noop-"));
   try {
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "Tests pass", "--next-action", "merge", "--force", "--force-reason", "CI cancelled"]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "Tests pass", "--next-action", "merge", "--force", "--force-reason", "CI cancelled"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
@@ -578,7 +578,7 @@ test("upsert-checkpoint-verdict --force rejected before noop", async () => {
 test("upsert-checkpoint-verdict rejects --force for non-CI pre_approval_gate refusal", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-non-ci-preapproval-"));
   try {
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234", "--verdict", "findings_present", "--findings-summary", "Some issues", "--next-action", "Fix issues", "--force", "--force-reason", "forced"]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "findings_present", "--findings-summary", "Some issues", "--next-action", "Fix issues", "--force", "--force-reason", "forced"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
@@ -590,7 +590,7 @@ test("upsert-checkpoint-verdict rejects --force for non-CI pre_approval_gate ref
 test("upsert-checkpoint-verdict rejects --force for draft_gate on non-draft PR", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-non-draft-"));
   try {
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "findings_present", "--findings-summary", "Some issues", "--next-action", "Fix issues", "--force", "--force-reason", "forced"]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "findings_present", "--findings-summary", "Some issues", "--next-action", "Fix issues", "--force", "--force-reason", "forced"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
@@ -602,7 +602,7 @@ test("upsert-checkpoint-verdict rejects --force for draft_gate on non-draft PR",
 test("upsert-checkpoint-verdict --force rejected before stale-head check", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-stale-"));
   try {
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "n/a", "--next-action", "merge", "--force", "--force-reason", "forced"]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "n/a", "--next-action", "merge", "--force", "--force-reason", "forced"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
@@ -618,7 +618,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -630,7 +630,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -638,7 +638,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       },
       {
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["body=### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234`", "**Next action:** mark ready for review"],
+        assertArgContains: ["body=### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`", "**Next action:** mark ready for review"],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
       },
     ]);
@@ -647,7 +647,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -662,8 +662,8 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
-      headSha: "abc1234",
-      currentHeadSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
+      currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
@@ -685,7 +685,7 @@ test("upsert-checkpoint-verdict embeds --findings-file content with preserved ne
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -697,7 +697,7 @@ test("upsert-checkpoint-verdict embeds --findings-file content with preserved ne
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -723,7 +723,7 @@ test("upsert-checkpoint-verdict embeds --findings-file content with preserved ne
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present",
       "--findings-file", findingsPath,
       "--next-action", "stay draft and fix",
@@ -749,7 +749,7 @@ test("upsert-checkpoint-verdict --findings-file takes precedence over --findings
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -761,7 +761,7 @@ test("upsert-checkpoint-verdict --findings-file takes precedence over --findings
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -783,7 +783,7 @@ test("upsert-checkpoint-verdict --findings-file takes precedence over --findings
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present",
       "--findings-summary", "should be overridden",
       "--findings-file", findingsPath,
@@ -806,7 +806,7 @@ test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict"
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -818,7 +818,7 @@ test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict"
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -836,7 +836,7 @@ test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict"
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-summary", "all clear, no issues",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
@@ -859,7 +859,7 @@ test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is sti
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: '{"number":266,"state":"OPEN","isDraft":false,"headRefOid":"def56789abcdef","reviews":[],"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}\n',
+        stdout: '{"number":266,"state":"OPEN","isDraft":false,"headRefOid":"def56789abcdef00000000000000000000000000","reviews":[],"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"],
@@ -871,7 +871,7 @@ test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is sti
       },
       {
         assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"def56789abcdef"}\n',
+        stdout: '{"headRefOid":"def56789abcdef00000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
@@ -897,7 +897,7 @@ test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is sti
       "--repo", "owner/repo",
       "--pr", "266",
       "--gate", "pre_approval_gate",
-      "--head-sha", "def56789",
+      "--head-sha", "def56789abcdef00000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -921,7 +921,7 @@ test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "543", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 543, state: "OPEN", isDraft: true, headRefOid: "f7a611b7234af479", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }) + "\n",
+        stdout: JSON.stringify({ number: 543, state: "OPEN", isDraft: true, headRefOid: "f7a611b7234af479000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/543/requested_reviewers"],
@@ -933,7 +933,7 @@ test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft
       },
       {
         assertArgs: ["pr", "view", "543", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"f7a611b7234af479"}\n',
+        stdout: '{"headRefOid":"f7a611b7234af479000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/543/comments?per_page=100"],
@@ -945,7 +945,7 @@ test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft
       "--repo", "owner/repo",
       "--pr", "543",
       "--gate", "pre_approval_gate",
-      "--head-sha", "f7a611b",
+      "--head-sha", "f7a611b7234af479000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -975,7 +975,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
           number: 17,
           state: "OPEN",
           isDraft: false,
-          headRefOid: "abc1234",
+          headRefOid: "abc1234000000000000000000000000000000000",
           reviews: [
             { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "1111111111111111111111111111111111111111" } },
             { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", submittedAt: "2026-05-31T20:05:00Z", commit: { oid: "2222222222222222222222222222222222222222" } },
@@ -996,7 +996,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1005,7 +1005,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
           body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             "**Findings summary:** no issues found",
@@ -1036,7 +1036,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "pre_approval_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -1051,8 +1051,8 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       repo: "owner/repo",
       pr: 17,
       gate: "pre_approval_gate",
-      headSha: "abc1234",
-      currentHeadSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
+      currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
@@ -1071,7 +1071,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: '{"number":17,"state":"OPEN","isDraft":false,"headRefOid":"abc1234","reviews":[{"author":{"login":"copilot-pull-request-reviewer"},"state":"COMMENTED","submittedAt":"2026-05-31T20:00:00Z","commit":{"oid":"abc1234"}}],"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}\n',
+        stdout: '{"number":17,"state":"OPEN","isDraft":false,"headRefOid":"abc1234000000000000000000000000000000000","reviews":[{"author":{"login":"copilot-pull-request-reviewer"},"state":"COMMENTED","submittedAt":"2026-05-31T20:00:00Z","commit":{"oid":"abc1234000000000000000000000000000000000"}}],"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1083,7 +1083,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1092,7 +1092,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
           body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             "**Findings summary:** no issues found",
@@ -1117,7 +1117,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "pre_approval_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", [
@@ -1140,8 +1140,8 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       repo: "owner/repo",
       pr: 17,
       gate: "pre_approval_gate",
-      headSha: "abc1234",
-      currentHeadSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
+      currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
@@ -1160,7 +1160,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1172,7 +1172,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1182,7 +1182,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "**Execution mode:** inline_single_agent — single-agent inline review (test)",
             "",
@@ -1209,7 +1209,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -1224,8 +1224,8 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
-      headSha: "abc1234",
-      currentHeadSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
+      currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
@@ -1246,7 +1246,7 @@ test("upsert-checkpoint-verdict updates (not noop) when only the inline reason c
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1258,7 +1258,7 @@ test("upsert-checkpoint-verdict updates (not noop) when only the inline reason c
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1270,7 +1270,7 @@ test("upsert-checkpoint-verdict updates (not noop) when only the inline reason c
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "**Execution mode:** inline_single_agent — stale prior reason",
             "",
@@ -1302,7 +1302,7 @@ test("upsert-checkpoint-verdict updates (not noop) when only the inline reason c
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -1326,7 +1326,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1338,7 +1338,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1348,7 +1348,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "**Execution mode:** inline_single_agent — single-agent inline review (test)",
             "",
@@ -1364,7 +1364,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `def5678`",
+            "**Reviewed head SHA:** `def5678000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             "**Findings summary:** older review",
@@ -1382,7 +1382,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -1393,9 +1393,9 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
     assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "noop");
-    assert.equal(parsed.headSha, "abc1234");
+    assert.equal(parsed.headSha, "abc1234000000000000000000000000000000000");
     assert.match(parsed.warning, /different head SHA/i);
-    assert.match(parsed.warning, /def5678/);
+    assert.match(parsed.warning, /def5678000000000000000000000000000000000/);
     assert.match(parsed.warning, /comment 202/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1409,7 +1409,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1421,7 +1421,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1431,7 +1431,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             ].join("\n"),
@@ -1451,7 +1451,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -1466,8 +1466,8 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
-      headSha: "abc1234",
-      currentHeadSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
+      currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
@@ -1486,7 +1486,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1498,7 +1498,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1508,7 +1508,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             ].join("\n"),
@@ -1520,7 +1520,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `def5678`",
+            "**Reviewed head SHA:** `def5678000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             "**Findings summary:** later head marker",
@@ -1534,7 +1534,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       },
       {
         assertArgs: ["api", "-X", "PATCH", "repos/owner/repo/issues/comments/101", "-f"],
-        assertArgContains: ["**Reviewed head SHA:** `abc1234`", "**Findings summary:** fixed the marker for the current head"],
+        assertArgContains: ["**Reviewed head SHA:** `abc1234000000000000000000000000000000000`", "**Findings summary:** fixed the marker for the current head"],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
       },
     ]);
@@ -1543,7 +1543,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "ABC1234",
+      "--head-sha", "ABC1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "fixed the marker for the current head",
@@ -1558,11 +1558,11 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
-      headSha: "abc1234",
-      currentHeadSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
+      currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
-      warning: "A gate comment for \`draft_gate\` already exists on a different head SHA \`def5678\` (comment 202). The old comment is stale for the current head.",
+      warning: "A gate comment for \`draft_gate\` already exists on a different head SHA \`def5678000000000000000000000000000000000\` (comment 202). The old comment is stale for the current head.",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
@@ -1579,7 +1579,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1591,7 +1591,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1601,7 +1601,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             "**Findings summary:** already complete",
@@ -1616,7 +1616,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             ].join("\n"),
@@ -1627,7 +1627,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       },
       {
         assertArgs: ["api", "-X", "PATCH", "repos/owner/repo/issues/comments/202", "-f"],
-        assertArgContains: ["body=### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234`", "**Findings summary:** corrected the newer malformed marker"],
+        assertArgContains: ["body=### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`", "**Findings summary:** corrected the newer malformed marker"],
         stdout: '{"id":202,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-202"}\n',
       },
     ]);
@@ -1636,7 +1636,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "corrected the newer malformed marker",
@@ -1651,8 +1651,8 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
-      headSha: "abc1234",
-      currentHeadSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
+      currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 202,
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-202",
       executionMode: "inline_single_agent",
@@ -1664,90 +1664,22 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
   }
 });
 
-test("upsert-checkpoint-verdict expands an abbreviated current-head SHA before matching same-head markers", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-short-head-"));
+test("upsert-checkpoint-verdict fails closed on an abbreviated --head-sha (no more current-head expansion; the primary head-sha must be FULL)", async () => {
+  const result = await runNode([
+    "--repo", "owner/repo",
+    "--pr", "17",
+    "--gate", "draft_gate",
+    "--head-sha", "ABCDEF1",
+    "--verdict", "clean",
+    "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+    "--findings-summary", "no issues found",
+    "--next-action", "mark ready for review",
+  ]);
 
-  try {
-    const env = await writeGhStub(tempDir, [
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abcdef1234567890abcdef1234567890abcdef12", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
-        stdout: '{"users":[],"teams":[]}\n',
-      },
-      {
-        assertArgs: ["api", "graphql", "pr=17"],
-        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
-      },
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abcdef1234567890abcdef1234567890abcdef12"}\n',
-      },
-      {
-        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
-        stdout: `${JSON.stringify([
-          {
-            id: 101,
-            body: [
-            "### Gate review: `draft_gate`",
-            "",
-            "**Reviewed head SHA:** `abcdef1234567890abcdef1234567890abcdef12`",
-            "**Verdict:** clean",
-            "**Execution mode:** inline_single_agent — single-agent inline review (test)",
-            "",
-            "**Findings summary:** no issues found",
-            "",
-            "**Next action:** mark ready for review",
-            ].join("\n"),
-            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
-            updated_at: "2026-05-30T18:00:00Z",
-          },
-        ])}\n`,
-      },
-      {
-        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
-        stdout: "[]\n",
-      },
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
-        stdout: '{"files":[{"path":"src/index.ts"}]}\n',
-      },
-    ]);
-
-    const result = await runNode([
-      "--repo", "owner/repo",
-      "--pr", "17",
-      "--gate", "draft_gate",
-      "--head-sha", "ABCDEF1",
-      "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
-      "--findings-summary", "no issues found",
-      "--next-action", "mark ready for review",
-    ], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
-    assert.deepEqual(JSON.parse(result.stdout), {
-      ok: true,
-      action: "noop",
-      repo: "owner/repo",
-      pr: 17,
-      gate: "draft_gate",
-      headSha: "abcdef1234567890abcdef1234567890abcdef12",
-      currentHeadSha: "abcdef1234567890abcdef1234567890abcdef12",
-      commentId: 101,
-      commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
-      executionMode: "inline_single_agent",
-      inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
-    });
-    // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
-    assert.equal(result.ghCallCount(), 8);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  assert.equal(result.code, 1);
+  const payload = JSON.parse(result.stderr);
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /FULL head commit SHA|40 or 64 hex/i);
 });
 
 test("upsert-checkpoint-verdict fails closed when the requested head SHA is stale", async () => {
@@ -1757,7 +1689,7 @@ test("upsert-checkpoint-verdict fails closed when the requested head SHA is stal
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "def5678", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "def5678000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1769,7 +1701,7 @@ test("upsert-checkpoint-verdict fails closed when the requested head SHA is stal
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"def5678"}\n',
+        stdout: '{"headRefOid":"def5678000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1781,7 +1713,7 @@ test("upsert-checkpoint-verdict fails closed when the requested head SHA is stal
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -1802,7 +1734,7 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "def5678", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "def5678000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1814,7 +1746,7 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"def5678"}\n',
+        stdout: '{"headRefOid":"def5678000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -1824,7 +1756,7 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
             body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             "**Findings summary:** previous review",
@@ -1846,7 +1778,7 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "def5678",
+      "--head-sha", "def5678000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -1858,9 +1790,9 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "created");
     assert.equal(parsed.gate, "draft_gate");
-    assert.equal(parsed.headSha, "def5678");
+    assert.equal(parsed.headSha, "def5678000000000000000000000000000000000");
     assert.match(parsed.warning, /different head SHA/i);
-    assert.match(parsed.warning, /abc1234/);
+    assert.match(parsed.warning, /abc1234000000000000000000000000000000000/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1873,7 +1805,7 @@ test("upsert-checkpoint-verdict treats stale clean draft_gate evidence on a non-
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: '{"number":266,"state":"OPEN","isDraft":false,"headRefOid":"def56789abcdef","reviews":[],"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}\n',
+        stdout: '{"number":266,"state":"OPEN","isDraft":false,"headRefOid":"def56789abcdef00000000000000000000000000","reviews":[],"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"],
@@ -1885,7 +1817,7 @@ test("upsert-checkpoint-verdict treats stale clean draft_gate evidence on a non-
       },
       {
         assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"def56789abcdef"}\n',
+        stdout: '{"headRefOid":"def56789abcdef00000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
@@ -1911,7 +1843,7 @@ test("upsert-checkpoint-verdict treats stale clean draft_gate evidence on a non-
       "--repo", "owner/repo",
       "--pr", "266",
       "--gate", "draft_gate",
-      "--head-sha", "def56789",
+      "--head-sha", "def56789abcdef00000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -1945,7 +1877,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-s
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-summary", "reviewed: 2 must-fix, 1 worth-fixing-now",
       "--next-action", "mark ready for review",
@@ -1984,7 +1916,7 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
@@ -2016,7 +1948,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-summary", "reviewed",
       "--next-action", "mark ready for review",
@@ -2048,7 +1980,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-summary", "all clear",
       "--next-action", "mark ready",
@@ -2079,7 +2011,7 @@ test("upsert-checkpoint-verdict treats draft_gate as an idempotent no-op when al
       body: [
         "### Gate review: `draft_gate`",
         "",
-        "**Reviewed head SHA:** `abc1234`",
+        "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
         "**Verdict:** clean",
         "",
         "**Findings summary:** no issues found",
@@ -2100,7 +2032,7 @@ test("upsert-checkpoint-verdict treats draft_gate as an idempotent no-op when al
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
@@ -2143,7 +2075,7 @@ test("upsert-checkpoint-verdict does NOT convert a ready PR to draft when reconc
         repo: "owner/repo",
         pr: 17,
         gate: "draft_gate",
-        headSha: "abc1234",
+        headSha: "abc1234000000000000000000000000000000000",
         verdict: "clean",
         findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
         findingsSummary: "no issues found",
@@ -2173,7 +2105,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-self-heal-transition-"));
 
   try {
-    const headSha = "abc1234";
+    const headSha = "abc1234000000000000000000000000000000000";
     // A clean pre_approval_gate comment on the current head — combined with a
     // submitted Copilot review on the current head and zero unresolved threads,
     // this drives interpretation to ready_to_rerequest_review +
@@ -2184,7 +2116,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
       body: [
         "### Gate review: `pre_approval_gate`",
         "",
-        "**Reviewed head SHA:** `abc1234`",
+        "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
         "**Verdict:** clean",
         "**Execution mode:** fanout_fanin",
         "",
@@ -2223,7 +2155,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
       // --- resolve PR node id + convert to draft ---
@@ -2233,7 +2165,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(true) },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
       // --- post the draft_gate verdict + restore ready ---
@@ -2286,13 +2218,13 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-draft-race-"));
 
   try {
-    const headSha = "abc1234";
+    const headSha = "abc1234000000000000000000000000000000000";
     const cleanPreApprovalComment = {
       id: 501,
       body: [
         "### Gate review: `pre_approval_gate`",
         "",
-        "**Reviewed head SHA:** `abc1234`",
+        "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
         "**Verdict:** clean",
         "**Execution mode:** fanout_fanin",
         "",
@@ -2333,7 +2265,7 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
       // --- resolve PR node id + convert to draft (ONLY ONCE) ---
@@ -2343,7 +2275,7 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
       // --- best-effort restore to ready after the guarded failure ---
@@ -2393,7 +2325,7 @@ test("upsert-checkpoint-verdict already-satisfied no-op sources executionMode fr
       id: 101,
       body: renderGateReviewCommentBody({
         gate: "draft_gate",
-        headSha: "abc1234",
+        headSha: "abc1234000000000000000000000000000000000",
         verdict: "clean",
         findingsSummary: "no issues found",
         nextAction: "mark ready for review",
@@ -2413,7 +2345,7 @@ test("upsert-checkpoint-verdict already-satisfied no-op sources executionMode fr
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
@@ -2457,7 +2389,7 @@ test("upsert-checkpoint-verdict already-satisfied no-op OMITS executionMode when
 
     const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
       isDraft: false,
-      headSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
       statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
       issueComments: [staleHeadDraftGateComment],
     }));
@@ -2466,7 +2398,7 @@ test("upsert-checkpoint-verdict already-satisfied no-op OMITS executionMode when
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
@@ -2493,7 +2425,7 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
   try {
     const cleanDraftGateComment = buildGateComment({
       gate: "draft_gate",
-      headSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
       verdict: "clean",
       findingsSummary: "no issues found",
       nextAction: "mark ready for review",
@@ -2529,7 +2461,7 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "pre_approval_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -2594,7 +2526,7 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found",
@@ -2619,7 +2551,7 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
 });
 
 test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates the flag", () => {
-  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--findings-severity-counts", '{"must-fix":0}'];
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--findings-severity-counts", '{"must-fix":0}'];
 
   // Inline is the default mode and now REQUIRES --inline-reason: a bare call
   // with neither --execution-mode nor --inline-reason errors (FIX B).
@@ -2659,7 +2591,7 @@ test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates t
 });
 
 test("parseUpsertCheckpointVerdictCliArgs fails closed instead of truncating an over-limit --inline-reason (#1388)", () => {
-  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go"];
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go"];
   const overLimitReason = "x".repeat(2001);
   // Pre-fix, this silently truncated to 120 chars with a `…[truncated N chars]`
   // marker spliced into the posted `**Execution mode:**` line.
@@ -2670,7 +2602,7 @@ test("parseUpsertCheckpointVerdictCliArgs fails closed instead of truncating an 
 });
 
 test("parseUpsertCheckpointVerdictCliArgs accepts an at-limit --inline-reason in full with no truncation marker (#1388)", () => {
-  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go"];
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go"];
   const atLimitReason = "x".repeat(2000);
   const options = parseUpsertCheckpointVerdictCliArgs([...base, "--inline-reason", atLimitReason]);
   assert.equal(options.inlineReason, atLimitReason);
@@ -2680,7 +2612,7 @@ test("parseUpsertCheckpointVerdictCliArgs accepts an at-limit --inline-reason in
 test("parseUpsertCheckpointVerdictCliArgs fails closed instead of truncating an over-limit --next-action (#1388)", () => {
   const overLimitNextAction = "x".repeat(2001);
   assert.throws(
-    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234", "--verdict", "clean", "--findings-summary", "ok", "--next-action", overLimitNextAction, "--inline-reason", "small change"]),
+    () => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", overLimitNextAction, "--inline-reason", "small change"]),
     /--next-action exceeds 2000 chars \(2001 chars\)/,
   );
 });
@@ -2688,7 +2620,7 @@ test("parseUpsertCheckpointVerdictCliArgs fails closed instead of truncating an 
 test("renderGateReviewCommentBody renders the execution-mode line round-trippable by the marker parser", async () => {
   const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
   const inlineBody = renderGateReviewCommentBody({
-    gate: "draft_gate", headSha: "abc1234", verdict: "clean", findingsSummary: "none", nextAction: "go",
+    gate: "draft_gate", headSha: "abc1234000000000000000000000000000000000", verdict: "clean", findingsSummary: "none", nextAction: "go",
     executionMode: "inline_single_agent", inlineReason: "quick fix",
   });
   assert.match(inlineBody, /\*\*Execution mode:\*\* inline_single_agent — quick fix/);
@@ -2697,7 +2629,7 @@ test("renderGateReviewCommentBody renders the execution-mode line round-trippabl
   assert.equal(parsedInline.inlineReason, "quick fix");
 
   const fanoutBody = renderGateReviewCommentBody({
-    gate: "draft_gate", headSha: "abc1234", verdict: "clean", findingsSummary: "none", nextAction: "go",
+    gate: "draft_gate", headSha: "abc1234000000000000000000000000000000000", verdict: "clean", findingsSummary: "none", nextAction: "go",
     executionMode: "fanout_fanin",
   });
   assert.match(fanoutBody, /\*\*Execution mode:\*\* fanout_fanin/);
@@ -2708,7 +2640,7 @@ test("renderGateReviewCommentBody renders structured per-angle fan-in findings a
   const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "findings_present",
     // free-text fallback is present but MUST be ignored in favor of structured render
     findingsSummary: "this free-text summary should be replaced by the structured render",
@@ -2747,7 +2679,7 @@ test("renderGateReviewCommentBody renders structured per-angle fan-in findings a
   const parsed = parseGateReviewCommentMarkerBody(body);
   assert.ok(parsed, "structured body must parse via the marker parser");
   assert.equal(parsed.gate, "draft_gate");
-  assert.equal(parsed.headSha, "abc1234");
+  assert.equal(parsed.headSha, "abc1234000000000000000000000000000000000");
   assert.equal(parsed.verdict, "findings_present");
   assert.equal(parsed.executionMode, "fanout_fanin");
   assert.equal(parsed.nextAction, "address must-fix findings then re-gate");
@@ -2763,7 +2695,7 @@ test("renderGateReviewCommentBody fails closed instead of truncating a structure
   assert.throws(
     () => renderGateReviewCommentBody({
       gate: "draft_gate",
-      headSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
       verdict: "findings_present",
       findingsSummary: "fallback",
       nextAction: "address findings then re-gate",
@@ -2776,7 +2708,7 @@ test("renderGateReviewCommentBody fails closed instead of truncating a structure
 test("renderGateReviewCommentBody falls back to free-text findings summary when no structured input is given (#898)", () => {
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "clean",
     findingsSummary: "no issues found",
     nextAction: "mark ready",
@@ -2790,7 +2722,7 @@ test("renderGateReviewCommentBody falls back to free-text findings summary when 
 test("renderGateReviewCommentBody renders the gate evidence note on its own labeled line, never spliced with `;` into the findings summary (#1388)", () => {
   const body = renderGateReviewCommentBody({
     gate: "pre_approval_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "clean",
     findingsSummary: "no issues found.",
     nextAction: "await final human approval",
@@ -2808,7 +2740,7 @@ test("renderGateReviewCommentBody renders the gate evidence note on its own labe
 test("renderGateReviewCommentBody omits the gate evidence note line entirely when no note is supplied", () => {
   const body = renderGateReviewCommentBody({
     gate: "pre_approval_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "clean",
     findingsSummary: "no issues found",
     nextAction: "await final human approval",
@@ -2821,7 +2753,7 @@ test("renderGateReviewCommentBody fails closed instead of truncating a gate evid
   assert.throws(
     () => renderGateReviewCommentBody({
       gate: "pre_approval_gate",
-      headSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
       verdict: "clean",
       findingsSummary: "no issues found",
       nextAction: "await final human approval",
@@ -2835,7 +2767,7 @@ test("renderGateReviewCommentBody renders an at-limit gate evidence note in full
   const atLimitNote = "x".repeat(2000);
   const body = renderGateReviewCommentBody({
     gate: "pre_approval_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "clean",
     findingsSummary: "no issues found",
     nextAction: "await final human approval",
@@ -2849,7 +2781,7 @@ test("renderGateReviewCommentBody neutralizes bare @copilot/`/copilot`* tokens s
   const { containsBareCopilotSummon } = await import("../../scripts/_core-helpers.mjs");
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "findings_present",
     // A findings summary quoting the anti-summon rule as bare text — the same
     // shape that self-deadlocked a live gate-verdict/request-review round-trip.
@@ -2898,7 +2830,7 @@ test("renderGateReviewCommentBody renders NESTED per-angle findings input correc
   const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "findings_present",
     findingsSummary: "ignored",
     nextAction: "fix",
@@ -2928,7 +2860,7 @@ test("renderGateReviewCommentBody groups FLAT per-finding input by angle without
   // fix this shape silently rendered every angle clean (findings dropped).
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "findings_present",
     findingsSummary: "ignored",
     nextAction: "fix",
@@ -2961,7 +2893,7 @@ test("renderGateReviewCommentBody throws on a non-empty unrecognizable structure
     () =>
       renderGateReviewCommentBody({
         gate: "draft_gate",
-        headSha: "abc1234",
+        headSha: "abc1234000000000000000000000000000000000",
         verdict: "findings_present",
         findingsSummary: "ignored",
         nextAction: "fix",
@@ -2979,7 +2911,7 @@ test("renderGateReviewCommentBody throws when nested and flat shapes are mixed (
     () =>
       renderGateReviewCommentBody({
         gate: "draft_gate",
-        headSha: "abc1234",
+        headSha: "abc1234000000000000000000000000000000000",
         verdict: "findings_present",
         findingsSummary: "ignored",
         nextAction: "fix",
@@ -2999,7 +2931,7 @@ test("renderGateReviewCommentBody sorts unknown/missing severities LAST, never b
   // known order (must-fix → worth-fixing-now → defer) leads and unknowns trail.
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "findings_present",
     findingsSummary: "ignored",
     nextAction: "fix",
@@ -3039,7 +2971,7 @@ test("renderGateReviewCommentBody throws when a non-empty payload mixes recogniz
     () =>
       renderGateReviewCommentBody({
         gate: "draft_gate",
-        headSha: "abc1234",
+        headSha: "abc1234000000000000000000000000000000000",
         verdict: "findings_present",
         findingsSummary: "ignored",
         nextAction: "fix",
@@ -3060,7 +2992,7 @@ test("renderGateReviewCommentBody renders an angle-less NESTED entry under `gene
   // non-empty structured payload must NOT silently degrade to the free-text path.
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
-    headSha: "abc1234",
+    headSha: "abc1234000000000000000000000000000000000",
     verdict: "findings_present",
     findingsSummary: "this free-text must NOT be rendered when structured findings are present",
     nextAction: "fix",
@@ -3099,7 +3031,7 @@ test("upsert-checkpoint-verdict --findings-json rejects an unrecognizable non-em
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
     ]);
     const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present", "--findings-json", findingsPath,
       "--next-action", "fix", "--execution-mode", "fanout_fanin",
     ], { env });
@@ -3122,7 +3054,7 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
     ]);
     const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present", "--findings-json", findingsPath,
       "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
     ], { env });
@@ -3152,11 +3084,11 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
       ...buildGateCoordinationEntries({
         isDraft: false,
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
-        reviews: [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "abc1234" } }],
+        reviews: [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "abc1234000000000000000000000000000000000" } }],
       }),
     ]);
     const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present", "--findings-json", findingsPath,
       "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
     ], { env });
@@ -3185,7 +3117,7 @@ test("upsert-checkpoint-verdict rejects an angle-less flat finding in fanout mod
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
     ]);
     const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present", "--findings-json", findingsPath,
       "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
     ], { env });
@@ -3220,7 +3152,7 @@ test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angl
       },
     ]);
     const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-json", findingsPath,
       "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
@@ -3248,7 +3180,7 @@ test("upsert-checkpoint-verdict does NOT enforce angle coverage for an inline_si
       },
     ]);
     const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present", "--findings-json", findingsPath,
       "--next-action", "fix then re-gate", "--inline-reason", "small change",
     ], { env });
@@ -3292,7 +3224,7 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
       },
     ]);
     const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present", "--findings-json", findingsPath,
       "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
     ], { env });
@@ -3339,7 +3271,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
           number: 17,
           state: "OPEN",
           isDraft: false,
-          headRefOid: "abc1234",
+          headRefOid: "abc1234000000000000000000000000000000000",
           reviews: [
             { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "1111111111111111111111111111111111111111" } },
             { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", submittedAt: "2026-05-31T20:05:00Z", commit: { oid: "2222222222222222222222222222222222222222" } },
@@ -3360,7 +3292,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
       },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: '{"headRefOid":"abc1234"}\n',
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
       },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
@@ -3369,7 +3301,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
           body: [
             "### Gate review: `draft_gate`",
             "",
-            "**Reviewed head SHA:** `abc1234`",
+            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
             "**Verdict:** clean",
             "",
             "**Findings summary:** no issues found",
@@ -3402,7 +3334,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "pre_approval_gate",
-      "--head-sha", "abc1234",
+      "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present",
       "--findings-json", findingsPath,
       "--next-action", "address findings then re-gate",
@@ -3422,7 +3354,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
     const expectedSummaryLine = "1 angle reviewed; 1 finding (see per-angle breakdown below).";
     const body = renderGateReviewCommentBody({
       gate: "pre_approval_gate",
-      headSha: "abc1234",
+      headSha: "abc1234000000000000000000000000000000000",
       verdict: "findings_present",
       findingsSummary: "free-text fallback (ignored in structured mode)",
       nextAction: "address findings then re-gate",
@@ -3460,7 +3392,7 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
       },
     ]);
     const inline = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found", "--next-action", "mark ready for review",
       "--execution-mode", "inline_single_agent", "--inline-reason", "manual single-agent run",
@@ -3480,7 +3412,7 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
       },
     ]);
     const fanout = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
       "--findings-summary", "no issues found", "--next-action", "mark ready for review",
       "--execution-mode", "fanout_fanin",
@@ -3498,7 +3430,7 @@ test("upsert-checkpoint-verdict CLI fails closed for inline mode without --inlin
   // inline mode but omits --inline-reason exits 1 with a clear argument error
   // (FIX B). runNodeHelper is used directly so no inline reason is auto-appended.
   const args = [
-    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234",
+    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
     "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
     "--findings-summary", "no issues found", "--next-action", "mark ready for review",
   ];

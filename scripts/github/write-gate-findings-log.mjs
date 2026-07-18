@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { checkFanoutAngleCoverage, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> --findings <json> [--tmp-root <path>]
@@ -13,7 +14,7 @@ Required:
   --repo <owner/name>
   --pr <number>
   --gate <draft_gate|pre_approval_gate>
-  --head-sha <sha>
+  --head-sha <sha>              FULL head commit SHA (40 or 64 hex chars) — a short prefix is rejected (it would write an unfindable ledger)
   --verdict <clean|findings_present|blocked>
   --findings <json>              JSON array of finding objects with severity, disposition, angle, and summary
 Optional:
@@ -37,10 +38,6 @@ function normalizeVerdict(value) {
   const verdicts = new Set(["clean", "findings_present", "blocked"]);
   const normalized = String(value).trim().toLowerCase();
   return verdicts.has(normalized) ? normalized : null;
-}
-function normalizeHeadSha(value) {
-  const normalized = String(value).trim().toLowerCase();
-  return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
 }
 const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
 const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "disputed", "operator_acknowledged"]);
@@ -253,8 +250,8 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       continue;
     }
     if (token.name === "head-sha") {
-      const sha = normalizeHeadSha(requireTokenValue(token, parseError));
-      if (!sha) throw parseError("--head-sha must be a 7-64 character hex SHA");
+      const sha = normalizeFullHeadSha(requireTokenValue(token, parseError));
+      if (!sha) throw parseError(FULL_HEAD_SHA_ERROR);
       options.headSha = sha;
       continue;
     }
