@@ -11,7 +11,7 @@
 // that touches coordination MUST set `cwd: tempDir`.
 //
 // Related convention: never read the real wall clock here either — no bare,
-// argument-less Date constructor call and no `Date.now()`. A production seam
+// argument-less Date constructor, and no read of the current epoch millis off the Date global. A production seam
 // that needs "now" (e.g. `claimRunnerOwnership`/`assertRunnerOwnership` in
 // scripts/loop/_pr-runner-coordination.mjs) already accepts an injected
 // `now`; pass a fixed value through it. Enforced mechanically by

@@ -11,7 +11,7 @@
 // coordination MUST set `cwd: tempDir`.
 //
 // Related convention: never read the real wall clock here either — no bare,
-// argument-less Date constructor call and no `Date.now()`. Production seams
+// argument-less Date constructor, and no read of the current epoch millis off the Date global. Production seams
 // that need "now" (`detectStaleRunner` in scripts/loop/_stale-runner-detection.mjs;
 // `claimRunnerOwnership`/`assertRunnerOwnership` in
 // scripts/loop/_pr-runner-coordination.mjs) already accept an injected
