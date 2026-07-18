@@ -1053,6 +1053,10 @@ for (const strategyValue of ["tracker-first", "github-first"]) {
         cwd: tempDir,
         env: {
           ...ghStub.env,
+          // Satisfy the async-start contract explicitly (CI has no ambient
+          // DEVLOOPS_RUN_ID; without this the CLI fails closed and the
+          // tracker-read path is never reached).
+          DEVLOOPS_RUN_ID: "test-run-123",
           DEVLOOPS_WORKTREE_BYPASS: "1",
           DEVLOOPS_OWNERSHIP_BYPASS: "1",
         },
