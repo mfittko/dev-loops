@@ -97,3 +97,12 @@ Failure output:
 
 <!-- rule: GRILL-SUBLOOP-HONEST-HANDOFF -->
 `GRILL-SUBLOOP-HONEST-HANDOFF`: An uncitable gap (only-`inferred`, no codebase/doc/issue citation) MUST drive the machine to the `needs_human_handoff` terminal naming the specific question; interactive runs ask the human, headless/`--auto` runs park the item with the recorded reason, and the loop MUST NOT fabricate an answer to force convergence.
+
+<!-- rule: GRILL-SUBLOOP-FULL-REWRITE -->
+`GRILL-SUBLOOP-FULL-REWRITE`: Tracker-first write-back MUST fully rewrite the issue description into one locked, unambiguous spec — every in-body "suggested / option A or B / TBD" phrasing for a gap the grill decided MUST be resolved to its decided form (rejected alternatives deleted, not left alongside), and now-stale or contradicting prose MUST be removed. The post-grill description carries ONLY normative locked content (context, the decided approach, `## Acceptance criteria`, `## Definition of done`, `## Non-goals`, and a linked refinement doc if present) — never a `Refinement notes` / rationale narrative section.
+
+<!-- rule: GRILL-SUBLOOP-RATIONALE-COMMENT -->
+`GRILL-SUBLOOP-RATIONALE-COMMENT`: The refinement rationale (gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken) MUST be posted as a separate `🔬 Grill / refinement results` comment via `comment-issue.mjs` (never `gh issue comment` directly, never embedded in the description) — the description and the rationale are two distinct artifacts.
+
+<!-- rule: GRILL-SUBLOOP-NO-BARE-HASH -->
+`GRILL-SUBLOOP-NO-BARE-HASH`: Neither the rewritten description nor the results comment may use a bare `#<number>` for a non-issue/PR reference (e.g. a defect/item enumeration) — GitHub auto-links it to an unrelated issue/PR. Use `defect N` / `item N` / backticks for enumerations; reserve `#<number>` for a genuine issue/PR cross-reference.

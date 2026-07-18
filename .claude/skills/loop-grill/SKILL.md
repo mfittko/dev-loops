@@ -14,7 +14,7 @@ It is entirely separate from the in-loop docs-grill (`docs/docs-grill-step.md`),
 
 ## State machine
 
-This grill is the bounded, closed sub-loop modeled by `packages/core/src/loop/refinement-grill-state.mjs` (detector `scripts/loop/detect-refinement-grill-state.mjs`), rendered on the State atlas; see `docs/refinement-grill-state-graph.md`. It obeys `GRILL-SUBLOOP-STATE-MACHINE`, `GRILL-SUBLOOP-ITERATE-TO-CLEAN`, `GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`, and `GRILL-SUBLOOP-HONEST-HANDOFF`. Iteration lives in the transition graph; the answer/synthesis is the bounded input consumed at the `await_answers` state.
+This grill is the bounded, closed sub-loop modeled by `packages/core/src/loop/refinement-grill-state.mjs` (detector `scripts/loop/detect-refinement-grill-state.mjs`), rendered on the State atlas; see `docs/refinement-grill-state-graph.md`. It obeys `GRILL-SUBLOOP-STATE-MACHINE`, `GRILL-SUBLOOP-ITERATE-TO-CLEAN`, `GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`, `GRILL-SUBLOOP-HONEST-HANDOFF`, `GRILL-SUBLOOP-FULL-REWRITE`, `GRILL-SUBLOOP-RATIONALE-COMMENT`, and `GRILL-SUBLOOP-NO-BARE-HASH`. Iteration lives in the transition graph; the answer/synthesis is the bounded input consumed at the `await_answers` state.
 
 ## Interface
 
@@ -119,21 +119,34 @@ Synthesize the answers into the body as sharpened `## Acceptance criteria`, `## 
 - This makes re-runs idempotent — no accumulated noise, no duplicate sections.
 - If parsing a section boundary fails, **abort with an error** rather than silently truncating.
 
-The body carries ONLY the synthesized sharpened sections. Do NOT write a `## Grill findings` section and do NOT embed the raw Q&A table in the body (`GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`).
+The synthesized sections carry no rationale scaffolding: do NOT write a `## Grill findings` section and do NOT embed the raw Q&A table in the body (`GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`). (The full rewrite below defines the complete set of content the locked body keeps — context, decided approach, and the canonical sections — so this is a "no embed", not a "sections only".)
 
 If a body migrated from older embed behavior still carries a `## Grill findings` section, **remove** it as part of write-back — strip from that heading through the next `##`-level heading (exclusive) or end of file, using the same replace-section boundary logic. This is a removal-only migration, never a re-introduction of the embed.
 
 Write the raw Q&A transcript ONLY to the gitignored, ephemeral, session-scoped artifact `tmp/issues/issue-<n>/grill/<timestamp>.md` (`tmp/` is already gitignored; never committed). For PR-body and plan-file surfaces, use the same tmp path shape scoped by surface (issues: `tmp/issues/issue-<n>/grill/`; a parallel `tmp/...` path for PR/plan).
 
-**Tracker-first write-back:** update the GitHub issue body using:
+**Tracker-first write-back is a full rewrite, not an append** (`GRILL-SUBLOOP-FULL-REWRITE`). After the replace-section synthesis above, scan the ENTIRE remaining description (not just the canonical headings) and resolve it into one locked, unambiguous spec:
+
+- Any "suggested / option A or B / TBD" phrasing that describes a gap THIS grill run just decided: rewrite it to the decided form only; delete the rejected alternative(s). A leftover undecided option for a gap the grill already resolved is a write-back defect.
+- Any `Refinement notes` / `Grill findings` / RFC-style rationale narrative (gap tables, recommendation + rejected alternatives, decision log) anywhere in the description: remove it entirely. That content is never body prose — it moves to the results comment (see below), not the description.
+- Any contradiction between now-stale prose and the locked AC/DoD/approach: resolve in favor of the locked form; delete the stale prose.
+- Any bare `#<number>` used as a defect/item enumeration rather than a genuine issue/PR reference (`GRILL-SUBLOOP-NO-BARE-HASH`): rewrite as `defect N` / `item N` / backticks. GitHub auto-links a bare `#<number>` to an unrelated issue/PR in this repo — reserve `#<number>` only for a real issue/PR cross-reference.
+
+The rewritten description carries ONLY normative locked content: context, the decided approach, `## Acceptance criteria`, `## Definition of done`, `## Non-goals`, and a linked refinement doc reference if present. Write it back with:
 
 ```
-dev-loops issue edit --repo <owner/repo> --issue <n> --body-file <tmp-path>
+dev-loops issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
 ```
 
-(source-repo fallback: `node scripts/github/edit-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-path>`)
+(source-repo fallback: `node scripts/github/edit-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-body-path>`)
 
-The synthesized sections live in the issue body, not as a comment. Do not use `comment-issue.mjs` here — that creates a comment, not a body update.
+**Post the rationale as a separate results comment** (`GRILL-SUBLOOP-RATIONALE-COMMENT`): the description and the rationale are two distinct artifacts — never merge them. Write the rationale (gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken) to a second tmp file and post it as its own comment titled `🔬 Grill / refinement results`:
+
+```
+node scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-rationale-path>
+```
+
+Never `gh issue comment` directly, and never fold this content back into the issue body. The same `#<number>` hygiene rule (`GRILL-SUBLOOP-NO-BARE-HASH`) applies to the comment. A zero-iteration `grill_clean` target (already refined, body left unchanged) has no rationale to post and skips this step; any run that actually filled a gap MUST post the results comment.
 
 **PR-body write-back:** update the PR body via `scripts/github/edit-pr.mjs` (never raw `gh`), same replace-section semantics.
 
@@ -143,11 +156,13 @@ The synthesized sections live in the issue body, not as a comment. Do not use `c
 
 ## Output artifact format
 
-Two distinct artifacts:
+Three distinct artifacts for tracker-first (two for PR-body/local-planning, which have no separate results-comment surface in this contract):
 
-1. **Synthesized body sections** (issue/PR/plan body): only `## Acceptance criteria`, `## Definition of done`, and `## Non-goals`, sharpened from the answers. No raw Q&A.
+1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, `## Acceptance criteria`, `## Definition of done`, and `## Non-goals`. No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
 
-2. **Raw Q&A transcript** (ephemeral `tmp/issues/issue-<n>/grill/<timestamp>.md` only — never the body):
+2. **Results comment** (tracker-first only, posted separately, titled `🔬 Grill / refinement results`): the rationale — gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken. Same `#<number>` hygiene rule applies.
+
+3. **Raw Q&A transcript** (ephemeral `tmp/issues/issue-<n>/grill/<timestamp>.md` only — never the body, never the comment):
 
 ```markdown
 <!-- loop-grill: <timestamp> mode:<interactive|auto> -->
@@ -173,7 +188,14 @@ Replace `grill-clean` with `N unresolved items` when unresolved gaps remain.
 
 ## Step 5 — Emit verdict
 
-After write-back, emit the verdict line to stdout:
+Before emitting the verdict for a tracker-first grill that filled at least one gap, verify the write-back contract and fail closed if any check fails — stop and report the specific violation instead of emitting a verdict:
+
+1. The rewritten description has no `Refinement notes` / `Grill findings` / rationale narrative section.
+2. The rewritten description has no unresolved "suggested … or …" / "option A or B" marker for a gap this run decided.
+3. Neither the rewritten description nor the results comment contains a bare non-issue `#<number>`.
+4. A `🔬 Grill / refinement results` comment was actually posted (skip this check only for the zero-iteration `grill_clean` path, which has no rationale to post).
+
+After write-back (and, for tracker-first, after the above verification passes), emit the verdict line to stdout:
 
 - `grill-clean` when no unresolved gaps remain.
 - `N unresolved items` (e.g. `3 unresolved items`) when gaps remain after all questions are answered.
