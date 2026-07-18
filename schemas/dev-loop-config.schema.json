@@ -15,7 +15,7 @@
       "type": "string",
       "enum": [
         "local-first",
-        "github-first"
+        "tracker-first"
       ]
     },
     "inputSource": {
@@ -668,7 +668,7 @@
             }
           },
           "additionalProperties": false,
-          "description": "GitHub Projects board identifier (explicit opt-in to Projects-based queue ordering)."
+          "description": "Deprecated: use tracker.board instead. GitHub Projects board identifier."
         },
         "archiveOlderThanDays": {
           "type": "integer",
@@ -678,6 +678,67 @@
       },
       "additionalProperties": false,
       "description": "Queue mode: parallelism, auto-filing caps, and Projects board opt-in."
+    },
+    "tracker": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tracker provider registry key. Built-in: \"github\" (default)."
+        },
+        "plugin": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Reserved: module specifier for an external tracker provider plugin (post-1.0, not implemented in this pass)."
+        },
+        "board": {
+          "type": "object",
+          "properties": {
+            "number": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "GitHub Projects board number."
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "description": "GitHub Projects board title."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Tracker board identifier; supersedes the deprecated queue.board."
+        },
+        "fieldMappings": {
+          "type": "object",
+          "properties": {
+            "next_up": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Provider status value for the next_up (pickup) logical column."
+            },
+            "in_progress": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Provider status value for the in_progress logical column."
+            },
+            "ready_for_review": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Provider status value for the ready_for_review logical column."
+            },
+            "done": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Provider status value for the done logical column."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Logical column -> provider-native status value."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Tracker seam config: provider (default \"github\"), board, and logical-column field mappings."
     },
     "internalPathPatterns": {
       "minItems": 1,

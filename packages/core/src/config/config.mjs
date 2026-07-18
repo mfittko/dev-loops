@@ -15,7 +15,16 @@ import { z } from "zod";
 
 // `strategy` and `inputSource` are single-value families (their only child was
 // a `default` wrapper) — flattened to a bare enum at the family key itself.
-const StrategyConfig = z.enum(["local-first", "github-first"]).describe("Work-intake strategy: local-first starts from a repo plan file, github-first from a tracked issue.");
+//
+// `tracker-first` renames the former `github-first` (issue #1408, the
+// tracker-agnostic seam: provider-neutral naming now that GitHub is one
+// tracker provider among a stable seam, not the only one). `github-first` is
+// still ACCEPTED as a deprecated alias — normalized to `tracker-first` with a
+// load-time warning in `loadDevLoopConfig` (see the alias-normalization pass
+// below `mergeConfigLayers`) — but this schema only validates the canonical
+// value, so the alias must be normalized on the raw merged object BEFORE it
+// reaches this parse.
+const StrategyConfig = z.enum(["local-first", "tracker-first"]).describe("Work-intake strategy: local-first starts from a repo plan file, tracker-first from a tracked issue (\"github-first\" is a deprecated accepted alias).");
 
 const InputSourceConfig = z.enum(["tracker", "phase-docs"]).describe("Where local-first work reads its spec: the tracker issue body, or repo phase docs.");
 
@@ -317,8 +326,37 @@ const QueueConfig = z.strictObject({
   maxParallel: z.number().int().min(1).max(10).default(3).describe("Maximum queue items worked in parallel."),
   maxAutoFiledIssues: z.number().int().min(0).max(100).default(10).describe("Cap on auto-filed issues per run."),
   reDispatchMaxRetries: z.number().int().min(0).max(10).default(1).describe("Retries when re-dispatching a failed queue item."),
-  board: QueueBoardConfig.describe("GitHub Projects board identifier (explicit opt-in to Projects-based queue ordering).").optional(),
+  // Deprecated: superseded by `tracker.board` (issue #1408, the tracker-agnostic
+  // seam). Kept accepted for back-compat — see resolveTrackerBoard, which reads
+  // `tracker.board` first and falls back to this field with a load-time warning.
+  board: QueueBoardConfig.describe("Deprecated: use tracker.board instead. GitHub Projects board identifier.").optional(),
   archiveOlderThanDays: z.number().int().positive().describe("Archive done board items older than this many days.").optional(),
+});
+
+// Logical board columns a tracker's fieldMappings maps to provider-native
+// status values (issue #1408). Keys are the real logical columns from
+// `../loop/queue-board-sync.mjs`'s `LOGICAL_COLUMN` — `next_up` is the
+// fail-closed PICKUP column `resolve-active-board-item.mjs` reads (load-bearing).
+const TrackerFieldMappingsConfig = z.strictObject({
+  next_up: z.string().trim().min(1).describe("Provider status value for the next_up (pickup) logical column.").optional(),
+  in_progress: z.string().trim().min(1).describe("Provider status value for the in_progress logical column.").optional(),
+  ready_for_review: z.string().trim().min(1).describe("Provider status value for the ready_for_review logical column.").optional(),
+  done: z.string().trim().min(1).describe("Provider status value for the done logical column.").optional(),
+});
+
+/**
+ * Tracker config (issue #1408, the tracker-agnostic seam). `provider` is a
+ * free-form registry key (not a zod enum): an unknown provider fails closed
+ * at `resolveTrackerAdapter` call time, not at config-parse time — the
+ * seam/resolver must not preclude a consumer registering an external
+ * provider post-1.0 (`plugin`, reserved, not implemented in this pass).
+ * `board` supersedes the deprecated `queue.board` (see resolveTrackerBoard).
+ */
+const TrackerConfig = z.strictObject({
+  provider: z.string().trim().min(1).describe("Tracker provider registry key. Built-in: \"github\" (default).").optional(),
+  plugin: z.string().trim().min(1).describe("Reserved: module specifier for an external tracker provider plugin (post-1.0, not implemented in this pass).").optional(),
+  board: QueueBoardConfig.describe("Tracker board identifier; supersedes the deprecated queue.board.").optional(),
+  fieldMappings: TrackerFieldMappingsConfig.describe("Logical column -> provider-native status value.").optional(),
 });
 
 /**
@@ -577,6 +615,7 @@ export const DevLoopConfigSchema = z.strictObject({
   workflow: WorkflowConfig.optional(),
   localImplementation: LocalImplementationConfig.optional(),
   queue: QueueConfig.optional(),
+  tracker: TrackerConfig.optional(),
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.optional(),
   uiReview: UiReviewConfig.optional(),
@@ -616,6 +655,13 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
     // queue.board is intentionally absent from defaults — setting it is an
     // explicit operator opt-in for Projects-based queue ordering.
   }),
+  tracker: Object.freeze({
+    provider: "github",
+    // tracker.board/fieldMappings are intentionally absent from defaults —
+    // board is an explicit operator opt-in (mirrors queue.board), and
+    // fieldMappings absent means "use the provider's own default column
+    // names" (DEFAULT_STATE_COLUMN_NAMES for the github provider).
+  }),
   internalPathPatterns: Object.freeze([
     "^scripts/",
     "^docs/",
@@ -643,6 +689,7 @@ export const FileConfigSchema = z.strictObject({
   workflow: WorkflowConfig.partial().describe("Workflow posture: draft-first, retrospectives, dev mode, async start.").optional(),
   localImplementation: LocalImplementationConfig.partial().describe("Local implementation dispatch (light mode for small scoped changes).").optional(),
   queue: QueueConfig.partial().describe("Queue mode: parallelism, auto-filing caps, and Projects board opt-in.").optional(),
+  tracker: TrackerConfig.partial().describe("Tracker seam config: provider (default \"github\"), board, and logical-column field mappings.").optional(),
   internalPathPatterns: InternalPatternsConfig.describe("Regex whitelist for internal-only PR detection.").optional(),
   worktree: WorktreeConfig.partial().describe("Worktree provisioning: gitignored files/dirs copied or symlinked into fresh worktrees.").optional(),
   uiReview: UiReviewConfig.partial().describe("UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps.").optional(),
@@ -1170,6 +1217,18 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
     return merged;
   }
 
+  // Deprecated `strategy: "github-first"` alias (issue #1408, the
+  // tracker-agnostic seam): normalized to "tracker-first" BEFORE this layer's
+  // own FileConfigSchema validation, since the schema enum only accepts the
+  // canonical value and would otherwise drop the whole layer as invalid.
+  if (data.strategy === "github-first") {
+    warnings.push(
+      `strategy: "github-first" is a deprecated alias for "tracker-first" (issue #1408). ` +
+      `Update ${path.basename(filePath)} to use "tracker-first"; the alias will be removed in a future version.`
+    );
+    data = { ...data, strategy: "tracker-first" };
+  }
+
   // Validate the file's structure before merging. Pre-existing behavior
   // (unrelated to the #1404 angle-entry redesign): a schema violation ANYWHERE
   // in this layer's file drops the WHOLE layer (errors is populated, `merged`
@@ -1320,6 +1379,20 @@ export async function loadDevLoopConfig(options = {}) {
       );
       merged = await applyLayer(merged, settingsPaths, "settings", warnings, errors);
     }
+  }
+
+  // Deprecated `queue.board` -> `tracker.board` alias (issue #1408, the
+  // tracker-agnostic seam). Runs on the fully-merged object (unlike the
+  // `strategy: "github-first"` alias above, this only affects cross-layer
+  // MERGE PRECEDENCE, not per-layer schema validity — queue.board is still a
+  // valid FileConfigSchema shape on its own — so normalizing once here, after
+  // every layer has merged, is sufficient).
+  if (isPlainObject(merged.queue?.board) && !isPlainObject(merged.tracker?.board)) {
+    warnings.push(
+      `queue.board is a deprecated alias for tracker.board (issue #1408). ` +
+      `Update .devloops to set tracker.board instead; the alias will be removed in a future version.`
+    );
+    merged = { ...merged, tracker: { ...(merged.tracker ?? {}), board: merged.queue.board } };
   }
 
   // Validate final merged config
@@ -2194,4 +2267,49 @@ export function resolveHumanHandoffConfig(config) {
     candidatesFrom: enabled ? candidatesFrom : [],
     assignees: enabled ? assignees : [],
   };
+}
+
+/**
+ * Resolve the tracker provider registry key (issue #1408). Defaults to
+ * `"github"` — the only built-in provider in v1 — when unset. Callers pass
+ * this to `resolveTrackerAdapter` (`@dev-loops/core/tracker`).
+ *
+ * @param {DevLoopConfig} config
+ * @returns {string}
+ */
+export function resolveTrackerProvider(config) {
+  const raw = config?.tracker?.provider;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : "github";
+}
+
+/**
+ * Resolve the effective tracker board identifier. `tracker.board` is
+ * canonical; `queue.board` is a DEPRECATED alias, already normalized onto
+ * `tracker.board` by `loadDevLoopConfig` (with a load-time warning) for any
+ * config that went through the loader. This resolver also accepts a
+ * hand-built config object that sets `queue.board` directly (bypassing the
+ * loader, e.g. in a test) and falls back to it — with no warning, since only
+ * the loader surfaces warnings.
+ *
+ * @param {DevLoopConfig} config
+ * @returns {{ number?: number, title?: string } | null}
+ */
+export function resolveTrackerBoard(config) {
+  if (isPlainObject(config?.tracker?.board)) return config.tracker.board;
+  if (isPlainObject(config?.queue?.board)) return config.queue.board;
+  return null;
+}
+
+/**
+ * Resolve the tracker's logical-column -> provider-status field mappings
+ * (issue #1408). Returns only the entries actually configured; callers merge
+ * this over their own provider-default column names (e.g.
+ * `DEFAULT_STATE_COLUMN_NAMES` in `../loop/queue-board-sync.mjs`).
+ *
+ * @param {DevLoopConfig} config
+ * @returns {{ next_up?: string, in_progress?: string, ready_for_review?: string, done?: string }}
+ */
+export function resolveTrackerFieldMappings(config) {
+  const raw = config?.tracker?.fieldMappings;
+  return isPlainObject(raw) ? { ...raw } : {};
 }

@@ -38,6 +38,9 @@ import {
   resolveGatePostFindingsComments,
   resolveRoleModel,
   resolveBaseBranch,
+  resolveTrackerProvider,
+  resolveTrackerBoard,
+  resolveTrackerFieldMappings,
 } from "../src/config/config.mjs";
 // ============================================================================
 // Schema validation tests (S1–S26)
@@ -94,7 +97,7 @@ describe("schema validation", () => {
   test("S6: strategy is a bare enum (flattened, #1404) — an object value is rejected", () => {
     const result = DevLoopConfigSchema.safeParse({
       version: 1,
-      strategy: { default: "github-first" },
+      strategy: { default: "tracker-first" },
     });
     assert.ok(!result.success);
   });
@@ -544,9 +547,9 @@ describe("BUILT_IN_DEFAULTS", () => {
     assert.equal(BUILT_IN_DEFAULTS.autonomy.humanMergeOnly, false);
   });
 
-  // P5 (#953) AC2: the github-first/built-in posture is unchanged by the
+  // P5 (#953) AC2: the tracker-first/built-in posture is unchanged by the
   // local-first extension-defaults opinion. These constants are the built-in
-  // surface and must stay github-first / high-noise-tolerant.
+  // surface and must stay tracker-first / high-noise-tolerant.
   test("queue.maxAutoFiledIssues built-in default stays 10 (#953 AC2)", () => {
     assert.equal(BUILT_IN_DEFAULTS.queue.maxAutoFiledIssues, 10);
   });
@@ -705,13 +708,13 @@ describe("loader — graceful degradation", () => {
       );
       await writeFile(
         path.join(piDir, "overrides.json"),
-        JSON.stringify({ version: 1, strategy: "github-first" }),
+        JSON.stringify({ version: 1, strategy: "tracker-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       // overrides.json beats defaults.json for strategy, but refinement falls through
-      assert.equal(result.config.strategy, "github-first");
+      assert.equal(result.config.strategy, "tracker-first");
       assert.equal(result.config.refinement.fanOut, 5);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -883,7 +886,7 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "settings.yaml"), [
         "version: 1",
-        "strategy: github-first",
+        "strategy: tracker-first",
       ].join("\n"));
       await writeFile(path.join(piDir, "overrides.yaml"), [
         "version: 1",
@@ -892,7 +895,7 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.deepEqual(result.errors, []);
-      assert.equal(result.config.strategy, "github-first");
+      assert.equal(result.config.strategy, "tracker-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -939,7 +942,7 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "settings.json"),
-        JSON.stringify({ version: 1, strategy: "github-first" }),
+        JSON.stringify({ version: 1, strategy: "tracker-first" }),
       );
       await writeFile(
         path.join(piDir, "overrides.json"),
@@ -948,7 +951,7 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.deepEqual(result.errors, []);
-      assert.equal(result.config.strategy, "github-first");
+      assert.equal(result.config.strategy, "tracker-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -962,10 +965,10 @@ describe("loader — graceful degradation", () => {
       await writeFile(path.join(piDir, "defaults.json"),
         JSON.stringify({ version: 1, strategy: "local-first" }));
       await writeFile(path.join(piDir, "defaults.yml"),
-        "version: 1\nstrategy: github-first");
+        "version: 1\nstrategy: tracker-first");
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.equal(result.config.strategy, "github-first", ".yml should take priority over JSON");
+      assert.equal(result.config.strategy, "tracker-first", ".yml should take priority over JSON");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1094,7 +1097,7 @@ describe("loader — graceful degradation", () => {
       );
       await writeFile(
         path.join(piDir, "overrides.json"),
-        JSON.stringify({ version: 2, strategy: "github-first" }),
+        JSON.stringify({ version: 2, strategy: "tracker-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
@@ -1350,6 +1353,102 @@ describe("loader — precedence", () => {
 });
 
 // ============================================================================
+// tracker: config block + deprecated aliases (issue #1408, the
+// tracker-agnostic seam)
+// ============================================================================
+
+describe("tracker config (#1408)", () => {
+  test("BUILT_IN_DEFAULTS.tracker.provider is github", () => {
+    assert.equal(BUILT_IN_DEFAULTS.tracker.provider, "github");
+  });
+
+  test("resolveTrackerProvider defaults to github when unset", () => {
+    assert.equal(resolveTrackerProvider({}), "github");
+    assert.equal(resolveTrackerProvider({ tracker: { provider: "jira" } }), "jira");
+  });
+
+  test("resolveTrackerBoard prefers tracker.board over the deprecated queue.board", () => {
+    assert.equal(resolveTrackerBoard({}), null);
+    assert.deepEqual(resolveTrackerBoard({ queue: { board: { title: "Q" } } }), { title: "Q" });
+    assert.deepEqual(resolveTrackerBoard({ tracker: { board: { number: 3 } } }), { number: 3 });
+    assert.deepEqual(
+      resolveTrackerBoard({ queue: { board: { title: "Q" } }, tracker: { board: { number: 3 } } }),
+      { number: 3 },
+    );
+  });
+
+  test("resolveTrackerFieldMappings returns only configured logical-column overrides", () => {
+    assert.deepEqual(resolveTrackerFieldMappings({}), {});
+    assert.deepEqual(
+      resolveTrackerFieldMappings({ tracker: { fieldMappings: { next_up: "Ready" } } }),
+      { next_up: "Ready" },
+    );
+  });
+
+  test("tracker.fieldMappings rejects an unknown logical column", () => {
+    const result = FileConfigSchema.safeParse({
+      version: 1,
+      tracker: { fieldMappings: { todo: "Backlog" } },
+    });
+    assert.ok(!result.success);
+  });
+
+  test("tracker.provider accepts any non-empty string (schema does not preclude an external provider)", () => {
+    const result = FileConfigSchema.safeParse({ version: 1, tracker: { provider: "jira" } });
+    assert.ok(result.success);
+  });
+
+  test("strategy: \"github-first\" is accepted as a deprecated alias for tracker-first, with a warning", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-tracker-alias-strategy-"));
+    try {
+      await writeFile(path.join(tmpDir, ".devloops"), "version: 1\nstrategy: github-first\n");
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(result.errors, []);
+      assert.equal(result.config.strategy, "tracker-first");
+      assert.ok(result.warnings.some((w) => /strategy: "github-first" is a deprecated alias/.test(w)));
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("queue.board is accepted as a deprecated alias for tracker.board, with a warning", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-tracker-alias-board-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\nqueue:\n  board:\n    title: Legacy Board\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.config.tracker.board, { title: "Legacy Board" });
+      assert.deepEqual(result.config.queue.board, { title: "Legacy Board" });
+      assert.ok(result.warnings.some((w) => /queue\.board is a deprecated alias for tracker\.board/.test(w)));
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("tracker.board set directly is not flagged as using the deprecated alias", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-tracker-board-canonical-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\ntracker:\n  board:\n    title: New Board\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.config.tracker.board, { title: "New Board" });
+      assert.equal(result.warnings.some((w) => /deprecated alias/.test(w)), false);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ============================================================================
 // mergeConfigLayers — angle arrays merge BY NAME across layers (D3)
 //
 // gates.<gate>.angles is the one place `mergeConfigLayers` does NOT wholesale-
@@ -1466,7 +1565,7 @@ describe("extension defaults", () => {
     try {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      // Extension defaults intend local-first; built-in defaults are github-first.
+      // Extension defaults intend local-first; built-in defaults are tracker-first.
       assert.equal(result.config.strategy, "local-first");
       assert.equal(result.config.workflow.requireDraftFirst, true);
       assert.equal(result.config.localImplementation.lightMode.enabled, true);
@@ -1499,11 +1598,11 @@ describe("extension defaults", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "defaults.yaml"),
-        "version: 1\nstrategy: github-first\n",
+        "version: 1\nstrategy: tracker-first\n",
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.equal(result.config.strategy, "github-first");
+      assert.equal(result.config.strategy, "tracker-first");
       // Workflow still comes from extension defaults because repo defaults did not set it.
       assert.equal(result.config.workflow.requireDraftFirst, true);
     } finally {
@@ -1516,11 +1615,11 @@ describe("extension defaults", () => {
     try {
       await writeFile(
         path.join(tmpDir, ".devloops"),
-        "version: 1\nstrategy: github-first\n",
+        "version: 1\nstrategy: tracker-first\n",
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.equal(result.config.strategy, "github-first");
+      assert.equal(result.config.strategy, "tracker-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
