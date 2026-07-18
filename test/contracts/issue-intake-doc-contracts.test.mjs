@@ -234,14 +234,33 @@ test("issue-intake flow carries the resolved repo slug through later GitHub issu
 
   assert.match(skillContent, /Carry that resolved repo slug through every later GitHub issue\/PR command/i);
   assert.match(skillContent, /gh issue create --repo <resolved-repo> --assignee @me/);
-  assert.match(skillContent, /node scripts\/github\/edit-issue\.mjs --repo <resolved-repo> --issue <number> --body-file <updated-body-file>/);
-  assert.match(skillContent, /node scripts\/github\/edit-issue\.mjs --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent/);
+  assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --body-file <updated-body-file>/);
+  assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee @me/);
+  assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent/);
   assert.match(skillContent, /gh pr edit <pr-number> --repo <resolved-repo> --title/);
   assert.match(skillContent, /gh pr ready <pr-number> --repo <resolved-repo>/);
   assert.match(skillContent, /gh pr review <pr-number> --repo <resolved-repo> --approve/);
   assert.match(skillContent, /detect-checkpoint-evidence\.mjs --repo <resolved-repo> --pr <pr-number>/);
   assert.doesNotMatch(skillContent, /--require-before-merge/, "the removed opt-in flag must not appear in the docs");
   assert.match(skillContent, /gh pr merge <pr-number> --repo <resolved-repo> --squash --delete-branch/);
+});
+
+test("residual raw-script refs are migrated to dev-loops subcommands (subcommand named first, raw kept only as fallback)", async () => {
+  // Every consumer-facing doc that used to instruct a raw `node scripts/*.mjs`
+  // call as the ONLY path must now name the routed `dev-loops <sub>` first. This
+  // pins the migration so a future revert to raw-only ships red (the generator
+  // --check only guarantees .claude mirror parity, not the source wording).
+  const [localImpl, grill, epic] = await Promise.all([
+    readRepo("skills/local-implementation/SKILL.md"),
+    readRepo("skills/loop-grill/SKILL.md"),
+    readRepo("skills/docs/epic-tree-refinement-procedure.md"),
+  ]);
+  // pre-flight-gate + ensure-worktree routed under the `loop` category.
+  assert.match(localImpl, /dev-loops loop pre-flight-gate /);
+  assert.match(localImpl, /dev-loops loop ensure-worktree /);
+  // edit-issue routed under the new `issue` category.
+  assert.match(grill, /dev-loops issue edit /);
+  assert.match(epic, /dev-loops issue edit /);
 });
 
 test("issue-intake docs define closed-match handling and keep the handoff helper on the resolved repo", async () => {

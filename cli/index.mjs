@@ -98,11 +98,17 @@ const SUBCOMMAND_ROUTES = {
     "info":                  "scripts/loop/info.mjs",
     "issue-refinement":     "scripts/loop/detect-issue-refinement-artifact.mjs",
     "debt-remediate":       "scripts/loop/debt-remediate.mjs",
+    "pre-flight-gate":      "scripts/loop/pre-flight-gate.mjs",
+    "ensure-worktree":      "scripts/loop/ensure-worktree.mjs",
   },
   pr: {
     create:             "scripts/github/create-pr.mjs",
     "ready-for-review": "scripts/github/ready-for-review.mjs",
     "reconcile-draft":  "scripts/github/reconcile-draft-gate.mjs",
+  },
+  issue: {
+    edit:   "scripts/github/edit-issue.mjs",
+    create: "scripts/github/create-issue.mjs",
   },
   queue: QUEUE_ROUTES,
   project: PROJECT_ROUTES,
@@ -137,13 +143,14 @@ const HELP_CATEGORY_LABELS = {
   gate: "Gate verdicts, evidence, and review operations",
   loop: "Loop lifecycle",
   pr: "PR helpers",
+  issue: "Issue helpers",
   queue: "Queue board: run + management (add/list/reorder/move/sync-status/archive)",
   project: "Alias for queue (GitHub Projects queue helpers)",
   inspect: "Inspection (Pi extension only)",
   refine: "Epic tree refinement verification",
 };
 
-const TOP_LEVEL_HELP_CATEGORY_ORDER = ["gate", "loop", "pr", "queue", "project", "inspect", "refine"];
+const TOP_LEVEL_HELP_CATEGORY_ORDER = ["gate", "loop", "pr", "issue", "queue", "project", "inspect", "refine"];
 
 const SUBCOMMAND_DESCRIPTIONS = {
   gate: {
@@ -172,11 +179,17 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "issue-refinement": "Detect issue refinement artifact",
     info: "Show read-only issue/PR state summary",
     "debt-remediate": "File debt remediation issues",
+    "pre-flight-gate": "Gate local implementation mutations before planning or editing",
+    "ensure-worktree": "Create/reuse and provision a loop-owned worktree",
   },
   pr: {
     create: "Create PR (always draft, self-assigned by default)",
     "ready-for-review": "Mark PR ready for review",
     "reconcile-draft": "Reconcile non-draft PR",
+  },
+  issue: {
+    edit: "Edit issue title/body/assignees/milestone",
+    create: "Create an issue",
   },
   queue: QUEUE_DESCRIPTIONS,
   project: PROJECT_DESCRIPTIONS,
