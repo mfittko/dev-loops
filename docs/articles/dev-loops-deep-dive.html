@@ -425,6 +425,56 @@
 
   <p>A state graph guarantees the behavior a prompt can only request. When the next step has to be knowable at any moment, the coordination layer itself should rest on something checkable.</p>
 
+  <h2 id="the-loop-heals-itself">The loop heals itself</h2>
+
+  <p>dev-loops treats a failure as a state to recover from. A failed CI check or a fail-closed tool response — a gate or wrapper that stops and surfaces the error — is detected and recorded on the pull request. The loop re-derives the next action from authoritative state and takes exactly one of three recovery moves: retry the check, run the review-fix-re-review loop until the change converges (bounded by a round cap, <code>refinement.maxCopilotRounds</code>), or stop and ask a human. Run progress is preserved as the recovery point, so the work resumes where it left off. Failing closed keeps the failure visible and red, so the loop recovers from the true state.</p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <div class="flow" role="img" aria-label="Self-healing recovery: a run in progress hits a failed check or fail-closed stop, which is detected and recorded, then the loop re-derives the next action and takes one of three recovery moves — retry the check, review-fix-re-review until it converges, or stop and ask a human — before resuming at the preserved progress and returning to the run.">
+        <div class="node start">Run&nbsp;in&nbsp;progress</div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">check fails / fails closed</span></div>
+        <div class="node">Detected&nbsp;&amp;&nbsp;recorded</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Re-derive&nbsp;the&nbsp;next&nbsp;action</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="flow-col">
+          <div class="node">Retry&nbsp;the&nbsp;check</div>
+          <div class="node">Review&nbsp;&rarr;&nbsp;fix&nbsp;&rarr;&nbsp;re-review&nbsp;(round-capped)</div>
+          <div class="node">Stop&nbsp;&amp;&nbsp;ask&nbsp;a&nbsp;human</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Resume&nbsp;at&nbsp;preserved&nbsp;progress</div>
+      </div>
+    </div>
+    <figcaption><b>Diagram 5 — Self-healing recovery.</b> A failed check or fail-closed stop is detected and recorded, then the loop re-derives the next action and takes one of three recovery moves before resuming at the preserved progress.</figcaption>
+  </figure>
+
+  <h2 id="the-loop-improves-itself">The loop improves itself</h2>
+
+  <p>The same machinery that ships a change also sharpens the next one. Grilling refines a raw issue into a locked spec before any code is written. The fan-out review angles (Diagram 3), extendable per repository, and the review-fix rounds tighten the change while it is in flight. After merge, a retrospective records advisory findings on the change; where they warrant it, the conductor opens follow-ups as new tracked issues, carrying improvement from one change into the next.</p>
+
+  <figure>
+    <div class="diagram-scroll">
+      <div class="flow" role="img" aria-label="Self-improving loop: grilling refines an issue into a locked spec, which is implemented, reviewed by fan-out angles, converged through review-fix rounds, and merged; a post-merge retrospective records advisory findings that the conductor can open as follow-up issues, feeding back into grilling the next issue.">
+        <div class="node start">Grill&nbsp;&amp;&nbsp;refine&nbsp;into&nbsp;a&nbsp;locked&nbsp;spec</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Implement</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Fan-out&nbsp;review&nbsp;angles</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Review/fix&nbsp;rounds&nbsp;converge</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Merge</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Retrospective&nbsp;(advisory)</div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">conductor opens, then back to grilling</span></div>
+        <div class="node">Follow-ups&nbsp;(new&nbsp;tracked&nbsp;issues)</div>
+      </div>
+    </div>
+    <figcaption><b>Diagram 6 — Self-improving feedback loop.</b> Grilling locks a spec before code, the fan-out and review-fix rounds tighten the change in flight, and a post-merge retrospective records advisory findings the conductor can open as follow-ups that feed the next cycle.</figcaption>
+  </figure>
+
   <div class="part">
     <p class="kicker">Part 2</p>
     <h2>Make the waiting visible</h2>
@@ -456,7 +506,7 @@
         <div class="node">Recover</div>
       </div>
     </div>
-    <figcaption><b>Diagram 5 — The interrupt-cost chain.</b> A five-minute question triggers five transitions, and the answer itself is only one of them.</figcaption>
+    <figcaption><b>Diagram 7 — The interrupt-cost chain.</b> A five-minute question triggers five transitions, and the answer itself is only one of them.</figcaption>
   </figure>
 
   <p>The five minutes of answering is the small box in the middle. The notice, switch, rebuild, and recover are the tax, and both sides of the exchange pay it. Across a queue of work, these costs multiply. Each handoff is an interrupt for whoever receives it, so a backlog of pending handoffs is a backlog of context switches waiting to happen.</p>
@@ -481,7 +531,7 @@
         <div class="node start">Receiver&nbsp;asks</div>
       </div>
     </div>
-    <figcaption><b>Diagram 6 — One handoff round trip.</b> Every question the state can't answer becomes an ask → answer → confirm cycle, and the work waits until it closes — then the next ambiguity restarts it.</figcaption>
+    <figcaption><b>Diagram 8 — One handoff round trip.</b> Every question the state can't answer becomes an ask → answer → confirm cycle, and the work waits until it closes — then the next ambiguity restarts it.</figcaption>
   </figure>
 
   <p>A mix of humans and AI agents makes it worse. Ambiguous ownership pauses a human until they ask. Missing context halts an agent, which either guesses and leaves you the cleanup or stops cold. Every human-to-agent and agent-to-human swap is one more place the state can drop on the floor. &quot;More hands make it faster&quot; holds only when the state survives each handoff intact, and any boundary it can fall through quietly cancels the gain you were counting on.</p>
@@ -529,7 +579,7 @@
         <div class="node start">Capture&nbsp;state</div>
       </div>
     </div>
-    <figcaption><b>Diagram 7 — The measurement loop.</b> Capture, measure, change, verify — then back to capture. It repeats as a cycle, because the slowest transition moves as you fix things.</figcaption>
+    <figcaption><b>Diagram 9 — The measurement loop.</b> Capture, measure, change, verify — then back to capture. It repeats as a cycle, because the slowest transition moves as you fix things.</figcaption>
   </figure>
 
   <p>This is ordinary improvement discipline, applied to the part of delivery that has stayed invisible. Shortening a wait depends on measuring it, and measuring it depends on capturing its state.</p>
@@ -578,7 +628,7 @@
         <path d="M320,282 L320,314" stroke="rgba(167,139,250,0.7)" fill="none" marker-end="url(#ah2)"/>
       </svg>
     </div>
-    <figcaption><b>Diagram 8 — Grounding &quot;observable state&quot; in real mechanisms.</b> The board carries owner and next step, the gate trail carries the latest decision, the resolver answers whose move it is, and safe automation runs on that confirmed state.</figcaption>
+    <figcaption><b>Diagram 10 — Grounding &quot;observable state&quot; in real mechanisms.</b> The board carries owner and next step, the gate trail carries the latest decision, the resolver answers whose move it is, and safe automation runs on that confirmed state.</figcaption>
   </figure>
 
   <p>These are the same mechanisms from Part 1, read from the other side. The board, the gates, and the resolver carry the four fields latent in the work, ready to surface. Making them explicit stops them from leaking.</p>

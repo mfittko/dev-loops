@@ -53,6 +53,70 @@ Model choice is configuration in the same spirit. Roles map to model tiers, and 
 
 That split is the practical argument for model flexibility. The structure constrains how far any single step can stray: each step is bounded, each gate fails closed, and the review fan-out checks the work regardless of which model produced it. So the quality bar sits where the gates put it, and a cheaper or self-hosted model can carry the routine steps while the strongest model you have is reserved for the judgment-heavy ones.
 
+## It heals and improves itself
+
+The loop already fails closed when a decision is ambiguous; the same posture covers failure. When a CI check fails or a tool response fails closed, the loop re-derives the next action from the state it already has, then retries the step, runs the review-fix rounds until the change converges, or stops and asks a human. The work resumes from the progress it already had.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Run
+  Run --> Fails: check or tool fails closed
+  Fails --> Rederive: re-derive next action
+  Rederive --> Retry
+  Rederive --> ReviewFix: review, fix, re-review
+  Rederive --> AskHuman: ask a human
+  Retry --> Resume
+  ReviewFix --> Resume
+  AskHuman --> Resume
+  Resume --> [*]
+```
+
+*Diagram 1 — Self-healing. A failed check or a fail-closed tool response re-derives the next action, then retries, resolves through review, or asks a human — and resumes at the progress already made.*
+
+<!-- figure
+      <div class="flow" role="img" aria-label="Self-healing: a failed check or fail-closed tool triggers re-deriving the next action, which retries, runs review-fix-re-review, or asks a human, then resumes at preserved progress.">
+        <div class="node start">Check&nbsp;or&nbsp;tool&nbsp;fails&nbsp;closed</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Re-derive&nbsp;next&nbsp;action</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="flow-col">
+          <div class="node">Retry</div>
+          <div class="node">Review&nbsp;&rarr;&nbsp;fix&nbsp;&rarr;&nbsp;re-review</div>
+          <div class="node">Ask&nbsp;a&nbsp;human</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Resume&nbsp;at&nbsp;preserved&nbsp;progress</div>
+      </div>
+-->
+
+The loop also sharpens its own inputs over time. Grilling turns a raw issue into a locked spec before any work starts, the review angles and the review/fix rounds tighten the change while it's in flight, and after merge a retrospective records advisory findings the conductor opens as new tracked issues that feed the next grill.
+
+```mermaid
+flowchart LR
+  A[Grill the issue] --> B[Review / fix rounds]
+  B --> C[Merge]
+  C --> D[Retrospective]
+  D -->|conductor opens| E[Follow-up issues]
+  E --> A
+```
+
+*Diagram 2 — Self-improving. Grilling locks the spec, review and fix rounds tighten the change, and a post-merge retrospective records advisory findings the conductor opens as new follow-up issues.*
+
+<!-- figure
+      <div class="flow" role="img" aria-label="Self-improving: grilling the issue leads to review and fix rounds, then merge, then a post-merge retrospective whose advisory findings the conductor opens as follow-up issues feeding back into grilling.">
+        <div class="node start">Grill&nbsp;the&nbsp;issue</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Review&nbsp;/&nbsp;fix&nbsp;rounds</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Merge</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Retrospective&nbsp;(advisory)</div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">conductor&nbsp;opens&nbsp;follow-ups</span></div>
+        <div class="node">Back&nbsp;to&nbsp;grilling</div>
+      </div>
+-->
+
 ## Set it up
 
 dev-loops drives an ordinary GitHub pull-request workflow from inside Claude Code or Pi. You need Node 24 or newer and the GitHub CLI (`gh`) authenticated for your repository.

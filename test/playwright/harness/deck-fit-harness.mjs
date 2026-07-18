@@ -256,6 +256,7 @@ export const DECK_REGISTRY = {
       { id: "the-work", stateName: "The work" },
       { id: "model-agnostic", stateName: "Model agnostic" },
       { id: "proof", stateName: "Proof (data)" },
+      { id: "self-healing", stateName: "Self-healing / self-improving" },
       { id: "setup", stateName: "Setup" },
     ],
   },
@@ -270,6 +271,8 @@ export const DECK_REGISTRY = {
       { id: "safe-pauses", stateName: "Safe pauses", capture: false },
       { id: "steering", stateName: "Steering", capture: false },
       { id: "parallel-review", stateName: "Parallel review", capture: true },
+      { id: "self-healing", stateName: "Self-healing recovery", capture: true },
+      { id: "self-improving", stateName: "Self-improving loop", capture: true },
       { id: "trust", stateName: "Trust / never-lie", capture: false },
       { id: "why-graphs", stateName: "Why graphs", capture: true },
       // Part 2 — make the waiting visible

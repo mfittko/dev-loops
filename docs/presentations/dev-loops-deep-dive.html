@@ -374,6 +374,80 @@
   </div>
 </section>
 
+<section class="slide" id="self-healing">
+  <div class="slide-inner">
+    <p class="kicker">Self-healing</p>
+    <h2>The Loop Recovers and Resumes</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li>A failed CI check or a <strong>fail-closed</strong> tool response is <strong>detected and recorded</strong> on the pull request.</li>
+          <li>The resolver <strong>re-derives the next action</strong> from authoritative state, and the run resumes from there.</li>
+          <li>Recovery is one of three moves: retry the check, run review&rarr;fix&rarr;re-review until it converges (round-capped by <code>refinement.maxCopilotRounds</code>), or stop and ask a human.</li>
+          <li>Run progress is <strong>preserved</strong> through the recovery, so nothing already done gets redone.</li>
+        </ul>
+      </div>
+      <div class="glass-card flow-card">
+        <p class="card-label">Failure detected, one recovery move, resume</p>
+        <div class="flow-scroll">
+          <div class="flow">
+            <div class="node start">Run</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node accent">Fails&nbsp;/&nbsp;fails-closed</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node accent">Re-derive&nbsp;next&nbsp;action</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="flow-col">
+              <div class="node">Retry&nbsp;the&nbsp;check</div>
+              <div class="node">Review&nbsp;&rarr;&nbsp;fix&nbsp;&rarr;&nbsp;re-review</div>
+              <div class="node">Ask&nbsp;a&nbsp;human</div>
+            </div>
+            <div class="edge"><span class="arrow">&#8635;</span><span class="edge-label">resume: progress preserved</span></div>
+            <div class="node start">Run</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="self-improving">
+  <div class="slide-inner">
+    <p class="kicker">Self-improving</p>
+    <h2>Each Change Sharpens the Next</h2>
+    <div class="grid grid-2">
+      <div class="glass-card">
+        <ul class="tight-list">
+          <li><strong>Grilling</strong> locks a spec before any code moves, so implementation starts from a settled shape.</li>
+          <li>Review runs as <strong>fan-out angles</strong> &mdash; extendable per repo &mdash; each reading the same evidence from a different lens.</li>
+          <li><strong>Review&rarr;fix rounds</strong> tighten the change in flight until it converges.</li>
+          <li>After merge, a <strong>retrospective</strong> records advisory findings on the change that the conductor opens as new tracked issues, feeding the next grill.</li>
+        </ul>
+      </div>
+      <div class="glass-card flow-card">
+        <p class="card-label">Each merge feeds the next issue</p>
+        <div class="flow-scroll">
+          <div class="flow">
+            <div class="node start">Grill&nbsp;/&nbsp;refine</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Implement</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node accent">Fan-out&nbsp;angles</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node accent">Review&nbsp;/&nbsp;fix&nbsp;converge</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Merge</div>
+            <div class="edge"><span class="arrow">&rarr;</span></div>
+            <div class="node">Retrospective&nbsp;&rarr;&nbsp;follow-ups</div>
+            <div class="edge"><span class="arrow">&#8635;</span><span class="edge-label">loop back to: grill / refine</span></div>
+            <div class="node start">Grill&nbsp;/&nbsp;refine</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="slide" id="trust">
   <div class="slide-inner">
     <p class="kicker">Verified done</p>
