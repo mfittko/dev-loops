@@ -14,6 +14,26 @@ test("decideBashGate allows non-gated commands", () => {
   assert.equal(decideBashGate({ command: "gh pr view 1", repoSlug: TARGET }).decision, "allow");
 });
 
+test("decideBashGate denies git stash on the target repo (refs/stash is shared across worktrees)", () => {
+  const d = decideBashGate({ command: "git stash", repoSlug: TARGET });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /git stash blocked/);
+  assert.match(d.reason, /refs\/stash is shared/);
+});
+
+test("decideBashGate allows git stash off the target repo", () => {
+  assert.equal(decideBashGate({ command: "git stash pop", repoSlug: "someone/else" }).decision, "allow");
+  assert.equal(decideBashGate({ command: "git stash pop", repoSlug: null }).decision, "allow");
+});
+
+test("decideBashGate denies git stash behind env-assignment/wrapper/path/git-option prefixes", () => {
+  assert.equal(decideBashGate({ command: "GIT_DIR=.git git stash", repoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "command git stash", repoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "/usr/bin/git stash", repoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "git -C /tmp stash", repoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "git -c foo=bar stash pop", repoSlug: TARGET }).decision, "deny");
+});
+
 test("decideBashGate denies ungated gh pr ready in the target repo", () => {
   const d = decideBashGate({ command: "gh pr ready 17", repoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");

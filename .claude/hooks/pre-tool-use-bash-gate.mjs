@@ -2,7 +2,7 @@
 /**
  * PreToolUse Bash gate hook (#773).
  *
- * Blocks three commands on the target repo; everything else passes through:
+ * Blocks these commands on the target repo; everything else passes through:
  *   - `gh pr create` — blocked outright (no gate evidence to check): PR creation must flow through
  *     the canonical wrapper scripts/github/create-pr.mjs (dev-loops pr create), which always drafts
  *     and self-assigns. Closes the hole where raw `gh pr create` opens a ready PR (draft-first breach).
@@ -12,6 +12,8 @@
  *     where a hand-run merge skips the loop's pre-merge gate check (and thus the pre-approval gate).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
+ *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
+ *     repo's one `.git` directory (docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -22,6 +24,7 @@ import {
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
   commandContainsRawExternalWrite,
+  commandContainsGitStash,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
@@ -39,7 +42,8 @@ const isReady = typeof command === "string" && commandContainsGhPrReady(command)
 const isMerge = typeof command === "string" && commandContainsGhPrMerge(command);
 const isCreate = typeof command === "string" && commandContainsGhPrCreate(command);
 const isExternalWrite = typeof command === "string" && commandContainsRawExternalWrite(command);
-if (!isReady && !isMerge && !isCreate && !isExternalWrite) {
+const isStash = typeof command === "string" && commandContainsGitStash(command);
+if (!isReady && !isMerge && !isCreate && !isExternalWrite && !isStash) {
   emitAllow();
 }
 

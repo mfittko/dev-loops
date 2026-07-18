@@ -166,6 +166,20 @@ node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>)
 Clean up promptly after merge so stale worktrees do not accumulate under
 `tmp/worktrees/`.
 
+## Never `git stash` in a shared-`.git` layout
+
+<!-- rule: WORKTREE-NO-STASH -->
+`WORKTREE-NO-STASH`: Agents MUST NOT run `git stash` (or `git stash pop`/`apply`) in this repo.
+`refs/stash` is a single ref shared by every worktree over this repo's one `.git` directory, so a
+stash pushed from one worktree can pop into a different worktree — parallel agents have already
+picked up each other's stashed files this way. Inspect working-tree changes with `git diff` (or
+`git diff --staged`) instead; save them to a patch file (`git diff > patch.diff`, later `git apply
+patch.diff`) if they need to survive a checkout, or use a separate scratch worktree/checkout
+rather than stashing. The Claude Code PreToolUse Bash gate blocks `git stash` outright on this
+repo — including behind an env-assignment, a `command`/`env`/`exec` wrapper, a path to the `git`
+binary, or leading git global options (`-C`, `-c`, `--git-dir=`, `--work-tree=`) between `git` and
+`stash`.
+
 ## Fallback when worktrees are unavailable
 
 <!-- rule: WORKTREE-FALLBACK -->

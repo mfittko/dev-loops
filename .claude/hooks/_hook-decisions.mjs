@@ -22,6 +22,7 @@ import {
   extractRepoFlagsFromGhPrCreateSegments,
   commandContainsRawExternalWrite,
   extractRepoFlagsFromExternalWriteSegments,
+  commandContainsGitStash,
   TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
 
@@ -84,6 +85,19 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 export function decideBashGate({ command, repoSlug = null, gatePassed = false, gateError = null, agentType = null }) {
   if (typeof command !== "string") {
     return ALLOW;
+  }
+  // `git stash` writes to `refs/stash`, one ref shared by every worktree over this repo's single
+  // `.git` directory — a stash from one worktree can pop into another's. Block it outright on the
+  // target repo; see docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout for the
+  // stash-free alternative (git diff / a patch file / a scratch checkout).
+  if (commandContainsGitStash(command) && (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase()) {
+    return {
+      decision: "deny",
+      reason:
+        "git stash blocked: refs/stash is shared across every worktree over this repo's one .git directory, " +
+        "so a stash can pop into a different worktree. Use `git diff` (or `git diff --staged`), save changes " +
+        "to a patch file, or use a separate scratch worktree instead of stashing.",
+    };
   }
   // Subagent-scoped external-write guard: block ad-hoc `gh issue create`/`gh issue comment`/
   // `gh issue edit`/`gh pr comment` on the target repo from a subagent, so external writes flow through the

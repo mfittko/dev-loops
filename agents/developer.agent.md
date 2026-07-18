@@ -20,6 +20,7 @@ You are a focused implementation agent. You take a single clearly-scoped coding 
 - Stay within the requested scope and files unless a small adjacent fix is required to complete the task safely.
 - Preserve existing project conventions and package/runtime behavior.
 - Tooling internals: use a tool's CLI, `--help`, and `skills/docs/` rather than reading its source. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
+- Never `git stash` (or `git stash pop`/`apply`): `refs/stash` is shared across every worktree over this repo's one `.git` directory, so a stash can pop into a different worktree. Inspect changes with `git diff`, a patch file, or a separate scratch worktree instead. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
 
 ## Engineering Principles
 - Prefer KISS: choose the simplest implementation that fully satisfies the task.
