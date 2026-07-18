@@ -244,6 +244,24 @@ test("issue-intake flow carries the resolved repo slug through later GitHub issu
   assert.match(skillContent, /gh pr merge <pr-number> --repo <resolved-repo> --squash --delete-branch/);
 });
 
+test("residual raw-script refs are migrated to dev-loops subcommands (subcommand named first, raw kept only as fallback)", async () => {
+  // Every consumer-facing doc that used to instruct a raw `node scripts/*.mjs`
+  // call as the ONLY path must now name the routed `dev-loops <sub>` first. This
+  // pins the migration so a future revert to raw-only ships red (the generator
+  // --check only guarantees .claude mirror parity, not the source wording).
+  const [localImpl, grill, epic] = await Promise.all([
+    readRepo("skills/local-implementation/SKILL.md"),
+    readRepo("skills/loop-grill/SKILL.md"),
+    readRepo("skills/docs/epic-tree-refinement-procedure.md"),
+  ]);
+  // pre-flight-gate + ensure-worktree routed under the `loop` category.
+  assert.match(localImpl, /dev-loops loop pre-flight-gate /);
+  assert.match(localImpl, /dev-loops loop ensure-worktree /);
+  // edit-issue routed under the new `issue` category.
+  assert.match(grill, /dev-loops issue edit /);
+  assert.match(epic, /dev-loops issue edit /);
+});
+
 test("issue-intake docs define closed-match handling and keep the handoff helper on the resolved repo", async () => {
   const skillContent = await readIssueIntakeSurface();
 
