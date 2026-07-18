@@ -35,8 +35,11 @@ export function resolveTrackerAdapter(config, { env, ghCommand, providers = BUIL
   const factory = providers[provider];
   if (typeof factory !== "function") {
     throw new Error(
-      `resolveTrackerAdapter: unknown tracker provider "${provider}" (known: ${Object.keys(providers).join(", ")}). ` +
-      `External providers are registered by passing { providers } to resolveTrackerAdapter, not via config alone.`,
+      `Unknown tracker.provider "${provider}" — no adapter is registered for it. ` +
+      `Built in: ${Object.keys(providers).join(", ")}. ` +
+      `An external provider is a post-1.0 consumer concern: register it by passing ` +
+      `{ providers: { ...builtins, "${provider}": createYourAdapter } } to resolveTrackerAdapter ` +
+      `(setting tracker.provider in .devloops alone does not register one).`,
     );
   }
   return factory({ ...(env !== undefined ? { env } : {}), ...(ghCommand !== undefined ? { ghCommand } : {}) });

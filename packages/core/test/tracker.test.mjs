@@ -263,7 +263,7 @@ test("resolveTrackerAdapter honors config.tracker.provider and fails closed on a
   assert.equal(isTrackerAdapter(adapter), true);
   assert.throws(
     () => resolveTrackerAdapter({ tracker: { provider: "jira" } }),
-    /unknown tracker provider "jira"/,
+    /Unknown tracker\.provider "jira".*Built in: github/s,
   );
 });
 

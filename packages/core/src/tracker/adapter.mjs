@@ -19,7 +19,7 @@
  *     valid Tracker.
  *
  * @typedef {Object} TrackerIssue
- * @property {string} id
+ * @property {string|number} id
  * @property {string} title
  * @property {string} body
  * @property {string} url
