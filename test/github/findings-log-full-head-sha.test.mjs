@@ -17,8 +17,10 @@ import { runNode as runNodeHelper } from "../_helpers.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildFanoutEnforcement } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { parseUpsertCheckpointVerdictCliArgs } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { normalizeFullHeadSha } from "../../scripts/lib/head-sha.mjs";
 
 const writeGateFindingsLogScript = path.resolve("scripts/github/write-gate-findings-log.mjs");
+const fallbackPosterScript = path.resolve("skills/dev-loop/scripts/post-gate-verdict-fallback.mjs");
 
 test("write-gate-findings-log (#1407): a SHORT --head-sha fails closed and writes no ledger", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-full-head-sha-short-"));
@@ -99,4 +101,31 @@ test("upsert-checkpoint-verdict (#1407): a SHORT --head-sha also fails closed at
     ]),
     /FULL head commit SHA|40 or 64 hex/,
   );
+});
+
+test("normalizeFullHeadSha (#1407): accepts 40- and 64-hex, rejects every other length", () => {
+  assert.equal(normalizeFullHeadSha("945391c0abcdef1234567890abcdef1234567890"), "945391c0abcdef1234567890abcdef1234567890"); // 40 (SHA-1)
+  assert.equal(normalizeFullHeadSha("A".repeat(64)), "a".repeat(64)); // 64 (SHA-2), lowercased
+  assert.equal(normalizeFullHeadSha("abc1234"), null); // short prefix
+  assert.equal(normalizeFullHeadSha("a".repeat(50)), null); // off-length (between 40 and 64)
+  assert.equal(normalizeFullHeadSha("a".repeat(41)), null); // 41
+  assert.equal(normalizeFullHeadSha(`  ${"b".repeat(40)}  `), "b".repeat(40)); // trims
+  assert.equal(normalizeFullHeadSha("z".repeat(40)), null); // non-hex
+  assert.equal(normalizeFullHeadSha(undefined), null);
+});
+
+test("post-gate-verdict-fallback (#1407): the bundled fallback poster also rejects a SHORT --head-sha", async () => {
+  // The fallback poster (zero-dep, plugin-bundled) writes the same head-SHA gate
+  // marker the reader compares by equality, so it must fail closed on a prefix too.
+  const result = await runNodeHelper(fallbackPosterScript, [
+    "--repo", "owner/repo",
+    "--pr", "42",
+    "--head-sha", "945391c0",
+    "--verdict", "clean",
+    "--findings-summary", "no issues",
+    "--next-action", "ready",
+    "--gh-command", "/bin/false", // never reached: parse fails first
+  ], { cwd: process.cwd() });
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /FULL head commit SHA|40 or 64 hex/);
 });

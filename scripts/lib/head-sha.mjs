@@ -12,8 +12,6 @@
 // compatibility. Provenance-only fields (carriedFromHead, resolvedIn) stay a
 // 7-64 prefix — they are recorded values, not path/marker keys.
 
-export const FULL_HEAD_SHA_LENGTHS = [40, 64];
-
 /**
  * Normalize a full head SHA. Returns the lowercased 40- or 64-hex SHA, or null
  * if the value is not a full-length hex SHA (a short prefix returns null).

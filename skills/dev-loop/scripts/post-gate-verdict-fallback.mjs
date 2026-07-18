@@ -47,14 +47,19 @@ function isValidRepoSlug(repo) {
   if (parts.length !== 2) return false;
   return isSafeRepoSegment(parts[0]) && isSafeRepoSegment(parts[1]);
 }
-const SHA_PATTERN = /^[0-9a-f]{7,64}$/i;
+// FULL head commit SHA only (40-hex SHA-1 / 64-hex SHA-2). This poster writes the
+// same `**Reviewed head SHA:**` marker the pre-merge reader parses and compares by
+// equality against the resolved full head SHA, so a short prefix would reproduce the
+// unfindable/never-current marker block. Mirrors scripts/lib/head-sha.mjs, inlined
+// because this fallback ships in the plugin (zero-dep, cannot import scripts/lib).
+const SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const USAGE = `Usage: post-gate-verdict-fallback.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>] [--gh-command <path>]
 Minimal fallback poster for draft_gate / pre_approval_gate checkpoint verdict comments.
 Use only when @dev-loops/core is not installed; otherwise prefer scripts/github/upsert-checkpoint-verdict.mjs.
 Required:
   --repo <owner/name>
   --pr <number>
-  --head-sha <sha>                            Full or 7+ char hex prefix
+  --head-sha <sha>                            FULL head commit SHA (40 or 64 hex chars) — a short prefix is rejected
   --verdict <clean|findings_present|blocked>
   --findings-summary <text>                 Single-line summary
   --findings-file <path>                    Read summary from file (preserves
@@ -198,7 +203,7 @@ export function parsePostGateVerdictFallbackCliArgs(argv, { parseError } = {}) {
     if (token === "--head-sha") {
       const headSha = normalizeHeadSha(requireOptionValue(args, "--head-sha", parseErr));
       if (!headSha) {
-        throw parseErr("--head-sha must be a 7-64 character hexadecimal SHA");
+        throw parseErr("--head-sha must be the FULL head commit SHA (40 or 64 hex chars), not a short prefix — the gate marker is keyed by it and the pre-merge check resolves the full head SHA");
       }
       options.headSha = headSha;
       continue;
