@@ -642,6 +642,156 @@ test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fa
   }
 });
 
+test("detect-copilot-loop-state excludes a gate-evidence commit STATUS (not check-run) the same way as the check-runs path (#1385 shifted gate-evidence to an explicit StatusContext)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-evidence-status-context-"));
+
+  try {
+    const emptyThreads = JSON.stringify({
+      data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } },
+    });
+
+    const { env } = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({
+          isDraft: false,
+          state: "OPEN",
+          number: 17,
+          headRefOid: "newsha",
+          reviews: [
+            {
+              id: "r-1",
+              author: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              submittedAt: "2026-06-02T08:00:00Z",
+              commit: { oid: "oldsha-1" },
+            },
+          ],
+          // Mirrors the live #1410 rollup: gate-evidence is a StatusContext
+          // (posted via `gh api statuses`, #1385), every check-run is green.
+          statusCheckRollup: [
+            { context: "gate-evidence", state: "FAILURE" },
+            { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
+          ],
+        }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: emptyThreads + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        stdout: JSON.stringify({
+          check_runs: [
+            { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
+          ],
+        }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        stdout: JSON.stringify({
+          statuses: [
+            { context: "gate-evidence", state: "failure" },
+          ],
+        }) + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0, `stderr: ${result.stderr}`);
+
+    const output = JSON.parse(result.stdout);
+    // Not "failure": the gate-evidence StatusContext is excluded from the
+    // commit-status signal exactly like a gate-evidence check-run would be.
+    assert.equal(output.snapshot.ciStatus, "success");
+    assert.deepEqual(output.snapshot.excludedFailureDetails, ["gate-evidence"]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-copilot-loop-state keeps a genuinely-failing commit status as failure alongside a red gate-evidence status (exclusion does not mask real failures)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-evidence-status-real-failure-"));
+
+  try {
+    const emptyThreads = JSON.stringify({
+      data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } },
+    });
+
+    const { env } = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({
+          isDraft: false,
+          state: "OPEN",
+          number: 17,
+          headRefOid: "newsha",
+          reviews: [
+            {
+              id: "r-1",
+              author: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              submittedAt: "2026-06-02T08:00:00Z",
+              commit: { oid: "oldsha-1" },
+            },
+          ],
+          // Rollup (fallback layer) is clean except gate-evidence — this is what
+          // triggers the current-head refresh below (fallbackCiStatus: "success").
+          statusCheckRollup: [
+            { context: "gate-evidence", state: "FAILURE" },
+            { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
+          ],
+        }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: emptyThreads + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        stdout: JSON.stringify({
+          check_runs: [
+            { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
+          ],
+        }) + "\n",
+      },
+      // The head-scoped commit-status refresh surfaces a genuinely failing,
+      // non-gate-evidence status alongside gate-evidence: the exclusion must
+      // not mask it.
+      {
+        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        stdout: JSON.stringify({
+          statuses: [
+            { context: "gate-evidence", state: "failure" },
+            { context: "verify-suite (test:core)", state: "failure" },
+          ],
+        }) + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 0, `stderr: ${result.stderr}`);
+
+    const output = JSON.parse(result.stdout);
+    // A real failing leg (verify-suite) must still fail the loop even with
+    // gate-evidence excluded — the exclusion is surgical to gate-evidence only.
+    assert.equal(output.snapshot.ciStatus, "failure");
+    assert.deepEqual(output.snapshot.excludedFailureDetails, ["gate-evidence"]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fallback when new commits land after resolved comments", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-round-cap-rerequest-"));
 
