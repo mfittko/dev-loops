@@ -276,7 +276,7 @@ queue:
   nonSuccessStatus: Backlog # optional fallback column for non-success outcomes
 ```
 
-If `queue.board` (neither `number` nor `title`) is set, no board transitions are attempted and queue behavior is unchanged.
+If `queue.board` is not set (neither `number` nor `title`), no board transitions are attempted and queue behavior is unchanged.
 
 ### Result shape
 
