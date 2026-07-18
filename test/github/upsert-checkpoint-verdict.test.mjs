@@ -426,6 +426,25 @@ test("summarizeCheckpointVerdictText renders at-limit content in full with no tr
   assert.doesNotMatch(summarized, /…\[truncated/);
 });
 
+test("an over-limit posted-comment arg (--inline-reason) fails closed with the usage payload, like every other arg error", () => {
+  // enforcePostedCommentLimit throws via parseError (carrying .usage), not a bare
+  // Error — so formatCliError renders the same { ok:false, error, usage } envelope
+  // as any other argument-validation failure instead of a usage-less one.
+  const args = [
+    "--repo", "o/n", "--pr", "7", "--head-sha", "abc1234",
+    "--verdict", "clean", "--findings-summary", "ok", "--next-action", "done",
+    "--execution-mode", "inline_single_agent",
+    "--inline-reason", "x".repeat(2001),
+  ];
+  let thrown;
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs(args),
+    (err) => { thrown = err; return /--inline-reason exceeds 2000 chars/.test(err.message); },
+  );
+  assert.equal(typeof thrown.usage, "string");
+  assert.match(thrown.usage, /Usage: upsert-checkpoint-verdict\.mjs/);
+});
+
 
 test("summarizeCheckpointVerdictText preserves multiline narrative text when no structured validation signals are present", () => {
   const narrative = [

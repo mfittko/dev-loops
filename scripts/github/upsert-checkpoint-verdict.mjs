@@ -161,7 +161,9 @@ function collapseWhitespace(value) {
 function enforcePostedCommentLimit(value, limit, fieldLabel) {
   const text = String(value);
   if (text.length > limit) {
-    throw new Error(
+    // parseError (not a bare Error) so the JSON envelope carries `usage`, like
+    // every other arg-validation failure in this CLI.
+    throw parseError(
       `${fieldLabel} exceeds ${limit} chars (${text.length} chars); a posted gate comment is never truncated — shorten ${fieldLabel} and retry.`,
     );
   }
