@@ -97,6 +97,11 @@ test("ensure: no --base auto-detects the repo's real default branch (unset-confi
     const res = await ensureWorktree({ repoRoot: repo.root, issue: 1368 });
     assert.equal(res.ok, true);
     assert.equal(res.created, true);
+    // Regression-catch the missing origin/ prefix: the auto-detected default must
+    // be the origin/-prefixed ref, not a bare local "main". (A self-referential
+    // origin re-syncs origin/main to local main on every fetch, so a SHA compare
+    // can't distinguish them — assert the resolved base ref directly.)
+    assert.equal(res.base, "origin/main", "auto-detected default base must be origin/-prefixed");
   } finally {
     repo.cleanup();
   }

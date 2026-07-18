@@ -211,14 +211,21 @@ export async function ensureWorktree(
   // The branch may already exist (worktree removed but branch left behind). `git
   // worktree add -b` fails on an existing branch, so attach to it instead; only
   // create-from-base when the branch is genuinely new.
+  // Report the ref the worktree was created off: an already-existing branch is
+  // re-attached; a genuinely new branch is created from `effectiveBase` (the
+  // origin/-prefixed auto-detected default, or an explicit --base). Lets
+  // callers/tests confirm the origin/ prefix was applied to the default.
+  let createdBase;
   if (branchExists(gitCommand, wantBranch, root)) {
+    createdBase = wantBranch;
     runGit(gitCommand, ["worktree", "add", target, wantBranch], root);
   } else {
+    createdBase = effectiveBase;
     runGit(gitCommand, ["worktree", "add", "-b", wantBranch, target, effectiveBase], root);
   }
 
   const summary = await provision({ worktreePath: target, repoRoot: root });
-  return { ok: true, path: target, created: true, reused: false, provision: summary };
+  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary };
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
