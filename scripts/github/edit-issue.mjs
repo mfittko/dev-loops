@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -165,68 +164,8 @@ export function parseEditIssueCliArgs(argv) {
   return options;
 }
 
-async function resolveBody(options) {
-  if (options.bodyFile === undefined) return options.body;
-  // Stdin (fd 0): the fs/promises readFile does NOT accept an integer fd, so read
-  // it synchronously via the callback-style API (which does). A real path stays on
-  // the async promise read.
-  const body =
-    options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
-  // Fail closed on an empty / whitespace-only file so a blank --body-file cannot
-  // silently clear the issue body (USAGE promises --body/--title reject empties).
-  if (body.trim().length === 0) {
-    throw new Error(`--body-file ${options.bodyFile} is empty`);
-  }
-  return body;
-}
-
-// Build the `gh issue edit` args and the parallel `edited` list (which fields were
-// touched) so callers get a stable summary without re-reading the issue.
-async function buildEditArgs(options) {
-  const args = ["issue", "edit", String(options.issue), "--repo", options.repo];
-  const edited = [];
-  if (options.title !== undefined) {
-    args.push("--title", options.title);
-    edited.push("title");
-  }
-  // resolveBody still runs for validation (reads the file, throws on empty /
-  // whitespace-only). A REAL --body-file path is handed straight to gh so large
-  // bodies avoid command-length limits. But `--body-file -` (stdin) was already
-  // consumed by resolveBody reading fd 0; re-emitting `--body-file -` makes gh
-  // re-read an exhausted stdin and clear the body, so pass the resolved string
-  // inline via --body instead.
-  const body = await resolveBody(options);
-  if (body !== undefined) {
-    if (options.bodyFile !== undefined && options.bodyFile !== "-") {
-      args.push("--body-file", options.bodyFile);
-    } else {
-      args.push("--body", body);
-    }
-    edited.push("body");
-  }
-  for (const u of options.addAssignees) {
-    args.push("--add-assignee", u);
-  }
-  if (options.addAssignees.length > 0) edited.push("add-assignee");
-  for (const u of options.removeAssignees) {
-    args.push("--remove-assignee", u);
-  }
-  if (options.removeAssignees.length > 0) edited.push("remove-assignee");
-  if (options.milestone !== undefined) {
-    args.push("--milestone", options.milestone);
-    edited.push("milestone");
-  }
-  return { args, edited };
-}
-
 export async function editIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
-  const { args, edited } = await buildEditArgs(options);
-  const result = await run(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh issue edit failed: ${detail}`);
-  }
-  return { ok: true, repo: options.repo, issue: options.issue, edited };
+  return coreEditIssue(options, { env, ghCommand, run });
 }
 
 export async function runCli(
