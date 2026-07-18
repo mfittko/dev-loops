@@ -1,17 +1,25 @@
 ---
 name: "ui-review"
-description: "Internal routed strategy behind `dev-loop` for the UI-review route — the \"prove it in the running app\" review sibling of reviewer/fixer. Scaffold slice only: registers the route, its stop rules, and its acceptance self-validation."
+description: "Internal routed strategy behind `dev-loop` for the UI-review route — the \"prove it in the running app\" review sibling of reviewer/fixer. Drives the PR through five CLI stages (provision, drive, diagnose, report, teardown), each routed as a `dev-loops loop ui-review-*` subcommand."
 allowed-tools: Read Bash
 user-invocable: false
 ---
 <!-- GENERATED from skills/ui-review/SKILL.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 
 
-# UI Review (scaffold)
+# UI Review
 
-When the public router selects `ui_review`, this route reviews a PR by proving
-the change in the running app from an isolated worktree, rather than reading the
-diff alone. It is the running-app review sibling of the `reviewer_fixer` route.
+`dev-loops loop startup --pr <n> --ui-review` routes the PR to this strategy
+deterministically. When the public router selects `ui_review`, this route
+reviews a PR by proving the change in the running app from an isolated
+worktree, rather than reading the diff alone. It is the running-app review
+sibling of the `reviewer_fixer` route.
+
+Each stage below is invoked as a `dev-loops` CLI subcommand
+(`dev-loops loop ui-review-provision`, `ui-review-drive`, `ui-review-diagnose`,
+`ui-review-report`, `ui-review-teardown`) — the agent orchestrates the
+sequence, threading each stage's result JSON into the next per its contract;
+there is no separate chaining orchestrator.
 
 The route's handoff envelope carries its stop rules and acceptance
 self-validation (defined in `handoff-envelope.mjs`): no product-code writes,
@@ -22,8 +30,10 @@ must be acknowledged before they run.
 
 The route's first operational step provisions an isolated worktree for the PR
 head and boots the branch's app to a ready state, via
-`scripts/loop/ui-review-provision.mjs --repo-root <p> --pr <n>`
-(pure orchestration in `packages/core/src/loop/ui-review-provision.mjs`). It
+`dev-loops loop ui-review-provision --repo-root <p> --pr <n>`
+(source-repo fallback: `node scripts/loop/ui-review-provision.mjs --repo-root <p>
+--pr <n>`; pure orchestration in
+`packages/core/src/loop/ui-review-provision.mjs`). It
 reuses the worktree machinery (`ensure-worktree`, `provision-worktree`), refuses
 to operate in the primary checkout, installs only the dependency-lock delta,
 runs pending dev-DB migrations, then boots the app and polls an HTTP readiness
@@ -53,8 +63,10 @@ assumption — a run recipe is trusted-branch input, not untrusted data.
 
 Once the app is booted, the route drives the changed UI flows against the
 handed-off app URL via
-`scripts/loop/ui-review-drive.mjs --repo-root <p> --app-url <url> --output-dir <p> [--changed-path <p> ...]`
-(pure orchestration in `packages/core/src/loop/ui-review-drive.mjs`). It launches
+`dev-loops loop ui-review-drive --repo-root <p> --app-url <url> --output-dir <p>
+[--changed-path <p> ...]`
+(source-repo fallback: `node scripts/loop/ui-review-drive.mjs ...`; pure
+orchestration in `packages/core/src/loop/ui-review-drive.mjs`). It launches
 one headless WebKit context, authenticates as the change's target role through a
 project-provided dev-login recipe, dismisses config-declared interstitials once
 per context, then walks the selected flows — rendering each page and exercising
@@ -99,8 +111,9 @@ boundary as the run recipe.
 Once failures are captured, the route maps each one to a source line and then to
 a PR diff line so the poster can anchor an inline comment on a real changed line,
 via
-`scripts/loop/ui-review-diagnose.mjs --pr <n> --drive-result <p> [--repo <slug>]`
-(pure mapping in `packages/core/src/loop/ui-review-diagnose.mjs`). It reuses PR
+`dev-loops loop ui-review-diagnose --pr <n> --drive-result <p> [--repo <slug>]`
+(source-repo fallback: `node scripts/loop/ui-review-diagnose.mjs ...`; pure
+mapping in `packages/core/src/loop/ui-review-diagnose.mjs`). It reuses PR
 state from `loop info --pr` rather than re-fetching, fetches the PR's unified
 diff, and for each failure parses the exception type/message plus the top in-repo
 stack frame (JS `at` frame, Ruby/Python traceback frame; vendor/framework frames
@@ -126,8 +139,10 @@ dependence, so the same failures always produce the same ordered output.
 
 The terminal reporting stage turns the ranked findings into a head-pinned
 PENDING PR review plus a self-contained screenshot artifact, via
-`scripts/loop/ui-review-report.mjs --pr <n> --diagnose-result <p> --html-output <p> [--repo <slug>]`
-(pure decisions in `packages/core/src/loop/ui-review-report.mjs`). It reuses the
+`dev-loops loop ui-review-report --pr <n> --diagnose-result <p> --html-output <p>
+[--repo <slug>]`
+(source-repo fallback: `node scripts/loop/ui-review-report.mjs ...`; pure
+decisions in `packages/core/src/loop/ui-review-report.mjs`). It reuses the
 shared pending-review poster (`scripts/github/stage-reviewer-draft.mjs` +
 `buildDraftReviewPayload`) — a caller/adapter, not a new poster. Each anchorable
 finding becomes an inline comment on its exact `{path,line,side:RIGHT}` anchor
@@ -163,8 +178,10 @@ The terminal cleanup stage tears down the loop's transient state — stops the
 app booted in provision, drops the dev-DB rows the drive created, removes the
 provisioned worktree — and ALWAYS emits a side-effect ledger so nothing is
 silently orphaned, via
-`scripts/loop/ui-review-teardown.mjs --repo-root <p> --provision-result <p> [--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
-(pure decisions in `packages/core/src/loop/ui-review-teardown.mjs`). It reads
+`dev-loops loop ui-review-teardown --repo-root <p> --provision-result <p>
+[--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
+(source-repo fallback: `node scripts/loop/ui-review-teardown.mjs ...`; pure
+decisions in `packages/core/src/loop/ui-review-teardown.mjs`). It reads
 the prior-stage result JSON — the app PID + applied migrations + worktree path
 from provision, and the rows-created signal from the drive.
 
