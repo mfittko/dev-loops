@@ -6,7 +6,7 @@ It runs autonomously in-loop. The dev-loop performs the grill itself through the
 
 ## What it checks
 
-- **Claims vs contracts.** Each statement a change makes about behavior is checked against the contract or doc it points at (for example `skills/docs/public-dev-loop-contract.md`, `docs/conductor-routing-contract.md`).
+- **Claims vs contracts.** Each statement a change makes about behavior is checked against the contract or doc it points at (for example `skills/docs/public-dev-loop-contract.md`, `skills/docs/conductor-routing-contract.md`).
 - **Code-vs-doc drift.** Where the code path and the doc describing it have diverged, the divergence is the finding.
 - **Stale references.** Links, path references, and command or script names that no longer resolve to the current file tree.
 - **Contract-surface accuracy.** Whether documented inputs/outputs, flags, and outcome sets still match what the code exposes.

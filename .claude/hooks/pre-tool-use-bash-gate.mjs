@@ -13,7 +13,7 @@
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
- *     repo's one `.git` directory (docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
+ *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
