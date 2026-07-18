@@ -27,7 +27,7 @@ import {
   ownershipNeedsViewerLogin,
 } from "@dev-loops/core/github/ownership-helpers";
 import { resolveLinkedIssuesFromPr } from "./detect-pr-gate-coordination-state.mjs";
-import { loadDevLoopConfig, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { detectScope } from "./detect-change-scope.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { validatePlanFile } from "../refine/validate-plan-file.mjs";
@@ -729,7 +729,9 @@ function resolveIssuelessMergeBase(cwd, candidates) {
  * mirrors resolveBaseBranch's own "config wins" validity check. */
 function configuredBaseBranch(config) {
   const raw = config?.workflow?.baseBranch;
-  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+  // Reduce to a bare branch name (same as resolveBaseBranch) so the later
+  // `origin/${configuredBase}` candidate can't become `origin/origin/main`.
+  return typeof raw === "string" && raw.trim().length > 0 ? normalizeToBareBranch(raw.trim()) : null;
 }
 
 /**

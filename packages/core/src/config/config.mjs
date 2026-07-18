@@ -1796,9 +1796,23 @@ function autoDetectDefaultBranch(cwd) {
 export function resolveBaseBranch(config, { cwd = process.cwd() } = {}) {
   const configured = config?.workflow?.baseBranch;
   if (typeof configured === "string" && configured.trim().length > 0) {
-    return configured.trim();
+    return normalizeToBareBranch(configured.trim());
   }
   return autoDetectDefaultBranch(cwd);
+}
+
+/**
+ * Reduce a configured base value to a BARE branch name. Callers prepend
+ * `origin/` for remote refs, so a configured `origin/main` /
+ * `refs/remotes/origin/main` / `refs/heads/main` must be stripped to `main`
+ * first — otherwise the worktree base double-prefixes to `origin/origin/main`.
+ * A branch name that merely contains a slash (e.g. `spike/vite`) is left intact.
+ */
+export function normalizeToBareBranch(value) {
+  return value
+    .replace(/^refs\/remotes\/origin\//, "")
+    .replace(/^refs\/heads\//, "")
+    .replace(/^origin\//, "");
 }
 
 /**

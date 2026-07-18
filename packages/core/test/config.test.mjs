@@ -3875,6 +3875,17 @@ describe("resolveBaseBranch (#1368)", () => {
     assert.equal(resolveBaseBranch(config, { cwd: "/nonexistent-path-never-a-repo" }), "develop");
   });
 
+  test("normalizes a configured ref to a bare branch (no origin/origin double-prefix)", () => {
+    // A user may put a remote/full ref in config; callers prepend origin/, so it
+    // must reduce to a bare name first (origin/main -> main, not origin/origin/main).
+    const cwd = "/nonexistent-path-never-a-repo";
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "origin/main" } }, { cwd }), "main");
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "refs/heads/develop" } }, { cwd }), "develop");
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "refs/remotes/origin/release" } }, { cwd }), "release");
+    // A branch name that merely contains a slash is left intact.
+    assert.equal(resolveBaseBranch({ version: 1, workflow: { baseBranch: "spike/vite" } }, { cwd }), "spike/vite");
+  });
+
   test("unset config auto-detects the repo's real default branch (main)", () => {
     const repo = makeGitRepo({ defaultBranch: "main" });
     try {

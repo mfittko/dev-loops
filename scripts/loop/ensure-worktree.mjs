@@ -15,7 +15,7 @@
  * - Does NOT run npm install (out of scope).
  *
  * Prints a JSON result to stdout:
- *   { ok, path, created|reused, provision: { actions, summary } }
+ *   { ok, path, created|reused, base?, provision: { actions, summary } }
  * (`provision` is the full provisionWorktree() result, not just its summary.)
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
@@ -49,6 +49,8 @@ Optional:
   -h, --help        Show this help.
 Output (stdout, JSON):
   { "ok": true, "path": <p>, "created": bool, "reused": bool,
+    "base": <ref>,   // present on create: the resolved base ref the worktree
+                     // was created off (origin/-prefixed default, or --base)
     "provision": { "actions": [...], "summary": {...} } }
 
 ${JQ_OUTPUT_USAGE}`.trim();
