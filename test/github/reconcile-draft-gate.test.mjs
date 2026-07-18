@@ -1,11 +1,20 @@
-// Determinism convention (issue #1405): fixtures in this file use fixed,
-// self-consistent timestamps. Never compare a fixture against the real
-// wall clock — that means no bare, argument-less Date constructor call and
-// no reading the current epoch millis off the Date global directly. A
-// production seam that needs "now" (e.g. `claimRunnerOwnership`,
-// `assertRunnerOwnership` in scripts/loop/_pr-runner-coordination.mjs)
-// already accepts an injected `now`; pass a fixed value through it
-// instead. Enforced mechanically by
+// Determinism (issue #1405). The root cause of the intermittent failures
+// here was NOT a fixture-vs-clock comparison but shared on-disk state: some
+// `runNode` calls omitted `cwd`, so the spawned CLI inherited the real
+// process cwd and resolved its runner-coordination file via
+// `git rev-parse --git-common-dir` — a path SHARED across every worktree
+// over this one `.git`. A stale leftover coordination file from another
+// run/worktree then flipped stale-runner age assertions. The fix: every
+// `runNode` that can reach coordination passes `cwd: tempDir` (a per-test
+// mkdtemp dir where `--git-common-dir` fails, so the coordination root
+// anchors to the isolated temp dir). Keep that invariant: any new spawn
+// that touches coordination MUST set `cwd: tempDir`.
+//
+// Related convention: never read the real wall clock here either — no bare,
+// argument-less Date constructor call and no `Date.now()`. A production seam
+// that needs "now" (e.g. `claimRunnerOwnership`/`assertRunnerOwnership` in
+// scripts/loop/_pr-runner-coordination.mjs) already accepts an injected
+// `now`; pass a fixed value through it. Enforced mechanically by
 // test/github/deterministic-fixture-time.test.mjs.
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
