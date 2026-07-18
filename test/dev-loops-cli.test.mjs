@@ -131,6 +131,46 @@ test("CLI help leads with dev-loop as the primary workflow entry", async () => {
 });
 
 
+test("loop category exposes the five ui-review stage subcommands (issue #1362)", async () => {
+  const helpStdout = createBufferStream();
+  const categoryStdout = createBufferStream();
+
+  const helpExitCode = await runCli({
+    argv: ["help"],
+    runtime: createRuntime(),
+    stdout: helpStdout.stream,
+    stderr: createBufferStream().stream,
+  });
+  const categoryExitCode = await runCli({
+    argv: ["loop", "--help"],
+    runtime: createRuntime(),
+    stdout: categoryStdout.stream,
+    stderr: createBufferStream().stream,
+  });
+
+  assert.equal(helpExitCode, 0);
+  assert.equal(categoryExitCode, 0);
+  const topLevelHelp = helpStdout.read();
+  const categoryHelp = categoryStdout.read();
+  const uiReviewSubcommands = [
+    "ui-review-provision",
+    "ui-review-drive",
+    "ui-review-diagnose",
+    "ui-review-report",
+    "ui-review-teardown",
+  ];
+  for (const sub of uiReviewSubcommands) {
+    assert.match(topLevelHelp, new RegExp(`\\b${sub}\\b`), `top-level help should list ${sub}`);
+    assert.match(categoryHelp, new RegExp(`\\b${sub}\\b`), `loop --help should list ${sub}`);
+
+    const helpRun = spawnSync("node", ["./cli/index.mjs", "loop", sub, "--help"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    assert.equal(helpRun.status, 0, `dev-loops loop ${sub} --help should exit 0: ${helpRun.stderr}`);
+  }
+});
+
 test("CLI help exposes project queue wrapper surface", async () => {
   const helpStdout = createBufferStream();
   const helpStderr = createBufferStream();
