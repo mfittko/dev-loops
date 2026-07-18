@@ -10,7 +10,7 @@ This document defines the bounded screenshot/state artifact contract introduced 
 - The shared deck/article/viewer suites emit these artifacts via the WebKit seam
   from [UI Smoke Harness](./ui-smoke-harness.md). *When* a PR is required to run
   those suites is path-triggered and fail-closed, not opt-in — see
-  [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md).
+  [UI e2e scoping step](./ui-e2e-scoping-step.md).
 
 ## What a named UI state means here
 
@@ -67,7 +67,7 @@ merged by the pure `convergeUiReviewLenses` seam. See
 These use the same deterministic artifact shape as smoke-validation artifacts, but
 the artifact belongs to a registered rendered artifact (deck, article, or the
 viewer) whose suite is **auto-scoped into CI** whenever a PR touches its source —
-see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md).
+see [UI e2e scoping step](./ui-e2e-scoping-step.md).
 
 If a required suite's expected artifacts are missing or malformed, validation fails
 closed.
@@ -232,7 +232,7 @@ coverage whenever a PR touches its source — the trigger is the changed-file se
 matched against explicit globs, and the gate fails closed otherwise. The criterion,
 the registries, and the satisfiable CI jobs (`deck-smoke`, `article-smoke`,
 `viewer-smoke`, matching `UI_E2E_CHECK_NAMES`) are owned by
-[UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md). These three
+[UI e2e scoping step](./ui-e2e-scoping-step.md). These three
 path/diff-conditioned jobs live in `.github/workflows/ci.yml`.
 
 ## Failure policy for required suites

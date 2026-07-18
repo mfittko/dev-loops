@@ -328,7 +328,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
       // scopes enforcement down to what IS remotely verifiable from the PR's public
       // comment history: the comment-derived executionMode/inlineReason check above
       // (including the light-mode inline exception). The deeper ledger/provenance/
-      // angle-coverage layer stays client-side-only (docs/gate-review-sub-loop-contract.md's
+      // angle-coverage layer stays client-side-only (skills/docs/gate-review-sub-loop-contract.md's
       // existing "not un-forgeable" caveat covers that gap).
       if (skipFanoutLedgerCheck) {
         continue;

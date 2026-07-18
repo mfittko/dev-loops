@@ -172,11 +172,11 @@ test("transformCommand shifts repo-root ../docs links (not bundled ../skills lin
 });
 
 test("transformAgent shifts repo-root ../docs links (not bundled ../skills links) for the deeper .claude/agents/ location", () => {
-  const raw = `---\nname: review\ndescription: "Gate reviewer."\ntools: [read]\n---\nSee the [Gate Contract](../docs/gate-review-sub-loop-contract.md) and [Intake](../skills/docs/issue-intake-procedure.md).\n`;
+  const raw = `---\nname: review\ndescription: "Gate reviewer."\ntools: [read]\n---\nSee the [Steering Contract](../docs/steering-contract.md) and [Intake](../skills/docs/issue-intake-procedure.md).\n`;
   const out = transformAgent({ source: "agents/review.agent.md", raw });
   // Repo-root docs/ is not mirrored into .claude/, so it shifts one level.
-  assert.ok(out.includes("(../../docs/gate-review-sub-loop-contract.md)"));
-  assert.equal(out.includes("(../docs/gate-review-sub-loop-contract.md)"), false);
+  assert.ok(out.includes("(../../docs/steering-contract.md)"));
+  assert.equal(out.includes("(../docs/steering-contract.md)"), false);
   // ../skills/docs is bundled to .claude/skills/docs — the relative path is preserved verbatim.
   assert.ok(out.includes("(../skills/docs/issue-intake-procedure.md)"));
 });

@@ -16,7 +16,7 @@ already known:
 This contract starts **after**:
 - the active run has been identified (scope/target resolved)
 - ownership/idempotency classification is optional (the `conductor-ownership.mjs` module and its issue #32 have been retired; designs archived in git history); when supplied, `ownershipState` activates routing branches such as `stay_with_current_live_owner`
-- the copilot/reviewer inner-loop state-machine outputs have been detected (from `copilot-loop-state.mjs` and `reviewer-loop-state.mjs`) and are interpreted under the broader family-local PR lifecycle semantics frozen in [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md)
+- the copilot/reviewer inner-loop state-machine outputs have been detected (from `copilot-loop-state.mjs` and `reviewer-loop-state.mjs`) and are interpreted under the broader family-local PR lifecycle semantics frozen in [PR Lifecycle Contract](./pr-lifecycle-contract.md)
 
 <!-- rule: ROUTING-EVALUATOR-AUTHORITY -->
 The evaluator **MUST** derive the routing outcome directly from normalized state inputs; it
@@ -29,7 +29,7 @@ remapper.
 |---|---|
 | [#28 — conductor umbrella](https://github.com/mfittko/dev-loops/issues/28) | Parent umbrella |
 | [#32 — ownership/idempotency](https://github.com/mfittko/dev-loops/issues/32) | **Historical**: designed the ownership model; the `conductor-ownership.mjs` module was retired during deslop cleanup (issue #319). `ownershipState` remains as an optional external input. |
-| [#26 — family-local PR lifecycle contract](https://github.com/mfittko/dev-loops/issues/26) / [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) | **Upstream**: provides family-local PR lifecycle semantics; the concrete `copilotState` and `reviewerState` inputs still come from the existing copilot/reviewer state machines, and this contract consumes them without redefining their semantics |
+| [#26 — family-local PR lifecycle contract](https://github.com/mfittko/dev-loops/issues/26) / [PR Lifecycle Contract](./pr-lifecycle-contract.md) | **Upstream**: provides family-local PR lifecycle semantics; the concrete `copilotState` and `reviewerState` inputs still come from the existing copilot/reviewer state machines, and this contract consumes them without redefining their semantics |
 | [#34 — request/watch helper contract](https://github.com/mfittko/dev-loops/issues/34) | **Adjacent**: defines Copilot request/watch semantics inside the copilot loop family; this contract decides _which family_ gets control |
 | [#48 — visible PR projection](https://github.com/mfittko/dev-loops/issues/48) | **Downstream**: routing decisions may drive PR projection artifacts |
 | [#57/#58/#59 — inspection/viewer/steering](https://github.com/mfittko/dev-loops/issues/57) | **Adjacent**: read-only inspection surfaces; this contract defines routing policy, not operator UX |
@@ -40,7 +40,7 @@ This contract owns **conductor routing and handoff decisions after ownership and
 
 It does **not** define:
 - which run is active (ownership/idempotency rules; the conductor implementation was retired, see issue #319)
-- PR lifecycle state semantics, gate order, or draft/ready transitions (from [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md))
+- PR lifecycle state semantics, gate order, or draft/ready transitions (from [PR Lifecycle Contract](./pr-lifecycle-contract.md))
 - Copilot request/re-request/watch helper semantics (from #34)
 - PR-visible projection artifacts (from #48)
 - inspection, viewer, or steering surfaces (from #57/#58/#59)
@@ -329,7 +329,7 @@ This contract intentionally does **not** cover:
 
 - ownership-key design, duplicate-owner handling, or start/attach/resume idempotency rules (→ #32, conductor implementation retired, see issue #319)
 - wiring `ownershipState` into `outer-loop.mjs` or any other caller (deferred; conductor implementation retired)
-- PR lifecycle states, draft/ready gate order, remediation ownership classes, or approval-gate semantics (→ [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md))
+- PR lifecycle states, draft/ready gate order, remediation ownership classes, or approval-gate semantics (→ [PR Lifecycle Contract](./pr-lifecycle-contract.md))
 - Copilot request / re-request / watch helper semantics (→ #34)
 - inspection, viewer, or steering surface design (→ #57/#58/#59)
 - PR-visible projection / closeout artifacts (→ #48)

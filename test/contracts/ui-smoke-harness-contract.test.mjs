@@ -7,7 +7,7 @@ const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), 'utf8');
 
 test('ui smoke harness doc defines the bounded reusable local Playwright/WebKit baseline', async () => {
   const [doc, indexDoc, localImplementationSkill] = await Promise.all([
-    readRepo('docs/ui-smoke-harness.md'),
+    readRepo('skills/docs/ui-smoke-harness.md'),
     readRepo('docs/index.md'),
     readRepo('skills/local-implementation/SKILL.md'),
   ]);
@@ -39,5 +39,5 @@ test('ui smoke harness doc defines the bounded reusable local Playwright/WebKit 
   // while tolerating rewording of the middle clause.
   assert.match(doc, /not make[^.]*mandatory[^.]*non-UI slices/i);
   assert.match(indexDoc, /ui-smoke-harness\.md/i);
-  assert.match(localImplementationSkill, /\.\.\/\.\.\/docs\/ui-smoke-harness\.md/i);
+  assert.match(localImplementationSkill, /\.\.\/docs\/ui-smoke-harness\.md/i);
 });

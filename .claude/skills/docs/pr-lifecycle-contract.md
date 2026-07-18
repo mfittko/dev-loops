@@ -6,9 +6,9 @@ in `dev-loops` — the deterministic family-local PR lifecycle contract.
 The canonical contract lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree.
 
 It consolidates the lifecycle boundary currently split across:
-- [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md)
-- [Reviewer Loop State Graph](../../docs/reviewer-loop-state-graph.md)
-- [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md)
+- [Copilot Loop State Graph](./copilot-loop-state-graph.md)
+- [Reviewer Loop State Graph](./reviewer-loop-state-graph.md)
+- [Gate Review Comment Contract](./gate-review-comment-contract.md)
 
 ## Purpose
 
@@ -27,10 +27,10 @@ It does not redefine helper transport mechanics, reviewer-loop internals, conduc
 
 | Surface | Relationship |
 |---|---|
-| [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md) | Copilot-family inner-loop state machine consumed by this lifecycle |
-| [Reviewer Loop State Graph](../../docs/reviewer-loop-state-graph.md) | Reviewer-side review production / submission boundary consumed by this lifecycle |
-| [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md) | Visible evidence contract for `draft_gate` and `pre_approval_gate` |
-| [Conductor Routing Contract](../../docs/conductor-routing-contract.md) | Downstream consumer of family-local lifecycle outcomes |
+| [Copilot Loop State Graph](./copilot-loop-state-graph.md) | Copilot-family inner-loop state machine consumed by this lifecycle |
+| [Reviewer Loop State Graph](./reviewer-loop-state-graph.md) | Reviewer-side review production / submission boundary consumed by this lifecycle |
+| [Gate Review Comment Contract](./gate-review-comment-contract.md) | Visible evidence contract for `draft_gate` and `pre_approval_gate` |
+| [Conductor Routing Contract](./conductor-routing-contract.md) | Downstream consumer of family-local lifecycle outcomes |
 | issue #29 | Reviewer-loop boundary semantics |
 | issue #34 | Copilot request / re-request / watch helper mechanics |
 | issue #43 | Review-angle policy for the final local pre-approval gate (now config-driven via `gates.preApproval.angles` and `resolveGateAngles`) |
@@ -53,9 +53,9 @@ It does not redefine helper transport mechanics, reviewer-loop internals, conduc
 ## Two required local gates
 
 Each gate runs an independent review chain (`GATE-EXEC-SEPARATE-CHAINS`); see
-[Checkpoint Review Chain Contract](../../docs/gate-review-sub-loop-contract.md). Every gate
+[Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md). Every gate
 pass writes a durable disposition ledger (`GATE-EXEC-DISPOSITION-LEDGER`) before the
-visible comment defined by [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md).
+visible comment defined by [Gate Review Comment Contract](./gate-review-comment-contract.md).
 
 ### 1. `draft_gate`
 
@@ -181,7 +181,7 @@ The lifecycle distinguishes three evidence classes:
    - current-head `pre_approval_gate` evidence when final approval readiness is required
 
 3. **durable disposition ledger** — owned by `GATE-EXEC-DISPOSITION-LEDGER`
-   (see [Checkpoint Review Chain Contract](../../docs/gate-review-sub-loop-contract.md#disposition-ledger-and-durable-logging))
+   (see [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#disposition-ledger-and-durable-logging))
 
 ### Precedence rules
 
@@ -213,8 +213,8 @@ In those cases the workflow MUST NOT:
 
 ## Cross-references
 
-- [Checkpoint Review Chain Contract](../../docs/gate-review-sub-loop-contract.md) — `GATE-EXEC-*` execution-shape rules
-- [Gate Review Comment Contract](../../docs/gate-review-comment-contract.md) — `GATE-COMMENT-*` PR-comment field rules
+- [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md) — `GATE-EXEC-*` execution-shape rules
+- [Gate Review Comment Contract](./gate-review-comment-contract.md) — `GATE-COMMENT-*` PR-comment field rules
 - [Merge preconditions](merge-preconditions.md)
 - [Contract style guide](contract-style-guide.md)
 

@@ -51,7 +51,7 @@ Options:
                   normalized to lowercase) of the
                   invariant briefing block this reviewer was seeded with
                   (GATE-EXEC-BRIEFING-PREFIX in
-                  docs/gate-review-sub-loop-contract.md). Recorded on the
+                  skills/docs/gate-review-sub-loop-contract.md). Recorded on the
                   reviewer's sentinel so \`verify-briefing-prefixes.mjs\` can
                   fail closed when reviewers of the same gate pass were
                   seeded with different invariant blocks. Mutually exclusive
@@ -76,7 +76,7 @@ Options:
                   sentinel with no recorded prefix hash still fails closed —
                   this is a narrow escape hatch for one documented scenario,
                   never a general bypass of the contamination guard. See
-                  "Sentinel lifecycle" in docs/gate-review-sub-loop-contract.md.
+                  "Sentinel lifecycle" in skills/docs/gate-review-sub-loop-contract.md.
 Output (stdout, JSON):
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>" }
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "gateContextPath": "...", "gateContextPresent": true }
@@ -322,7 +322,7 @@ async function main(argv = process.argv.slice(2)) {
   }
   const existing = await checkSentinelExists(scope, round);
   if (existing.exists) {
-    // Sanctioned same-head PR-body-fix retry (docs/gate-review-sub-loop-contract.md,
+    // Sanctioned same-head PR-body-fix retry (skills/docs/gate-review-sub-loop-contract.md,
     // "Sentinel lifecycle"): a PR-body/description-only fix does not earn a new
     // round key (the round is keyed by head SHA, which a body edit never changes),
     // so a same-scope + same-head re-entry would otherwise always trip the

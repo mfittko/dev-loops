@@ -305,7 +305,7 @@ The queue board URL and number are discoverable at runtime — no explicit confi
 
 ## See also
 
-- [Queue mode SPEC](./specs/queue-mode/SPEC.md) — full queue mode specification
+- the queue-mode SPEC (`docs/specs/queue-mode/SPEC.md`) — full queue mode specification
 - Issue [#632](https://github.com/mfittko/dev-loops/issues/632) — this setup task
 - Issue [#625](https://github.com/mfittko/dev-loops/issues/625) — parent epic
 - Issue [#631](https://github.com/mfittko/dev-loops/issues/631) — queue workflow documentation

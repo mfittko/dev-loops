@@ -54,7 +54,7 @@ const KNOWN_INTENTIONAL_DUPLICATE_SENTENCES = new Set([
   // commands/loop-auto.command.md and commands/loop-start.command.md — command trigger
   // phrasing is load-bearing verbatim per-command guardrail (c); not a restatement bug.
   "Do not pick an internal strategy name yourself.",
-  // docs/slides-story-review-loop.md and docs/ui-designer-review-loop.md are sibling
+  // skills/docs/slides-story-review-loop.md and skills/docs/ui-designer-review-loop.md are sibling
   // non-normative review-loop docs (epic non-goal) that share boilerplate by design.
   "The loop requires all of the following inputs before it may run:",
   "If any required part of this bundle is missing, incomplete, or ambiguous, the loop fails closed instead of guessing.",

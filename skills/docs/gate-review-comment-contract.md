@@ -14,7 +14,7 @@ the latest head — without relying on local or session-only artifacts.
 `GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict comment evidence contract only.
 It does not restate the full PR follow-up procedure; that
 remains owned by the relevant workflow skill. The broader family-local PR lifecycle
-that consumes this evidence is defined in [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md).
+that consumes this evidence is defined in [PR Lifecycle Contract](./pr-lifecycle-contract.md).
 
 ## Scope
 
@@ -183,14 +183,14 @@ required visible PR comment is confirmed posted for the current head SHA.
 
 | Contract | Relationship |
 |---|---|
-| `draft_gate` boundary | Governs the draft → ready-for-review transition in [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md) Step 7 |
-| `pre_approval_gate` boundary | Governs final-approval readiness in [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md) Step 7 and the narrowed [Final Approval](../skills/final-approval/SKILL.md) route |
+| `draft_gate` boundary | Governs the draft → ready-for-review transition in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) Step 7 |
+| `pre_approval_gate` boundary | Governs final-approval readiness in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) Step 7 and the narrowed [Final Approval](../final-approval/SKILL.md) route |
 | Local/session artifacts | These remain complementary; the visible PR comment is the minimum required auditable surface, not a replacement for all local artifacts |
 
 ## See also
 
-- [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) — broader lifecycle state machine
+- [PR Lifecycle Contract](./pr-lifecycle-contract.md) — broader lifecycle state machine
 - [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md) — execution shape for gate inspection work
-- [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md) — skill that owns gate execution
-- [Final Approval](../skills/final-approval/SKILL.md) — human approval gate route
-- [Contract style guide](../skills/docs/contract-style-guide.md) — rule ID and RFC-2119 conventions
+- [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) — skill that owns gate execution
+- [Final Approval](../final-approval/SKILL.md) — human approval gate route
+- [Contract style guide](./contract-style-guide.md) — rule ID and RFC-2119 conventions

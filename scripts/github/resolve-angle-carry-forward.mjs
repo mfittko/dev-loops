@@ -15,7 +15,7 @@
  * FAIL-CLOSED: only a prior log whose overall verdict is `clean` can carry
  * forward anything; any uncertainty (non-clean prior log, empty/unclassifiable
  * delta, unmapped angle, always-run angle) resolves to must-re-run. See
- * docs/gate-review-sub-loop-contract.md.
+ * skills/docs/gate-review-sub-loop-contract.md.
  *
  * Also emits a Copilot convergence-carry-forward decision (AC2): whether a
  * post-convergence head bump is a pure doc/prose bump and so need not force a

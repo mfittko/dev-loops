@@ -30,7 +30,7 @@ const VALID_VERDICTS = new Set(["clean", "findings_present"]);
  * depth). The flow MUST fail closed with this message and route the gate review
  * to the conductor rather than silently degrading to a single-agent inline
  * review (which requireFanoutProvenance is designed to reject). Documented as a
- * contract in docs/gate-review-sub-loop-contract.md.
+ * contract in skills/docs/gate-review-sub-loop-contract.md.
  */
 export const FANOUT_UNAVAILABLE_MESSAGE = "fan-out unavailable — route to conductor";
 
@@ -79,7 +79,7 @@ export function countDistinctReviewers(perAngle) {
  * is well-formed and consistent. Shared by the write path (write-gate-findings-log)
  * and the enforcement read path (buildPreMergeGateCheck) so both agree.
  *
- * Consistency rule (documented in docs/gate-review-sub-loop-contract.md):
+ * Consistency rule (documented in skills/docs/gate-review-sub-loop-contract.md):
  *   - `distinctReviewers` must be a non-negative integer.
  *   - `perAngle` must be an array, and non-empty when `distinctReviewers > 0`.
  *   - `distinctReviewers` must be <= the count of DISTINCT reviewer identities

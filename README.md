@@ -217,8 +217,8 @@ Upgrading from before the rename to `dev-loops`? The package name, repo slug, an
 - [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md) — public routing contract
 - [Extension Documentation](./extension/README.md) — README-driven extension spec
 - [Scripts Documentation](./scripts/README.md) — deterministic script contracts
-- [UI Smoke Harness](./docs/ui-smoke-harness.md) — reusable local Playwright/WebKit smoke baseline
-- [UI Artifact Contract](./docs/ui-artifact-contract.md) — screenshot/state artifact contract and CI-promotion rules
-- [UI Designer Review Loop](./docs/ui-designer-review-loop.md) — designer + vision (`uiReviewMode: vision`) review loop
+- [UI Smoke Harness](./skills/docs/ui-smoke-harness.md) — reusable local Playwright/WebKit smoke baseline
+- [UI Artifact Contract](./skills/docs/ui-artifact-contract.md) — screenshot/state artifact contract and CI-promotion rules
+- [UI Designer Review Loop](./skills/docs/ui-designer-review-loop.md) — designer + vision (`uiReviewMode: vision`) review loop
 - [UI-Review Run/Auth Recipe Contract](./skills/docs/ui-review-recipe-contract.md) — per-project run/login/flow recipe for `/loop-review-ui`
-- [Slides Story Review Loop](./docs/slides-story-review-loop.md) — bounded slides content & storytelling reviewer
+- [Slides Story Review Loop](./skills/docs/slides-story-review-loop.md) — bounded slides content & storytelling reviewer

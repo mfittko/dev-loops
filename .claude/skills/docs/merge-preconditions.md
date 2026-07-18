@@ -47,7 +47,7 @@ Before merge, ALL of the following MUST hold:
    `evaluatePrGateCoordination` fails it closed identically to a real CI failure at
    the pre-approval and final-approval boundaries (#552). It only extends the
    draft-gate wait until CI actually settles green.
-3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](../../docs/gate-review-comment-contract.md))
+3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md))
 4. ✅ Pre-approval gate satisfied — clean `pre_approval_gate` verdict on the current head, same rule
 5. ✅ All review threads resolved
 6. ✅ Explicit merge authorization from operator
@@ -91,7 +91,7 @@ practice:
 
 The server-side check verifies the same visible, comment-derived verdict fields
 the client-side tooling does (including the light-mode inline exception,
-[Gate Review Sub-Loop Contract](../../docs/gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs)),
+[Gate Review Sub-Loop Contract](./gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs)),
 via `--skip-fanout-ledger-check`. It does **not** re-verify the deeper fan-out
 findings-log ledger/provenance layer (`gates.requireFanoutEvidence` /
 `requireFanoutProvenance`): that evidence lives in a gitignored, worktree-local
@@ -190,13 +190,13 @@ human(s).
 ## Post-merge
 
 - Remove merged worktree (canonical, `WORKTREE-CLEANUP`): `node scripts/loop/cleanup-worktree.mjs --repo-root <main> (--issue <n> | --pr <n>)`.
-  See [Worktree usage guidance](../../docs/worktree-guidance.md#post-merge-cleanup).
+  See [Worktree usage guidance](./worktree-guidance.md#post-merge-cleanup).
 - Archive long-done queue items (operator-induced, NOT a cron): `node scripts/projects/archive-done-items.mjs --repo <owner/name> || true`.
   Runs as part of this post-merge hook. It applies the configured `queue.archiveOlderThanDays` (default `7d`) and archives
   board items whose issue/PR has been closed at least that long. Best-effort: run it as a standard post-merge step but ignore
   any non-zero exit (a successful run that finds nothing to archive exits 0; a board/config-resolution/API error exits
   non-zero, which the `|| true` masks) — a failure here must never block merge completion. See
-  [projects queue usage](../../docs/projects-queue-usage.md).
+  [projects queue usage](./projects-queue-usage.md).
 - Clean up stale branches
 
 ## Cross-references
@@ -205,5 +205,5 @@ human(s).
 - [Validation policy](validation-policy.md)
 - [Stop conditions](stop-conditions.md)
 - [PR Lifecycle Contract](pr-lifecycle-contract.md)
-- [Checkpoint Verdict Comment Contract](../../docs/gate-review-comment-contract.md) — `GATE-COMMENT-VERDICT-VALUES`
+- [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md) — `GATE-COMMENT-VERDICT-VALUES`
 - [Contract style guide](contract-style-guide.md)

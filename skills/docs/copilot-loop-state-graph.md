@@ -8,7 +8,7 @@ This document defines the deterministic state machine for the async Copilot revi
 
 The state machine captures observable PR/GitHub/worktree facts (the **snapshot**) and maps them to exactly one **current state**, a list of **allowed next transitions**, and a **recommended next action**.
 
-This document is the Copilot-family inner-loop state machine. The broader family-local PR lifecycle that consumes this machine is defined in [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md).
+This document is the Copilot-family inner-loop state machine. The broader family-local PR lifecycle that consumes this machine is defined in [PR Lifecycle Contract](./pr-lifecycle-contract.md).
 
 The implementation lives in:
 
@@ -196,7 +196,7 @@ Re-requesting Copilot after a follow-up fix is gated on the updated head being g
 ### `waiting_for_copilot_review` is a persistence boundary for explicit async loop entry
 
 <!-- rule: COPILOT-STATE-WATCH-PERSISTENCE -->
-`COPILOT-STATE-WATCH-PERSISTENCE`: When a user explicitly asks to enter or continue the async Copilot dev loop, landing on `waiting_for_copilot_review` MUST keep the loop in watch mode (the continuation-not-completion core is owned by [`STOP-COPILOT-REVIEW-001`](../skills/docs/stop-conditions.md), quiet observations by [`STOP-QUIET-WATCHER-001`](../skills/docs/stop-conditions.md)). This rule owns watch REATTACHMENT: after a quiet `timeout`/`idle`, refresh deterministic state and, if it remains `waiting_for_copilot_review` (or another non-terminal wait state), keep the async watcher attached; after a successful narrow follow-up fix / reply-resolve / re-request cycle that returns to `waiting_for_copilot_review`, resume watch mode instead of treating the re-request handoff as the end of the async run. Handoff-only behavior is a separate, narrower contract and MUST be explicitly requested.
+`COPILOT-STATE-WATCH-PERSISTENCE`: When a user explicitly asks to enter or continue the async Copilot dev loop, landing on `waiting_for_copilot_review` MUST keep the loop in watch mode (the continuation-not-completion core is owned by [`STOP-COPILOT-REVIEW-001`](./stop-conditions.md), quiet observations by [`STOP-QUIET-WATCHER-001`](./stop-conditions.md)). This rule owns watch REATTACHMENT: after a quiet `timeout`/`idle`, refresh deterministic state and, if it remains `waiting_for_copilot_review` (or another non-terminal wait state), keep the async watcher attached; after a successful narrow follow-up fix / reply-resolve / re-request cycle that returns to `waiting_for_copilot_review`, resume watch mode instead of treating the re-request handoff as the end of the async run. Handoff-only behavior is a separate, narrower contract and MUST be explicitly requested.
 
 ## Normal request/watch routing contract
 

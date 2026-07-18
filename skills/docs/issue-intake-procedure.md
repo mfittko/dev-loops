@@ -124,7 +124,7 @@ Preflight verdicts:
 - <!-- rule: INTAKE-LINKED-PR-HELPER-DELEGATION --> `INTAKE-LINKED-PR-HELPER-DELEGATION`: Agents MUST NOT re-implement linked-event query behavior, pagination, repo filtering, or tie-break logic, and MUST NOT rely only on PR title/body containing a literal issue number.
 - treat an open linked PR as the active implementation for this issue
 - once an open linked PR exists, attach follow-up work to it per `FACADE-LINKED-PR-SINGLE-ARTIFACT` (owned in [Public Dev Loop Contract](public-dev-loop-contract.md)) for the `issue_intake` strategy
-- **follow-up-capture rule:** when a follow-up is discovered while working a PR/loop, note it on the originating issue (or the PR body); file a standalone issue only if the follow-up is genuinely independent of the PR **and** outlives it (a real separate bug/feature that would be lost as a note on a soon-closed issue). Prefer noting PR-scoped follow-ups on the originating artifact over spinning up standalone tracker items for work that is part of the same effort or will be resolved imminently. See [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md).
+- **follow-up-capture rule:** when a follow-up is discovered while working a PR/loop, note it on the originating issue (or the PR body); file a standalone issue only if the follow-up is genuinely independent of the PR **and** outlives it (a real separate bug/feature that would be lost as a note on a soon-closed issue). Prefer noting PR-scoped follow-ups on the originating artifact over spinning up standalone tracker items for work that is part of the same effort or will be resolved imminently. See [Sub-Issue Tree Contract](./sub-issue-tree-contract.md).
 - if a PR already exists, classify bootstrap-wait versus follow-up:
   `node <resolved-skill-scripts>/loop/detect-initial-copilot-pr-state.mjs --repo <resolved-repo> --issue <number>`
 - `waiting_for_initial_copilot_implementation`: keep waiting; in durable-auto mode use:
@@ -215,10 +215,10 @@ node <resolved-skill-scripts>/github/manage-sub-issues.mjs list \
 
 Ad-hoc bypass of `manage-sub-issues.mjs` and duplicating the tree in the parent body are owned
 by `SUBISSUE-NO-ADHOC-BYPASS` and `SUBISSUE-LEAN-BODY-NO-DUPLICATE` in
-[Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md); this procedure does not
+[Sub-Issue Tree Contract](./sub-issue-tree-contract.md); this procedure does not
 restate those rules.
 
-For the full `manage-sub-issues.mjs` contract, use [Sub-Issue Tree Contract](../../docs/sub-issue-tree-contract.md) when working in the `dev-loops` source repository. That contract is a source-repo reference, not part of the bundled installed skill-doc surface. For installed or normalized skill copies, inspect the target repository docs/source directly instead of assuming a bundled shared-doc copy exists.
+For the full `manage-sub-issues.mjs` contract, see [Sub-Issue Tree Contract](./sub-issue-tree-contract.md).
 
 When an existing sub-issue tree needs **scope alignment, AC/DoD contracts, and delegation boundary refinement** across all levels (parent → children → grandchildren), use the [Epic Tree Refinement Procedure](./epic-tree-refinement-procedure.md) — it owns the deterministic depth-first, top-down-then-bottom-up refinement protocol.
 

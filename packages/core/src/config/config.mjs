@@ -194,14 +194,14 @@ const GatesConfig = z.strictObject({
   // fan-out/fan-in review sub-loop (executionMode === "fanout_fanin" plus a
   // durable findings-log ledger), not an inline single-agent run. Default
   // true (opt-out): a clean gate verdict requires fan-out/fan-in evidence
-  // unless explicitly disabled. See docs/gate-review-sub-loop-contract.md.
+  // unless explicitly disabled. See skills/docs/gate-review-sub-loop-contract.md.
   requireFanoutEvidence: z.boolean().default(true),
   // Fail-closed enforcement that a fanout_fanin gate verdict carries recorded,
   // internally-consistent fan-out *provenance* (distinct reviewer count +
   // per-angle dispatch). This RAISES THE BAR against a single agent self-producing
   // every artifact but does NOT prove independence — provenance is self-reported,
   // so it remains forgeable; un-forgeable recording is the Pi-harness bridge (see
-  // the honest caveat in docs/gate-review-sub-loop-contract.md). Layered ON TOP of
+  // the honest caveat in skills/docs/gate-review-sub-loop-contract.md). Layered ON TOP of
   // requireFanoutEvidence — only takes effect when fan-out evidence enforcement
   // is active. Default false (opt-in): closing this loophole is additive and
   // does not change behavior for existing ledgers that carry no provenance.
@@ -214,7 +214,7 @@ const GatesConfig = z.strictObject({
   // comment so they are auditable and Copilot/humans are aware of them. Default
   // true (opt-out). The disposition ledger is written regardless; this flag only
   // suppresses the PR comment when explicitly false. See
-  // docs/gate-review-sub-loop-contract.md.
+  // skills/docs/gate-review-sub-loop-contract.md.
   postFindingsComments: z.boolean().default(true),
   // Explicit global lens catalog override for additive angle selection
   // (gates.<gate>.dynamic.additive, #1048). GLOBAL, not per-gate (D1): one
@@ -227,7 +227,7 @@ const GatesConfig = z.strictObject({
   // provenance names only angles in the gate's configured pool — ad-hoc/foreign
   // angle labels are rejected rather than silently accepted. Default true
   // (reject); set false to warn instead of fail. See resolveRejectForeignAngles
-  // / docs/gate-review-sub-loop-contract.md.
+  // / skills/docs/gate-review-sub-loop-contract.md.
   rejectForeignAngles: z.boolean().default(true),
 });
 
@@ -235,7 +235,7 @@ const AutonomyConfig = z.strictObject({
   // ponytail: secondary cleanup #6 (stopAt kebab values vs camelCase gate
   // keys) is DEFERRED — "draft-pr"/"pre-approval" are checkpoint/state-machine
   // vocabulary shared far beyond config (lifecycle-state.mjs, hook-decisions.mjs,
-  // the handoff-envelope contract, docs/reviewer-loop-state-graph.md, and ~20
+  // the handoff-envelope contract, skills/docs/reviewer-loop-state-graph.md, and ~20
   // more files), not a config-local spelling. Renaming here would mean
   // renaming that shared vocabulary, a materially larger change than this
   // config-schema RFC's scope.
@@ -276,7 +276,7 @@ const WorkflowConfig = z.strictObject({
   // workflow-handoff-contract.test.mjs / the inspect-run viewer), so renaming
   // it here would also mean renaming a shipped artifact contract, not just a
   // config key. Out of scope for this config-shape RFC; revisit as its own
-  // change against docs/gate-review-comment-contract.md + the envelope schema.
+  // change against skills/docs/gate-review-comment-contract.md + the envelope schema.
   requireRetrospective: z.boolean().describe("Require a retrospective checkpoint before a loop completes."),
   requireDraftFirst: z.boolean().describe("Open pull requests as drafts and promote via the draft gate."),
   devModeDefault: z.boolean().describe("Default new loops to dev mode."),
@@ -1640,7 +1640,7 @@ export function resolveGateConfig(config, gate) {
  * a durable findings-log ledger exists for that gate + head SHA. Using a
  * `!== false` test (rather than `=== true`) keeps the opt-out semantics robust
  * for programmatically-built config objects that bypass schema defaulting. See
- * docs/gate-review-sub-loop-contract.md.
+ * skills/docs/gate-review-sub-loop-contract.md.
  *
  * @param {DevLoopConfig} config
  * @returns {boolean}
@@ -1654,7 +1654,7 @@ export function resolveRequireFanoutEvidence(config) {
  * requireFanoutProvenance. A floor of 2 is the smallest count that is not a
  * single agent; it raises the bar but does not prove independence (provenance
  * is self-reported — see the honest caveat in
- * docs/gate-review-sub-loop-contract.md).
+ * skills/docs/gate-review-sub-loop-contract.md).
  */
 export const FANOUT_PROVENANCE_MIN_REVIEWERS = 2;
 
@@ -1666,7 +1666,7 @@ export const FANOUT_PROVENANCE_MIN_REVIEWERS = 2;
  * `=== true` test so behavior is byte-identical to today unless a repo
  * explicitly opts in via `gates.requireFanoutProvenance: true`. Layered on top
  * of fan-out evidence enforcement (see buildFanoutEnforcement). See
- * docs/gate-review-sub-loop-contract.md.
+ * skills/docs/gate-review-sub-loop-contract.md.
  *
  * @param {DevLoopConfig} config
  * @returns {boolean}
@@ -1695,7 +1695,7 @@ export function resolveRejectForeignAngles(config) {
  * keeps the opt-out semantics robust for programmatically-built config objects
  * that bypass schema defaulting. The disposition ledger is written regardless;
  * this flag only suppresses the auditable PR comment. See
- * docs/gate-review-sub-loop-contract.md.
+ * skills/docs/gate-review-sub-loop-contract.md.
  *
  * @param {DevLoopConfig} config
  * @returns {boolean}

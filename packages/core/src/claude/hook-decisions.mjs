@@ -87,7 +87,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   }
   // `git stash` writes to `refs/stash`, one ref shared by every worktree over this repo's single
   // `.git` directory — a stash from one worktree can pop into another's. Block it outright on the
-  // target repo; see docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout for the
+  // target repo; see skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout for the
   // stash-free alternative (git diff / a patch file / a scratch checkout).
   if (commandContainsGitStash(command) && (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase()) {
     return {

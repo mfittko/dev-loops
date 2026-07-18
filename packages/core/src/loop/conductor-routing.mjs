@@ -17,7 +17,7 @@
  * - The evaluator is purely functional; no I/O or side effects
  * - Callers use evaluateConductorRouting as the single routing authority
  *
- * Integration boundary (see docs/conductor-routing-contract.md):
+ * Integration boundary (see skills/docs/conductor-routing-contract.md):
  * - This module starts after active-run identity and ownership are already resolved
  * - It consumes already-detected family-local lifecycle states as inputs
  * - It derives the routing outcome directly from states; it does not take a

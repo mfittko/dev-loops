@@ -7,7 +7,7 @@ const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), 'utf8');
 
 test('designer review loop doc remains the canonical bounded UI review handoff contract and the stale template is gone', async () => {
   const [doc, indexDoc, localImplementationSkill, visionTemplate] = await Promise.all([
-    readRepo('docs/ui-designer-review-loop.md'),
+    readRepo('skills/docs/ui-designer-review-loop.md'),
     readRepo('docs/index.md'),
     readRepo('skills/local-implementation/SKILL.md'),
     readRepo('skills/dev-loop/templates/ui-vision-review.md'),
@@ -61,5 +61,5 @@ test('designer review loop doc remains the canonical bounded UI review handoff c
   assert.match(visionTemplate, /console\.json/i);
   assert.match(visionTemplate, /must-fix/i);
   assert.match(indexDoc, /ui-designer-review-loop\.md/i);
-  assert.match(localImplementationSkill, /\.\.\/\.\.\/docs\/ui-designer-review-loop\.md/i);
+  assert.match(localImplementationSkill, /\.\.\/docs\/ui-designer-review-loop\.md/i);
 });

@@ -1,6 +1,6 @@
 # Copilot loop operations
 
-Canonical owner for operating the deterministic Copilot PR follow-up state machine — the operational reference for the routed `copilot_pr_followup`, `wait_watch`, `reviewer_fixer`, and `final_approval` paths behind `dev-loop`. The machine's states and transitions are defined by [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md).
+Canonical owner for operating the deterministic Copilot PR follow-up state machine — the operational reference for the routed `copilot_pr_followup`, `wait_watch`, `reviewer_fixer`, and `final_approval` paths behind `dev-loop`. The machine's states and transitions are defined by [Copilot Loop State Graph](./copilot-loop-state-graph.md).
 
 Use it together with:
 - [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md)
@@ -26,16 +26,14 @@ Use the machines to answer:
 - when to stop instead of guessing
 
 Each machine's snapshot-to-state mapping is defined in its owner doc (see the Overview of
-[Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md) and
-[Reviewer Loop State Graph](../../docs/reviewer-loop-state-graph.md)), under `../../docs/`
-relative to `skills/copilot-pr-followup/SKILL.md` in the `dev-loops` source repository. Treat
-those links as source-repo references, not bundled installed-skill docs.
+[Copilot Loop State Graph](./copilot-loop-state-graph.md) and
+[Reviewer Loop State Graph](./reviewer-loop-state-graph.md)), both bundled sibling docs under `skills/docs/`.
 
-For tracker-first MVP `story -> PR -> tracker sync` work, the source-repo reference is [Tracker-First Story-to-PR Contract](../../docs/tracker-story-pr-contract.md). That source doc inherits source-of-truth ownership, the required work item <-> PR link, and reverse-sync semantics from `#21`; it only adds the mutually exclusive workflow-family states and post-merge sync-verification states for this narrower MVP slice.
+For tracker-first MVP `story -> PR -> tracker sync` work, see [Tracker-First Story-to-PR Contract](./tracker-story-pr-contract.md). That doc inherits source-of-truth ownership, the required work item <-> PR link, and reverse-sync semantics from `#21`; it only adds the mutually exclusive workflow-family states and post-merge sync-verification states for this narrower MVP slice.
 
 ## Key guarantees from the state machine
 
-These routing guarantees are owned by [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md); see `COPILOT-STATE-UNRESOLVED-PRIORITY`, `COPILOT-STATE-TERMINAL-STOP`, `COPILOT-STATE-REPLY-BEFORE-REREQUEST`, and `COPILOT-STATE-ACTIVE-REQUEST-WAIT` there for the routing rules driving `unresolvedThreadCount`, `copilotReviewRequestStatus`, and `agentFixStatus`.
+These routing guarantees are owned by [Copilot Loop State Graph](./copilot-loop-state-graph.md); see `COPILOT-STATE-UNRESOLVED-PRIORITY`, `COPILOT-STATE-TERMINAL-STOP`, `COPILOT-STATE-REPLY-BEFORE-REREQUEST`, and `COPILOT-STATE-ACTIVE-REQUEST-WAIT` there for the routing rules driving `unresolvedThreadCount`, `copilotReviewRequestStatus`, and `agentFixStatus`.
 
 ## How to use the state machine in practice
 
@@ -63,7 +61,7 @@ These routing guarantees are owned by [Copilot Loop State Graph](../../docs/copi
 
 ## Judgment calls that remain in the agent layer
 
-See [Copilot Loop State Graph](../../docs/copilot-loop-state-graph.md)'s "Agent judgment boundary" for the bounded list of decisions the state machine leaves to the agent.
+See [Copilot Loop State Graph](./copilot-loop-state-graph.md)'s "Agent judgment boundary" for the bounded list of decisions the state machine leaves to the agent.
 
 ## Workflow overview
 

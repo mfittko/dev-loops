@@ -447,7 +447,7 @@ This contract explicitly does **not** define:
 
 ## Relationship to queue mode
 
-The [Queue Mode SPEC](./specs/queue-mode/SPEC.md) and [Queue Board Setup](./queue-board-setup.md)
+The queue-mode SPEC and [Queue Board Setup](./queue-board-setup.md)
 describe a queue-mode implementation that uses `.pi/dev-loop-queue.json` for durable entry
 lifecycle tracking. This contract adds an **optional** Projects-board scheduling input on top
 of that existing queue infrastructure — it does not replace local queue persistence and does
@@ -457,6 +457,6 @@ back to positional arguments as described in the queue mode specification.
 ## See also
 
 - [Queue Board Setup](./queue-board-setup.md) — one-time setup guide
-- [Queue Mode SPEC](./specs/queue-mode/SPEC.md) — full queue mode specification
+- the queue-mode SPEC (`docs/specs/queue-mode/SPEC.md`) — full queue mode specification
 - Issue [#625](https://github.com/mfittko/dev-loops/issues/625) — parent epic
 - Issue [#626](https://github.com/mfittko/dev-loops/issues/626) — this contract refinement

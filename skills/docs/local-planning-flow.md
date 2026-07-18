@@ -41,7 +41,7 @@ The refine step writes the refiner output back into the same plan file:
 node scripts/refine/refine-plan-file.mjs --plan-file docs/phases/phase-<n>.md --payload <payload.json>
 ```
 
-`refinePlanFileInPlace` appends the `Acceptance criteria` and `Definition of done` sections, a `Coverage matrix` section, and a `Docs-grill findings` section, then advances the intake state to `plan_refined_ready_for_promotion` and stops at the `local_human_review` checkpoint. The docs-grill runs as a step within refinement: each finding is classified with `classifyDocsGrillFinding` (see the [Docs-Grill Step](../../docs/docs-grill-step.md)) and the dispositions are recorded into the plan. The step makes no GitHub or network call; the human reviews the refined plan before anything is promoted.
+`refinePlanFileInPlace` appends the `Acceptance criteria` and `Definition of done` sections, a `Coverage matrix` section, and a `Docs-grill findings` section, then advances the intake state to `plan_refined_ready_for_promotion` and stops at the `local_human_review` checkpoint. The docs-grill runs as a step within refinement: each finding is classified with `classifyDocsGrillFinding` (see the [Docs-Grill Step](./docs-grill-step.md)) and the dispositions are recorded into the plan. The step makes no GitHub or network call; the human reviews the refined plan before anything is promoted.
 
 ## 4. Promote to a single draft PR
 
@@ -60,4 +60,4 @@ Promotion is PR-first: it commits the plan doc and opens exactly one draft PR vi
 | [Artifact Authority Contract](artifact-authority-contract.md) | Canonical model and per-phase contract details for the local-first flow |
 | [Plan-file Contract](plan-file-contract.md) | Plan-file format, base sections, validator, and the optional `prNumber` front-matter |
 | [Local-Planning Worked Example](local-planning-worked-example.md) | One plan file shown through every stage of this sequence |
-| [Docs-Grill Step](../../docs/docs-grill-step.md) | The in-loop grill that runs as a step within refinement |
+| [Docs-Grill Step](./docs-grill-step.md) | The in-loop grill that runs as a step within refinement |

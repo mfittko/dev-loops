@@ -17,7 +17,7 @@ name: Gate evidence
 # bypass): head-provenance — the workflow and the scripts it runs come from the
 # PR's own head, so a PR could edit this file or the detector to forge a green
 # check on itself. This is the "self-reported / not un-forgeable" caveat in
-# docs/gate-review-sub-loop-contract.md; the un-forgeable provenance bridge
+# skills/docs/gate-review-sub-loop-contract.md; the un-forgeable provenance bridge
 # (harness attestation) is #1358's explicit non-goal. Merge is maintainer-
 # gated, so forging requires the merger to self-modify.
 #

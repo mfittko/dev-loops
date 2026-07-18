@@ -292,7 +292,7 @@ test("public dev-loop contract keeps tracker-backed local work inside local_impl
 
 test("checkpoint review chain contract exists and is referenced by both gates", async () => {
   const [subLoopContract, copilotFollowupSkill] = await Promise.all([
-    readRepo("docs/gate-review-sub-loop-contract.md"),
+    readRepo("skills/docs/gate-review-sub-loop-contract.md"),
     readRepo("skills/copilot-pr-followup/SKILL.md"),
   ]);
 
@@ -343,7 +343,7 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
     readRepo("skills/final-approval/SKILL.md"),
     readRepo("AGENTS.md"),
     readRepo("skills/docs/workflow-handoff-contract.md"),
-    readRepo("docs/tracker-story-pr-contract.md"),
+    readRepo("skills/docs/tracker-story-pr-contract.md"),
   ]);
 
   // copilot-pr-followup routes PR creation through the canonical create-pr wrapper

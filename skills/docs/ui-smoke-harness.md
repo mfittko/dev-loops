@@ -8,7 +8,7 @@ config, fixture-server, and named-state capture helpers.
 
 When UI e2e coverage is **required** is no longer an opt-in convention — it is
 path-triggered and fail-closed (see
-[UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)). This document covers
+[UI e2e scoping step](./ui-e2e-scoping-step.md)). This document covers
 the reusable WebKit/config/capture mechanics those required suites reuse.
 
 ## Purpose
@@ -47,7 +47,7 @@ For a **rendered artifact** (deck, article, or the viewer) registration is the
 path — add a registry entry plus a thin spec calling `defineDeckSuite` /
 `defineArticleSuite`; `playwright.config.mjs` derives a project from the
 registry automatically, so no config edit is needed
-(see [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md)). The spec file
+(see [UI e2e scoping step](./ui-e2e-scoping-step.md)). The spec file
 **must** be named `<sliceId>.spec.mjs`: each generated project pins
 `testMatch: ['<sliceId>.spec.mjs']`, so the spec basename and the registry
 `sliceId` are coupled. For a bespoke local UI surface that uses this WebKit seam
@@ -100,6 +100,6 @@ This harness (the WebKit seam) does not attempt to provide:
 
 CI enforcement for the shared rendered-artifact suites is **required and
 auto-scoped**, not promoted per slice — see
-[UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md). The named-state
+[UI e2e scoping step](./ui-e2e-scoping-step.md). The named-state
 artifact shape these suites emit is documented in
 [UI Artifact Contract](./ui-artifact-contract.md).

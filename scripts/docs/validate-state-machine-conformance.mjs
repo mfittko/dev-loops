@@ -595,7 +595,7 @@ registerMachine(PR_GATE_COORDINATION_MACHINE);
 // ---------------------------------------------------------------------------
 // Second machine (issue #1156): conductor-routing.
 //
-// Doc side: docs/conductor-routing-contract.md's "## Required transitions" bullets,
+// Doc side: skills/docs/conductor-routing-contract.md's "## Required transitions" bullets,
 // parsed at load time via parseRequiredTransitions. The doc bullets one abstract row
 // per non-terminal outer state ("`state` -> any outer state") because the outer-loop
 // graph is stateless per cycle (every evaluation is independent, so a non-terminal
@@ -622,7 +622,7 @@ const CONDUCTOR_ROUTING_ABSTRACT_ROWS = new Map(
 );
 
 const CONDUCTOR_ROUTING_DOC_TRANSITIONS = parseRequiredTransitions(
-  readFileSync(path.join(REPO_ROOT, "docs", "conductor-routing-contract.md"), "utf8"),
+  readFileSync(path.join(REPO_ROOT, "skills", "docs", "conductor-routing-contract.md"), "utf8"),
   { abstractRows: CONDUCTOR_ROUTING_ABSTRACT_ROWS },
 );
 
@@ -683,7 +683,7 @@ registerMachine(CONDUCTOR_ROUTING_MACHINE);
 // ---------------------------------------------------------------------------
 // Third machine (issue #1157): copilot-loop-state.
 //
-// Doc side: docs/copilot-loop-state-graph.md's "## Required transitions" bullets,
+// Doc side: skills/docs/copilot-loop-state-graph.md's "## Required transitions" bullets,
 // parsed at load time via parseRequiredTransitions.
 //
 // Code side: packages/core/src/loop/copilot-loop-state.mjs exports STATE, TRANSITIONS,
@@ -724,7 +724,7 @@ function tableTerminalStates(table) {
 }
 
 const COPILOT_LOOP_STATE_DOC_TRANSITIONS = parseRequiredTransitions(
-  readFileSync(path.join(REPO_ROOT, "docs", "copilot-loop-state-graph.md"), "utf8"),
+  readFileSync(path.join(REPO_ROOT, "skills", "docs", "copilot-loop-state-graph.md"), "utf8"),
 );
 
 bindDocToCodeTable("copilot-loop-state", COPILOT_LOOP_STATE_DOC_TRANSITIONS, tableEdges(TRANSITIONS));
@@ -790,7 +790,7 @@ registerMachine(COPILOT_LOOP_STATE_MACHINE);
 // ---------------------------------------------------------------------------
 // Fourth machine (issue #1157): reviewer-loop-state.
 //
-// Doc side: docs/reviewer-loop-state-graph.md's "## Required transitions" bullets, with
+// Doc side: skills/docs/reviewer-loop-state-graph.md's "## Required transitions" bullets, with
 // three abstract rows expanded via REVIEWER_LOOP_STATE_ABSTRACT_ROWS below. The interpreter
 // checks its {!prExists, prMerged, prClosed, prDraft} pre-gates first (those snapshots stay
 // `waiting_for_review_request`); only past those pre-gates does the reviewSubmissionStatus
@@ -838,7 +838,7 @@ const REVIEWER_LOOP_STATE_ABSTRACT_ROWS = new Map([
 ]);
 
 const REVIEWER_LOOP_STATE_DOC_TRANSITIONS = parseRequiredTransitions(
-  readFileSync(path.join(REPO_ROOT, "docs", "reviewer-loop-state-graph.md"), "utf8"),
+  readFileSync(path.join(REPO_ROOT, "skills", "docs", "reviewer-loop-state-graph.md"), "utf8"),
   { abstractRows: REVIEWER_LOOP_STATE_ABSTRACT_ROWS },
 );
 
@@ -892,7 +892,7 @@ for (const [from, to] of REVIEWER_LOOP_STATE_OWNED_ELSEWHERE_EDGES) {
     status: "owned_elsewhere",
     note: "Legacy external-wait compatibility state re-entry is owned by the outer-loop "
       + "compatibility layer, not by interpretReviewerLoopState, which never assigns "
-      + `"${from}" as its own output state (see docs/reviewer-loop-state-graph.md).`,
+      + `"${from}" as its own output state (see skills/docs/reviewer-loop-state-graph.md).`,
   });
 }
 for (const [from, to] of realEdges(REVIEWER_LOOP_STATE_DOC_TRANSITIONS)) {

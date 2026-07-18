@@ -42,10 +42,10 @@ test("review workflow resolves pre-approval gate angles from config with explici
   const [localImplementationSkill, copilotFollowupSkill, subLoopContract, reviewAgent, reviewTemplate, reviewerGraph] = await Promise.all([
     readRepo("skills/local-implementation/SKILL.md"),
     readRepo("skills/copilot-pr-followup/SKILL.md"),
-    readRepo("docs/gate-review-sub-loop-contract.md"),
+    readRepo("skills/docs/gate-review-sub-loop-contract.md"),
     readRepo("agents/review.agent.md"),
     readRepo("skills/dev-loop/templates/review.md"),
-    readRepo("docs/reviewer-loop-state-graph.md"),
+    readRepo("skills/docs/reviewer-loop-state-graph.md"),
   ]);
 
   const gateDocuments = [
@@ -53,7 +53,7 @@ test("review workflow resolves pre-approval gate angles from config with explici
     ["skills/copilot-pr-followup/SKILL.md", copilotFollowupSkill, /default pre-approval gate/i],
     ["agents/review.agent.md", reviewAgent, /default pre-approval gate contract:[\s\S]{0,200}resolveGateAngles/i],
     ["skills/dev-loop/templates/review.md", reviewTemplate, /Default pre-approval gate/i],
-    ["docs/reviewer-loop-state-graph.md", reviewerGraph, /default pre-approval gate[\s\S]{0,200}resolveGateAngles/i],
+    ["skills/docs/reviewer-loop-state-graph.md", reviewerGraph, /default pre-approval gate[\s\S]{0,200}resolveGateAngles/i],
   ];
 
   for (const [label, content, gatePhraseWithLenses] of gateDocuments) {
@@ -64,7 +64,7 @@ test("review workflow resolves pre-approval gate angles from config with explici
     ["skills/local-implementation/SKILL.md", localImplementationSkill],
     ["skills/copilot-pr-followup/SKILL.md", copilotFollowupSkill],
     ["agents/review.agent.md", reviewAgent],
-    ["docs/reviewer-loop-state-graph.md", reviewerGraph],
+    ["skills/docs/reviewer-loop-state-graph.md", reviewerGraph],
   ]) {
     assert.match(
       content,
@@ -78,27 +78,27 @@ test("review workflow resolves pre-approval gate angles from config with explici
   assert.match(reviewTemplate, /configured angle checks/i);
   assert.match(localImplementationSkill, /GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK/);
   assert.match(copilotFollowupSkill, /gate-review-sub-loop-contract\.md.*pre-approval/i);
-  assertRuleOwned("GATE-EXEC-BUILD-ONCE-SEED", "docs/gate-review-sub-loop-contract.md");
-  assertRuleOwned("GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK", "docs/gate-review-sub-loop-contract.md");
+  assertRuleOwned("GATE-EXEC-BUILD-ONCE-SEED", "skills/docs/gate-review-sub-loop-contract.md");
+  assertRuleOwned("GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK", "skills/docs/gate-review-sub-loop-contract.md");
   assert.match(copilotFollowupSkill, /GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK/);
   // The review agent's fresh-context + sequential-fallback sentences point at
   // GATE-EXEC-BUILD-ONCE-SEED / GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK (owned
   // above); loose token checks on the agent surface, not exact sentences (#1159).
   assert.match(reviewAgent, /fresh context/i);
   assert.match(reviewAgent, /record the limitation/i);
-  assertRuleOwned("REVIEWER-STATE-GATE-ANGLE-MAPPING", "docs/reviewer-loop-state-graph.md");
+  assertRuleOwned("REVIEWER-STATE-GATE-ANGLE-MAPPING", "skills/docs/reviewer-loop-state-graph.md");
   assert.match(reviewerGraph, /REVIEWER-STATE-GATE-ANGLE-MAPPING/);
 });
 
 test("reviewer-loop contract documents submitted-review handoff and explicit external waits", async () => {
   const [reviewerGraph, scriptsReadme] = await Promise.all([
-    readRepo("docs/reviewer-loop-state-graph.md"),
+    readRepo("skills/docs/reviewer-loop-state-graph.md"),
     readRepo("scripts/README.md"),
   ]);
 
-  assertRuleOwned("REVIEWER-BOUNDARY-CONTRACT", "docs/reviewer-loop-state-graph.md");
+  assertRuleOwned("REVIEWER-BOUNDARY-CONTRACT", "skills/docs/reviewer-loop-state-graph.md");
   assert.match(reviewerGraph, /REVIEWER-BOUNDARY-CONTRACT/);
-  assert.match(reviewerGraph, /skills\/docs\/pr-lifecycle-contract\.md/i);
+  assert.match(reviewerGraph, /\.\/pr-lifecycle-contract\.md/i);
   assert.match(scriptsReadme, /reviewer `submitted_review`\s+as outer-loop-owned `continue_wait` states at explicit external\/handoff boundaries/i);
   assert.match(scriptsReadme, /preserves compatibility for reviewer `waiting_for_author_followup` and `waiting_for_re_request`\s+as legacy named external-wait boundaries/i);
 });
@@ -107,9 +107,9 @@ test("consolidated PR lifecycle contract freezes the family-local lifecycle boun
   const [lifecycleContract, docsIndex, copilotGraph, gateContract, conductorRouting] = await Promise.all([
     readRepo("skills/docs/pr-lifecycle-contract.md"),
     readRepo("docs/index.md"),
-    readRepo("docs/copilot-loop-state-graph.md"),
-    readRepo("docs/gate-review-comment-contract.md"),
-    readRepo("docs/conductor-routing-contract.md"),
+    readRepo("skills/docs/copilot-loop-state-graph.md"),
+    readRepo("skills/docs/gate-review-comment-contract.md"),
+    readRepo("skills/docs/conductor-routing-contract.md"),
   ]);
 
   assert.match(docsIndex, /skills\/docs\/pr-lifecycle-contract\.md/i);
@@ -124,9 +124,9 @@ test("consolidated PR lifecycle contract freezes the family-local lifecycle boun
   assert.match(lifecycleContract, /waiting_for_human_pr_approval/i);
   assertRuleOwned("LIFECYCLE-CONFLICT-BLOCKS-PROGRESS", "skills/docs/pr-lifecycle-contract.md");
 
-  assert.match(copilotGraph, /skills\/docs\/pr-lifecycle-contract\.md/i);
-  assert.match(gateContract, /skills\/docs\/pr-lifecycle-contract\.md/i);
-  assert.match(conductorRouting, /skills\/docs\/pr-lifecycle-contract\.md/i);
+  assert.match(copilotGraph, /\.\/pr-lifecycle-contract\.md/i);
+  assert.match(gateContract, /\.\/pr-lifecycle-contract\.md/i);
+  assert.match(conductorRouting, /\.\/pr-lifecycle-contract\.md/i);
 });
 
 test("local-implementation skill documents the auto-scoped rendered-artifact UI e2e requirement", async () => {
