@@ -11,28 +11,32 @@ name: Gate evidence
 # draft PR cannot be merged regardless); GitHub Actions treats a skipped job on a
 # required check as passing, so this never blocks draft work.
 #
-# Two inherent limitations of a pull_request-triggered, head-run check (both
-# accepted by design, neither a bypass):
-#   - Head-provenance: the workflow and the scripts it runs come from the PR's
-#     own head, so a PR could edit this file or the detector to forge a green
-#     check on itself. This is the "self-reported / not un-forgeable" caveat in
-#     docs/gate-review-sub-loop-contract.md; the un-forgeable provenance bridge
-#     (harness attestation) is #1358's explicit non-goal. Merge is maintainer-
-#     gated, so forging requires the merger to self-modify.
-#   - Trigger staleness: the verdict depends on PR comment history + thread
-#     resolution, which pull_request events don't re-fire on. For HEAD staleness
-#     this fails closed (a new commit re-triggers synchronize; missing/stale
-#     current-head evidence -> red). But the comment/thread dimension is NOT
-#     re-evaluated between triggering events: a NEW unresolved thread appearing
-#     after the last push/ready event leaves the SHA-pinned green check stale
-#     until the next push -> a residual false-green window on the thread axis.
-#     Bounded by the draft-first flow (re-evaluates on ready_for_review after the
-#     verdict is posted) and the maintainer-gated merge, but real; closing it
-#     (re-verify at merge / broaden triggers) is tracked separately. Not a reason
-#     to treat this check as the sole merge guard.
+# One inherent limitation of a head-run check (accepted by design, not a
+# bypass): head-provenance — the workflow and the scripts it runs come from the
+# PR's own head, so a PR could edit this file or the detector to forge a green
+# check on itself. This is the "self-reported / not un-forgeable" caveat in
+# docs/gate-review-sub-loop-contract.md; the un-forgeable provenance bridge
+# (harness attestation) is #1358's explicit non-goal. Merge is maintainer-
+# gated, so forging requires the merger to self-modify.
+#
+# Trigger staleness (the thread/comment axis) was a real gap: the verdict
+# depends on PR comment history + thread resolution, and pull_request events
+# don't re-fire when a thread is opened/resolved or a review is submitted.
+# Head staleness was always fail-closed (a new commit re-triggers synchronize);
+# closed here by also re-firing on pull_request_review (review submitted,
+# which can add unresolved threads) and pull_request_review_thread
+# (resolved/unresolved) — both fire on the base repo's own token regardless of
+# whether the PR head is a fork, and both carry the same `pull_request` object
+# (number, draft, ...) that this workflow already reads. So a NEW unresolved
+# thread, or a submitted review, re-evaluates this check instead of leaving a
+# SHA-pinned green stale until the next push.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_thread:
+    types: [resolved, unresolved]
 
 permissions:
   contents: read
