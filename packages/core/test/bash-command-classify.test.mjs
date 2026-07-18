@@ -20,6 +20,7 @@ import {
   extractRepoFlagsFromGhPrCreateSegments,
   commandContainsRawExternalWrite,
   extractRepoFlagsFromExternalWriteSegments,
+  commandContainsGitStash,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -267,4 +268,13 @@ test("gate normalization does not over-match the wrapper or --help", () => {
   // --help still exempts even behind a prefix
   assert.equal(commandContainsGhPrCreate("gh pr create --help"), false);
   assert.equal(commandContainsGhPrCreate("command gh pr create --help"), false);
+});
+
+test("commandContainsGitStash detects bare stash and subcommands anywhere in the command", () => {
+  assert.equal(commandContainsGitStash("git stash"), true);
+  assert.equal(commandContainsGitStash("git stash pop"), true);
+  assert.equal(commandContainsGitStash("git stash push -m wip"), true);
+  assert.equal(commandContainsGitStash("git diff && git stash apply"), true);
+  assert.equal(commandContainsGitStash("git status"), false);
+  assert.equal(commandContainsGitStash("git stash-list-alias"), false);
 });

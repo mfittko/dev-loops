@@ -59,6 +59,10 @@ const KNOWN_INTENTIONAL_DUPLICATE_SENTENCES = new Set([
   "The loop requires all of the following inputs before it may run:",
   "If any required part of this bundle is missing, incomplete, or ambiguous, the loop fails closed instead of guessing.",
   "- required acceptance criteria are missing",
+  // agents/developer.agent.md and agents/fixer.agent.md deliberately state the same git-stash
+  // ban verbatim — both are direct implementation agents that touch the same shared-`.git`
+  // worktree layout, so the guardrail belongs in both, not just one.
+  "- Never (or /): is shared across every worktree over this repo's one directory, so a stash can pop into a different worktree.",
 ]);
 
 const USAGE = `Usage: validate-rule-ownership.mjs [--help]
