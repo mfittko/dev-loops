@@ -16,17 +16,30 @@ const stateGraphDoc = readFileSync(
 // describes in prose — the contract states the rules narratively, not as regexes,
 // so these are the test's own approximations, used to prove the fixtures below
 // actually exercise each rule rather than only pinning doc text. Not a production
-// module: the grill itself is agent-executed prose. The unresolved-option proxy
-// uses the dotAll (`s`) flag so "Suggested: … or …" split across a markdown list
-// (newlines) still trips it.
+// module: the grill itself is agent-executed prose.
+//
+// UNRESOLVED_OPTION_RE uses dotAll (`s`) so a "Suggested: … or …" split across a
+// markdown list (newlines) still trips it.
+//
+// BARE_HASH_RE deliberately OVER-approximates: it flags ANY bare `#<number>`.
+// The rule (`GRILL-SUBLOOP-NO-BARE-HASH`) rejects `#N` used as enumeration but
+// ALLOWS a genuine issue/PR cross-reference — a distinction that cannot be made
+// from syntax alone (`#1` the enumeration and `#1098` the cross-reference are
+// identical). Deciding which is which is agent judgment, not this regex. So the
+// clean write-back fixtures simply avoid bare `#N` of either kind (enumerations
+// use `defect N`), and the test only asserts the proxy FIRES on an enumeration —
+// it never claims to classify a genuine reference.
 const RATIONALE_SECTION_RE = /^#{1,6}\s*(?:🔬\s*)?(?:refinement notes|grill findings|grill\s*\/\s*refinement results)\b/im;
 const UNRESOLVED_OPTION_RE = /\bsuggested:.*\bor\b|\boption a or b\b/is;
-const BARE_NON_ISSUE_HASH_RE = /(?<![\w`])#\d+(?!\d)/;
+const BARE_HASH_RE = /(?<![\w`])#\d+(?!\d)/;
 
 function assertWriteBackClean(body) {
   assert.doesNotMatch(body, RATIONALE_SECTION_RE, "post-grill description must carry no rationale/narrative section");
   assert.doesNotMatch(body, UNRESOLVED_OPTION_RE, "post-grill description must carry no unresolved 'suggested ... or ...' option");
-  assert.doesNotMatch(body, BARE_NON_ISSUE_HASH_RE, "post-grill description must carry no bare non-issue #N");
+  // Conservative: the fixture avoids bare `#N` of either kind (enumerations use
+  // `defect N`); a genuine issue reference belongs in backticks or is left to
+  // agent judgment, outside this proxy's scope.
+  assert.doesNotMatch(body, BARE_HASH_RE, "post-grill description fixture carries no bare #N (enumerations use `defect N`)");
 }
 
 test("SKILL.md write-back contract names all three rewrite rules and the new rule IDs", () => {
@@ -129,7 +142,10 @@ test("results-comment fixture carries the required title and no bare non-issue #
   ].join("\n");
 
   assert.match(resultsComment, /🔬 Grill \/ refinement results/);
-  assert.doesNotMatch(resultsComment, BARE_NON_ISSUE_HASH_RE, "results comment must carry no bare non-issue #N");
+  // The fixture enumerates rejected alternatives as `defect A`/`defect B`, so it
+  // carries no bare `#N` at all (the proxy over-approximates, so the fixture
+  // sidesteps the enumeration-vs-reference ambiguity entirely).
+  assert.doesNotMatch(resultsComment, BARE_HASH_RE, "results comment fixture uses `defect A`/`defect B`, no bare #N");
 });
 
 test("each write-back hygiene detector independently fires on its own defect (non-vacuous)", () => {
@@ -139,7 +155,11 @@ test("each write-back hygiene detector independently fires on its own defect (no
   // matches) can't leave every fixture green.
   assert.match("## Refinement notes (auto)", RATIONALE_SECTION_RE);
   assert.match("Suggested: cap it here, or fail closed instead.", UNRESOLVED_OPTION_RE);
-  assert.match("Considered defect #1 (truncation).", BARE_NON_ISSUE_HASH_RE);
-  // And the bare-#N detector must NOT trip on a backticked genuine issue ref.
-  assert.doesNotMatch("tracked in `#1389`", BARE_NON_ISSUE_HASH_RE);
+  assert.match("Considered defect #1 (truncation).", BARE_HASH_RE);
+  // The proxy is bare-only: a backticked reference is not flagged (this proves the
+  // backtick lookbehind fires). Note the proxy would ALSO match a genuine BARE
+  // issue ref like "#1098" — it can't tell that from an enumeration, which is
+  // exactly why the clean fixtures above avoid bare `#N` and leave the
+  // enumeration-vs-reference call to agent judgment, not this regex.
+  assert.doesNotMatch("tracked in `#1389`", BARE_HASH_RE);
 });
