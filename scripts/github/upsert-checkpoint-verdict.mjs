@@ -14,6 +14,7 @@ import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
+import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
@@ -36,7 +37,7 @@ but must match the coordination state's allowed next actions.
 Required:
   --repo <owner/name>
   --pr <number>
-  --head-sha <sha>                            Full current head SHA or hexadecimal prefix of it
+  --head-sha <sha>                            FULL current head commit SHA (40 or 64 hex chars) — a short prefix is rejected
   --verdict <clean|findings_present|blocked>
   --findings-summary <text>                 Findings summary as a single argument
                                             (use --findings-file for multi-line)
@@ -129,10 +130,6 @@ function normalizeGateName(value) {
 function normalizeVerdict(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return GATE_VERDICTS.has(normalized) ? normalized : null;
-}
-function normalizeHeadSha(value) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
 }
 function normalizeExecutionMode(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -340,9 +337,9 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       continue;
     }
     if (token.name === "head-sha") {
-      const headSha = normalizeHeadSha(requireTokenValue(token, parseError));
+      const headSha = normalizeFullHeadSha(requireTokenValue(token, parseError));
       if (!headSha) {
-        throw parseError("--head-sha must be a 7-64 character hexadecimal SHA");
+        throw parseError(FULL_HEAD_SHA_ERROR);
       }
       options.headSha = headSha;
       continue;

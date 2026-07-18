@@ -643,7 +643,7 @@ Required:
 - `--repo <owner/name>`
 - `--pr <number>`
 - `--gate <draft_gate|pre_approval_gate>`
-- `--head-sha <sha>` — full current head SHA or a hexadecimal prefix of it; the helper canonicalizes to the full current head before comparing/updating visible markers
+- `--head-sha <sha>` — the FULL current head commit SHA (40 or 64 hex chars); a short prefix is rejected (the gate marker is keyed by it and the pre-merge check resolves the full head SHA)
 - `--verdict <clean|findings_present|blocked>`
 - `--findings-summary <text>`
 - `--next-action <text>`
