@@ -40,6 +40,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "pr-body-title-assignee-milestone": "scripts/github/edit-pr.mjs",
     "issue-body-title-assignee-milestone": "scripts/github/edit-issue.mjs",
     "issue-comment": "scripts/github/comment-issue.mjs",
+    "issue-comment-edit": "scripts/github/edit-comment.mjs",
     "issue-create": "scripts/github/create-issue.mjs",
   }),
 
