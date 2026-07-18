@@ -14,11 +14,11 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 
 const USAGE = `Usage: resolve-handoff-candidates.mjs --repo <owner/name> --pr <number> [--changed-files <a,b,c>] [--pr-author <login>]
 Resolve an ordered, deduped list of human-handoff reviewer/assignee candidates
-for a PR, from the sources configured under \`approval.humanHandoff\` (#920).
+for a PR, from the sources configured under \`approval\` (#920).
 This is the "offer" side: it surfaces candidates only — it never assigns anyone.
 
 Sources (in priority order):
-  assignees          Static configured list (approval.humanHandoff.assignees).
+  assignees          Static configured list (approval.assignees).
   codeowners         .github/CODEOWNERS / CODEOWNERS / docs/CODEOWNERS matched
                      against the PR's changed paths (last-match-wins per
                      CODEOWNERS semantics). Team handles (@org/team) are
@@ -27,7 +27,7 @@ Sources (in priority order):
                      by GitHub login where derivable from the commit email,
                      excluding the PR author and bots.
 
-Which sources run is controlled by approval.humanHandoff.candidatesFrom.
+Which sources run is controlled by approval.candidatesFrom.
 Disabled (default) => no-op: ok:true with an empty candidate list.
 
 Required:

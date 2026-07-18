@@ -2,7 +2,7 @@
 /**
  * Provision a freshly-created worktree with the gitignored files/dirs the app
  * and tests need, copied/symlinked from the main checkout per `.devloops`
- * `worktree.copyOnInit` / `worktree.linkOnInit` (issue #909).
+ * `worktree.entries` (mode: copy/link, issue #909).
  *
  * - Sources resolve against the main checkout (`--repo-root`), never cwd.
  * - Entries are repo-relative literal paths OR glob patterns (native fsp.glob).
@@ -35,7 +35,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 const USAGE = `Usage:
   provision-worktree.mjs --worktree-path <p> --repo-root <p>
 Provision a worktree with gitignored files/dirs from the main checkout,
-driven by .devloops worktree.copyOnInit / worktree.linkOnInit.
+driven by .devloops worktree.entries (mode: copy/link).
 Required:
   --worktree-path <p>   Absolute path to the target worktree.
   --repo-root <p>       Absolute path to the main checkout (source of files).

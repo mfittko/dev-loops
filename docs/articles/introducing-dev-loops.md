@@ -153,10 +153,8 @@ On Pi the same set is reachable as subcommands of one command: `/dev-loops start
 ```yaml
 # .devloops
 version: 1
-strategy:
-  default: local-first    # start from a local plan file; github-first starts from issues
-inputSource:
-  default: tracker        # read the spec from the issue body, or phase-docs
+strategy: local-first    # start from a local plan file; github-first starts from issues
+inputSource: tracker     # read the spec from the issue body, or phase-docs
 refinement:
   maxCopilotRounds: 5     # automated review rounds before converging; 0 turns Copilot off
 autonomy:

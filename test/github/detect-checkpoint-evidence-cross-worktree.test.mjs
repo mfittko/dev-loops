@@ -237,7 +237,7 @@ const ANGLE_CONFIG = {
   gates: {
     requireFanoutEvidence: true,
     draft: { required: true },
-    preApproval: { required: true, mandatoryAngles: ["pr-checklist-matrix"], angles: ["dry", "pr-checklist-matrix"] },
+    preApproval: { required: true, angles: ["dry", { name: "pr-checklist-matrix", mandatory: true }] },
   },
 };
 

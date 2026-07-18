@@ -47,7 +47,7 @@ describe("schema validation", () => {
   test("S1: full valid config parses successfully", () => {
     const input = {
       version: 1,
-      strategy: { default: "local-first" },
+      strategy: "local-first",
       models: { conductor: "gpt-5", roles: { security: "gpt-5" } },
       refinement: { fanOut: 5, mode: "sequential", roles: ["security"] },
       gates: {
@@ -91,10 +91,10 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
-  test("S6: unknown nested key inside strategy rejected", () => {
+  test("S6: strategy is a bare enum (flattened, #1404) — an object value is rejected", () => {
     const result = DevLoopConfigSchema.safeParse({
       version: 1,
-      strategy: { default: "github-first", unknownKey: true },
+      strategy: { default: "github-first" },
     });
     assert.ok(!result.success);
   });
@@ -165,7 +165,7 @@ describe("schema validation", () => {
   test("S11: strategy.default bad enum", () => {
     const result = DevLoopConfigSchema.safeParse({
       version: 1,
-      strategy: { default: "neither" },
+      strategy: "neither",
     });
     assert.ok(!result.success);
   });
@@ -173,7 +173,7 @@ describe("schema validation", () => {
   test("S11b: inputSource.default bad enum", () => {
     const result = DevLoopConfigSchema.safeParse({
       version: 1,
-      inputSource: { default: "local-docs" },
+      inputSource: "local-docs",
     });
     assert.ok(!result.success);
   });
@@ -297,13 +297,9 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
-  test("S24: strategy.byWorkflow rejected as unknown key", () => {
-    const result = DevLoopConfigSchema.safeParse({
-      version: 1,
-      strategy: { default: "github-first", byWorkflow: { x: "local-first" } },
-    });
-    assert.ok(!result.success);
-  });
+  // S24 (strategy.byWorkflow rejected) removed: strategy is now a bare enum
+  // (#1404), so "an object under strategy is rejected" is already covered by
+  // S6 above — a second object-shape variant added nothing.
 
   test("S25: models.roles has empty string value", () => {
     const result = DevLoopConfigSchema.safeParse({
@@ -524,20 +520,20 @@ describe("BUILT_IN_DEFAULTS", () => {
   });
 
   test("strategy.default is local-first", () => {
-    assert.equal(BUILT_IN_DEFAULTS.strategy.default, "local-first");
+    assert.equal(BUILT_IN_DEFAULTS.strategy, "local-first");
   });
 
   test("inputSource.default is tracker", () => {
-    assert.equal(BUILT_IN_DEFAULTS.inputSource.default, "tracker");
+    assert.equal(BUILT_IN_DEFAULTS.inputSource, "tracker");
   });
 
   test("refinement defaults include fanOut 3, mode parallel, maxCopilotRounds 5, and low-signal defaults", () => {
     assert.equal(BUILT_IN_DEFAULTS.refinement.fanOut, 3);
     assert.equal(BUILT_IN_DEFAULTS.refinement.mode, "parallel");
     assert.equal(BUILT_IN_DEFAULTS.refinement.maxCopilotRounds, 5);
-    assert.equal(BUILT_IN_DEFAULTS.refinement.stopOnLowSignal, false);
-    assert.equal(BUILT_IN_DEFAULTS.refinement.lowSignalRoundThreshold, 3);
-    assert.equal(BUILT_IN_DEFAULTS.refinement.lowSignalMaxComments, 2);
+    assert.equal(BUILT_IN_DEFAULTS.refinement.lowSignal.enabled, false);
+    assert.equal(BUILT_IN_DEFAULTS.refinement.lowSignal.roundThreshold, 3);
+    assert.equal(BUILT_IN_DEFAULTS.refinement.lowSignal.maxComments, 2);
   });
 
   test("autonomy.stopAt is [merge]", () => {
@@ -685,12 +681,12 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "defaults.json"),
-        JSON.stringify({ version: 1, strategy: { default: "local-first" } }),
+        JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
       assert.equal(result.warnings.length, 0);
       assert.equal(result.errors.length, 0);
     } finally {
@@ -705,17 +701,17 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "defaults.json"),
-        JSON.stringify({ version: 1, strategy: { default: "local-first" }, refinement: { fanOut: 5 } }),
+        JSON.stringify({ version: 1, strategy: "local-first", refinement: { fanOut: 5 } }),
       );
       await writeFile(
         path.join(piDir, "overrides.json"),
-        JSON.stringify({ version: 1, strategy: { default: "github-first" } }),
+        JSON.stringify({ version: 1, strategy: "github-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       // overrides.json beats defaults.json for strategy, but refinement falls through
-      assert.equal(result.config.strategy.default, "github-first");
+      assert.equal(result.config.strategy, "github-first");
       assert.equal(result.config.refinement.fanOut, 5);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -764,13 +760,13 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "defaults.json"),
-        JSON.stringify({ version: 1, strategy: { default: "local-first" } }),
+        JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(path.join(piDir, "overrides.json"), "broken json [[[");
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
       assert.ok(result.errors.length > 0, "should error for broken overrides");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -785,26 +781,24 @@ describe("loader — graceful degradation", () => {
       await writeFile(path.join(piDir, "defaults.yaml"), [
         "version: 1",
         "# This is a comment",
-        "strategy:",
-        "  default: local-first",
+        "strategy: local-first",
         "gates:",
         "  draft:",
         "    angles:",
-        "      - scope",
-        "      - coverage",
+        "      - name: scope",
+        "        persona: review",
+        "        prompt: Check scope",
         "    required: true",
-        "personas:",
-        "  scope:",
-        "    persona: review",
-        "    prompt: Check scope",
-        "    defaultModel: null",
       ].join("\n"));
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      assert.equal(result.config.strategy.default, "local-first");
-      assert.deepEqual(result.config.gates.draft.angles, ["scope", "coverage"]);
-      assert.equal(result.config.personas.scope.prompt, "Check scope");
+      assert.equal(result.config.strategy, "local-first");
+      // Angle arrays merge BY NAME across layers (D3): this repo-defaults.yaml
+      // layer overrides just the "scope" entry's prompt without restating the
+      // packaged extension-defaults angle list.
+      const scopeEntry = result.config.gates.draft.angles.find((a) => a.name === "scope");
+      assert.equal(scopeEntry.prompt, "Check scope");
       assert.equal(result.config.refinement.maxCopilotRounds, 5);
       assert.equal(result.warnings.length, 0);
     } finally {
@@ -871,13 +865,12 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "overrides.yaml"), [
         "version: 1",
-        "strategy:",
-        "  default: local-first",
+        "strategy: local-first",
       ].join("\n"));
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.deepEqual(result.errors, []);
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -890,18 +883,16 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "settings.yaml"), [
         "version: 1",
-        "strategy:",
-        "  default: github-first",
+        "strategy: github-first",
       ].join("\n"));
       await writeFile(path.join(piDir, "overrides.yaml"), [
         "version: 1",
-        "strategy:",
-        "  default: local-first",
+        "strategy: local-first",
       ].join("\n"));
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.deepEqual(result.errors, []);
-      assert.equal(result.config.strategy.default, "github-first");
+      assert.equal(result.config.strategy, "github-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -928,10 +919,12 @@ describe("loader — graceful degradation", () => {
         "  draft:",
         "    requireCi: false",
       ].join("\n"));
-      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const { loadDevLoopConfig, resolveGateAngles } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.deepEqual(result.errors, []);
-      assert.deepEqual(result.config.gates?.draft?.angles, ["scope", "coverage"]);
+      const angleNames = resolveGateAngles(result.config, "draft");
+      assert.ok(angleNames.includes("scope"), "scope angle preserved");
+      assert.ok(angleNames.includes("coverage"), "coverage angle preserved");
       assert.equal(result.config.gates?.draft?.requireCi, false);
       assert.equal(result.config.gates?.draft?.required, true);
     } finally {
@@ -946,16 +939,16 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "settings.json"),
-        JSON.stringify({ version: 1, strategy: { default: "github-first" } }),
+        JSON.stringify({ version: 1, strategy: "github-first" }),
       );
       await writeFile(
         path.join(piDir, "overrides.json"),
-        JSON.stringify({ version: 1, strategy: { default: "local-first" } }),
+        JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.deepEqual(result.errors, []);
-      assert.equal(result.config.strategy.default, "github-first");
+      assert.equal(result.config.strategy, "github-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -967,12 +960,12 @@ describe("loader — graceful degradation", () => {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "defaults.json"),
-        JSON.stringify({ version: 1, strategy: { default: "local-first" } }));
+        JSON.stringify({ version: 1, strategy: "local-first" }));
       await writeFile(path.join(piDir, "defaults.yml"),
-        "version: 1\nstrategy:\n  default: github-first");
+        "version: 1\nstrategy: github-first");
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.equal(result.config.strategy.default, "github-first", ".yml should take priority over JSON");
+      assert.equal(result.config.strategy, "github-first", ".yml should take priority over JSON");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -985,7 +978,7 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "defaults.json"),
-        JSON.stringify({ version: 1, strategy: { default: "local-first" } }),
+        JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
         path.join(piDir, "overrides.json"),
@@ -994,7 +987,7 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
       assert.ok(result.errors.length > 0, "should error for bad overrides schema");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -1043,7 +1036,7 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1056,7 +1049,7 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "defaults.json"),
-        JSON.stringify({ version: 1, strategy: { default: "local-first" } }),
+        JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
         path.join(piDir, "overrides.json"),
@@ -1066,7 +1059,7 @@ describe("loader — graceful degradation", () => {
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       assert.equal(result.config.refinement.fanOut, 7);
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1083,7 +1076,7 @@ describe("loader — graceful degradation", () => {
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       assert.equal(result.config.version, 1);
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
       assert.ok(result.errors.length >= 2, "should have errors for both files");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -1097,17 +1090,17 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "defaults.json"),
-        JSON.stringify({ version: 1, strategy: { default: "local-first" } }),
+        JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
         path.join(piDir, "overrides.json"),
-        JSON.stringify({ version: 2, strategy: { default: "github-first" } }),
+        JSON.stringify({ version: 2, strategy: "github-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       // overrides.json rejected, defaults.json applied
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
       assert.ok(result.errors.length > 0, "should error for version mismatch");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -1137,7 +1130,7 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
       assert.equal(result.config.refinement.fanOut, 3);
       assert.equal(result.config.refinement.mode, "parallel");
       assert.deepEqual(result.config.autonomy.stopAt, ["merge"]);
@@ -1159,11 +1152,11 @@ describe("loader — precedence", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "defaults.json"),
-        JSON.stringify({ version: 1, strategy: { default: "local-first" } }),
+        JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1281,7 +1274,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M7: persona override may omit prompt without failing merged validation", async () => {
+  test("M7: overriding just an angle's persona preserves its prompt (D3 per-entry merge, not a whole-array restate)", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M7-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1290,25 +1283,25 @@ describe("loader — precedence", () => {
         path.join(piDir, "defaults.json"),
         JSON.stringify({
           version: 1,
-          personas: {
-            dry: { persona: "review", prompt: "Built-in DRY prompt", defaultModel: null },
-          },
+          gates: { draft: { angles: [{ name: "dry", persona: "review", prompt: "Built-in DRY prompt" }] } },
         }),
       );
       await writeFile(
         path.join(piDir, "overrides.json"),
         JSON.stringify({
           version: 1,
-          personas: {
-            dry: { persona: "custom-dry-reviewer" },
-          },
+          gates: { draft: { angles: [{ name: "dry", persona: "custom-dry-reviewer" }] } },
         }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.deepEqual(result.errors, []);
-      assert.equal(result.config.personas.dry.persona, "custom-dry-reviewer");
-      assert.equal(result.config.personas.dry.prompt, undefined);
+      const dryEntry = result.config.gates.draft.angles.find((a) => a.name === "dry");
+      assert.equal(dryEntry.persona, "custom-dry-reviewer");
+      // The overriding layer only restated `persona` — merge-by-name (D3)
+      // shallow-merges the rest of the entry, so `prompt` from the base layer
+      // survives rather than being dropped by a whole-array replace.
+      assert.equal(dryEntry.prompt, "Built-in DRY prompt");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1357,6 +1350,113 @@ describe("loader — precedence", () => {
 });
 
 // ============================================================================
+// mergeConfigLayers — angle arrays merge BY NAME across layers (D3)
+//
+// gates.<gate>.angles is the one place `mergeConfigLayers` does NOT wholesale-
+// replace an array across layers: entries merge by `name`, so a later layer
+// can add a new angle or disable/override an existing one without restating
+// the whole upstream list — the ergonomic mandatoryAngles/excludeAngles used
+// to provide via separate flat keys.
+// ============================================================================
+
+describe("mergeConfigLayers — angle arrays merge by name (D3)", () => {
+  // These tests override extensionDefaultsBasePath with a minimal stub layer
+  // (no gates) so the shipped extension-defaults.yaml angle set never merges
+  // in and interferes with the layering assertions below.
+  async function stubExtensionDefaults(tmpDir) {
+    const extDir = path.join(tmpDir, "stub-extension");
+    await mkdir(extDir, { recursive: true });
+    await writeFile(path.join(extDir, "extension-defaults.yaml"), "version: 1\n");
+    return path.join(extDir, "extension-defaults");
+  }
+
+  test("a later layer ADDS a new angle without restating the base list", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-angle-add-"));
+    try {
+      const extensionDefaultsBasePath = await stubExtensionDefaults(tmpDir);
+      const piDir = path.join(tmpDir, ".pi", "dev-loop");
+      await mkdir(piDir, { recursive: true });
+      await writeFile(
+        path.join(piDir, "defaults.json"),
+        JSON.stringify({ version: 1, gates: { draft: { angles: ["scope", "coverage"] } } }),
+      );
+      await writeFile(
+        path.join(piDir, "overrides.json"),
+        // Adds "custom-lens" only — does not restate scope/coverage.
+        JSON.stringify({ version: 1, gates: { draft: { angles: ["custom-lens"] } } }),
+      );
+      const { loadDevLoopConfig, resolveGateAngles } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir, extensionDefaultsBasePath });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(resolveGateAngles(result.config, "draft"), ["scope", "coverage", "custom-lens"]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a later layer DISABLES a base angle (enabled: false) without restating the base list", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-angle-disable-"));
+    try {
+      const extensionDefaultsBasePath = await stubExtensionDefaults(tmpDir);
+      const piDir = path.join(tmpDir, ".pi", "dev-loop");
+      await mkdir(piDir, { recursive: true });
+      await writeFile(
+        path.join(piDir, "defaults.json"),
+        JSON.stringify({ version: 1, gates: { draft: { angles: ["scope", "coverage", "correctness"] } } }),
+      );
+      await writeFile(
+        path.join(piDir, "overrides.json"),
+        // Drops "coverage" only — does not restate scope/correctness.
+        JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", enabled: false }] } } }),
+      );
+      const { loadDevLoopConfig, resolveGateAngles } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir, extensionDefaultsBasePath });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(resolveGateAngles(result.config, "draft"), ["scope", "correctness"]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a later layer overrides one angle's flags (mandatory) while a sibling angle's persona/prompt survive untouched", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-angle-override-"));
+    try {
+      const extensionDefaultsBasePath = await stubExtensionDefaults(tmpDir);
+      const piDir = path.join(tmpDir, ".pi", "dev-loop");
+      await mkdir(piDir, { recursive: true });
+      await writeFile(
+        path.join(piDir, "defaults.json"),
+        JSON.stringify({
+          version: 1,
+          gates: {
+            draft: {
+              angles: [
+                { name: "scope", persona: "review", prompt: "Check scope" },
+                "coverage",
+              ],
+            },
+          },
+        }),
+      );
+      await writeFile(
+        path.join(piDir, "overrides.json"),
+        JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", mandatory: true }] } } }),
+      );
+      const { loadDevLoopConfig, resolveGateConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir, extensionDefaultsBasePath });
+      assert.deepEqual(result.errors, []);
+      const gateConfig = resolveGateConfig(result.config, "draft");
+      assert.deepEqual(gateConfig.mandatoryAngles, ["coverage"]);
+      const scopeEntry = result.config.gates.draft.angles.find((a) => a.name === "scope");
+      assert.equal(scopeEntry.persona, "review");
+      assert.equal(scopeEntry.prompt, "Check scope");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ============================================================================
 // Extension defaults precedence tests (E1–E4)
 // ============================================================================
 
@@ -1367,7 +1467,7 @@ describe("extension defaults", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       // Extension defaults intend local-first; built-in defaults are github-first.
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
       assert.equal(result.config.workflow.requireDraftFirst, true);
       assert.equal(result.config.localImplementation.lightMode.enabled, true);
     } finally {
@@ -1399,11 +1499,11 @@ describe("extension defaults", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(
         path.join(piDir, "defaults.yaml"),
-        "version: 1\nstrategy:\n  default: github-first\n",
+        "version: 1\nstrategy: github-first\n",
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.equal(result.config.strategy.default, "github-first");
+      assert.equal(result.config.strategy, "github-first");
       // Workflow still comes from extension defaults because repo defaults did not set it.
       assert.equal(result.config.workflow.requireDraftFirst, true);
     } finally {
@@ -1416,11 +1516,11 @@ describe("extension defaults", () => {
     try {
       await writeFile(
         path.join(tmpDir, ".devloops"),
-        "version: 1\nstrategy:\n  default: github-first\n",
+        "version: 1\nstrategy: github-first\n",
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.equal(result.config.strategy.default, "github-first");
+      assert.equal(result.config.strategy, "github-first");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1435,8 +1535,7 @@ describe("extension defaults", () => {
         path.join(extDir, "extension-defaults.yaml"),
         [
           "version: 1",
-          "strategy:",
-          "  default: local-first",
+          "strategy: local-first",
           "refinement:",
           "  fanOut: 7",
           "  mode: sequential",
@@ -1447,7 +1546,7 @@ describe("extension defaults", () => {
         repoRoot: tmpDir,
         extensionDefaultsBasePath: path.join(extDir, "extension-defaults"),
       });
-      assert.equal(result.config.strategy.default, "local-first");
+      assert.equal(result.config.strategy, "local-first");
       assert.equal(result.config.refinement.fanOut, 7);
       assert.equal(result.config.refinement.mode, "sequential");
       // Missing keys still fall through to built-in defaults.
@@ -1486,7 +1585,7 @@ describe("role resolution", () => {
 
   test("R3: angle with model override applies override even when falling back", () => {
     const result = resolveReviewerRole(
-      { models: { roles: { style: "gpt-5" } } },
+      { gates: { draft: { angles: [{ name: "style", model: "gpt-5" }] } } },
       "style",
     );
     assert.equal(result.persona, "default-reviewer");
@@ -1496,7 +1595,7 @@ describe("role resolution", () => {
 
   test("R4: unknown angle with model override", () => {
     const result = resolveReviewerRole(
-      { models: { roles: { unknown: "claude-opus" } } },
+      { gates: { draft: { angles: [{ name: "unknown", model: "claude-opus" }] } } },
       "unknown",
     );
     assert.equal(result.persona, "default-reviewer");
@@ -1511,8 +1610,8 @@ describe("role resolution", () => {
     assert.equal(result.fallback, true);
   });
 
-  test("R6: missing models.roles in config", () => {
-    const result = resolveReviewerRole({ models: {} }, "security");
+  test("R6: absent gate config", () => {
+    const result = resolveReviewerRole({ gates: {} }, "security");
     assert.equal(result.persona, "default-reviewer");
     assert.equal(result.model, null);
   });
@@ -1529,7 +1628,7 @@ describe("role resolution", () => {
 
   test("R9: model override with empty string ignored", () => {
     const result = resolveReviewerRole(
-      { models: { roles: { security: "" } } },
+      { gates: { draft: { angles: [{ name: "security", model: "" }] } } },
       "security",
     );
     assert.equal(result.persona, "default-reviewer");
@@ -1599,7 +1698,7 @@ describe("role resolution", () => {
 
   test("R13: known angle with model override applies override", () => {
     const result = resolveReviewerRole(
-      { models: { roles: { dry: "gpt-5" } } },
+      { gates: { draft: { angles: [{ name: "dry", model: "gpt-5" }] } } },
       "dry",
     );
     assert.equal(result.persona, "review");
@@ -1607,20 +1706,20 @@ describe("role resolution", () => {
     assert.equal(result.fallback, false);
   });
 
-  // --- Config-driven persona overrides ---
+  // --- Config-driven persona overrides (now per-gate angle entries, D4) ---
 
-  test("R14: config personas override built-in persona for same angle", () => {
+  test("R14: config angle entry overrides built-in persona for same angle", () => {
     const result = resolveReviewerRole(
-      { personas: { dry: { persona: "custom-dry-reviewer", defaultModel: null } } },
+      { gates: { draft: { angles: [{ name: "dry", persona: "custom-dry-reviewer" }] } } },
       "dry",
     );
     assert.equal(result.persona, "custom-dry-reviewer");
     assert.equal(result.fallback, false);
   });
 
-  test("R15: config personas add new angle not in built-in registry", () => {
+  test("R15: config angle entry adds new angle not in built-in registry", () => {
     const result = resolveReviewerRole(
-      { personas: { security: { persona: "security-reviewer", defaultModel: "claude-opus" } } },
+      { gates: { draft: { angles: [{ name: "security", persona: "security-reviewer", model: "claude-opus" }] } } },
       "security",
     );
     assert.equal(result.persona, "security-reviewer");
@@ -1628,33 +1727,27 @@ describe("role resolution", () => {
     assert.equal(result.fallback, false);
   });
 
-  test("R16: model override in models.roles takes priority over config persona defaultModel", () => {
+  test("R16: angle entry model wins over persona (single source now, no separate defaultModel layer)", () => {
     const result = resolveReviewerRole(
-      {
-        personas: { dry: { persona: "review", defaultModel: "gpt-4" } },
-        models: { roles: { dry: "gpt-5" } },
-      },
+      { gates: { draft: { angles: [{ name: "dry", persona: "review", model: "gpt-5" }] } } },
       "dry",
     );
     assert.equal(result.persona, "review");
     assert.equal(result.model, "gpt-5");
   });
 
-  test("R17: unknown angle without config personas still falls back to BUILTIN_PERSONAS", () => {
-    // Empty personas map — should fall back to built-in for known angles
+  test("R17: unknown angle without a config entry still falls back to BUILTIN_PERSONAS", () => {
     const result = resolveReviewerRole(
-      { personas: {} },
+      { gates: { draft: { angles: [] } } },
       "scope",
     );
     assert.equal(result.persona, "review");
     assert.equal(result.fallback, false);
   });
 
-  test("R18: consumer overrides built-in persona and replaces model", () => {
+  test("R18: consumer overrides built-in persona and sets a model", () => {
     const result = resolveReviewerRole(
-      {
-        personas: { correctness: { persona: "my-correctness-agent", defaultModel: "claude-sonnet" } },
-      },
+      { gates: { draft: { angles: [{ name: "correctness", persona: "my-correctness-agent", model: "claude-sonnet" }] } } },
       "correctness",
     );
     assert.equal(result.persona, "my-correctness-agent");
@@ -1662,29 +1755,29 @@ describe("role resolution", () => {
     assert.equal(result.fallback, false);
   });
 
-  test("R19: built-in fallback returns null prompt when config personas absent", () => {
+  test("R19: built-in fallback returns null prompt when no config entry is present", () => {
     const result = resolveReviewerRole({}, "dry");
     assert.equal(result.persona, "review");
-    assert.equal(result.prompt, null, "prompt should be null when config.personas is absent");
+    assert.equal(result.prompt, null, "prompt should be null when the angle has no config entry");
     assert.equal(result.fallback, false);
   });
 
-  test("R20: config personas provide prompts; fallback does not duplicate them", () => {
+  test("R20: config angle entry provides a prompt; fallback does not duplicate it", () => {
     // Without config: persona resolves, prompt is null (lives in config only)
     const noConfig = resolveReviewerRole({}, "dry");
     assert.equal(noConfig.prompt, null);
-    // With config: persona resolves with prompt from config
+    // With config: persona resolves with prompt from the angle entry
     const withConfig = resolveReviewerRole(
-      { personas: { dry: { persona: "review", prompt: "Check duplication" } } },
+      { gates: { draft: { angles: [{ name: "dry", persona: "review", prompt: "Check duplication" }] } } },
       "dry",
     );
     assert.equal(withConfig.prompt, "Check duplication");
     assert.equal(withConfig.fallback, false);
   });
 
-  test("R21: config persona prompt overrides built-in prompt", () => {
+  test("R21: config angle entry prompt overrides built-in prompt", () => {
     const result = resolveReviewerRole(
-      { personas: { dry: { persona: "review", prompt: "Custom DRY prompt for this project" } } },
+      { gates: { draft: { angles: [{ name: "dry", persona: "review", prompt: "Custom DRY prompt for this project" }] } } },
       "dry",
     );
     assert.equal(result.prompt, "Custom DRY prompt for this project");
@@ -1698,14 +1791,38 @@ describe("role resolution", () => {
     assert.equal(result.fallback, true);
   });
 
-  test("R23: config persona without prompt resolves with null prompt", () => {
+  test("R23: config angle entry without a prompt resolves with null prompt", () => {
     const result = resolveReviewerRole(
-      { personas: { dry: { persona: "custom-dry-reviewer" } } },
+      { gates: { draft: { angles: [{ name: "dry", persona: "custom-dry-reviewer" }] } } },
       "dry",
     );
     assert.equal(result.persona, "custom-dry-reviewer");
     assert.equal(result.prompt, null);
     assert.equal(result.fallback, false);
+  });
+
+  test("R24: an angle disabled on one gate does NOT shadow its real, enabled override on another gate (the shipped renderer-security case)", () => {
+    // Mirrors this repo's own shipped .devloops: draft disables
+    // renderer-security (a phantom enabled:false placeholder, no persona/
+    // prompt) while preApproval configures it as a real, enabled angle with
+    // its own persona/prompt. findAngleEntry searches draft first — if it
+    // returned the disabled draft placeholder instead of skipping it, this
+    // would resolve fallback:true / prompt:null instead of the real override.
+    const config = {
+      gates: {
+        draft: { angles: ["scope", { name: "renderer-security", enabled: false }] },
+        preApproval: { angles: ["dry", { name: "renderer-security", persona: "review", prompt: "Check renderer security." }] },
+      },
+    };
+    const role = resolveReviewerRole(config, "renderer-security");
+    assert.equal(role.persona, "review", "must resolve preApproval's real persona, not fall back");
+    assert.equal(role.prompt, "Check renderer security.", "must resolve preApproval's real prompt");
+    assert.equal(role.fallback, false, "must not report a fallback — a real override exists on preApproval");
+
+    // The disabled placeholder must still do its OWN job: dropping
+    // renderer-security from draft's own resolved angle list.
+    const draftAngles = resolveGateAngles(config, "draft");
+    assert.ok(!draftAngles.includes("renderer-security"), "renderer-security must stay excluded from draft's resolved angles");
   });
 
   describe("model and config resolution", () => {
@@ -1869,7 +1986,7 @@ describe("role resolution", () => {
     test("resolveRefinement returns configured values", () => {
       const result = resolveRefinement({
         version: 1,
-        refinement: { fanOut: 5, mode: "sequential", maxCopilotRounds: 7, stopOnLowSignal: true, lowSignalRoundThreshold: 5, lowSignalMaxComments: 1, roles: ["security", "style"] }
+        refinement: { fanOut: 5, mode: "sequential", maxCopilotRounds: 7, lowSignal: { enabled: true, roundThreshold: 5, maxComments: 1 }, roles: ["security", "style"] }
       });
       assert.equal(result.fanOut, 5);
       assert.equal(result.mode, "sequential");
@@ -1902,7 +2019,7 @@ describe("role resolution", () => {
     test("resolveRefinementConfig resolves low-signal keys from config", () => {
       const config = {
         version: 1,
-        refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: 5, stopOnLowSignal: true, lowSignalRoundThreshold: 4, lowSignalMaxComments: 1 },
+        refinement: { fanOut: 3, mode: "parallel", maxCopilotRounds: 5, lowSignal: { enabled: true, roundThreshold: 4, maxComments: 1 } },
       };
       assert.equal(resolveRefinementConfig(config, "stopOnLowSignal"), true);
       assert.equal(resolveRefinementConfig(config, "lowSignalRoundThreshold"), 4);
@@ -1929,7 +2046,6 @@ describe("role resolution", () => {
         angles: null,
         excludeAngles: [],
         mandatoryAngles: [],
-        extraAngles: [],
         required: true,
         requireCi: true,
         dynamicAngles: false,
@@ -1949,7 +2065,6 @@ describe("role resolution", () => {
         angles: ["scope", "coverage", "correctness"],
         excludeAngles: [],
         mandatoryAngles: [],
-        extraAngles: [],
         required: false,
         requireCi: false,
         dynamicAngles: false,
@@ -1995,8 +2110,7 @@ describe("role resolution", () => {
         version: 1,
         gates: {
           draft: {
-            angles: ["scope", "coverage", "correctness", "dry"],
-            excludeAngles: ["dry"],
+            angles: ["scope", "coverage", "correctness", { name: "dry", enabled: false }],
           },
         },
       };
@@ -2009,8 +2123,7 @@ describe("role resolution", () => {
         version: 1,
         gates: {
           preApproval: {
-            angles: ["dry", "kiss", "yagni", "deep", "docs"],
-            excludeAngles: ["docs", "kiss"],
+            angles: ["dry", { name: "kiss", enabled: false }, "yagni", "deep", { name: "docs", enabled: false }],
           },
         },
       };
@@ -2018,13 +2131,12 @@ describe("role resolution", () => {
       assert.deepEqual(result, ["dry", "yagni", "deep"]);
     });
 
-    test("resolveGateAngles with empty excludeAngles returns all angles", () => {
+    test("resolveGateAngles with no disabled angles returns all angles", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
             angles: ["scope", "coverage"],
-            excludeAngles: [],
           },
         },
       };
@@ -2032,13 +2144,12 @@ describe("role resolution", () => {
       assert.deepEqual(result, ["scope", "coverage"]);
     });
 
-    test("resolveGateAngles with all angles excluded returns empty array", () => {
+    test("resolveGateAngles with all angles disabled returns empty array", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
-            angles: ["scope", "coverage"],
-            excludeAngles: ["scope", "coverage"],
+            angles: [{ name: "scope", enabled: false }, { name: "coverage", enabled: false }],
           },
         },
       };
@@ -2046,18 +2157,19 @@ describe("role resolution", () => {
       assert.deepEqual(result, []);
     });
 
-    test("resolveGateAngles handles non-string entries gracefully", () => {
+    test("resolveGateAngles handles non-string/malformed entries gracefully", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
-            angles: ["scope", 42, null, "coverage"],
-            excludeAngles: [true, "scope"],
+            angles: ["scope", 42, null, "coverage", { name: "scope", enabled: false }],
           },
         },
       };
       const result = resolveGateAngles(config, "draft");
-      // Non-strings are coerced to "" and filtered out; "scope" excluded
+      // Non-strings/malformed entries are dropped; the later `{name: "scope",
+      // enabled: false}` entry merges by name with the earlier bare "scope",
+      // disabling it.
       assert.deepEqual(result, ["coverage"]);
     });
 
@@ -2071,16 +2183,17 @@ describe("role resolution", () => {
         },
       };
       const result = resolveGateAngles(config, "draft");
+      // The array key is present (not absent), so an all-garbage array still
+      // resolves to an explicit empty list, not the "unconfigured" null.
       assert.deepEqual(result, []);
     });
 
-    test("resolveGateAngles trims whitespace from angles and excludeAngles", () => {
+    test("resolveGateAngles trims whitespace from angle names", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
-            angles: [" scope ", "  coverage  ", "correctness"],
-            excludeAngles: [" scope  "],
+            angles: [{ name: " scope ", enabled: false }, "  coverage  ", "correctness"],
           },
         },
       };
@@ -2185,13 +2298,12 @@ describe("role resolution", () => {
       assert.equal(result.success, false);
     });
 
-    test("GateConfig accepts valid mandatoryAngles", () => {
+    test("GateConfig accepts a mandatory angle entry (was mandatoryAngles)", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
-            angles: ["scope"],
-            mandatoryAngles: ["pr-description", "correctness"],
+            angles: ["scope", { name: "pr-description", mandatory: true }, { name: "correctness", mandatory: true }],
           },
         },
       };
@@ -2199,12 +2311,12 @@ describe("role resolution", () => {
       assert.equal(result.success, true);
     });
 
-    test("GateConfig rejects mandatoryAngles with empty strings", () => {
+    test("GateConfig rejects an angle entry with an empty name", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
-            mandatoryAngles: [""],
+            angles: [{ name: "", mandatory: true }],
           },
         },
       };
@@ -2212,78 +2324,24 @@ describe("role resolution", () => {
       assert.equal(result.success, false);
     });
 
-    test("GateConfig accepts mandatoryAngles as optional (absent)", () => {
+    test("GateConfig accepts angles as optional (absent)", () => {
       const config = {
         version: 1,
         gates: {
-          draft: { angles: ["scope"] },
+          draft: { required: true },
         },
       };
       const result = FileConfigSchema.safeParse(config);
       assert.equal(result.success, true);
     });
 
-    test("GateConfig accepts valid extraAngles", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: {
-            angles: ["scope"],
-            extraAngles: ["custom-lens"],
-          },
-        },
-      };
-      const result = FileConfigSchema.safeParse(config);
-      assert.equal(result.success, true);
-    });
-
-    test("GateConfig rejects extraAngles with empty strings", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: {
-            extraAngles: [""],
-          },
-        },
-      };
-      const result = FileConfigSchema.safeParse(config);
-      assert.equal(result.success, false);
-    });
-
-    test("GateConfig accepts extraAngles as optional (absent, defaults to [])", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: { angles: ["scope"] },
-        },
-      };
-      const result = FileConfigSchema.safeParse(config);
-      assert.equal(result.success, true);
-      assert.deepEqual(result.data.gates.draft.extraAngles, []);
-    });
-
-        test("resolveGateAngles filters when excludeAngles has angles not in angles list", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: {
-            angles: ["scope", "coverage"],
-            excludeAngles: ["dry", "kiss"],
-          },
-        },
-      };
-      const result = resolveGateAngles(config, "draft");
-      assert.deepEqual(result, ["scope", "coverage"]);
-    });
-
-    // --- mandatoryAngles ---
+    // --- mandatoryAngles (now a per-entry `mandatory: true`, folded off gates.<gate>.angles) ---
     test("resolveGateConfig returns mandatoryAngles", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
-            angles: ["scope", "coverage"],
-            mandatoryAngles: ["pr-description", "correctness"],
+            angles: ["scope", "coverage", { name: "pr-description", mandatory: true }, { name: "correctness", mandatory: true }],
           },
         },
       };
@@ -2305,8 +2363,7 @@ describe("role resolution", () => {
         version: 1,
         gates: {
           draft: {
-            angles: ["scope", "coverage"],
-            mandatoryAngles: ["pr-description", "correctness"],
+            angles: ["scope", "coverage", { name: "pr-description", mandatory: true }, { name: "correctness", mandatory: true }],
           },
         },
       };
@@ -2314,28 +2371,17 @@ describe("role resolution", () => {
       assert.deepEqual(result, ["pr-description", "correctness", "scope", "coverage"]);
     });
 
-    test("resolveGateAngles deduplicates overlap between mandatory and regular angles", () => {
+    test("resolveGateAngles excludes mandatoryAngles matching a disabled entry", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
-            angles: ["scope", "coverage", "pr-description"],
-            mandatoryAngles: ["pr-description", "correctness"],
-          },
-        },
-      };
-      const result = resolveGateAngles(config, "draft");
-      assert.deepEqual(result, ["pr-description", "correctness", "scope", "coverage"]);
-    });
-
-    test("resolveGateAngles excludes mandatoryAngles matching excludeAngles", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: {
-            angles: ["scope"],
-            mandatoryAngles: ["pr-description", "correctness", "gate-evidence"],
-            excludeAngles: ["correctness"],
+            angles: [
+              "scope",
+              { name: "pr-description", mandatory: true },
+              { name: "correctness", mandatory: true, enabled: false },
+              { name: "gate-evidence", mandatory: true },
+            ],
           },
         },
       };
@@ -2343,19 +2389,19 @@ describe("role resolution", () => {
       assert.deepEqual(result, ["pr-description", "gate-evidence", "scope"]);
     });
 
-    test("resolveGateAngles returns null when both angles and mandatoryAngles empty", () => {
+    test("resolveGateAngles returns null when angles absent", () => {
       const config = {
         version: 1,
-        gates: { draft: { mandatoryAngles: [] } },
+        gates: { draft: {} },
       };
       const result = resolveGateAngles(config, "draft");
       assert.deepEqual(result, null);
     });
 
-    test("resolveGateAngles returns only mandatoryAngles when angles not configured", () => {
+    test("resolveGateAngles returns only mandatoryAngles when angles configured with only mandatory entries", () => {
       const config = {
         version: 1,
-        gates: { draft: { mandatoryAngles: ["pr-description", "correctness"] } },
+        gates: { draft: { angles: [{ name: "pr-description", mandatory: true }, { name: "correctness", mandatory: true }] } },
       };
       const result = resolveGateAngles(config, "draft");
       assert.deepEqual(result, ["pr-description", "correctness"]);
@@ -2366,105 +2412,12 @@ describe("role resolution", () => {
       assert.deepEqual(result.mandatoryAngles, []);
     });
 
-    // --- extraAngles (#1392) ---
-    test("resolveGateConfig returns extraAngles", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: {
-            angles: ["scope", "coverage"],
-            extraAngles: ["custom-lens"],
-          },
-        },
-      };
-      const result = resolveGateConfig(config, "draft");
-      assert.deepEqual(result.extraAngles, ["custom-lens"]);
-    });
-
-    test("resolveGateConfig returns empty extraAngles when absent", () => {
-      const config = {
-        version: 1,
-        gates: { draft: { angles: ["scope"] } },
-      };
-      const result = resolveGateConfig(config, "draft");
-      assert.deepEqual(result.extraAngles, []);
-    });
-
-    test("resolveGateAngles extends shipped angles with extraAngles without restating them", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: {
-            angles: ["scope", "coverage"],
-            extraAngles: ["custom-lens"],
-          },
-        },
-      };
-      const result = resolveGateAngles(config, "draft");
-      assert.deepEqual(result, ["scope", "coverage", "custom-lens"]);
-    });
-
-    test("resolveGateAngles deduplicates an extraAngles entry already in angles", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: {
-            angles: ["scope", "coverage"],
-            extraAngles: ["coverage", "custom-lens"],
-          },
-        },
-      };
-      const result = resolveGateAngles(config, "draft");
-      assert.deepEqual(result, ["scope", "coverage", "custom-lens"]);
-    });
-
-    test("resolveGateAngles deduplicates an extraAngles entry already in mandatoryAngles", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: {
-            angles: ["scope"],
-            mandatoryAngles: ["correctness"],
-            extraAngles: ["correctness", "custom-lens"],
-          },
-        },
-      };
-      const result = resolveGateAngles(config, "draft");
-      assert.deepEqual(result, ["correctness", "scope", "custom-lens"]);
-    });
-
-    test("resolveGateAngles excludeAngles wins over extraAngles", () => {
-      const config = {
-        version: 1,
-        gates: {
-          draft: {
-            angles: ["scope"],
-            extraAngles: ["custom-lens"],
-            excludeAngles: ["custom-lens"],
-          },
-        },
-      };
-      const result = resolveGateAngles(config, "draft");
-      assert.deepEqual(result, ["scope"]);
-    });
-
-    test("resolveGateAngles returns only extraAngles when angles/mandatoryAngles not configured", () => {
-      const config = {
-        version: 1,
-        gates: { draft: { extraAngles: ["custom-lens"] } },
-      };
-      const result = resolveGateAngles(config, "draft");
-      assert.deepEqual(result, ["custom-lens"]);
-    });
-
-    test("resolveGateAngles returns null when angles, mandatoryAngles, and extraAngles are all empty", () => {
-      const config = {
-        version: 1,
-        gates: { draft: { extraAngles: [] } },
-      };
-      const result = resolveGateAngles(config, "draft");
-      assert.deepEqual(result, null);
-    });
+    // extraAngles (#1392) removed: D3's merge-by-name lets a later config layer
+    // add a plain (non-mandatory) angle to gates.<gate>.angles directly, without
+    // restating the list — the exact "add without restating" ergonomic
+    // extraAngles used to provide at the single-layer level. See the
+    // "mergeConfigLayers — angle arrays merge by name (D3)" describe block for
+    // the layering-level add/disable-without-restate contract tests.
 
         test("resolveRefinement returns new roles array (not reference to config)", () => {
       const config = { version: 1, refinement: { fanOut: 2, mode: "parallel", roles: ["security"] } };
@@ -2511,6 +2464,144 @@ describe("role resolution", () => {
 
 });
 
+// ============================================================================
+// Byte-identical shipped-config parity guard (post #1404 config-schema
+// redesign): D3's merge-by-name change means gates.<gate>.angles no longer
+// wholesale-replaces the extension-defaults angle list across layers — a
+// consumer .devloops must now explicitly disable a shipped angle it doesn't
+// want (enabled: false), or the angle silently merges back in by name. Pins
+// this repo's own shipped .devloops + extension-defaults.yaml against the
+// exact angle sets / mandatory sets / blockCleanOnFindingSeverities the
+// pre-redesign flat-key config resolved, so a future edit can't silently
+// regrow (or shrink) the effective gate-review surface.
+// ============================================================================
+
+describe("shipped .devloops + extension-defaults.yaml resolve byte-identically to pre-#1404 (D3 regression guard)", () => {
+  const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+
+  // The exact sets origin/main (pre-#1404, flat mandatoryAngles/excludeAngles
+  // keys, wholesale-replace merge) resolved for this repo's own shipped
+  // .devloops + extension-defaults.yaml. Order is NOT pinned — resolveGateAngles
+  // never documented a specific order, and D3's merge-by-name (target-then-
+  // append) inherently can't preserve a later layer's reordering of names the
+  // base layer already declared; only set membership is a real contract.
+  const PRE_1404_ANGLE_SETS = {
+    draft: [
+      "scope", "coverage", "correctness", "ci-guard", "contract-surface",
+      "input-validation", "determinism", "no-op", "link-check",
+      "packaging-runtime", "state-concurrency", "config-drift", "gate-evidence",
+      "pr-description", "pr-comments", "contradiction-lens", "code-conformance",
+      "semantic-drift",
+    ],
+    preApproval: [
+      "dry", "kiss", "yagni", "srp", "soc", "deep", "docs", "ocp", "lsp", "isp",
+      "dip", "renderer-security", "pr-checklist-matrix", "acceptance-criteria",
+      "contradiction-lens", "correctness-final", "ui-validation",
+    ],
+    spike: ["scope", "docs"],
+  };
+  const PRE_1404_MANDATORY_SETS = {
+    draft: ["pr-description"],
+    preApproval: ["pr-checklist-matrix", "acceptance-criteria", "yagni", "contradiction-lens"],
+    spike: [],
+  };
+  const PRE_1404_BLOCK_CLEAN = {
+    draft: ["must-fix", "worth-fixing-now"],
+    preApproval: ["must-fix", "worth-fixing-now"],
+    spike: ["must-fix"],
+  };
+
+  const sortedSet = (arr) => [...new Set(arr)].sort();
+
+  for (const gate of /** @type {const} */ (["draft", "preApproval", "spike"])) {
+    test(`${gate} gate: resolved angle set, mandatory set, and blockCleanOnFindingSeverities match pre-#1404`, async () => {
+      const { loadDevLoopConfig, resolveGateAngles, resolveGateConfig } = await import("../src/config/config.mjs");
+      const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+      assert.deepEqual(errors, []);
+      const angles = resolveGateAngles(config, gate);
+      const gateConfig = resolveGateConfig(config, gate);
+      assert.deepEqual(sortedSet(angles), sortedSet(PRE_1404_ANGLE_SETS[gate]), `${gate} angle set`);
+      assert.deepEqual(sortedSet(gateConfig.mandatoryAngles), sortedSet(PRE_1404_MANDATORY_SETS[gate]), `${gate} mandatory set`);
+      assert.deepEqual(sortedSet(gateConfig.blockCleanOnFindingSeverities), sortedSet(PRE_1404_BLOCK_CLEAN[gate]), `${gate} blockCleanOnFindingSeverities`);
+    });
+  }
+
+  // Every angle that had a real config.personas[angle] entry pre-#1404 (a
+  // persona + a written prompt, not just a BUILTIN_PERSONAS fallback) must
+  // still resolve to the SAME persona and a prompt with the same recognizable
+  // opening text now that the override lives on the gate's own angle entry.
+  // A dropped prompt (persona still matching by coincidence, e.g. both
+  // resolve to the generic "review" persona, while the prompt silently goes
+  // null) is exactly the class of regression this guards — acceptance-criteria
+  // was found missing its prompt this way during review.
+  const PRE_1404_PERSONA_PROMPTS = {
+    scope: ["review", "Check whether every changed file belongs in this PR"],
+    coverage: ["review", "Check whether tests cover the changed behavior adequately"],
+    correctness: ["review", "Check whether the implementation matches the acceptance criteria"],
+    "ci-guard": ["review", "Audit CI/workflow semantics for reproducibility"],
+    "contract-surface": ["review", "Review this change for public contract-surface drift"],
+    "input-validation": ["review", "Review this change for input-validation drift"],
+    determinism: ["review", "Review this change for determinism"],
+    "no-op": ["review", "Flag workflow or tool invocations that are effectively no-ops"],
+    "link-check": ["review", "Validate link and path correctness"],
+    "packaging-runtime": ["review", "Review this change for packaging/runtime asset contract gaps"],
+    "state-concurrency": ["review", "Review this change for state concurrency and locking risks"],
+    "config-drift": ["review", "Cross-check config, schema, and documentation for contract drift"],
+    "gate-evidence": ["review", "Verify that required workflow checkpoint evidence is present"],
+    "pr-description": ["review", "Review the PR description for completeness"],
+    "pr-comments": ["review", "Scan PR comments for unresolved issues"],
+    dry: ["review", "Flag duplicated logic, repeated patterns"],
+    kiss: ["review", "Flag over-engineering and unnecessary complexity"],
+    yagni: ["review", "Flag speculative features, future-proofing"],
+    srp: ["review", "Single Responsibility Principle"],
+    soc: ["review", "Separation of Concerns"],
+    deep: ["review", "Perform a structural code quality audit"],
+    docs: ["docs", "Review documentation correctness"],
+    ocp: ["review", "Open/Closed Principle"],
+    lsp: ["review", "Liskov Substitution Principle"],
+    isp: ["review", "Interface Segregation Principle"],
+    dip: ["review", "Dependency Inversion Principle"],
+    "renderer-security": ["review", "Review this change for renderer security"],
+    "pr-checklist-matrix": ["review", "Verify before approval that the PR checklist"],
+    "acceptance-criteria": ["review", "Verify that each acceptance criterion and definition-of-done item"],
+  };
+  // Angles used by the shipped gates that never had a personas[angle] entry
+  // pre-#1404 — must keep falling back to default-reviewer with a null prompt.
+  const FALLBACK_ANGLES = ["contradiction-lens", "code-conformance", "semantic-drift", "correctness-final", "ui-validation"];
+
+  test("every pre-#1404 personas[angle] entry still resolves the same persona + prompt from its gate entry", async () => {
+    const { loadDevLoopConfig, resolveReviewerRole } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, []);
+    for (const [angle, [persona, promptStart]] of Object.entries(PRE_1404_PERSONA_PROMPTS)) {
+      const role = resolveReviewerRole(config, angle);
+      assert.equal(role.persona, persona, `${angle} persona`);
+      assert.ok(role.prompt && role.prompt.startsWith(promptStart), `${angle} prompt should start with ${JSON.stringify(promptStart)}, got ${JSON.stringify(role.prompt?.slice(0, 60))}`);
+    }
+    for (const angle of FALLBACK_ANGLES) {
+      const role = resolveReviewerRole(config, angle);
+      assert.equal(role.persona, "default-reviewer", `${angle} persona`);
+      assert.equal(role.prompt, null, `${angle} prompt`);
+    }
+
+    // "threat-model" is genuinely disabled (dropped) from every one of this
+    // repo's shipped gates, same as pre-#1404 (it was likewise absent from
+    // every resolved angle pool there — its old top-level personas[angle]
+    // entry was reachable ONLY because that registry was global and
+    // independent of any gate's angle list, a property D3's per-gate angle
+    // entries deliberately don't reproduce for a name disabled everywhere:
+    // findAngleEntry has no live caller that queries a name outside some
+    // gate's enabled, resolved angle list). It still resolves via
+    // BUILTIN_PERSONAS (persona "review", no prompt there either) rather
+    // than the generic default-reviewer fallback, since it IS a known builtin
+    // persona name — just with no reachable prompt override anymore.
+    const threatModel = resolveReviewerRole(config, "threat-model");
+    assert.equal(threatModel.persona, "review");
+    assert.equal(threatModel.prompt, null);
+    assert.equal(threatModel.fallback, false);
+  });
+});
+
 describe("shipped defaults docs and deep angle wiring", () => {
 
   test("D2: shipped defaults wire contract-surface by default and expose cluster-derived opt-in prompts", async () => {
@@ -2537,20 +2628,21 @@ describe("shipped defaults docs and deep angle wiring", () => {
       assert.deepEqual(result.errors, []);
       assert.ok(draftAngles.includes("contract-surface"), "contract-surface should run in draft gate by default");
 
+      const roles = {};
       for (const angle of requiredAngles) {
         const role = resolveReviewerRole(result.config, angle);
+        roles[angle] = role;
         assert.equal(role.persona, "review", `${angle} should use review persona`);
         assert.equal(role.fallback, false, `${angle} should resolve from persona registry`);
-        assert.equal(role.prompt, result.config.personas[angle].prompt, `${angle} prompt should come from config`);
         assert.doesNotMatch(role.prompt, /mfittko\/dev-loops|issue #?\d+|tmp\/investigation|uncategorized-clusters/i, `${angle} prompt should stay repo-agnostic`);
       }
 
-      assert.match(result.config.personas["contract-surface"].prompt, /schema fields, state\/sentinel names, runtime values, tests, and CLI output agree/i);
-      assert.match(result.config.personas["input-validation"].prompt, /repo slug, issue number, host, SHA, whitespace, and sentinel normalization/i);
-      assert.match(result.config.personas["packaging-runtime"].prompt, /installed packages, extensions, or runtime bundles/i);
-      assert.match(result.config.personas["state-concurrency"].prompt, /state-file read\/modify\/write paths/i);
-      assert.match(result.config.personas["renderer-security"].prompt, /HTML text escaping, URL encoding, attribute encoding/i);
-      assert.match(result.config.personas.determinism.prompt, /ordering, tie-breakers, localeCompare use/i);
+      assert.match(roles["contract-surface"].prompt, /schema fields, state\/sentinel names, runtime values, tests, and CLI output agree/i);
+      assert.match(roles["input-validation"].prompt, /repo slug, issue number, host, SHA, whitespace, and sentinel normalization/i);
+      assert.match(roles["packaging-runtime"].prompt, /installed packages, extensions, or runtime bundles/i);
+      assert.match(roles["state-concurrency"].prompt, /state-file read\/modify\/write paths/i);
+      assert.match(roles["renderer-security"].prompt, /HTML text escaping, URL encoding, attribute encoding/i);
+      assert.match(roles.determinism.prompt, /ordering, tie-breakers, localeCompare use/i);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -2571,18 +2663,14 @@ describe("shipped defaults docs and deep angle wiring", () => {
       const deepRole = resolveReviewerRole(result.config, "deep");
 
       assert.deepEqual(result.errors, []);
-      assert.equal(result.config.personas.docs.persona, "docs");
-      assert.match(result.config.personas.docs.prompt, /Review documentation correctness/i);
-      assert.equal(result.config.personas.deep.persona, "review");
-      assert.match(result.config.personas.deep.prompt, /Perform a structural code quality audit of this PR/i);
-      assert.match(result.config.personas.deep.prompt, /deslop audit/i);
+      assert.equal(docsRole.persona, "docs");
+      assert.match(docsRole.prompt, /Review documentation correctness/i);
+      assert.equal(deepRole.persona, "review");
+      assert.match(deepRole.prompt, /Perform a structural code quality audit of this PR/i);
+      assert.match(deepRole.prompt, /deslop audit/i);
       assert.ok(preApprovalAngles.includes("docs"), "docs must be enabled by default for pre-approval");
       assert.ok(preApprovalAngles.includes("deep"), "deep must run by default for pre-approval");
-      assert.equal(docsRole.persona, "docs");
-      assert.equal(docsRole.prompt, result.config.personas.docs.prompt);
       assert.equal(docsRole.fallback, false);
-      assert.equal(deepRole.persona, "review");
-      assert.equal(deepRole.prompt, result.config.personas.deep.prompt);
       assert.equal(deepRole.fallback, false);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -2607,23 +2695,22 @@ describe("shipped defaults docs and deep angle wiring", () => {
       const draftAngles = resolveGateAngles(result.config, "draft");
 
       assert.deepEqual(result.errors, []);
-      assert.equal(result.config.personas["pr-description"].persona, "review");
-      assert.match(result.config.personas["pr-description"].prompt, /Summary section/i);
-      assert.match(result.config.personas["pr-description"].prompt, /Validation command section/i);
-      assert.match(result.config.personas["pr-description"].prompt, /Do not block on formatting/i);
-      assert.match(result.config.personas["pr-description"].prompt, /linked issue acceptance criteria/i);
-      assert.match(result.config.personas["pr-description"].prompt, /single sentence/i);
-      assert.match(result.config.personas["pr-description"].prompt, /Closes #N/i);
-      assert.match(result.config.personas["pr-description"].prompt, /operator-intended close target/i);
-      assert.match(result.config.personas["pr-description"].prompt, /Scope and context section/i);
+      assert.equal(prDescRole.persona, "review");
+      assert.match(prDescRole.prompt, /Summary section/i);
+      assert.match(prDescRole.prompt, /Validation command section/i);
+      assert.match(prDescRole.prompt, /Do not block on formatting/i);
+      assert.match(prDescRole.prompt, /linked issue acceptance criteria/i);
+      assert.match(prDescRole.prompt, /single sentence/i);
+      assert.match(prDescRole.prompt, /Closes #N/i);
+      assert.match(prDescRole.prompt, /operator-intended close target/i);
+      assert.match(prDescRole.prompt, /Scope and context section/i);
       // The File-by-file requirement was removed: GitHub's Files-changed tab already
       // lists touched files, and mandating the section churned gate findings every fix
       // round. The angle must neither require it nor be worded to flag its absence.
-      assert.doesNotMatch(result.config.personas["pr-description"].prompt, /File-by-file/i);
-      assert.match(result.config.personas["pr-description"].prompt, /Definition of done section/i);
-      assert.match(result.config.personas["pr-description"].prompt, /Non-goals section/i);
+      assert.doesNotMatch(prDescRole.prompt, /File-by-file/i);
+      assert.match(prDescRole.prompt, /Definition of done section/i);
+      assert.match(prDescRole.prompt, /Non-goals section/i);
       assert.ok(draftAngles.includes("pr-description"), "pr-description must be in draft gate angles after settings opt-in");
-      assert.equal(prDescRole.persona, "review");
       assert.equal(prDescRole.fallback, false);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -2648,13 +2735,12 @@ describe("shipped defaults docs and deep angle wiring", () => {
       const preApprovalAngles = resolveGateAngles(result.config, "preApproval");
 
       assert.deepEqual(result.errors, []);
-      assert.equal(result.config.personas["pr-checklist-matrix"].persona, "review");
-      assert.match(result.config.personas["pr-checklist-matrix"].prompt, /checkbox/i);
-      assert.match(result.config.personas["pr-checklist-matrix"].prompt, /AC\/DoD\/non-goals matrix/i);
-      assert.match(result.config.personas["pr-checklist-matrix"].prompt, /markdown table/i);
-      assert.match(result.config.personas["pr-checklist-matrix"].prompt, /unchecked/i);
-      assert.ok(preApprovalAngles.includes("pr-checklist-matrix"), "pr-checklist-matrix must be in pre-approval gate angles after settings opt-in");
       assert.equal(checklistRole.persona, "review");
+      assert.match(checklistRole.prompt, /checkbox/i);
+      assert.match(checklistRole.prompt, /AC\/DoD\/non-goals matrix/i);
+      assert.match(checklistRole.prompt, /markdown table/i);
+      assert.match(checklistRole.prompt, /unchecked/i);
+      assert.ok(preApprovalAngles.includes("pr-checklist-matrix"), "pr-checklist-matrix must be in pre-approval gate angles after settings opt-in");
       assert.equal(checklistRole.fallback, false);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -2730,8 +2816,7 @@ test("resolveGateAngles filters excluded angles (unit integration)", async () =>
     gates: {
       preApproval: {
         description: "pre-approval gate",
-        angles: ["deep", "dry", "scope"],
-        excludeAngles: ["dry"],
+        angles: ["deep", { name: "dry", enabled: false }, "scope"],
       },
     },
   };
@@ -2739,6 +2824,7 @@ test("resolveGateAngles filters excluded angles (unit integration)", async () =>
   assert.deepStrictEqual(angles, ["deep", "scope"]);
   // "dry" should be excluded
   assert.ok(!angles.includes("dry"));
+});
 // ── LocalImplementation light mode ────────────────────────────────────────
 
 test("resolveLightMode returns null when config has no localImplementation", () => {
@@ -2791,37 +2877,37 @@ test("resolveIssuelessEnabled is false when issueless is absent", () => {
 });
 
 test("resolveIssuelessEnabled is false when enabled=false or malformed", () => {
-  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: { issueless: { enabled: false } } }), false);
-  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: { issueless: { enabled: "yes" } } }), false);
+  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: { issueless: false } }), false);
+  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: { issueless: "yes" } }), false);
 });
 
 test("resolveIssuelessEnabled is true when enabled", () => {
-  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: { issueless: { enabled: true } } }), true);
+  assert.equal(resolveIssuelessEnabled({ version: 1, localImplementation: { issueless: true } }), true);
 });
 
-test("schema accepts localImplementation.issueless.enabled", async () => {
+test("schema accepts localImplementation.issueless as a bare boolean (flattened, #1404)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-issueless-"));
   try {
     await writeFile(
       path.join(tmpDir, ".devloops"),
-      "version: 1\nlocalImplementation:\n  issueless:\n    enabled: true\n",
+      "version: 1\nlocalImplementation:\n  issueless: true\n",
       "utf8",
     );
     const { loadDevLoopConfig: load } = await import("../src/config/config.mjs");
     const result = await load({ repoRoot: tmpDir });
     assert.deepStrictEqual(result.errors, []);
-    assert.equal(result.config.localImplementation.issueless.enabled, true);
+    assert.equal(result.config.localImplementation.issueless, true);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-test("schema rejects a non-boolean issueless.enabled at config load", async () => {
+test("schema rejects a non-boolean issueless value at config load", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-issueless-type-"));
   try {
     await writeFile(
       path.join(tmpDir, ".devloops"),
-      "version: 1\nlocalImplementation:\n  issueless:\n    enabled: \"yes\"\n",
+      "version: 1\nlocalImplementation:\n  issueless: \"yes\"\n",
       "utf8",
     );
     const { loadDevLoopConfig: load } = await import("../src/config/config.mjs");
@@ -2832,12 +2918,12 @@ test("schema rejects a non-boolean issueless.enabled at config load", async () =
   }
 });
 
-test("schema rejects unknown keys inside localImplementation.issueless (strict object)", async () => {
+test("schema rejects an object under localImplementation.issueless (flattened to a bare boolean)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-issueless-bad-"));
   try {
     await writeFile(
       path.join(tmpDir, ".devloops"),
-      "version: 1\nlocalImplementation:\n  issueless:\n    enabled: true\n    bogus: 1\n",
+      "version: 1\nlocalImplementation:\n  issueless:\n    enabled: true\n",
       "utf8",
     );
     const { loadDevLoopConfig: load } = await import("../src/config/config.mjs");
@@ -3132,9 +3218,6 @@ test("parseGitDiffStat: whitespace-only output", async () => {
   assert.equal(result.linesChanged, 0);
 });
 
-// Close the integration tests describe block
-});
-
 // ============================================================================
 // resolveGateAnglesDynamic tests
 // ============================================================================
@@ -3176,7 +3259,7 @@ describe("resolveGateAnglesDynamic", () => {
     const config = {
       version: 1,
       gates: {
-        draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"], dynamicAngles: true },
+        draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"], dynamic: { subtractive: true } },
       },
     };
     const result = await resolveGateAnglesDynamic(config, "draft", {
@@ -3190,14 +3273,13 @@ describe("resolveGateAnglesDynamic", () => {
     assert.ok(result.recommendedAngles.length < 5); // narrowed from 5
   });
 
-  test("respects excludeAngles during dynamic resolution", async () => {
+  test("respects a disabled angle during dynamic resolution", async () => {
     const config = {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope", "docs", "kiss"],
-          excludeAngles: ["kiss"],
-          dynamicAngles: true,
+          angles: ["scope", "docs", { name: "kiss", enabled: false }],
+          dynamic: { subtractive: true },
         },
       },
     };
@@ -3217,7 +3299,7 @@ describe("resolveGateAnglesDynamic", () => {
       gates: {
         draft: {
           angles: ["scope", "coverage", "docs", "deep", "kiss", "dry", "srp", "soc"],
-          dynamicAngles: true,
+          dynamic: { subtractive: true },
         },
       },
     };
@@ -3238,9 +3320,14 @@ describe("resolveGateAnglesDynamic", () => {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope", "coverage"],
-          mandatoryAngles: ["pr-description", "correctness", "gate-evidence"],
-          dynamicAngles: true,
+          angles: [
+            "scope",
+            "coverage",
+            { name: "pr-description", mandatory: true },
+            { name: "correctness", mandatory: true },
+            { name: "gate-evidence", mandatory: true },
+          ],
+          dynamic: { subtractive: true },
         },
       },
     };
@@ -3265,9 +3352,8 @@ describe("resolveGateAnglesDynamic", () => {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope"],
-          mandatoryAngles: ["pr-description"],
-          dynamicAngles: true,
+          angles: ["scope", { name: "pr-description", mandatory: true }],
+          dynamic: { subtractive: true },
         },
       },
     };
@@ -3277,14 +3363,16 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(result.recommendedAngles, ["pr-description", "scope"]);
   });
 
-  test("extraAngles (#1392): present (like configured angles) when dynamicAngles is off", async () => {
+  test("a plain (non-mandatory) angle appended to angles is present when dynamicAngles is off", async () => {
+    // Pre-D3 this required a separate extraAngles list (#1392); D3's
+    // merge-by-name lets a config layer add a plain angle to `angles`
+    // directly, so a bare additional entry now covers the same case.
     const config = {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope"],
-          extraAngles: ["custom-lens"],
-          dynamicAngles: false,
+          angles: ["scope", "custom-lens"],
+          dynamic: { subtractive: false },
         },
       },
     };
@@ -3293,14 +3381,13 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(result.recommendedAngles, ["scope", "custom-lens"]);
   });
 
-  test("extraAngles (#1392): prunable (not mandatory) when dynamicAngles is on — matches configured angles behavior", async () => {
+  test("a plain (non-mandatory) angle is prunable when dynamicAngles is on — matches other configured angles", async () => {
     const config = {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope"],
-          extraAngles: ["custom-lens"],
-          dynamicAngles: true,
+          angles: ["scope", "custom-lens"],
+          dynamic: { subtractive: true },
         },
       },
     };
@@ -3323,7 +3410,7 @@ describe("resolveGateAnglesDynamic", () => {
       gates: {
         draft: {
           angles: ["scope", "coverage", "docs"],
-          dynamicAngles: true,
+          dynamic: { subtractive: true },
         },
       },
     };
@@ -3345,9 +3432,8 @@ describe("resolveGateAnglesDynamic", () => {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope", "pr-description"],
-          mandatoryAngles: ["pr-description", "correctness"],
-          dynamicAngles: true,
+          angles: ["scope", { name: "pr-description", mandatory: true }, { name: "correctness", mandatory: true }],
+          dynamic: { subtractive: true },
         },
       },
     };
@@ -3366,10 +3452,12 @@ describe("resolveGateAnglesDynamic", () => {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope"],
-          mandatoryAngles: ["pr-description", "correctness"],
-          excludeAngles: ["correctness"],
-          dynamicAngles: true,
+          angles: [
+            "scope",
+            { name: "pr-description", mandatory: true },
+            { name: "correctness", mandatory: true, enabled: false },
+          ],
+          dynamic: { subtractive: true },
         },
       },
     };
@@ -3390,14 +3478,14 @@ describe("resolveGateAnglesDynamic", () => {
     const baseGates = {
       draft: {
         angles: ["scope", "coverage", "docs"],
-        dynamicAngles: true,
+        dynamic: { subtractive: true },
       },
     };
     const diff = { diff: { nameStatusOutput: "A\t.github/workflows/ci.yml" } };
 
     const withoutAdditive = await resolveGateAnglesDynamic({ version: 1, gates: baseGates }, "draft", diff);
     const withAdditiveUnset = await resolveGateAnglesDynamic(
-      { version: 1, gates: { draft: { ...baseGates.draft, additiveAngles: false } } },
+      { version: 1, gates: { draft: { ...baseGates.draft, dynamic: { subtractive: true, additive: false } } } },
       "draft",
       diff,
     );
@@ -3417,8 +3505,7 @@ describe("resolveGateAnglesDynamic", () => {
       gates: {
         draft: {
           angles: ["scope", "coverage", "docs"], // ci-guard deliberately omitted
-          dynamicAngles: true,
-          additiveAngles: true,
+          dynamic: { subtractive: true, additive: true },
         },
         anglePool: ["scope", "coverage", "docs", "ci-guard", "config-drift"],
       },
@@ -3437,10 +3524,10 @@ describe("resolveGateAnglesDynamic", () => {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope", "coverage", "docs"],
-          excludeAngles: ["ci-guard"],
-          dynamicAngles: true,
-          additiveAngles: true,
+          // A phantom disabled entry (not otherwise configured) still acts as
+          // a hard exclusion ceiling for additive selection.
+          angles: ["scope", "coverage", "docs", { name: "ci-guard", enabled: false }],
+          dynamic: { subtractive: true, additive: true },
         },
         anglePool: ["scope", "coverage", "docs", "ci-guard", "config-drift"],
       },
@@ -3457,10 +3544,14 @@ describe("resolveGateAnglesDynamic", () => {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope", "coverage"],
-          mandatoryAngles: ["pr-description", "correctness", "gate-evidence"],
-          dynamicAngles: true,
-          additiveAngles: true,
+          angles: [
+            "scope",
+            "coverage",
+            { name: "pr-description", mandatory: true },
+            { name: "correctness", mandatory: true },
+            { name: "gate-evidence", mandatory: true },
+          ],
+          dynamic: { subtractive: true, additive: true },
         },
         anglePool: ["scope", "coverage", "ci-guard"],
       },
@@ -3483,10 +3574,8 @@ describe("resolveGateAnglesDynamic", () => {
       gates: {
         anglePool: ["scope", "correctness", "contract-surface", "docs", "renderer-security"],
         preApproval: {
-          angles: ["scope"],
-          mandatoryAngles: ["renderer-security"],
-          dynamicAngles: true,
-          additiveAngles: true,
+          angles: ["scope", { name: "renderer-security", mandatory: true }],
+          dynamic: { subtractive: true, additive: true },
         },
       },
     };
@@ -3506,8 +3595,7 @@ describe("resolveGateAnglesDynamic", () => {
       gates: {
         draft: {
           angles: ["scope", "coverage"], // contract-surface omitted; no explicit anglePool
-          dynamicAngles: true,
-          additiveAngles: true,
+          dynamic: { subtractive: true, additive: true },
         },
       },
     };
@@ -3559,8 +3647,7 @@ describe("resolveGateAnglesDynamic", () => {
       gates: {
         draft: {
           angles: ["scope", "coverage", "docs"], // ci-guard deliberately omitted here
-          dynamicAngles: true,
-          additiveAngles: true,
+          dynamic: { subtractive: true, additive: true },
         },
         preApproval: { angles: ["ci-guard", "link-check"] },
       },
@@ -3573,7 +3660,7 @@ describe("resolveGateAnglesDynamic", () => {
   });
 
   test("resolveGateConfig: additiveAngles defaults to false when unset (this repo's own gates are unaffected)", () => {
-    const config = { version: 1, gates: { draft: { angles: ["scope"], dynamicAngles: true } } };
+    const config = { version: 1, gates: { draft: { angles: ["scope"], dynamic: { subtractive: true } } } };
     assert.equal(resolveGateConfig(config, "draft").additiveAngles, false);
   });
 
@@ -3676,7 +3763,7 @@ describe("gates.rejectForeignAngles (#1196)", () => {
 describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)", () => {
   test("returns exclude-filtered mandatory angles + the resolveGateAngles pool by default", () => {
     const config = {
-      gates: { preApproval: { angles: ["dry", "kiss"], mandatoryAngles: ["pr-checklist-matrix"] } },
+      gates: { preApproval: { angles: ["dry", "kiss", { name: "pr-checklist-matrix", mandatory: true }] } },
     };
     const { mandatoryAngles, pool } = resolveGateAngleContract(config, "preApproval");
     assert.deepEqual(mandatoryAngles, ["pr-checklist-matrix"]);
@@ -3687,9 +3774,12 @@ describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)
     const config = {
       gates: {
         preApproval: {
-          angles: ["dry", "kiss"],
-          mandatoryAngles: ["pr-checklist-matrix", "yagni"],
-          excludeAngles: ["yagni"],
+          angles: [
+            "dry",
+            "kiss",
+            { name: "pr-checklist-matrix", mandatory: true },
+            { name: "yagni", mandatory: true, enabled: false },
+          ],
         },
       },
     };
@@ -3705,10 +3795,8 @@ describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)
       gates: {
         anglePool: ["dry", "kiss", "catalog-extra", "catalog-blocked"],
         preApproval: {
-          angles: ["dry"],
-          mandatoryAngles: [],
-          additiveAngles: true,
-          excludeAngles: ["catalog-blocked"],
+          angles: ["dry", { name: "catalog-blocked", enabled: false }],
+          dynamic: { additive: true },
         },
       },
     };
@@ -3717,7 +3805,7 @@ describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)
     assert.ok(!pool.includes("catalog-blocked"), "excludeAngles caps additive widening");
     // Without additiveAngles the catalog angle stays foreign.
     const strict = resolveGateAngleContract({
-      gates: { anglePool: ["dry", "catalog-extra"], preApproval: { angles: ["dry"], mandatoryAngles: [] } },
+      gates: { anglePool: ["dry", "catalog-extra"], preApproval: { angles: ["dry"] } },
     }, "preApproval");
     assert.ok(!strict.pool.includes("catalog-extra"));
   });
@@ -3753,19 +3841,11 @@ describe("gates.maxFanoutReviewers", () => {
   });
 });
 
-describe("deprecated localPlanning key", () => {
-  test("a config still carrying a localPlanning block parses and the key has no effect", () => {
+describe("removed localPlanning key (#1404 — 1.0 hard break)", () => {
+  test("a config carrying a localPlanning block is now rejected as an unknown key", () => {
     const input = { version: 1, localPlanning: { plansDir: "docs/phases/" } };
-    const full = DevLoopConfigSchema.safeParse(input);
-    assert.equal(full.success, true);
-    const file = FileConfigSchema.safeParse(input);
-    assert.equal(file.success, true);
-    // No effect: parsed output is identical to a config without the key,
-    // apart from the tolerated passthrough itself.
-    const without = DevLoopConfigSchema.safeParse({ version: 1 });
-    assert.equal(without.success, true);
-    const { localPlanning, ...rest } = full.data;
-    assert.deepEqual(rest, without.data);
+    assert.equal(DevLoopConfigSchema.safeParse(input).success, false);
+    assert.equal(FileConfigSchema.safeParse(input).success, false);
   });
 });
 
@@ -3943,14 +4023,15 @@ describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
     );
   });
 
-  test("explicit per-angle roleTiers override beats the review-tier default", () => {
+  test("explicit per-angle `tier` entry beats the review-tier default", () => {
     // `low` is DISTINCT from the angle-path fallback (review → high → opus), so
-    // this fails if the override branch (`roleTiers[role] ?? review`) is removed.
-    const config = { models: { roleTiers: { docs: "low" } } };
-    // roleTiers.docs is shared with the docs role; an explicit override applies
-    // to the angle path too, downgrading it below the review default.
+    // this fails if the entry.tier override is ignored. Angle-level tier
+    // overrides now live on the gate's own angle entry (D4), not the removed
+    // angle-keyed models.roleTiers map.
+    const config = { gates: { draft: { angles: [{ name: "docs", tier: "low" }] } } };
     assert.equal(resolveRoleModel(config, { role: "docs", harness: "claude", kind: "angle" }), "sonnet");
-    // The role path already resolves low; the override keeps it low.
+    // The role path is unaffected — models.roleTiers (role-keyed) still governs it,
+    // and docs already resolves low there by default.
     assert.equal(resolveRoleModel(config, { role: "docs", harness: "claude", kind: "role" }), "sonnet");
   });
 });

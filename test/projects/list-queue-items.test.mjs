@@ -878,12 +878,12 @@ describe("list-queue-items", () => {
     it("main() fails closed with INVALID_PROJECT when neither --project nor projectTitle given", async () => {
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops" }, { env: {}, runChild: mockRunChild([]) }),
-        (e) => e.code === "INVALID_PROJECT" && /queue\.projectNumber/.test(e.message),
+        (e) => e.code === "INVALID_PROJECT" && /queue\.board\.number/.test(e.message),
       );
     });
 
     it("runCli resolves projectNumber from .devloops when --project omitted", async () => {
-      await withTempCwd("queue:\n  projectNumber: 1\n", async (cwd) => {
+      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops"], {
           env: {}, cwd, runChild: mockRunChild(listResponses(EXISTING_PROJECT)),
           stdout: noopStream(), stderr: noopStream(),
@@ -893,7 +893,7 @@ describe("list-queue-items", () => {
     });
 
     it("runCli resolves boardTitle from .devloops when --project omitted", async () => {
-      await withTempCwd("queue:\n  boardTitle: \"Dev Loop Queue\"\n", async (cwd) => {
+      await withTempCwd("queue:\n  board:\n    title: \"Dev Loop Queue\"\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops"], {
           env: {}, cwd, runChild: mockRunChild(listResponses(EXISTING_PROJECT)),
           stdout: noopStream(), stderr: noopStream(),
@@ -904,7 +904,7 @@ describe("list-queue-items", () => {
 
     it("runCli: explicit --project wins over .devloops", async () => {
       const other = { id: "PVT_flag", number: 9, title: "Flag Project", url: "u" };
-      await withTempCwd("queue:\n  projectNumber: 1\n", async (cwd) => {
+      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops", "--project", "9"], {
           env: {}, cwd, runChild: mockRunChild(listResponses(other)),
           stdout: noopStream(), stderr: noopStream(),

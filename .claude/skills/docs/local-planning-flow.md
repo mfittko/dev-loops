@@ -2,7 +2,7 @@
 
 The operator sequence for the local-first plan-file flow. The [Artifact Authority Contract](artifact-authority-contract.md) owns the model and the per-phase contract details; this doc names the shipped helper scripts in the order they run for one plan file. The [Local-Planning Worked Example](local-planning-worked-example.md) shows a single plan file evolving through these steps.
 
-The flow applies under local-planning mode (`strategy.default: local-first`, the shipped default — see the contract's [Shipped default posture](artifact-authority-contract.md#shipped-default-posture)). The plan file lives under `docs/phases/`.
+The flow applies under local-planning mode (`strategy: local-first`, the shipped default — see the contract's [Shipped default posture](artifact-authority-contract.md#shipped-default-posture)). The plan file lives under `docs/phases/`.
 
 ## Stages
 

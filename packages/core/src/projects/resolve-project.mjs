@@ -15,10 +15,13 @@ function resolveSettings(cwd) {
       const queue = settings?.queue;
       if (!queue) return null;
       const out = {};
-      if (typeof queue.projectNumber === "number" && Number.isInteger(queue.projectNumber) && queue.projectNumber > 0) {
-        out.project = queue.projectNumber;
-      } else if (typeof queue.boardTitle === "string" && queue.boardTitle.trim().length > 0) {
-        out.title = queue.boardTitle.trim();
+      const board = queue.board;
+      if (board && typeof board === "object") {
+        if (typeof board.number === "number" && Number.isInteger(board.number) && board.number > 0) {
+          out.project = board.number;
+        } else if (typeof board.title === "string" && board.title.trim().length > 0) {
+          out.title = board.title.trim();
+        }
       }
       if (typeof queue.archiveOlderThanDays === "number" && Number.isInteger(queue.archiveOlderThanDays) && queue.archiveOlderThanDays > 0) {
         out.olderThanDays = queue.archiveOlderThanDays;
@@ -132,7 +135,7 @@ function resolveProjectSelector(args) {
     : null;
   if (!projectRef && !projectTitle) {
     throw Object.assign(
-      new Error("--project is required (or set queue.projectNumber / queue.boardTitle in .devloops)"),
+      new Error("--project is required (or set queue.board.number / queue.board.title in .devloops)"),
       { code: "INVALID_PROJECT" },
     );
   }
@@ -171,7 +174,7 @@ function findProject(projects, { projectRef, projectTitle }, owner) {
 }
 
 // Apply .devloops board settings when --project was not passed. Precedence:
-// explicit --project flag > queue.projectNumber/boardTitle. Mutates args.
+// explicit --project flag > queue.board.number/queue.board.title. Mutates args.
 function applyDevloopsBoard(args, cwd) {
   if (args.project === undefined) {
     const settings = resolveSettings(cwd);

@@ -14,7 +14,7 @@ the candidate list (the "offer"); the operator confirms who takes it. With
 --assign / --request-review it performs the confirmed action via \`gh pr edit\`.
 
 This pairs with autonomy.humanMergeOnly: when human-merge is enforced, the offer
-names who should take the merge. No-op when approval.humanHandoff is disabled
+names who should take the merge. No-op when approval is disabled
 (default) — prints an empty offer.
 
 Required:

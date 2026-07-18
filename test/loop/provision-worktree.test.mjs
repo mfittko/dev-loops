@@ -52,7 +52,7 @@ test("parseProvisionWorktreeCliArgs: --help short-circuits", () => {
 // ---------------------------------------------------------------------------
 
 test("provision: copies a literal file", async () => {
-  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/app.yml\n");
+  const fx = makeFixture("version: 1\nworktree:\n  entries:\n    - path: config/app.yml\n      mode: copy\n");
   try {
     mkdirSync(path.join(fx.repoRoot, "config"));
     writeFileSync(path.join(fx.repoRoot, "config/app.yml"), "key: value\n");
@@ -72,7 +72,7 @@ test("provision: copies a literal file", async () => {
 // ---------------------------------------------------------------------------
 
 test("provision: symlinks a directory with an absolute target", async () => {
-  const fx = makeFixture("version: 1\nworktree:\n  linkOnInit:\n    - data/big\n");
+  const fx = makeFixture("version: 1\nworktree:\n  entries:\n    - path: data/big\n      mode: link\n");
   try {
     mkdirSync(path.join(fx.repoRoot, "data/big"), { recursive: true });
     writeFileSync(path.join(fx.repoRoot, "data/big/blob.bin"), "x");
@@ -94,7 +94,7 @@ test("provision: symlinks a directory with an absolute target", async () => {
 // ---------------------------------------------------------------------------
 
 test("provision: expands a glob pattern", async () => {
-  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - 'config/*.yml'\n");
+  const fx = makeFixture("version: 1\nworktree:\n  entries:\n    - path: 'config/*.yml'\n      mode: copy\n");
   try {
     mkdirSync(path.join(fx.repoRoot, "config"));
     writeFileSync(path.join(fx.repoRoot, "config/a.yml"), "a");
@@ -116,7 +116,7 @@ test("provision: expands a glob pattern", async () => {
 // ---------------------------------------------------------------------------
 
 test("provision: missing source fails soft (warns, continues, ok)", async () => {
-  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/absent.yml\n");
+  const fx = makeFixture("version: 1\nworktree:\n  entries:\n    - path: config/absent.yml\n      mode: copy\n");
   try {
     const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
     assert.equal(res.ok, true);
@@ -130,7 +130,7 @@ test("provision: missing source fails soft (warns, continues, ok)", async () => 
 });
 
 test("provision: empty glob fails soft", async () => {
-  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - 'config/*.nope'\n");
+  const fx = makeFixture("version: 1\nworktree:\n  entries:\n    - path: 'config/*.nope'\n      mode: copy\n");
   try {
     const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
     assert.equal(res.ok, true);
@@ -145,7 +145,7 @@ test("provision: empty glob fails soft", async () => {
 // ---------------------------------------------------------------------------
 
 test("provision: rejects a path-traversal source", async () => {
-  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - ../outside/secret\n");
+  const fx = makeFixture("version: 1\nworktree:\n  entries:\n    - path: ../outside/secret\n      mode: copy\n");
   try {
     // create the outside file to prove it is rejected on path, not existence
     mkdirSync(path.join(fx.base, "outside"), { recursive: true });
@@ -162,7 +162,7 @@ test("provision: rejects a path-traversal source", async () => {
 });
 
 test("provision: rejects a source that is a symlink escaping the main checkout", async () => {
-  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/leak\n");
+  const fx = makeFixture("version: 1\nworktree:\n  entries:\n    - path: config/leak\n      mode: copy\n");
   try {
     // outside the repo: a real secret
     mkdirSync(path.join(fx.base, "outside"), { recursive: true });
@@ -192,7 +192,7 @@ test("provision: rejects a source that is a symlink escaping the main checkout",
 // ---------------------------------------------------------------------------
 
 test("provision: config with errors yields zero config-driven actions (fail-closed)", async () => {
-  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/app.yml\n");
+  const fx = makeFixture("version: 1\nworktree:\n  entries:\n    - path: config/app.yml\n      mode: copy\n");
   try {
     // A real, present source — proves the EMPTY treatment is driven by the
     // config errors, not by a missing file.
@@ -200,8 +200,8 @@ test("provision: config with errors yields zero config-driven actions (fail-clos
     writeFileSync(path.join(fx.repoRoot, "config/app.yml"), "key: value\n");
 
     const loadConfig = async () => ({
-      config: { version: 1, worktree: { copyOnInit: ["config/app.yml"] } },
-      errors: [{ field: "worktree.copyOnInit", reason: "invalid" }],
+      config: { version: 1, worktree: { entries: [{ path: "config/app.yml", mode: "copy" }] } },
+      errors: [{ field: "worktree.entries", reason: "invalid" }],
     });
 
     const res = await provisionWorktree(
@@ -229,7 +229,7 @@ test("provision: config with errors yields zero config-driven actions (fail-clos
 
 test("provision: a per-entry copy failure is recorded as skip and does not throw", async () => {
   const fx = makeFixture(
-    "version: 1\nworktree:\n  copyOnInit:\n    - blocked/file.yml\n    - ok.yml\n",
+    "version: 1\nworktree:\n  entries:\n    - path: blocked/file.yml\n      mode: copy\n    - path: ok.yml\n      mode: copy\n",
   );
   try {
     mkdirSync(path.join(fx.repoRoot, "blocked"));
@@ -381,7 +381,7 @@ test("provision: workspace self-link fails soft when the worktree has no package
 });
 
 test("provision: idempotent on reuse (second run skips)", async () => {
-  const fx = makeFixture("version: 1\nworktree:\n  copyOnInit:\n    - config/app.yml\n  linkOnInit:\n    - data/big\n");
+  const fx = makeFixture("version: 1\nworktree:\n  entries:\n    - path: config/app.yml\n      mode: copy\n    - path: data/big\n      mode: link\n");
   try {
     mkdirSync(path.join(fx.repoRoot, "config"));
     writeFileSync(path.join(fx.repoRoot, "config/app.yml"), "v");

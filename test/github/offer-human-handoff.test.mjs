@@ -67,7 +67,7 @@ test("main offer mode: prints candidates, assigns no one (disabled => no-op)", a
   let code;
   try {
     code = await main(["--repo", "o/n", "--pr", "1"], {
-      config: { approval: { humanHandoff: { enabled: false } } },
+      config: { approval: { enabled: false } },
       run: async () => { ghCalled = true; return { code: 0, stdout: "", stderr: "" }; },
     });
   } finally {

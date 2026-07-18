@@ -625,7 +625,7 @@ describe("resolve-active-board-item resolves the configured next_up column (#109
   }
 
   it("pickup queries the overridden statusColumns.next_up column (\"Todo\"), not the literal", async () => {
-    await withTempCwd('queue:\n  projectNumber: 7\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+    await withTempCwd('queue:\n  board:\n    number: 7\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
       // Head item lives ONLY in the renamed "Todo" column. If the resolver still
       // queried the literal "Next Up", it would see an empty column and fail
       // closed — so a resolved target proves it queried the configured name.
@@ -675,7 +675,7 @@ describe("resolve-active-board-item resolves the configured in_progress column (
   }
 
   it("pickup queries the overridden statusColumns.in_progress column (\"Doing\"), not the literal", async () => {
-    await withTempCwd('queue:\n  projectNumber: 7\n  statusColumns:\n    in_progress: "Doing"\n', async (cwd) => {
+    await withTempCwd('queue:\n  board:\n    number: 7\n  statusColumns:\n    in_progress: "Doing"\n', async (cwd) => {
       // The single active item lives ONLY in the renamed "Doing" column. If the
       // resolver still queried the literal "In Progress", it would see an empty
       // column and fall through to Next Up instead — proving misdetection.

@@ -29,7 +29,7 @@ describe("_resolve-project — resolveSettings", () => {
   });
 
   it("prefers projectNumber over boardTitle", () => {
-    withTempDevloops("queue:\n  projectNumber: 5\n  boardTitle: \"ignored\"\n", "", (dir) => {
+    withTempDevloops("queue:\n  board:\n    number: 5\n    title: \"ignored\"\n", "", (dir) => {
       const s = resolveSettings(dir);
       assert.strictEqual(s.project, 5);
       assert.strictEqual(s.title, undefined);
@@ -37,7 +37,7 @@ describe("_resolve-project — resolveSettings", () => {
   });
 
   it("returns { title } when only boardTitle is set", () => {
-    withTempDevloops("queue:\n  boardTitle: \"  Dev Loop Queue  \"\n", "", (dir) => {
+    withTempDevloops("queue:\n  board:\n    title: \"  Dev Loop Queue  \"\n", "", (dir) => {
       const s = resolveSettings(dir);
       assert.strictEqual(s.title, "Dev Loop Queue");
       assert.strictEqual(s.project, undefined);
@@ -60,7 +60,7 @@ describe("_resolve-project — resolveSettings", () => {
   });
 
   it("ignores a non-positive projectNumber and falls through to boardTitle", () => {
-    withTempDevloops("queue:\n  projectNumber: 0\n  boardTitle: \"B\"\n", "", (dir) => {
+    withTempDevloops("queue:\n  board:\n    number: 0\n    title: \"B\"\n", "", (dir) => {
       const s = resolveSettings(dir);
       assert.strictEqual(s.project, undefined);
       assert.strictEqual(s.title, "B");
@@ -68,20 +68,20 @@ describe("_resolve-project — resolveSettings", () => {
   });
 
   it("reads a .json variant", () => {
-    withTempDevloops(JSON.stringify({ queue: { projectNumber: 7 } }), ".json", (dir) => {
+    withTempDevloops(JSON.stringify({ queue: { board: { number: 7 } } }), ".json", (dir) => {
       const s = resolveSettings(dir);
       assert.strictEqual(s.project, 7);
     });
   });
 
   it("returns null (does not throw) on a syntactically broken .devloops", () => {
-    withTempDevloops("queue:\n  projectNumber: : : bad\n", "", (dir) => {
+    withTempDevloops("queue:\n  board:\n    number: : : bad\n", "", (dir) => {
       assert.strictEqual(resolveSettings(dir), null);
     });
   });
 
   it("ignores a float projectNumber (fail-closed) with no boardTitle", () => {
-    withTempDevloops("queue:\n  projectNumber: 5.5\n", "", (dir) => {
+    withTempDevloops("queue:\n  board:\n    number: 5.5\n", "", (dir) => {
       const s = resolveSettings(dir);
       assert.strictEqual(s.project, undefined);
       assert.strictEqual(s.title, undefined);
@@ -89,7 +89,7 @@ describe("_resolve-project — resolveSettings", () => {
   });
 
   it("ignores a quoted-string projectNumber (fail-closed) with no boardTitle", () => {
-    withTempDevloops("queue:\n  projectNumber: \"5\"\n", "", (dir) => {
+    withTempDevloops("queue:\n  board:\n    number: \"5\"\n", "", (dir) => {
       const s = resolveSettings(dir);
       assert.strictEqual(s.project, undefined);
       assert.strictEqual(s.title, undefined);

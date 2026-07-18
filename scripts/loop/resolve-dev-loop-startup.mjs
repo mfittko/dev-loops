@@ -85,7 +85,7 @@ Optional modifier:
                  its maxFiles/maxLines threshold; fails closed with a distinct
                  reason (light mode disabled / scope undetectable / over
                  threshold) requiring --issue above the threshold — unless
-                 localImplementation.issueless.enabled is set, which sanctions
+                 localImplementation.issueless is set, which sanctions
                  issue-less PR-first at ANY change scope (the whole eligibility
                  gate is skipped; gate dispatch still resolves review depth
                  from scope on its own).
@@ -354,18 +354,18 @@ function resolveTargetPreference(cwd) {
       const raw = readFileSync(devloopsPath, "utf8");
       let val;
       if (devloopsPath.endsWith(".json")) {
-        val = JSON.parse(raw)?.strategy?.default;
+        val = JSON.parse(raw)?.strategy;
       } else if (devloopsPath.endsWith(".yaml") || devloopsPath.endsWith(".yml")) {
-        const m = raw.match(/strategy:\s*\n\s*default:\s*["']?([^"'\s]+)["']?/);
+        const m = raw.match(/^strategy:\s*["']?([^"'\s]+)["']?/m);
         val = m ? m[1] : undefined;
       } else {
         // Bare file (no recognized extension) — YAML first, JSON fallback
-        const m = raw.match(/strategy:\s*\n\s*default:\s*["']?([^"'\s]+)["']?/);
+        const m = raw.match(/^strategy:\s*["']?([^"'\s]+)["']?/m);
         if (m) {
           val = m[1];
         } else {
           try {
-            val = JSON.parse(raw)?.strategy?.default;
+            val = JSON.parse(raw)?.strategy;
           } catch {
             // Not valid JSON either — fall through
           }
@@ -387,12 +387,12 @@ function resolveTargetPreference(cwd) {
       const raw = readFileSync(settingsPath, "utf8");
       if (settingsPath.endsWith(".json")) {
         const parsed = JSON.parse(raw);
-        const val = parsed?.strategy?.default;
+        const val = parsed?.strategy;
         if (val === "local-first") return "prefer_local";
         if (val === "github-first") return "prefer_github_first";
         continue;
       }
-      const match = raw.match(/strategy:\s*\n\s*default:\s*["']?([^"'\s]+)["']?/);
+      const match = raw.match(/^strategy:\s*["']?([^"'\s]+)["']?/m);
       if (match) {
         if (match[1] === "local-first") return "prefer_local";
         if (match[1] === "github-first") return "prefer_github_first";
@@ -823,7 +823,7 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
  *
  * Read-only: no tracker mutation, no GitHub calls, no issue/PR number. Gated
  * by {@link resolveIssuelessLightweightEligibility} — unless
- * `localImplementation.issueless.enabled` (#1349) sanctions any-scope
+ * `localImplementation.issueless` (#1349) sanctions any-scope
  * issue-less PR-first, in which case the eligibility gate is skipped entirely.
  * Otherwise an ineligible change
  * throws so the CLI fails closed (exit 1, no readiness bundle) with a message
@@ -836,7 +836,7 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
  * @returns {object} startup input with canonicalSpecSource: "pr_body"
  */
 export function buildLightweightIssuelessInput({ config, cwd }) {
-  // localImplementation.issueless.enabled (#1349) sanctions issue-less
+  // localImplementation.issueless (#1349) sanctions issue-less
   // PR-first at ANY change scope — for consumers whose spec of record lives
   // in an external tracker and who cannot mint a GitHub issue for big work.
   // Review depth is unaffected: gate dispatch re-measures scope itself and
@@ -845,12 +845,12 @@ export function buildLightweightIssuelessInput({ config, cwd }) {
     const eligibility = resolveIssuelessLightweightEligibility(config, cwd);
     if (!eligibility.eligible) {
       if (eligibility.reason === "light_mode_disabled") {
-        throw new Error("--lightweight without --issue (issue-less PR-first) requires localImplementation.lightMode.enabled in .devloops; enable light mode, set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.");
+        throw new Error("--lightweight without --issue (issue-less PR-first) requires localImplementation.lightMode.enabled in .devloops; enable light mode, set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.");
       }
       if (eligibility.reason === "scope_detection_failed") {
-        throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.`);
+        throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
       }
-      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Set localImplementation.issueless.enabled for any-scope issue-less PR-first, or provide --issue <n>.`);
+      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
     }
   }
   return {
@@ -1041,12 +1041,12 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     ? resolveWorkflowConfig(devLoopConfig, "asyncStartMode")
     : "required";
   const targetPreference = configErrors.length === 0
-    ? devLoopConfig?.strategy?.default === "local-first"
+    ? devLoopConfig?.strategy === "local-first"
       ? "prefer_local"
       : "prefer_github_first"
     : "prefer_local";
   const inputSource = configErrors.length === 0
-    ? normalizeConfigInputSource(devLoopConfig?.inputSource?.default)
+    ? normalizeConfigInputSource(devLoopConfig?.inputSource)
     : "tracker";
   let input;
   if (options.spike !== undefined) {

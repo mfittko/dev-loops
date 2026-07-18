@@ -21,7 +21,7 @@ import {
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
-import { resolveHumanMergeOnly } from "../config/config.mjs";
+import { resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -354,20 +354,19 @@ function applySpecSourceVariant(criteria, specSource) {
 
 function deriveGateConfig(settings, subGate) {
   const gateKey = subGate === "pre-approval" ? "preApproval" : subGate;
-  const gateSettings = settings?.gates?.[gateKey];
-  if (!gateSettings) return undefined;
+  if (!settings?.gates?.[gateKey]) return undefined;
 
-  const angles = Array.isArray(gateSettings.angles) ? [...gateSettings.angles] : [];
-  const excludeAngles = Array.isArray(gateSettings.excludeAngles) ? [...gateSettings.excludeAngles] : [];
-  const filteredAngles = angles.filter((a) => !excludeAngles.includes(a));
-
+  // Route through the canonical resolver rather than re-parsing
+  // gates.<gate>.angles by hand: resolveGateConfig already folds the unified
+  // angle-entry shape (mandatory/enabled per-entry, D3) into this same
+  // exclude-filtered angles + separate excludeAngles list the envelope
+  // contract has always shipped.
+  const resolved = resolveGateConfig(settings, gateKey);
   return {
-    angles: filteredAngles,
-    excludeAngles: excludeAngles.length > 0 ? excludeAngles : undefined,
-    blockCleanOnFindingSeverities: Array.isArray(gateSettings.blockCleanOnFindingSeverities)
-      ? [...gateSettings.blockCleanOnFindingSeverities]
-      : ["must-fix"],
-    requireCi: gateSettings.requireCi ?? true,
+    angles: resolved.angles ?? [],
+    excludeAngles: resolved.excludeAngles.length > 0 ? resolved.excludeAngles : undefined,
+    blockCleanOnFindingSeverities: resolved.blockCleanOnFindingSeverities,
+    requireCi: resolved.requireCi,
   };
 }
 

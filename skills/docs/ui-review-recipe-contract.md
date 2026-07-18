@@ -79,18 +79,17 @@ drive your app.
 
 A fresh worktree starts from a clean checkout, so anything gitignored that the
 app needs at boot (installed dependencies, a local DB config) must be provided.
-Entries are repo-relative literal paths or glob patterns.
-
-- `worktree.copyOnInit` — copied per worktree (isolated writable copy).
-- `worktree.linkOnInit` — absolute symlink into the main checkout (shared,
-  treat as read-only).
+`worktree.entries` is a list of `{ path, mode }`: `path` is a repo-relative
+literal path or glob pattern, `mode` is `copy` (isolated writable copy) or
+`link` (absolute symlink into the main checkout, shared, treat as read-only).
 
 ```yaml
 worktree:
-  linkOnInit:
-    - node_modules          # example: large, immutable install shared read-only
-  copyOnInit:
-    - config/database.local.yml   # example: gitignored local DB config
+  entries:
+    - path: node_modules          # example: large, immutable install shared read-only
+      mode: link
+    - path: config/database.local.yml   # example: gitignored local DB config
+      mode: copy
 ```
 
 ## `uiReview.run` — boot recipe (required to boot)
@@ -283,8 +282,8 @@ verified against the shipped zod schema by
 from the schema or if the schema gains a key not listed here.
 
 <!-- ui-review-config-keys:start -->
-- `worktree.copyOnInit`
-- `worktree.linkOnInit`
+- `worktree.entries[].path`
+- `worktree.entries[].mode`
 - `uiReview.run.command`
 - `uiReview.run.readyUrl`
 - `uiReview.run.readyTimeoutMs`

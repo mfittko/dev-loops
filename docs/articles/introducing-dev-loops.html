@@ -377,10 +377,8 @@
 
   <pre><code><span class="cm"># .devloops</span>
 version: 1
-strategy:
-  default: local-first    <span class="cm"># start from a local plan file; github-first starts from issues</span>
-inputSource:
-  default: tracker        <span class="cm"># read the spec from the issue body, or phase-docs</span>
+strategy: local-first    <span class="cm"># start from a local plan file; github-first starts from issues</span>
+inputSource: tracker     <span class="cm"># read the spec from the issue body, or phase-docs</span>
 refinement:
   maxCopilotRounds: 5     <span class="cm"># automated review rounds before converging; 0 turns Copilot off</span>
 autonomy:

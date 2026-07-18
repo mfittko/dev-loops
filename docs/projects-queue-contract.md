@@ -270,12 +270,13 @@ Board integration is active only when `.devloops` at repo root identifies a boar
 
 ```yaml
 queue:
-  projectNumber: 5          # direct project number
-  # OR boardTitle: "Dev Loop Queue"
+  board:
+    number: 5          # direct project number
+    # OR title: "Dev Loop Queue"
   nonSuccessStatus: Backlog # optional fallback column for non-success outcomes
 ```
 
-If neither `queue.projectNumber` nor `queue.boardTitle` is set, no board transitions are attempted and queue behavior is unchanged.
+If `queue.board` is not set (neither `number` nor `title`), no board transitions are attempted and queue behavior is unchanged.
 
 ### Result shape
 
@@ -353,7 +354,8 @@ The normative `Next Up` rule above currently assumes the **default** `Next Up` d
 
 ```yaml
 queue:
-  projectNumber: 5
+  board:
+    number: 5
 ```
 
 With local queue entries `[#1, #2, #3]`, an entry `#4` that is **not** in `Next Up`, and board `Next Up` order `[#3, #1]`, the driver dispatches `#3` then `#1` and nothing else — `#2` and `#4` are left untouched. If `Next Up` is empty, the driver idles with `"queue empty — prioritize Backlog items into Next Up"` and never touches Backlog.
@@ -367,11 +369,11 @@ queue:
   # Maximum parallel entries the queue may process concurrently.
   maxParallel: 3
 
-  # GitHub Projects V2 project number for direct lookup (overrides title-based discovery).
-  projectNumber: 1
-
-  # Board title for Projects V2 lookup (used when projectNumber is not set).
-  boardTitle: "Dev Loop Queue"
+  board:
+    # GitHub Projects V2 project number for direct lookup (overrides title-based discovery).
+    number: 1
+    # Board title for Projects V2 lookup (used when number is not set).
+    title: "Dev Loop Queue"
 
   # Maximum bug issues the queue driver may auto-file in one run.
   maxAutoFiledIssues: 10
@@ -383,25 +385,25 @@ queue:
 
 ### Board title key
 
-The `queue.boardTitle` key is the primary opt-in signal for Projects-based queue ordering (`projectNumber` is also available — see Project number key below):
+The `queue.board.title` key is the primary opt-in signal for Projects-based queue ordering (`queue.board.number` is also available — see Project number key below):
 
 | Value | Meaning |
 |---|---|
-| Not set (key missing) | Projects path not active; use positional ordering |
+| `queue.board` not set | Projects path not active; use positional ordering |
 | `"Dev Loop Queue"` (recommended title) | Look up project by this title under the repo owner |
 | Any other string | Look up project by that exact title |
 
-If `boardTitle` is set but the project does not exist, queue operations that depend on board
+If `queue.board.title` is set but the project does not exist, queue operations that depend on board
 ordering fail closed — they do not treat the missing board as equivalent to "not opted in."
 
 ### Project number key
 
-The `queue.projectNumber` key provides direct project lookup by number, bypassing title-based
-discovery. When both `projectNumber` and `boardTitle` are set, `projectNumber` takes precedence.
+The `queue.board.number` key provides direct project lookup by number, bypassing title-based
+discovery. When both `number` and `title` are set under `queue.board`, `number` takes precedence.
 
 ### Settings source
 
-Queue board settings (`boardTitle` / `projectNumber`) are read only from `.devloops` at the
+Queue board settings (`queue.board.title` / `queue.board.number`) are read only from `.devloops` at the
 repo root. The queue tooling does not consult the shipped defaults
 (`packages/core/src/config/extension-defaults.yaml`) or the repo-local
 `.pi/dev-loop/defaults.*` override layer for them — both deliberately omit these keys.

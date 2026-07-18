@@ -1,10 +1,8 @@
 version: 1
 
-strategy:
-  default: local-first
+strategy: local-first
 
-inputSource:
-  default: tracker
+inputSource: tracker
 
 refinement:
   maxCopilotRounds: 2
@@ -16,7 +14,8 @@ gates:
   # own gates; dynamic angle resolution (below) scopes the fan-out per change.
   requireFanoutEvidence: true
   draft:
-    dynamicAngles: true
+    dynamic:
+      subtractive: true
     angles:
       - scope
       - coverage
@@ -31,23 +30,43 @@ gates:
       - state-concurrency
       - config-drift
       - gate-evidence
-      - pr-description
+      - name: pr-description
+        mandatory: true
       - pr-comments
       - contradiction-lens
       - code-conformance
       - semantic-drift
+      # Shipped in extension-defaults.yaml's draft pool but intentionally not
+      # run by this repo's own draft gate (pre-1.0 config-schema redesign,
+      # #1404: gates.<gate>.angles now merges BY NAME across config layers —
+      # D3 — so dropping a shipped angle requires an explicit enabled:false
+      # entry here; omitting it entirely would let it merge back in).
+      - name: threat-model
+        enabled: false
+      - name: renderer-security
+        enabled: false
     requireCi: true
-    mandatoryAngles:
-      - pr-description
     blockCleanOnFindingSeverities:
       - must-fix
       - worth-fixing-now
   preApproval:
-    dynamicAngles: true
+    dynamic:
+      subtractive: true
+    # Mandatory angles always run in the fan-out (never dropped by dynamic
+    # resolution); fully configurable — set `mandatory: true` on any angle.
     angles:
+      - name: pr-checklist-matrix
+        mandatory: true
+      - name: acceptance-criteria
+        mandatory: true
+        persona: review
+        prompt: Verify that each acceptance criterion and definition-of-done item from the linked issue/PR is actually satisfied by the implementation — not merely listed. For every criterion, cite the concrete code/test/behavior evidence that meets it; flag any criterion that is unmet, only partially met, or unverifiable from the diff as a blocking finding. Confirm definition-of-done items (tests, docs, validation) are done and that declared non-goals are respected (no scope creep).
+      - name: yagni
+        mandatory: true
+      - name: contradiction-lens
+        mandatory: true
       - dry
       - kiss
-      - yagni
       - srp
       - soc
       - deep
@@ -56,20 +75,11 @@ gates:
       - lsp
       - isp
       - dip
-      - renderer-security
-      - pr-checklist-matrix
-      - acceptance-criteria
-      - contradiction-lens
+      - name: renderer-security
+        persona: review
+        prompt: Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
       - correctness-final
       - ui-validation
-    # Mandatory angles always run in the fan-out (never dropped by dynamic
-    # resolution); fully configurable — add/remove any angle from the pool.
-    mandatoryAngles:
-      - pr-checklist-matrix
-      - acceptance-criteria
-      - yagni
-      - contradiction-lens
-
     blockCleanOnFindingSeverities:
       - must-fix
       - worth-fixing-now
@@ -86,7 +96,8 @@ localImplementation:
     maxLines: 20 # micro-PR ceiling (#1043)
 
 queue:
-  boardTitle: "dev-loops Queue"
+  board:
+    title: "dev-loops Queue"
   maxParallel: 3
   maxAutoFiledIssues: 10
   reDispatchMaxRetries: 1

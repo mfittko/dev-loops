@@ -56,9 +56,12 @@ async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate }) 
   git(repoRoot, ["init", "-q"]);
   git(repoRoot, ["config", "user.email", "test@example.com"]);
   git(repoRoot, ["config", "user.name", "Test"]);
+  const angleLines = mandatoryAngles.length > 0
+    ? mandatoryAngles.map((name) => `      - name: ${name}\n        mandatory: true`).join("\n")
+    : "      []";
   await writeFile(
     path.join(repoRoot, ".devloops.yaml"),
-    `version: 1\ngates:\n  draft:\n    mandatoryAngles: ${JSON.stringify(mandatoryAngles)}\n`,
+    `version: 1\ngates:\n  draft:\n    angles:\n${angleLines}\n`,
     "utf8",
   );
   const base = {
@@ -247,7 +250,7 @@ test("CLI re-runs code angles on a DIVERGENT advance where the file equals the m
     git(repoRoot, ["init", "-q"]);
     git(repoRoot, ["config", "user.email", "test@example.com"]);
     git(repoRoot, ["config", "user.name", "Test"]);
-    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft:\n    mandatoryAngles: []\n", "utf8");
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft: {}\n", "utf8");
     await mkdir(path.join(repoRoot, "src"), { recursive: true });
     await mkdir(path.join(repoRoot, "docs"), { recursive: true });
     // merge-base M: foo.mjs = v1

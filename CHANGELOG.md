@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed (breaking — `.devloops` config shape, #1404)
+
+Pre-1.0 config-schema redesign: gate-review angle identity, which used to be
+split across five places, is now one array-of-objects per gate
+(`gates.<gate>.angles`; a bare string is sugar for `{ name }`). Config layers
+merge these arrays **by name** — a later layer can add a new angle, or
+override/disable an existing one (`enabled: false`), without restating the
+whole list.
+
+No back-compat shim for the old flat keys (pre-1.0 hard break, by design).
+Upgrading your `.devloops`:
+
+| Old key | New shape |
+|---|---|
+| `gates.<gate>.mandatoryAngles: [name, ...]` | per-angle `{ name, mandatory: true }` in `gates.<gate>.angles` |
+| `gates.<gate>.excludeAngles: [name, ...]` | per-angle `{ name, enabled: false }` in `gates.<gate>.angles` |
+| `gates.<gate>.extraAngles: [name, ...]` | just add the angle to `gates.<gate>.angles` — arrays now merge by name across layers, so this no longer needs its own list |
+| `gates.<gate>.dynamicAngles` / `additiveAngles` | `gates.<gate>.dynamic: { subtractive, additive }` |
+| top-level `personas.<angle>: { persona, prompt, defaultModel }` | per-angle `persona` / `prompt` / `model` fields in `gates.<gate>.angles` |
+| `models.roles.<angle>` / `models.roleTiers.<angle>` (angle-keyed) | per-angle `model` / `tier` fields in `gates.<gate>.angles` (role-keyed `models.roles`/`models.roleTiers` for subagent roles are unchanged) |
+| `queue.projectNumber` / `queue.boardTitle` | `queue.board.number` / `queue.board.title` |
+| `worktree.copyOnInit: [path, ...]` / `worktree.linkOnInit: [path, ...]` | `worktree.entries: [{ path, mode: "copy"\|"link" }, ...]` |
+| `refinement.stopOnLowSignal` / `lowSignalRoundThreshold` / `lowSignalMaxComments` | `refinement.lowSignal: { enabled, roundThreshold, maxComments }` |
+| `strategy.default` / `inputSource.default` | flattened: `strategy` / `inputSource` (bare enum value) |
+| `approval.humanHandoff.*` | lifted: `approval.*` (its only child) |
+| `localImplementation.issueless.enabled` | flattened: `localImplementation.issueless` (bare boolean) |
+| `localPlanning` | removed (was already deprecated/unread since #1088) |
+
+`gates.anglePool` stays global (not per-gate); the `spike` gate keeps the same
+unified gate schema as `draft`/`preApproval` (some knobs, e.g.
+`blockCleanOnFindingSeverities`, are inert for it). See
+`schemas/dev-loop-config.schema.json` and
+`packages/core/src/config/extension-defaults.yaml` for the full shape.
+
 ## 1.0.0-rc.2 - 2026-07-17
 
 Second release candidate: closes out the pre-1.0 backlog surfaced during the rc.1 window.

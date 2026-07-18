@@ -51,6 +51,68 @@ test("JS safe-integer sentinels are stripped from the generated schema", () => {
   assert.equal(schema.properties.refinement.properties.fanOut.maximum, 10);
 });
 
+// Minimal JSON Schema (draft 2020-12) matcher covering exactly the construct
+// subset generateConfigJsonSchema emits (type/const/enum/oneOf/properties+
+// required/items/additionalProperties/minLength) — not a general-purpose
+// validator. No JSON-Schema validation library (e.g. ajv) is installed in
+// this repo; this is the few-lines-not-a-dependency version scoped to what
+// this generated schema actually uses, so the "does the generated schema
+// really accept a real config" question can be answered directly instead of
+// only by re-deriving the generator's own output (which can't catch a
+// construct z.toJSONSchema itself silently drops, e.g. a preprocess branch).
+function matchesSchema(schema, value) {
+  if (schema.oneOf) return schema.oneOf.some((s) => matchesSchema(s, value));
+  if (schema.anyOf) return schema.anyOf.some((s) => matchesSchema(s, value));
+  if ("const" in schema) return value === schema.const;
+  if (Array.isArray(schema.enum)) return schema.enum.includes(value);
+  switch (schema.type) {
+    case "string":
+      return typeof value === "string" && (schema.minLength === undefined || value.length >= schema.minLength);
+    case "boolean":
+      return typeof value === "boolean";
+    case "number":
+      return typeof value === "number";
+    case "array":
+      return Array.isArray(value) && (!schema.items || value.every((v) => matchesSchema(schema.items, v)));
+    case "object": {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+      for (const key of schema.required ?? []) if (!(key in value)) return false;
+      for (const [key, v] of Object.entries(value)) {
+        const propSchema = schema.properties?.[key];
+        if (propSchema) {
+          if (!matchesSchema(propSchema, v)) return false;
+        } else if (schema.additionalProperties === false) {
+          return false;
+        }
+      }
+      return true;
+    }
+    default:
+      return true;
+  }
+}
+
+test("generated schema accepts a bare-string angle (gates.<gate>.angles[]) — regression guard for the dropped preprocess branch", async () => {
+  const schema = JSON.parse(await readFile(schemaFileUrl, "utf8"));
+  for (const gate of ["draft", "preApproval", "spike"]) {
+    const fixture = { version: 1, gates: { [gate]: { angles: ["scope"] } } };
+    assert.ok(
+      matchesSchema(schema, fixture),
+      `generated schema must accept a bare-string angle for gates.${gate}.angles[] (matches zod's GateAngleEntry preprocess sugar + the shipped .devloops/extension-defaults.yaml, which both use bare strings)`
+    );
+  }
+  // The object form must keep validating too — this guards the fix from
+  // overcorrecting into accepting ONLY strings.
+  assert.ok(
+    matchesSchema(schema, { version: 1, gates: { draft: { angles: [{ name: "scope", mandatory: true }] } } }),
+    "generated schema must still accept the full angle-object form"
+  );
+  // enum enforcement: the matcher must reject an out-of-enum value (guards the
+  // helper from silently ignoring `enum`, which would let it false-pass).
+  assert.ok(matchesSchema(schema, { version: 1, strategy: "github-first" }), "valid enum value must match");
+  assert.ok(!matchesSchema(schema, { version: 1, strategy: "bogus" }), "out-of-enum strategy must NOT match");
+});
+
 test("shipped config layers parse under the validator the schema is extracted from", async () => {
   const layers = [
     new URL("../../packages/core/src/config/extension-defaults.yaml", import.meta.url),

@@ -40,7 +40,7 @@ This section owns only the comment-visible ledger path per gate:
 
 ## Review-angle ownership and non-substitution rules
 
-Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). The reviewer persona for each angle is resolved via `resolveReviewerRole` from the persona registry (`packages/core/src/config/config.mjs`). Consumer repos may override angles and map custom personas via their own config.
+Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). The reviewer persona for each angle is resolved via `resolveReviewerRole` from the gate's own angle entry, falling back to the built-in persona registry (`packages/core/src/config/config.mjs`). Consumer repos may override an angle's persona/prompt via its own `gates.<gate>.angles[]` entry in their config.
 
 Resolve angles at runtime with `resolveGateAngles(config, "draft")` and `resolveGateAngles(config, "preApproval")` from `@dev-loops/core/config`. Do not hardcode angle names in skill procedures or review prompts.
 

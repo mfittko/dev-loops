@@ -57,24 +57,27 @@ test("refiner agent defines the approved phase-refinement contract", async () =>
 });
 
 
-test("defaults config exposes a customizable refiner coverage-matrix prompt", async () => {
-  const content = await readRepo("packages/core/src/config/extension-defaults.yaml");
+test("refiner agent defines the AC/DoD/Non-goal coverage-matrix contract", async () => {
+  // Pre-1.0 config-schema redesign (#1404): the top-level `personas` map
+  // (including the unwired `refiner`/`audit` entries that only ever mirrored
+  // this agent's own owned text — no code path ever read
+  // config.personas.refiner/.audit) is removed; gate-review angle
+  // persona/prompt overrides now live on the gate's own angle entry
+  // (gates.<gate>.angles[].persona/.prompt), which has no equivalent for
+  // "refiner"/"audit" since neither is a gate angle. The coverage-matrix
+  // contract itself is owned here, not mirrored in shipped config.
+  const content = await readRepo("agents/refiner.agent.md");
 
   assertMatchesAll(content, [
-    /personas:\n  refiner:\n    persona: refiner/m,
     /AC\/DoD\/Non-goal coverage matrix/i,
     /\| Item \| Type \(AC\/DoD\/Non-goal\) \| Status \(Met\/Partial\/Unmet\/Unverified\) \| Evidence \| Notes \|/i,
     /Use exact wording from the source issue\(s\); when the governing input is a phase doc or other spec instead of an issue, use that source wording exactly for every explicit item/i,
     /Include every explicit acceptance criterion, definition-of-done item, and non-goal; do not skip items/i,
-    // The yaml is a shipped config mirror of the owner rule REFINER-DOD-PROPOSED-SUBSECTION;
-    // pin fidelity of the mirror here, the owner doc's owned text is checked below.
-    /If no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix/i,
-    /A refinement is complete only when no item has `Partial`, `Unmet`, or `Unverified` status/i,
-  ], "packages/core/src/config/extension-defaults.yaml");
+  ], "agents/refiner.agent.md");
   assertRuleOwned("REFINER-DOD-PROPOSED-SUBSECTION", "agents/refiner.agent.md");
   // Owned-text check — marker survival alone must not mask dropping the Proposed-DoD clause.
   assert.match(
-    extractOwnedText(await readRepo("agents/refiner.agent.md"), "REFINER-DOD-PROPOSED-SUBSECTION"),
+    extractOwnedText(content, "REFINER-DOD-PROPOSED-SUBSECTION"),
     /Proposed DoD/,
   );
 });
@@ -238,9 +241,12 @@ test("AGENTS stays compact and resolver-first", async () => {
   assert.doesNotMatch(agents, /Formal dev mode vs required post-run retrospective/i);
 });
 test("refinement docs and prompts wire the optional audit handoff into the refiner chain", async () => {
-  const [refinerAgent, defaultsConfig, localImplementationSkill, issueIntakeDoc] = await Promise.all([
+  // Pre-1.0 config-schema redesign (#1404): the shipped extension-defaults.yaml
+  // no longer mirrors this contract under a top-level `personas.audit` entry
+  // (removed along with the whole top-level `personas` map — see the
+  // coverage-matrix test above); the agent doc is the sole owner of this text.
+  const [refinerAgent, localImplementationSkill, issueIntakeDoc] = await Promise.all([
     readRepo("agents/refiner.agent.md"),
-    readRepo("packages/core/src/config/extension-defaults.yaml"),
     readRepo("skills/local-implementation/SKILL.md"),
     readRepo("skills/docs/issue-intake-procedure.md"),
   ]);
@@ -257,15 +263,6 @@ test("refinement docs and prompts wire the optional audit handoff into the refin
   assertRuleOwned("REFINER-NO-INVENT-AUDIT-FINDINGS", "agents/refiner.agent.md");
   // Owned-text check — marker survival alone must not mask dropping the no-invent clause.
   assert.match(extractOwnedText(refinerAgent, "REFINER-NO-INVENT-AUDIT-FINDINGS"), /invent audit findings/i);
-
-  assertMatchesAll(defaultsConfig, [
-    /Audit inputs/i,
-    /highest-value follow-up candidates/i,
-    /Will not rewrite\/broaden in this phase/i,
-    /do not fabricate audit evidence when none was provided/i,
-    /\n  audit:\n    persona: review/i,
-    /audit only the named files\/areas/i,
-  ], "packages/core/src/config/extension-defaults.yaml");
 
   assertMatchesAll(localImplementationSkill, [
     /run one bounded audit before variant fan-out/i,

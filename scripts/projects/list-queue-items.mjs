@@ -15,8 +15,8 @@ ascending. Returns machine-readable JSON.
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
   --project <number|id>   Project number (integer) or node ID. When omitted,
-                          resolved from .devloops queue.projectNumber /
-                          queue.boardTitle.
+                          resolved from .devloops queue.board.number /
+                          queue.board.title.
   --column <name>         Filter items by Status column value (e.g. "Next Up").
   --limit <n>             Return at most <n> items (flat mode only).
   --summary               Whole-board digest grouped by Status column, in board

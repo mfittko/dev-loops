@@ -11,34 +11,20 @@
       "description": "Config format version; always 1."
     },
     "strategy": {
-      "type": "object",
-      "properties": {
-        "default": {
-          "type": "string",
-          "enum": [
-            "local-first",
-            "github-first"
-          ],
-          "description": "Default work-intake strategy: local-first starts from a repo plan file, github-first from a tracked issue."
-        }
-      },
-      "additionalProperties": false,
-      "description": "Work-intake strategy defaults."
+      "description": "Work-intake strategy default.",
+      "type": "string",
+      "enum": [
+        "local-first",
+        "github-first"
+      ]
     },
     "inputSource": {
-      "type": "object",
-      "properties": {
-        "default": {
-          "type": "string",
-          "enum": [
-            "tracker",
-            "phase-docs"
-          ],
-          "description": "Where local-first work reads its spec: the tracker issue body, or repo phase docs."
-        }
-      },
-      "additionalProperties": false,
-      "description": "Spec source for local-first work."
+      "description": "Spec source for local-first work.",
+      "type": "string",
+      "enum": [
+        "tracker",
+        "phase-docs"
+      ]
     },
     "models": {
       "type": "object",
@@ -109,7 +95,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Model routing: conductor override, per-role/angle overrides, tier aliases, and role→tier policy."
+      "description": "Model routing: conductor override, per-role overrides, tier aliases, and role→tier policy."
     },
     "refinement": {
       "type": "object",
@@ -134,22 +120,29 @@
           "type": "integer",
           "minimum": 0
         },
-        "stopOnLowSignal": {
-          "default": false,
-          "description": "Stop Copilot rounds early once they stop producing signal.",
-          "type": "boolean"
-        },
-        "lowSignalRoundThreshold": {
-          "default": 3,
-          "description": "Rounds counted toward the low-signal stop decision.",
-          "type": "integer",
-          "minimum": 0
-        },
-        "lowSignalMaxComments": {
-          "default": 2,
-          "description": "A round with at most this many comments counts as low-signal.",
-          "type": "integer",
-          "minimum": 0
+        "lowSignal": {
+          "description": "Early-stop policy for low-signal Copilot rounds.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Stop Copilot rounds early once they stop producing signal.",
+              "type": "boolean"
+            },
+            "roundThreshold": {
+              "default": 3,
+              "description": "Rounds counted toward the low-signal stop decision.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxComments": {
+              "default": 2,
+              "description": "A round with at most this many comments counts as low-signal.",
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
         },
         "roles": {
           "type": "array",
@@ -170,39 +163,74 @@
           "type": "object",
           "properties": {
             "angles": {
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier.",
               "type": "array",
               "items": {
-                "type": "string",
-                "minLength": 1
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "mandatory": {
+                        "description": "Always run this angle, regardless of diff-based dynamic selection.",
+                        "type": "boolean"
+                      },
+                      "enabled": {
+                        "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
+                        "type": "boolean"
+                      },
+                      "persona": {
+                        "description": "Reviewer persona for this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "prompt": {
+                        "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "model": {
+                        "description": "Concrete model override for this angle (highest precedence).",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "tier": {
+                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "dynamic": {
+              "description": "Diff-driven dynamic angle selection policy for this gate.",
+              "type": "object",
+              "properties": {
+                "subtractive": {
+                  "default": false,
+                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (was gates.<gate>.dynamicAngles).",
+                  "type": "boolean"
+                },
+                "additive": {
+                  "default": false,
+                  "description": "Allow diff-driven addition of catalog angles beyond this gate's configured pool (was gates.<gate>.additiveAngles).",
+                  "type": "boolean"
+                }
               },
-              "description": "Review lenses this gate fans out to."
-            },
-            "excludeAngles": {
-              "default": [],
-              "description": "Angles removed from the resolved angle list.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "mandatoryAngles": {
-              "default": [],
-              "description": "Angles that always run, regardless of diff-based dynamic selection.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "extraAngles": {
-              "default": [],
-              "description": "Angles additively unioned into the resolved angle list; unlike mandatoryAngles, these remain eligible for dynamic pruning.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
+              "additionalProperties": false
             },
             "required": {
               "default": true,
@@ -229,16 +257,6 @@
                   "defer"
                 ]
               }
-            },
-            "dynamicAngles": {
-              "default": false,
-              "description": "Enable diff-driven dynamic angle resolution for this gate.",
-              "type": "boolean"
-            },
-            "additiveAngles": {
-              "default": false,
-              "description": "Allow diff-driven addition of catalog angles beyond this gate's configured pool.",
-              "type": "boolean"
             }
           },
           "additionalProperties": false,
@@ -248,39 +266,74 @@
           "type": "object",
           "properties": {
             "angles": {
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier.",
               "type": "array",
               "items": {
-                "type": "string",
-                "minLength": 1
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "mandatory": {
+                        "description": "Always run this angle, regardless of diff-based dynamic selection.",
+                        "type": "boolean"
+                      },
+                      "enabled": {
+                        "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
+                        "type": "boolean"
+                      },
+                      "persona": {
+                        "description": "Reviewer persona for this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "prompt": {
+                        "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "model": {
+                        "description": "Concrete model override for this angle (highest precedence).",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "tier": {
+                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "dynamic": {
+              "description": "Diff-driven dynamic angle selection policy for this gate.",
+              "type": "object",
+              "properties": {
+                "subtractive": {
+                  "default": false,
+                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (was gates.<gate>.dynamicAngles).",
+                  "type": "boolean"
+                },
+                "additive": {
+                  "default": false,
+                  "description": "Allow diff-driven addition of catalog angles beyond this gate's configured pool (was gates.<gate>.additiveAngles).",
+                  "type": "boolean"
+                }
               },
-              "description": "Review lenses this gate fans out to."
-            },
-            "excludeAngles": {
-              "default": [],
-              "description": "Angles removed from the resolved angle list.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "mandatoryAngles": {
-              "default": [],
-              "description": "Angles that always run, regardless of diff-based dynamic selection.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "extraAngles": {
-              "default": [],
-              "description": "Angles additively unioned into the resolved angle list; unlike mandatoryAngles, these remain eligible for dynamic pruning.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
+              "additionalProperties": false
             },
             "required": {
               "default": true,
@@ -307,16 +360,6 @@
                   "defer"
                 ]
               }
-            },
-            "dynamicAngles": {
-              "default": false,
-              "description": "Enable diff-driven dynamic angle resolution for this gate.",
-              "type": "boolean"
-            },
-            "additiveAngles": {
-              "default": false,
-              "description": "Allow diff-driven addition of catalog angles beyond this gate's configured pool.",
-              "type": "boolean"
             }
           },
           "additionalProperties": false,
@@ -326,39 +369,74 @@
           "type": "object",
           "properties": {
             "angles": {
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier.",
               "type": "array",
               "items": {
-                "type": "string",
-                "minLength": 1
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "mandatory": {
+                        "description": "Always run this angle, regardless of diff-based dynamic selection.",
+                        "type": "boolean"
+                      },
+                      "enabled": {
+                        "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
+                        "type": "boolean"
+                      },
+                      "persona": {
+                        "description": "Reviewer persona for this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "prompt": {
+                        "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "model": {
+                        "description": "Concrete model override for this angle (highest precedence).",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "tier": {
+                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "dynamic": {
+              "description": "Diff-driven dynamic angle selection policy for this gate.",
+              "type": "object",
+              "properties": {
+                "subtractive": {
+                  "default": false,
+                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (was gates.<gate>.dynamicAngles).",
+                  "type": "boolean"
+                },
+                "additive": {
+                  "default": false,
+                  "description": "Allow diff-driven addition of catalog angles beyond this gate's configured pool (was gates.<gate>.additiveAngles).",
+                  "type": "boolean"
+                }
               },
-              "description": "Review lenses this gate fans out to."
-            },
-            "excludeAngles": {
-              "default": [],
-              "description": "Angles removed from the resolved angle list.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "mandatoryAngles": {
-              "default": [],
-              "description": "Angles that always run, regardless of diff-based dynamic selection.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "extraAngles": {
-              "default": [],
-              "description": "Angles additively unioned into the resolved angle list; unlike mandatoryAngles, these remain eligible for dynamic pruning.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
+              "additionalProperties": false
             },
             "required": {
               "default": true,
@@ -385,16 +463,6 @@
                   "defer"
                 ]
               }
-            },
-            "dynamicAngles": {
-              "default": false,
-              "description": "Enable diff-driven dynamic angle resolution for this gate.",
-              "type": "boolean"
-            },
-            "additiveAngles": {
-              "default": false,
-              "description": "Allow diff-driven addition of catalog angles beyond this gate's configured pool.",
-              "type": "boolean"
             }
           },
           "additionalProperties": false,
@@ -424,7 +492,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Explicit global lens catalog for additive angle selection."
+          "description": "Explicit global lens catalog for additive angle selection (global, not per-gate)."
         },
         "rejectForeignAngles": {
           "type": "boolean",
@@ -461,32 +529,26 @@
     "approval": {
       "type": "object",
       "properties": {
-        "humanHandoff": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "default": false,
-              "type": "boolean"
-            },
-            "candidatesFrom": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "codeowners",
-                  "recent-committers"
-                ]
-              }
-            },
-            "assignees": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
-            }
-          },
-          "additionalProperties": false
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "candidatesFrom": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "codeowners",
+              "recent-committers"
+            ]
+          }
+        },
+        "assignees": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "additionalProperties": false,
@@ -560,17 +622,8 @@
           "additionalProperties": false
         },
         "issueless": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Opt into issue-less PR-first dispatch at any change scope; gate dispatch still resolves inline vs full fan-out from scope on its own."
-            }
-          },
-          "required": [
-            "enabled"
-          ],
-          "additionalProperties": false
+          "type": "boolean",
+          "description": "Opt into issue-less PR-first dispatch at any change scope; gate dispatch still resolves inline vs full fan-out from scope on its own."
         }
       },
       "additionalProperties": false,
@@ -600,15 +653,22 @@
           "minimum": 0,
           "maximum": 10
         },
-        "projectNumber": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "description": "GitHub Projects board number (explicit opt-in to Projects-based queue ordering)."
-        },
-        "boardTitle": {
-          "type": "string",
-          "minLength": 1,
-          "description": "GitHub Projects board title (explicit opt-in to Projects-based queue ordering)."
+        "board": {
+          "type": "object",
+          "properties": {
+            "number": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "GitHub Projects board number."
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "description": "GitHub Projects board title."
+            }
+          },
+          "additionalProperties": false,
+          "description": "GitHub Projects board identifier (explicit opt-in to Projects-based queue ordering)."
         },
         "archiveOlderThanDays": {
           "type": "integer",
@@ -618,41 +678,6 @@
       },
       "additionalProperties": false,
       "description": "Queue mode: parallelism, auto-filing caps, and Projects board opt-in."
-    },
-    "personas": {
-      "type": "object",
-      "propertyNames": {
-        "type": "string",
-        "minLength": 1
-      },
-      "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "persona": {
-            "type": "string",
-            "minLength": 1
-          },
-          "prompt": {
-            "description": "Short focused instruction for the reviewer agent — what to look for and how to judge this angle",
-            "type": "string",
-            "minLength": 1
-          },
-          "defaultModel": {
-            "default": null,
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false
-      },
-      "description": "Gate-angle → reviewer persona registry overrides (angle name → persona, prompt, default model)."
     },
     "internalPathPatterns": {
       "minItems": 1,
@@ -666,21 +691,32 @@
     "worktree": {
       "type": "object",
       "properties": {
-        "copyOnInit": {
+        "entries": {
+          "description": "Gitignored paths/globs provisioned into a fresh worktree.",
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "description": "Repo-relative paths/globs copied into a fresh worktree (isolated per worktree — use for mutable files)."
-        },
-        "linkOnInit": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "description": "Repo-relative paths/globs symlinked to the main checkout (shared — read-only data only)."
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Repo-relative path or glob."
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "copy",
+                  "link"
+                ],
+                "description": "copy = fs.cp into the worktree (isolated, mutable); link = absolute symlink to the main checkout (shared, read-only)."
+              }
+            },
+            "required": [
+              "path",
+              "mode"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false,
@@ -936,8 +972,7 @@
       },
       "additionalProperties": false,
       "description": "UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps."
-    },
-    "localPlanning": {}
+    }
   },
   "required": [
     "version"

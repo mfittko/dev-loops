@@ -64,18 +64,21 @@ which ones to bring in from the main checkout:
 ```yaml
 # .devloops
 worktree:
-  copyOnInit:          # mutable → copied (isolated per worktree)
-    - config/app.yml
-    - .env.test
-    - 'config/*.local.yml'   # glob patterns supported
-  linkOnInit:          # large/read-only → symlinked (no duplication)
-    - data/large-dataset
+  entries:
+    - path: config/app.yml           # mutable → copied (isolated per worktree)
+      mode: copy
+    - path: .env.test
+      mode: copy
+    - path: 'config/*.local.yml'     # glob patterns supported
+      mode: copy
+    - path: data/large-dataset       # large/read-only → symlinked (no duplication)
+      mode: link
 ```
 
-- Entries are repo-relative **literal paths or glob patterns** (native
-  `fsp.glob`). A directory (literal or matched) recurses.
-- `copyOnInit` → `fs.cp` (recursive), isolated per worktree — use for files a run
-  may write to. `linkOnInit` → **absolute** symlink into the main checkout, shared
+- Entries are `{ path, mode }`; `path` is a repo-relative **literal path or glob
+  pattern** (native `fsp.glob`) — a directory (literal or matched) recurses.
+- `mode: copy` → `fs.cp` (recursive), isolated per worktree — use for files a run
+  may write to. `mode: link` → **absolute** symlink into the main checkout, shared
   across worktrees — use **only for read-only data** (a symlinked dir is one
   underlying directory; never link anything a run mutates).
 - Sources resolve against the main checkout, never cwd. Every resolved path must
@@ -190,7 +193,7 @@ exception path that MUST NOT become the normal default for mutating local work.
 
 ## Non-goals
 
-- No Windows symlink support (`linkOnInit` assumes POSIX).
+- No Windows symlink support (a `mode: link` entry assumes POSIX).
 - No default provisioning file list — provisioning is opt-in per repo.
 - Not a `node_modules` mirroring mechanism — deps belong to `npm ci`-in-worktree.
 - No expansion of this guidance into a second backlog or planning system.

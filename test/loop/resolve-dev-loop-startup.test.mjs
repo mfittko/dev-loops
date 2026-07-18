@@ -999,7 +999,7 @@ test("runCli --issue uses config inputSource=phase-docs to choose phase-doc loca
     await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
       path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
-      "version: 1\nstrategy:\n  default: local-first\ninputSource:\n  default: phase-docs\n",
+      "version: 1\nstrategy: local-first\ninputSource: phase-docs\n",
       "utf8",
     );
 
@@ -1032,7 +1032,7 @@ test("local-first phase-doc intake fires no tracker artifact / Copilot call befo
     await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
       path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
-      "version: 1\ninputSource:\n  default: phase-docs\n",
+      "version: 1\ninputSource: phase-docs\n",
       "utf8",
     );
 
@@ -1765,7 +1765,7 @@ test("runCli --issue --lightweight threads canonicalSpecSource:pr_body onto the 
     // call, so the empty gh stub (exits non-zero on any call) proves zero side effects.
     await writeFile(
       path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
-      "version: 1\nstrategy:\n  default: local-first\ninputSource:\n  default: phase-docs\n",
+      "version: 1\nstrategy: local-first\ninputSource: phase-docs\n",
       "utf8",
     );
     const ghStub = await writeGhStubHelper(tempDir, []);
@@ -1812,7 +1812,7 @@ test("runCli --lightweight ALONE (no --issue): light mode disabled fails closed 
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /lightMode\.enabled/);
-    assert.match(result.stderr, /issueless\.enabled/);
+    assert.match(result.stderr, /localImplementation\.issueless/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1826,7 +1826,7 @@ test("runCli --lightweight ALONE (no --issue): undetectable scope (no commits) f
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /measurable change scope/);
-    assert.match(result.stderr, /issueless\.enabled/);
+    assert.match(result.stderr, /localImplementation\.issueless/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1873,7 +1873,7 @@ test("runCli --lightweight ALONE (no --issue): DIRTY-TREE above-threshold change
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /stay within the light-mode threshold/);
-    assert.match(result.stderr, /issueless\.enabled/);
+    assert.match(result.stderr, /localImplementation\.issueless/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1921,7 +1921,7 @@ test("runCli --lightweight ALONE: issueless.enabled allows an OVER-threshold cha
     await initFeatureBranchRepo(tempDir);
     await writeFile(
       path.join(tempDir, ".devloops"),
-      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n  issueless:\n    enabled: true\n",
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n  issueless: true\n",
       "utf8",
     );
     await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
@@ -1943,7 +1943,7 @@ test("runCli --lightweight ALONE: issueless.enabled allows startup even with lig
     await initFeatureBranchRepo(tempDir);
     await writeFile(
       path.join(tempDir, ".devloops"),
-      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 3\n    maxLines: 200\n  issueless:\n    enabled: true\n",
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 3\n    maxLines: 200\n  issueless: true\n",
       "utf8",
     );
     await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\n", "utf8");
@@ -1963,7 +1963,7 @@ test("runCli --lightweight ALONE: issueless.enabled=false keeps the over-thresho
     await initFeatureBranchRepo(tempDir);
     await writeFile(
       path.join(tempDir, ".devloops"),
-      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n  issueless:\n    enabled: false\n",
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n  issueless: false\n",
       "utf8",
     );
     await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");

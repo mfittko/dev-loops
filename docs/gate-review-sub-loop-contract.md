@@ -69,31 +69,28 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   this phase writes (#1135). Reviewers run in the PR's actual worktree/head — the same
   checkout the preamble ran in.
 - the preamble resolves the gate's review angle set: it starts from the configured
-  angle pool (`gates.<gate>.angles`) and, when `gates.<gate>.dynamicAngles` is enabled,
-  narrows it to the angles relevant to the change at hand (configured pool → resolved
-  set). Optional code-review lenses not triggered by the change (for example most code
-  lenses for a docs-only change) are dropped, and the reason each angle was dropped is
-  recorded as rationale. Angles in `gates.<gate>.mandatoryAngles` form a floor and are
-  always included after dynamic selection (filtered only by `excludeAngles`); they are
-  never dropped. `gates.<gate>.extraAngles` is the additive-but-non-mandatory
-  counterpart (#1392): it unions into the configured `angles` — `((angles ∪
-  extraAngles) ∪ mandatoryAngles) − excludeAngles` — so a consumer can add a custom
-  review lens without copy-pasting/maintaining the whole shipped `angles` array (a
-  consumer `angles:` REPLACES the shipped list via `mergeConfigLayers`'s array-replace
-  semantics; `extraAngles` extends it instead). Unlike `mandatoryAngles`, an
-  `extraAngles` member does NOT survive `dynamicAngles` pruning — it stays eligible for
-  the same diff-driven selection as any other configured angle. A duplicate against
-  `angles` or `mandatoryAngles` is deduplicated by the set union (appears exactly once,
-  never errors, and keeps that angle's existing mandatory/prunable status); a member
-  also in `excludeAngles` is removed like any other angle. When `dynamicAngles` is off
-  (or no diff is available), the configured static pool is used unchanged. Symmetrically, when `gates.<gate>.additiveAngles` is
+  angle pool (`gates.<gate>.angles` — an array of angle names/objects, D3/D4) and, when
+  `gates.<gate>.dynamic.subtractive` is enabled, narrows it to the angles relevant to
+  the change at hand (configured pool → resolved set). Optional code-review lenses not
+  triggered by the change (for example most code lenses for a docs-only change) are
+  dropped, and the reason each angle was dropped is recorded as rationale. Angle entries
+  with `mandatory: true` form a floor and are always included after dynamic selection
+  (filtered only by entries with `enabled: false`); they are never dropped. Adding a
+  plain (non-mandatory) angle entry is additive but not mandatory — a duplicate name is
+  deduplicated by the set union (appears exactly once, never errors, and keeps that
+  angle's existing mandatory/prunable status); an entry with `enabled: false` is removed
+  like any other angle. Because `gates.<gate>.angles` merges BY NAME across config
+  layers (D3), a consumer can add a new angle, or disable/override an existing one, by
+  naming just that entry — no need to copy-paste/maintain the whole shipped `angles`
+  array. When `dynamic.subtractive` is off (or no diff is available), the configured
+  static pool is used unchanged. Symmetrically, when `gates.<gate>.dynamic.additive` is
   enabled (default **off**), the resolver may also ADD catalog angles that
   change-category heuristics recommend but that are not already in the gate's
   configured pool, drawn from the global lens catalog (the explicit `gates.anglePool`
   override, or — when `anglePool` is not set or is empty — the union of the built-in persona
   registry's angle names and every angle actually configured across this config's
-  own `gates.draft`/`gates.preApproval`/`gates.spike` `angles`/`mandatoryAngles`).
-  `excludeAngles` remains a hard ceiling on additions — an excluded angle is
+  own `gates.draft`/`gates.preApproval`/`gates.spike` `angles`). A disabled (`enabled:
+  false`) entry remains a hard ceiling on additions — an excluded angle is
   never added, even if the change categories would otherwise recommend it. Additions
   are recorded in the rationale with action `"added"`, with a reason naming either the
   triggering change category or, for always-include lenses, that it is an
@@ -361,7 +358,7 @@ The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryFo
 - `config-drift` → `config`/`ci`; `ci-guard` → `ci`.
 - always-run angles (`gate-evidence`, `pr-description`, `renderer-security`, and any configured mandatory angle) → **never carried** (their surface includes inputs the file delta cannot bound, e.g. the PR body).
 
-**Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's `mandatoryAngles` and forces every one to re-run, never carried); or any changed file's kind is in the angle's surface.
+**Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's angle entries with `mandatory: true` and forces every one to re-run, never carried); or any changed file's kind is in the angle's surface.
 
 **Renames force the RENAME_ONLY angles to re-run.** A rename records only its destination path, so classifying that path alone would miss what the move itself implicates (a relocated doc breaking a link, a moved test/code file shifting scope/contract-surface). When the delta `git diff A..B` contains ANY rename/copy row, the CLI forces the RENAME_ONLY-mapped angles (`CATEGORY_ANGLE_MAP[RENAME_ONLY]`: `scope`, `correctness`, `contract-surface`, `docs`, `link-check`) to re-run for that run; the remaining angles still follow the surface rule above.
 
@@ -554,17 +551,18 @@ narrower gap is exactly what this caveat and the Pi-harness bridge remain scoped
 `GATE-EXEC-ANGLE-COVERAGE`: A `fanout_fanin` verdict's recorded per-angle results
 (`provenance.perAngle` on the write path / merge-evidence read path, and the
 `--findings-json` structured per-angle results on the verdict-comment path) MUST
-cover every angle in the gate's effective `mandatoryAngles`, and MUST NOT name an
+cover every angle in the gate's effective mandatory angles (entries with
+`mandatory: true`), and MUST NOT name an
 angle outside the gate's effective pool unless `gates.rejectForeignAngles` is
 explicitly set to `false`, in which case a foreign angle downgrades to a warning.
 The effective contract is `resolveGateAngleContract` (`@dev-loops/core/config`),
-the single resolver every consumer uses: `mandatoryAngles` is filtered through
-`excludeAngles` (an excluded mandatory angle must not deadlock every fanout
-write), and the pool is `resolveGateAngles` (configured `angles` ∪
-`mandatoryAngles`, minus `excludeAngles`), widened to the global lens catalog
-(`resolveAnglePool`) when the gate enables `additiveAngles` — dynamic resolution
-may legitimately dispatch catalog angles then, with `excludeAngles` still a hard
-ceiling. A delta-suffixed angle (`<angle>-delta-at-...`, e.g. a re-review scoped
+the single resolver every consumer uses: the mandatory-angle set is filtered
+through entries disabled via `enabled: false` (an excluded mandatory angle must
+not deadlock every fanout write), and the pool is `resolveGateAngles` (configured
+angles minus disabled entries), widened to the global lens catalog
+(`resolveAnglePool`) when the gate enables `gates.<gate>.dynamic.additive` —
+dynamic resolution may legitimately dispatch catalog angles then, with a
+disabled entry still a hard ceiling. A delta-suffixed angle (`<angle>-delta-at-...`, e.g. a re-review scoped
 to only the current head's delta) counts toward its base angle for both checks.
 This is independent of `requireFanoutProvenance`, and is exempt for
 `inline_single_agent` verdicts (light-mode inline runs carry no per-angle fan-out

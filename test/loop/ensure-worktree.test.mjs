@@ -58,7 +58,7 @@ test("parseEnsureWorktreeCliArgs: an explicit --base always wins", () => {
 // ---------------------------------------------------------------------------
 
 test("ensure: creates at the canonical namespaced path and provisions", async () => {
-  const repo = makeRepo({ devloops: "version: 1\nworktree:\n  copyOnInit:\n    - secret.env\n" });
+  const repo = makeRepo({ devloops: "version: 1\nworktree:\n  entries:\n    - path: secret.env\n      mode: copy\n" });
   try {
     // secret.env is GITIGNORED (untracked) — only provisioning can bring it into
     // the fresh worktree, so a non-zero copied count proves provision ran.
