@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
@@ -113,8 +114,9 @@ async function resolveBody(options) {
     }
     return options.body;
   }
-  const source = options.bodyFile === "-" ? 0 : options.bodyFile;
-  const body = await readFile(source, "utf8");
+  // Read stdin ("-") synchronously via fd 0 — fs/promises.readFile(0) is
+  // unreliable on this Node target (mirrors edit-issue.mjs).
+  const body = options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
   if (body.trim().length === 0) {
     throw new Error(`--body-file ${options.bodyFile} is empty`);
   }

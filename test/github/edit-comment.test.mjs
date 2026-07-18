@@ -65,6 +65,17 @@ test("editComment: PATCHes via gh api and returns the comment URL", async () => 
   ]);
 });
 
+test("editComment: a body starting with @ is passed raw via -f (NOT the @-file magic of -F)", async () => {
+  // `-f/--raw-field` is a static string; only `-F/--field` interprets a leading
+  // `@` as read-from-file. A comment body like "@user please review" must stay
+  // literal — this pins the raw-field choice against a regression to -F.
+  const { run, calls } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
+  await editComment({ repo: "o/n", commentId: 9, body: "@user please review" }, { run });
+  assert.deepEqual(calls[0], [
+    "api", "-X", "PATCH", "repos/o/n/issues/comments/9", "-f", "body=@user please review",
+  ]);
+});
+
 test("editComment: reads the body from --body-file", async () => {
   const dir = await mkdtemp(join(tmpdir(), "edit-comment-"));
   try {
