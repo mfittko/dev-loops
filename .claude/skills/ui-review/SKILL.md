@@ -31,8 +31,7 @@ must be acknowledged before they run.
 The route's first operational step provisions an isolated worktree for the PR
 head and boots the branch's app to a ready state, via
 `dev-loops loop ui-review-provision --repo-root <p> --pr <n>`
-(source-repo fallback: `node scripts/loop/ui-review-provision.mjs --repo-root <p>
---pr <n>`; pure orchestration in
+(source-repo fallback: `node scripts/loop/ui-review-provision.mjs --repo-root <p> --pr <n>`; pure orchestration in
 `packages/core/src/loop/ui-review-provision.mjs`). It
 reuses the worktree machinery (`ensure-worktree`, `provision-worktree`), refuses
 to operate in the primary checkout, installs only the dependency-lock delta,
@@ -63,8 +62,7 @@ assumption — a run recipe is trusted-branch input, not untrusted data.
 
 Once the app is booted, the route drives the changed UI flows against the
 handed-off app URL via
-`dev-loops loop ui-review-drive --repo-root <p> --app-url <url> --output-dir <p>
-[--changed-path <p> ...]`
+`dev-loops loop ui-review-drive --repo-root <p> --app-url <url> --output-dir <p> [--changed-path <p> ...]`
 (source-repo fallback: `node scripts/loop/ui-review-drive.mjs ...`; pure
 orchestration in `packages/core/src/loop/ui-review-drive.mjs`). It launches
 one headless WebKit context, authenticates as the change's target role through a
@@ -139,8 +137,7 @@ dependence, so the same failures always produce the same ordered output.
 
 The terminal reporting stage turns the ranked findings into a head-pinned
 PENDING PR review plus a self-contained screenshot artifact, via
-`dev-loops loop ui-review-report --pr <n> --diagnose-result <p> --html-output <p>
-[--repo <slug>]`
+`dev-loops loop ui-review-report --pr <n> --diagnose-result <p> --html-output <p> [--repo <slug>]`
 (source-repo fallback: `node scripts/loop/ui-review-report.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-report.mjs`). It reuses the
 shared pending-review poster (`scripts/github/stage-reviewer-draft.mjs` +
@@ -178,8 +175,7 @@ The terminal cleanup stage tears down the loop's transient state — stops the
 app booted in provision, drops the dev-DB rows the drive created, removes the
 provisioned worktree — and ALWAYS emits a side-effect ledger so nothing is
 silently orphaned, via
-`dev-loops loop ui-review-teardown --repo-root <p> --provision-result <p>
-[--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
+`dev-loops loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
 (source-repo fallback: `node scripts/loop/ui-review-teardown.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-teardown.mjs`). It reads
 the prior-stage result JSON — the app PID + applied migrations + worktree path
