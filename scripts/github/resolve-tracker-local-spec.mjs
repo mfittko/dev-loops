@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { resolveTrackerAdapter } from "@dev-loops/core/tracker";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-const ISSUE_JSON_FIELDS = "number,title,body,url,state";
 const USAGE = `Usage: resolve-tracker-local-spec.mjs (--repo <owner/name> --issue <number> | --issue-url <github-issue-url>)
 Resolve the canonical tracker-backed local spec bundle from one GitHub issue reference.
 This helper is intentionally bounded to the GitHub-backed tracker path and does not
@@ -134,26 +135,15 @@ export function parseResolveTrackerLocalSpecCliArgs(argv) {
   }
   return options;
 }
-function buildIssueViewArgs({ repo, issue }) {
-  return [
-    "issue",
-    "view",
-    String(issue),
-    "--repo",
-    repo,
-    "--json",
-    ISSUE_JSON_FIELDS,
-  ];
-}
-function readIssuePayload(payload) {
-  if (!payload || typeof payload !== "object") {
+function readIssuePayload(issue) {
+  if (!issue || typeof issue !== "object") {
     throw new Error("Invalid tracker issue payload: expected object");
   }
-  const number = payload.number;
-  const title = payload.title;
-  const body = payload.body;
-  const url = payload.url;
-  const state = payload.state;
+  const number = issue.id;
+  const title = issue.title;
+  const body = issue.body;
+  const url = issue.url;
+  const state = issue.state;
   if (!Number.isInteger(number) || number <= 0) {
     throw new Error("Invalid tracker issue payload: missing positive issue number");
   }
@@ -171,26 +161,20 @@ function readIssuePayload(payload) {
     title,
     body: typeof body === "string" ? body : "",
     url,
-    state,
+    // Uppercase for output back-compat: the tracker adapter normalizes issue
+    // state to lowercase (provider-agnostic), but this tool's documented
+    // output (and its callers) expect gh's original OPEN/CLOSED casing.
+    state: state.toUpperCase(),
   };
 }
 export async function resolveTrackerLocalSpec(
   { repo, issue },
-  { env = process.env, ghCommand = "gh" } = {},
+  { env = process.env, ghCommand = "gh", tracker = resolveTrackerAdapter({}, { env, ghCommand }) } = {},
 ) {
   const { owner, name } = parseRepoSlug(repo);
   const canonicalRepo = `${owner}/${name}`;
-  const result = await runChild(
-    ghCommand,
-    buildIssueViewArgs({ repo: canonicalRepo, issue }),
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  const payload = parseJsonText(result.stdout);
-  const resolvedIssue = readIssuePayload(payload);
+  const issuePayload = await tracker.getIssue({ repo: canonicalRepo, id: issue });
+  const resolvedIssue = readIssuePayload(issuePayload);
   return {
     ok: true,
     repo: canonicalRepo,
@@ -214,9 +198,14 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
+  // Best-effort config load so `tracker.provider` (default "github") is
+  // honored; a broken/missing config falls back to the built-in github
+  // provider, matching this tool's pre-#1408 behavior exactly.
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  const tracker = resolveTrackerAdapter(errors.length === 0 ? config : {}, { env, ghCommand });
   const result = await resolveTrackerLocalSpec(
     { repo: options.repo, issue: options.issue },
-    { env, ghCommand },
+    { env, ghCommand, tracker },
   );
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
