@@ -1380,41 +1380,17 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // exhausted and the current head is clean (zero unresolved threads + green CI)
   // — including a POST-CAP head Copilot has not (and will not) re-review, since
   // no further Copilot round is permitted. Re-requesting review is illegal here,
-  // so this MUST NOT dead-end at READY_TO_REREQUEST_REVIEW. It routes to the
-  // pre_approval_gate, which reviews the post-cap head itself (per #848). The CI
-  // guards below still hold (failing / credibly-green CI blocks), and conflicts /
-  // blocked states are handled earlier, so genuinely-blocked states still forbid
-  // pre_approval. Mirrors LOW_SIGNAL_CONVERGED routing with round-cap reasoning.
+  // so this MUST NOT dead-end at READY_TO_REREQUEST_REVIEW — nor at a forced
+  // rerequest for a post-convergence significant change (#1387): the cap makes
+  // that rerequest impossible (request-copilot-review suppresses it), so a
+  // significant change discovered here is reviewed by the pre_approval_gate
+  // fan-out itself, on the post-cap head, same as any other clean fallback. It
+  // routes to the pre_approval_gate, which reviews the post-cap head itself
+  // (per #848). The CI guards below still hold (failing / credibly-green CI
+  // blocks), and conflicts / blocked states are handled earlier, so
+  // genuinely-blocked states still forbid pre_approval. Mirrors
+  // LOW_SIGNAL_CONVERGED routing with round-cap reasoning.
   if (effectiveLifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK) {
-    if (roundCapNewCycleRequired) {
-      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
-      pushUnique(forbiddenActions, [
-        PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
-        PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
-        PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
-        PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-        PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
-      ]);
-      return buildResult({
-        repo: input.repo ?? null,
-        pr: Number.isInteger(input.pr) ? input.pr : null,
-        currentHeadSha,
-        lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
-        loopDisposition: DISPOSITION.ACTION_REQUIRED,
-        gateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
-        draftGateAlreadySatisfied: roundCapReached ? true : draftGateAlreadySatisfied,
-        draftGate,
-        preApprovalGate,
-        allowedNextActions,
-        forbiddenActions,
-        nextAction: PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
-        reason: `The previous Copilot cycle converged at the round cap (${copilotReviewRoundCount}/${maxCopilotRounds}), but significant post-convergence changes landed on the current head. Open a new cycle and re-request Copilot review before entering \`pre_approval_gate\`.`,
-        mergeStateStatus,
-        conflictFiles,
-        refinementArtifact,
-        copilotReviewRoundCount,
-      });
-    }
     if (preApprovalRequireCi && (ciStatus === "failure" || ciStatus === "crediblyGreen")) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, postDraftForbidden);

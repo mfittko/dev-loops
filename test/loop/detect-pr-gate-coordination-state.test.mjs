@@ -585,7 +585,15 @@ test("detect-pr-gate-coordination-state routes a post-cap clean head to pre_appr
   }
 });
 
-test("detect-pr-gate-coordination-state re-requests Copilot when significant post-convergence changes land after cap convergence", async () => {
+// #1387: at the round cap, a significant post-convergence change must NOT
+// force an impossible rerequest_copilot_review (the round cap makes a fresh
+// Copilot cycle impossible — request-copilot-review.mjs suppresses it). It
+// must instead allow run_pre_approval_gate, which reviews the post-cap head
+// itself, matching detect-copilot-loop-state's own round_cap_clean_fallback
+// guidance. Copilot WAS formally requested in this fixture's timeline (a
+// prior round actually ran) so the separate #613 formal-request guard does
+// not also fire, isolating the #1387 routing behavior under test.
+test("detect-pr-gate-coordination-state allows pre_approval_gate (not an impossible rerequest) when significant post-convergence changes land after cap convergence (#1387)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-round-cap-significant-"));
 
   try {
@@ -625,8 +633,10 @@ test("detect-pr-gate-coordination-state re-requests Copilot when significant pos
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/266/reviews?per_page=100"], stdout: '[]\n' },
       { assertArgs: ["api", "repos/owner/repo/compare/5555555555555555555555555555555555555555...def56789abcdef"], stdout: jsonLine({ files: [{ filename: "scripts/loop/resolve-active-board-item.mjs", changes: 670 }] }) },
       {
+        // Copilot WAS formally requested (a prior round actually ran) — the
+        // durable #613 signal must not also gate this scenario.
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
-        stdout: "\n",
+        stdout: "copilot-pull-request-reviewer[bot]\n",
       },
     ]);
 
@@ -635,11 +645,16 @@ test("detect-pr-gate-coordination-state re-requests Copilot when significant pos
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
     const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.gateBoundary, "post_draft_external_review");
-    assert.equal(parsed.nextAction, "rerequest_copilot_review");
-    assert.ok(parsed.allowedNextActions.includes("rerequest_copilot_review"));
-    assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
-    assert.match(parsed.reason, /significant post-convergence changes/i);
+    // No contract-complete pre_approval marker exists for the post-cap head yet,
+    // so the boundary normalizes to pre_approval_gate_needed (mirrors the #896
+    // sibling test above) — the key point is run_pre_approval_gate is permitted.
+    assert.equal(parsed.gateBoundary, "pre_approval_gate_needed");
+    assert.equal(parsed.nextAction, "run_pre_approval_gate");
+    assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+    assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
+    // The round cap forbids any further Copilot (re-)request — no dead-end.
+    assert.ok(!parsed.allowedNextActions.includes("rerequest_copilot_review"));
+    assert.ok(!parsed.allowedNextActions.includes("request_copilot_review"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

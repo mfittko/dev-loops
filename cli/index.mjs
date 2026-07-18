@@ -12,8 +12,32 @@ import {
   summarizeChecks,
   DEV_LOOP_CHECK_IDS,
 } from "../lib/dev-loops-core.mjs";
-import { isUsageError, buildCorrectedArgs } from "@dev-loops/core/cli/retry-wrapper";
-import { createPiAdapter } from "@dev-loops/core/harness";
+
+// Zero-dep preflight: a Claude Code plugin marketplace checkout ships
+// `.claude/` (and this `cli/`) with no `node_modules` — no install hook runs.
+// `@dev-loops/core` must therefore NEVER be a static top-level import here: that
+// crashes module load with a raw ERR_MODULE_NOT_FOUND before a single line of
+// output. `isCoreResolvable()` is a resolve-only probe (no module execution);
+// every call site that actually needs core dynamically imports it AFTER
+// confirming resolvability, so the only failure mode left is this one
+// friendly line + non-zero exit.
+function isCoreResolvable() {
+  try {
+    import.meta.resolve("@dev-loops/core/harness");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const CORE_UNRESOLVABLE_DETAIL =
+  "`@dev-loops/core` is not installed in this checkout (a deps-less plugin/marketplace checkout) — " +
+  "run via `npx dev-loops@<version>` (or `npm i -g dev-loops`) instead of local scripts.";
+
+function writeCoreUnresolvableError(stderr) {
+  writeLines(stderr, [`[dev-loops] ${CORE_UNRESOLVABLE_DETAIL}`]);
+  return 1;
+}
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -277,14 +301,13 @@ function orderedCliSetupSteps(checks) {
 function writeLines(stream, lines) { stream.write(`${lines.join("\n")}\n`); }
 
 export function createCliRuntime({
-  adapter = createPiAdapter(),
   cwd, searchPath,
   platform, pathExt,
 } = {}) {
-  const effectiveCwd = cwd ?? adapter.getCwd();
-  const effectiveSearchPath = searchPath ?? adapter.getEnv().PATH ?? "";
+  const effectiveCwd = cwd ?? process.cwd();
+  const effectiveSearchPath = searchPath ?? process.env.PATH ?? "";
   const effectivePlatform = platform ?? process.platform;
-  const effectivePathExt = pathExt ?? adapter.getEnv().PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
+  const effectivePathExt = pathExt ?? process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
   return {
     surface: "cli",
     cwd: effectiveCwd,
@@ -392,6 +415,10 @@ export async function runCli({
       return 0;
     }
     case "subcommand_help": {
+      // The routed scripts import `@dev-loops/core` at their own top level, so
+      // spawning one from a deps-less checkout would ERR_MODULE_NOT_FOUND in the
+      // child instead of printing our friendly line — gate before spawning.
+      if (!isCoreResolvable()) return writeCoreUnresolvableError(stderr);
       if (fromTop.deprecationNotice) { writeLines(stderr, [fromTop.deprecationNotice]); }
       const result = spawnSync("node", [fromTop.scriptPath, "--help"], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -401,20 +428,41 @@ export async function runCli({
       return result.status ?? (result.signal ? 1 : result.error ? 1 : 0);
     }
     case "action": {
-      const activeRuntime = runtime ?? createCliRuntime({ adapter: createPiAdapter({ cwd }), cwd });
+      // `gates` reads gate config via `@dev-loops/core/config` (through the
+      // shared executor); every other top-level action (help/status/doctor) is
+      // core-independent and must keep working in a deps-less checkout.
+      if (fromTop.action === "gates" && !isCoreResolvable()) {
+        return writeCoreUnresolvableError(stderr);
+      }
+      const activeRuntime = runtime ?? createCliRuntime({ cwd });
       const result = await executeDevLoopsCommand({ input: argv, surface: "cli", runtime: activeRuntime, stdout });
       switch (result.kind) {
         case "help": { writeLines(stdout, buildCliHelpLines()); return 0; }
         case "checks": {
-          const summary = summarizeChecks(result.checks);
-          const readiness = describeReadiness(result.checks);
+          // `doctor` names @dev-loops/core resolvability explicitly: a deps-less
+          // plugin/marketplace checkout can still run `doctor` itself (it needs
+          // no core import), so it's the one place that diagnoses the condition
+          // the preflight above exits on for every other command.
+          const coreOk = isCoreResolvable();
+          const checks = result.action === "doctor"
+            ? [...result.checks, {
+                id: "core-resolvable",
+                label: "@dev-loops/core resolvable (local script execution)",
+                ok: coreOk,
+                detail: coreOk
+                  ? "`@dev-loops/core` resolves from this checkout; local scripts can run directly."
+                  : CORE_UNRESOLVABLE_DETAIL,
+              }]
+            : result.checks;
+          const summary = summarizeChecks(checks);
+          const readiness = describeReadiness(checks);
           const lines = [
             `dev-loops ${result.action}: ${summary.ok}/${summary.total} checks passed`,
             `Local loop readiness: ${readiness.localReady ? "ready" : "needs setup"}`,
             `Remote GitHub/Copilot readiness: ${readiness.remoteReady ? "ready" : "needs setup"}`,
           ];
-          if (result.action === "status") { lines.push("Suggested next steps:", ...orderedCliSetupSteps(result.checks)); }
-          else { lines.push(...renderCheckLines(result.checks)); }
+          if (result.action === "status") { lines.push("Suggested next steps:", ...orderedCliSetupSteps(checks)); }
+          else { lines.push(...renderCheckLines(checks)); }
           writeLines(stdout, lines);
           return 0;
         }
@@ -431,12 +479,19 @@ export async function runCli({
     }
     case "subcommand": {
       if (fromTop.error) { writeLines(stderr, [fromTop.error]); return 1; }
+      // Same as subcommand_help: every routed script imports `@dev-loops/core`.
+      if (!isCoreResolvable()) return writeCoreUnresolvableError(stderr);
       if (fromTop.deprecationNotice) { writeLines(stderr, [fromTop.deprecationNotice]); }
       const scriptArgs = fromTop.forwardedArgs || [];
       const result = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       });
-      // Retry on usage/flag errors: parse usage for valid flags, retry once (#483)
+      // Retry on usage/flag errors: parse usage for valid flags, retry once (#483).
+      // Reached only once core is confirmed resolvable above, so this dynamic
+      // import (not a top-level one) never throws ERR_MODULE_NOT_FOUND itself.
+      const { isUsageError, buildCorrectedArgs } = result.status !== 0
+        ? await import("@dev-loops/core/cli/retry-wrapper")
+        : {};
       if (result.status !== 0 && isUsageError(result.stderr)) {
         const correctedArgs = buildCorrectedArgs(scriptArgs, result.stderr);
         if (correctedArgs && correctedArgs.length > 0) {
