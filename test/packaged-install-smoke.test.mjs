@@ -103,6 +103,7 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
       ["loop", "pre-flight-gate", "--help"],
       ["loop", "ensure-worktree", "--help"],
       ["issue", "edit", "--help"],
+      ["issue", "create", "--help"],
     ]) {
       const output = execFileSync("node", [devLoopsBin, ...args], { cwd: installDir }).toString();
       assert.doesNotMatch(output, /ERR_MODULE_NOT_FOUND/, `dev-loops ${args.join(" ")} failed to resolve @dev-loops/core`);
