@@ -37,15 +37,23 @@ test("actionlint flags the deliberately-invalid on: trigger fixture", (t) => {
 // branch is exercised deterministically regardless of what's installed on the
 // machine running this test.
 test("main() exits 0 with an install-hint warning when actionlint is absent from PATH", () => {
-  const result = spawnSync(process.execPath, [SCRIPT_PATH], {
-    encoding: "utf8",
-    // No actionlint on this PATH — only node itself, so `git` also 404s
-    // (resolveRepoRoot falls back to cwd, which is fine either way).
-    env: { PATH: path.dirname(process.execPath) },
-  });
+  // Point PATH at a guaranteed-empty dir (not node's own bindir, which on some
+  // installs — Homebrew, /usr/bin — also holds actionlint) so the binary-absent
+  // branch is exercised deterministically regardless of the host. The child is
+  // spawned via the absolute node path, so node needs no PATH; actionlint and
+  // git both ENOENT (resolveRepoRoot falls back to cwd, which is fine).
+  const emptyDir = mkdtempSync(path.join(tmpdir(), "lint-workflows-nopath-"));
+  try {
+    const result = spawnSync(process.execPath, [SCRIPT_PATH], {
+      encoding: "utf8",
+      env: { PATH: emptyDir },
+    });
 
-  assert.equal(result.status, 0);
-  assert.match(result.stdout + result.stderr, /actionlint not installed/);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout + result.stderr, /actionlint not installed/);
+  } finally {
+    rmSync(emptyDir, { recursive: true, force: true });
+  }
 });
 
 test("main() exits non-zero when actionlint runs against the invalid-on-trigger fixture", (t) => {
