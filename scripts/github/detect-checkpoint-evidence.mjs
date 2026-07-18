@@ -96,8 +96,14 @@ Output (stdout, JSON; always includes preMergeGateCheck):
     "preMergeGateCheck": {
       "ok": true,
       "failures": []
-    }
+    },
+    "evidenceState": "satisfied"
   }
+  (evidenceState is "satisfied"|"not_established"|"violation": "not_established"
+  means evidence for the current head simply doesn't exist yet (draft,
+  mid-Copilot-loop, pre-approval not yet re-run after a fix commit); "violation"
+  means a visible current-head comment carries a bad verdict, or another
+  pre-merge check failed. Present on both success and failure output.)
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
@@ -414,6 +420,57 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
+/** Canonical evidenceState values (single source of truth for the gate-evidence status mapping). */
+export const EVIDENCE_STATE = Object.freeze({
+  SATISFIED: "satisfied",
+  NOT_ESTABLISHED: "not_established",
+  VIOLATION: "violation",
+});
+
+// "absent" (no visible comment yet for this head) vs "bad" (a comment exists for
+// this exact head but its verdict/contract is not clean) — the distinction
+// evidenceState needs: absent is the normal in-progress gap (not_established),
+// bad is an actual problem (violation). Head-mismatch is not a separate case
+// here: summarizeGateReviewCommentMarkers already filters markers to the exact
+// current head, so a marker for a stale/older head is simply invisible (absent).
+function gateVerdictState({ visible, verdict, contractComplete = true }) {
+  if (!visible) return "absent";
+  if (contractComplete === false) return "bad";
+  return verdict === "clean" ? "clean" : "bad";
+}
+
+/**
+ * Classify WHY the checkpoint-evidence pre-merge check is (un)satisfied, for the
+ * gate-evidence commit-status mapping: `not_established` (evidence for the
+ * current head simply doesn't exist yet — draft, mid-Copilot-loop, or right
+ * after a fix commit before pre_approval_gate re-runs) reads as `pending`, not
+ * `failure`; `violation` (a visible current-head comment carries a bad verdict —
+ * blocked/findings_present — or another pre-merge check failed, e.g. unresolved
+ * threads or a stale runner) reads as `failure`; `satisfied` reads as `success`.
+ * Both gates clean is a precondition for `satisfied`, not the definition of it —
+ * a clean-gates PR can still fail on an unrelated pre-merge failure, which is a
+ * real problem (violation), not "waiting".
+ *
+ * @param {{ draftGate: object, preApprovalGateMarker: object }} evidence
+ * @param {{ ok: boolean }} preMergeGateCheck
+ * @returns {"satisfied"|"not_established"|"violation"}
+ */
+export function deriveEvidenceState(evidence, preMergeGateCheck) {
+  const draftState = gateVerdictState({ visible: evidence.draftGate.visible, verdict: evidence.draftGate.verdict });
+  const preApprovalState = gateVerdictState({
+    visible: evidence.preApprovalGateMarker.visible,
+    verdict: evidence.preApprovalGateMarker.verdict,
+    contractComplete: evidence.preApprovalGateMarker.contractComplete,
+  });
+  if (draftState === "bad" || preApprovalState === "bad") {
+    return EVIDENCE_STATE.VIOLATION;
+  }
+  if (draftState === "absent" || preApprovalState === "absent") {
+    return EVIDENCE_STATE.NOT_ESTABLISHED;
+  }
+  return preMergeGateCheck?.ok === true ? EVIDENCE_STATE.SATISFIED : EVIDENCE_STATE.VIOLATION;
+}
+
 async function ledgerExists(fullPath) {
   try {
     await access(fullPath);
@@ -735,7 +792,8 @@ async function main() {
         : [],
     };
     const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true });
-    const output = { ...result, preMergeGateCheck, staleRunnerCheck };
+    const evidenceState = deriveEvidenceState(result, preMergeGateCheck);
+    const output = { ...result, preMergeGateCheck, staleRunnerCheck, evidenceState };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({
         ok: false,
@@ -746,6 +804,7 @@ async function main() {
         preMergeGateCheck,
         staleRunnerCheck,
         staleRunner: result.staleRunner,
+        evidenceState,
       })}\n`);
       process.exitCode = 1;
       return;

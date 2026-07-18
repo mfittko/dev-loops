@@ -17,6 +17,8 @@ import {
   buildPreMergeGateCheck,
   buildFanoutEnforcement,
   detectCheckpointEvidence,
+  deriveEvidenceState,
+  EVIDENCE_STATE,
 } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { fetchGithubReviewThreadsPayload } from "../../scripts/github/capture-review-threads.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
@@ -494,6 +496,7 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         ok: true,
         failures: [],
       },
+      evidenceState: EVIDENCE_STATE.SATISFIED,
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -559,6 +562,7 @@ test("detect-checkpoint-evidence fails pre-merge check when only draft gate exis
     assert.deepEqual(payload.preMergeGateCheck.failures, [
       "missing visible clean current-head pre_approval_gate comment",
     ]);
+    assert.equal(payload.evidenceState, EVIDENCE_STATE.NOT_ESTABLISHED);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -714,6 +718,7 @@ test("detect-checkpoint-evidence always passes pre-merge check with clean draft 
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.preMergeGateCheck.ok, true);
     assert.deepEqual(payload.preMergeGateCheck.failures, []);
+    assert.equal(payload.evidenceState, EVIDENCE_STATE.SATISFIED);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -780,11 +785,14 @@ test("detect-checkpoint-evidence fails pre-merge check when pre-approval gate is
     assert.deepEqual(payload.preMergeGateCheck.failures, [
       "missing visible clean current-head pre_approval_gate comment",
     ]);
+    // The marker for the old head is simply invisible (filtered by exact head
+    // match), so this reads as "no evidence yet for this head" — the normal
+    // post-fix-commit gap — not a violation.
+    assert.equal(payload.evidenceState, EVIDENCE_STATE.NOT_ESTABLISHED);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
-
 
 test("detect-checkpoint-evidence reports gh failures deterministically", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-checkpoint-evidence-fail-"));
@@ -2058,4 +2066,63 @@ test("detect-checkpoint-evidence requireFanoutEvidence=true passes for fanout_fa
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// --- deriveEvidenceState (state-aware gate-evidence status: satisfied|not_established|violation) ---
+
+test("deriveEvidenceState: both gates clean on the current head is satisfied", () => {
+  const evidence = cleanEvidence();
+  const preMergeGateCheck = { ok: true, failures: [] };
+  assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.SATISFIED);
+});
+
+test("deriveEvidenceState: no draft_gate comment yet is not_established (draft PR / never run)", () => {
+  const evidence = {
+    draftGate: { visible: false, verdict: null },
+    preApprovalGateMarker: { visible: false, contractComplete: false, verdict: null, headSha: null },
+  };
+  const preMergeGateCheck = { ok: false, failures: ["missing visible clean draft_gate comment", "missing visible clean current-head pre_approval_gate comment"] };
+  assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.NOT_ESTABLISHED);
+});
+
+test("deriveEvidenceState: no current-head pre_approval_gate comment yet (mid-Copilot-loop / post-fix-commit) is not_established", () => {
+  const evidence = {
+    draftGate: { visible: true, verdict: "clean" },
+    preApprovalGateMarker: { visible: false, contractComplete: false, verdict: null, headSha: null },
+  };
+  const preMergeGateCheck = { ok: false, failures: ["missing visible clean current-head pre_approval_gate comment"] };
+  assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.NOT_ESTABLISHED);
+});
+
+test("deriveEvidenceState: a blocked/findings_present pre_approval_gate verdict on the current head is a violation", () => {
+  const evidence = {
+    draftGate: { visible: true, verdict: "clean" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "blocked", headSha: "abc1234" },
+  };
+  const preMergeGateCheck = { ok: false, failures: ["missing visible clean current-head pre_approval_gate comment"] };
+  assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.VIOLATION);
+});
+
+test("deriveEvidenceState: a bad (non-clean) draft_gate verdict is a violation, not not_established", () => {
+  const evidence = {
+    draftGate: { visible: true, verdict: "findings_present" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+  };
+  const preMergeGateCheck = { ok: false, failures: ["missing visible clean draft_gate comment"] };
+  assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.VIOLATION);
+});
+
+test("deriveEvidenceState: a current-head marker with incomplete contract fields is a violation (not absent)", () => {
+  const evidence = {
+    draftGate: { visible: true, verdict: "clean" },
+    preApprovalGateMarker: { visible: true, contractComplete: false, verdict: null, headSha: "abc1234" },
+  };
+  const preMergeGateCheck = { ok: false, failures: ["missing visible clean current-head pre_approval_gate comment"] };
+  assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.VIOLATION);
+});
+
+test("deriveEvidenceState: both gates clean but an unrelated pre-merge failure (e.g. unresolved threads) is a violation, not satisfied", () => {
+  const evidence = cleanEvidence();
+  const preMergeGateCheck = { ok: false, failures: ["unresolved review threads present (2); must resolve all threads before merge"] };
+  assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.VIOLATION);
 });

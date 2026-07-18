@@ -92,9 +92,12 @@ jobs:
       # including the documented light-mode inline exception.
       #
       # set +e: a non-zero exit must still reach the status-reporting step
-      # below (posting a red status) rather than aborting the job with no
-      # status posted at all, which would leave the required check pending
-      # forever instead of failing closed.
+      # below (posting a status) rather than aborting the job with no status
+      # posted at all, which would leave the required check pending forever
+      # instead of failing closed. stdout/stderr are captured to files (rather
+      # than piped through `jq` directly) so a non-JSON line on either stream
+      # can never break parsing, and both are still echoed for the same
+      # Actions-log visibility a plain (uncaptured) run would have had.
       - name: Verify draft_gate / pre_approval_gate evidence
         id: gate_check
         env:
@@ -104,24 +107,35 @@ jobs:
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
             --pr "${{ github.event.pull_request.number }}" \
-            --skip-fanout-ledger-check
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+            --skip-fanout-ledger-check \
+            > gate_check_stdout.json 2> gate_check_stderr.json
+          cat gate_check_stdout.json
+          cat gate_check_stderr.json >&2
 
-      # The only step that reports context `gate-evidence` (see the header
-      # comment on `on:` above for why this can't be the job's own implicit
-      # check-run). Always posts — success only when the detector step above
-      # actually ran and exited 0 — so a missing/empty exit_code (e.g. an
-      # earlier checkout/npm-ci failure that skipped the detector step) fails
-      # closed to `failure`, never leaves the head SHA with no status.
+      # evidenceState (satisfied|not_established|violation, from
+      # detect-checkpoint-evidence.mjs) drives the posted commit-status state:
+      # not_established (evidence for the current head simply doesn't exist yet
+      # — draft, mid-Copilot-loop, pre-approval not yet re-run after a fix
+      # commit) is the NORMAL in-progress gap and reads as `pending`, not
+      # `failure` — the loop's own CI-status reading already excludes this
+      # context (LOOP_DERIVED_CI_CHECK_NAME) so a pending gate-evidence never
+      # blocks the loop's convergence, only the actual merge. `violation` (a
+      # visible current-head comment carries a bad verdict, or another
+      # pre-merge check failed) reads as `failure` — the bypass signal this
+      # check exists to catch. A missing/unparseable evidenceState (e.g. an
+      # earlier checkout/npm-ci failure that skipped the detector step
+      # entirely) fails CLOSED to `failure`, never "no status".
       - name: Report gate-evidence status on the PR head SHA
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          state="failure"
-          if [ "${{ steps.gate_check.outputs.exit_code }}" = "0" ]; then
-            state="success"
-          fi
+          evidence_state="$(jq -r '.evidenceState // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
+          case "$evidence_state" in
+            satisfied) state="success" ;;
+            not_established) state="pending" ;;
+            *) state="failure" ;;
+          esac
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
             -f "state=${state}" \
             -f "context=gate-evidence" \
