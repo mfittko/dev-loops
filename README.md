@@ -83,7 +83,7 @@ Installed from npm, point at the bundled copy: `claude --plugin-dir node_modules
 
 The hooks provide the `gh pr ready` draft-gate guard and an opt-in read-only boundary for the main agent (`DEVLOOPS_MAIN_AGENT_READONLY=1`). Skill references to a consumer repo's own `PLAN.md` / `AGENTS.md` resolve against that repo, by design.
 
-**Consumer entry contract.** The plugin ships prompts, skills, agents, and hooks only — the runtime that actually executes commands is always the npm `dev-loops` CLI (`npx dev-loops@<version>`), never a raw `node scripts/*.mjs` invocation against the marketplace checkout. A `/plugin marketplace add` or `/plugin install` checkout has no install hook and therefore no `node_modules`; running local scripts directly from it is unsupported and `dev-loops doctor` / the CLI preflight will name the condition and point back here. The single-source CLI subcommand reference is tracked in [issue #1376](https://github.com/mfittko/dev-loops/issues/1376).
+**Consumer entry contract.** The plugin ships prompts, skills, agents, and hooks only — the runtime that actually executes commands is always the npm `dev-loops` CLI (`npx dev-loops@<version>`), never a raw `node scripts/*.mjs` invocation against the marketplace checkout. A `/plugin marketplace add` or `/plugin install` checkout has no install hook and therefore no `node_modules`; running local scripts directly from it is unsupported and `dev-loops doctor` / the CLI preflight will name the condition and point you at the npm `dev-loops` CLI (`npx dev-loops@<version>`). The single-source CLI subcommand reference is tracked in [issue #1376](https://github.com/mfittko/dev-loops/issues/1376).
 
 ### Pi extension
 

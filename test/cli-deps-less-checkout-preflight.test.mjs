@@ -53,7 +53,13 @@ test("cli/index.mjs has no top-level @dev-loops/core import on the reachable pat
   // `await import(...)` (a lazy, guarded dynamic import).
   const staticImportLines = source
     .split("\n")
-    .filter((line) => /^\s*import\s.*\bfrom\b/.test(line));
+    // Match top-level `import` STATEMENT lines — both `import x from "..."` and
+    // side-effect `import "...";` — via the required whitespace after `import`,
+    // so a side-effect import of core can't slip past. The `\s+` deliberately
+    // excludes `import.meta.resolve(...)` (the zero-dep probe) and dynamic
+    // `import(...)`. (Multi-line imports are backstopped by the runtime deps-less
+    // test below, which sees the real ERR_MODULE_NOT_FOUND.)
+    .filter((line) => /^\s*import\s+/.test(line));
   const offenders = staticImportLines.filter((line) => line.includes("@dev-loops/core"));
   assert.deepEqual(offenders, [], "no static top-level import may reference @dev-loops/core");
 });
