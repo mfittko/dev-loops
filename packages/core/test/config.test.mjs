@@ -1929,6 +1929,7 @@ describe("role resolution", () => {
         angles: null,
         excludeAngles: [],
         mandatoryAngles: [],
+        extraAngles: [],
         required: true,
         requireCi: true,
         dynamicAngles: false,
@@ -1948,6 +1949,7 @@ describe("role resolution", () => {
         angles: ["scope", "coverage", "correctness"],
         excludeAngles: [],
         mandatoryAngles: [],
+        extraAngles: [],
         required: false,
         requireCi: false,
         dynamicAngles: false,
@@ -2221,6 +2223,45 @@ describe("role resolution", () => {
       assert.equal(result.success, true);
     });
 
+    test("GateConfig accepts valid extraAngles", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope"],
+            extraAngles: ["custom-lens"],
+          },
+        },
+      };
+      const result = FileConfigSchema.safeParse(config);
+      assert.equal(result.success, true);
+    });
+
+    test("GateConfig rejects extraAngles with empty strings", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            extraAngles: [""],
+          },
+        },
+      };
+      const result = FileConfigSchema.safeParse(config);
+      assert.equal(result.success, false);
+    });
+
+    test("GateConfig accepts extraAngles as optional (absent, defaults to [])", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: { angles: ["scope"] },
+        },
+      };
+      const result = FileConfigSchema.safeParse(config);
+      assert.equal(result.success, true);
+      assert.deepEqual(result.data.gates.draft.extraAngles, []);
+    });
+
         test("resolveGateAngles filters when excludeAngles has angles not in angles list", () => {
       const config = {
         version: 1,
@@ -2323,6 +2364,106 @@ describe("role resolution", () => {
     test("resolveGateConfig default booleans include empty mandatoryAngles", () => {
       const result = resolveGateConfig({ version: 1 }, "draft");
       assert.deepEqual(result.mandatoryAngles, []);
+    });
+
+    // --- extraAngles (#1392) ---
+    test("resolveGateConfig returns extraAngles", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope", "coverage"],
+            extraAngles: ["custom-lens"],
+          },
+        },
+      };
+      const result = resolveGateConfig(config, "draft");
+      assert.deepEqual(result.extraAngles, ["custom-lens"]);
+    });
+
+    test("resolveGateConfig returns empty extraAngles when absent", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { angles: ["scope"] } },
+      };
+      const result = resolveGateConfig(config, "draft");
+      assert.deepEqual(result.extraAngles, []);
+    });
+
+    test("resolveGateAngles extends shipped angles with extraAngles without restating them", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope", "coverage"],
+            extraAngles: ["custom-lens"],
+          },
+        },
+      };
+      const result = resolveGateAngles(config, "draft");
+      assert.deepEqual(result, ["scope", "coverage", "custom-lens"]);
+    });
+
+    test("resolveGateAngles deduplicates an extraAngles entry already in angles", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope", "coverage"],
+            extraAngles: ["coverage", "custom-lens"],
+          },
+        },
+      };
+      const result = resolveGateAngles(config, "draft");
+      assert.deepEqual(result, ["scope", "coverage", "custom-lens"]);
+    });
+
+    test("resolveGateAngles deduplicates an extraAngles entry already in mandatoryAngles", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope"],
+            mandatoryAngles: ["correctness"],
+            extraAngles: ["correctness", "custom-lens"],
+          },
+        },
+      };
+      const result = resolveGateAngles(config, "draft");
+      assert.deepEqual(result, ["correctness", "scope", "custom-lens"]);
+    });
+
+    test("resolveGateAngles excludeAngles wins over extraAngles", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope"],
+            extraAngles: ["custom-lens"],
+            excludeAngles: ["custom-lens"],
+          },
+        },
+      };
+      const result = resolveGateAngles(config, "draft");
+      assert.deepEqual(result, ["scope"]);
+    });
+
+    test("resolveGateAngles returns only extraAngles when angles/mandatoryAngles not configured", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { extraAngles: ["custom-lens"] } },
+      };
+      const result = resolveGateAngles(config, "draft");
+      assert.deepEqual(result, ["custom-lens"]);
+    });
+
+    test("resolveGateAngles returns null when angles, mandatoryAngles, and extraAngles are all empty", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { extraAngles: [] } },
+      };
+      const result = resolveGateAngles(config, "draft");
+      assert.deepEqual(result, null);
     });
 
         test("resolveRefinement returns new roles array (not reference to config)", () => {
@@ -3134,6 +3275,46 @@ describe("resolveGateAnglesDynamic", () => {
     const result = await resolveGateAnglesDynamic(config, "draft");
     assert.equal(result.dynamicAnglesActive, false);
     assert.deepEqual(result.recommendedAngles, ["pr-description", "scope"]);
+  });
+
+  test("extraAngles (#1392): present (like configured angles) when dynamicAngles is off", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope"],
+          extraAngles: ["custom-lens"],
+          dynamicAngles: false,
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft");
+    assert.equal(result.dynamicAnglesActive, false);
+    assert.deepEqual(result.recommendedAngles, ["scope", "custom-lens"]);
+  });
+
+  test("extraAngles (#1392): prunable (not mandatory) when dynamicAngles is on — matches configured angles behavior", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope"],
+          extraAngles: ["custom-lens"],
+          dynamicAngles: true,
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: {
+        nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md",
+      },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    // custom-lens is a candidate (like configured angles), not a mandatory
+    // floor: an unrecognized custom angle is pruned by the docs-only diff,
+    // same as "scope" would be if it weren't relevant.
+    assert.ok(result.skippedAngles.includes("custom-lens"));
+    assert.ok(!result.recommendedAngles.includes("custom-lens"));
   });
 
   test("backward compat: no mandatoryAngles = all angles are candidates", async () => {

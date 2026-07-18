@@ -195,6 +195,15 @@
                 "minLength": 1
               }
             },
+            "extraAngles": {
+              "default": [],
+              "description": "Angles additively unioned into the resolved angle list; unlike mandatoryAngles, these remain eligible for dynamic pruning.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
             "required": {
               "default": true,
               "description": "Whether this gate must run.",
@@ -264,6 +273,15 @@
                 "minLength": 1
               }
             },
+            "extraAngles": {
+              "default": [],
+              "description": "Angles additively unioned into the resolved angle list; unlike mandatoryAngles, these remain eligible for dynamic pruning.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
             "required": {
               "default": true,
               "description": "Whether this gate must run.",
@@ -327,6 +345,15 @@
             "mandatoryAngles": {
               "default": [],
               "description": "Angles that always run, regardless of diff-based dynamic selection.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "extraAngles": {
+              "default": [],
+              "description": "Angles additively unioned into the resolved angle list; unlike mandatoryAngles, these remain eligible for dynamic pruning.",
               "type": "array",
               "items": {
                 "type": "string",

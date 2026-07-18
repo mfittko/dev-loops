@@ -75,8 +75,18 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   lenses for a docs-only change) are dropped, and the reason each angle was dropped is
   recorded as rationale. Angles in `gates.<gate>.mandatoryAngles` form a floor and are
   always included after dynamic selection (filtered only by `excludeAngles`); they are
-  never dropped. When `dynamicAngles` is off (or no diff is available), the configured
-  static pool is used unchanged. Symmetrically, when `gates.<gate>.additiveAngles` is
+  never dropped. `gates.<gate>.extraAngles` is the additive-but-non-mandatory
+  counterpart (#1392): it unions into the configured `angles` — `((angles ∪
+  extraAngles) ∪ mandatoryAngles) − excludeAngles` — so a consumer can add a custom
+  review lens without copy-pasting/maintaining the whole shipped `angles` array (a
+  consumer `angles:` REPLACES the shipped list via `mergeConfigLayers`'s array-replace
+  semantics; `extraAngles` extends it instead). Unlike `mandatoryAngles`, an
+  `extraAngles` member does NOT survive `dynamicAngles` pruning — it stays eligible for
+  the same diff-driven selection as any other configured angle. A duplicate against
+  `angles` or `mandatoryAngles` is deduplicated by the set union (appears exactly once,
+  never errors, and keeps that angle's existing mandatory/prunable status); a member
+  also in `excludeAngles` is removed like any other angle. When `dynamicAngles` is off
+  (or no diff is available), the configured static pool is used unchanged. Symmetrically, when `gates.<gate>.additiveAngles` is
   enabled (default **off**), the resolver may also ADD catalog angles that
   change-category heuristics recommend but that are not already in the gate's
   configured pool, drawn from the global lens catalog (the explicit `gates.anglePool`
