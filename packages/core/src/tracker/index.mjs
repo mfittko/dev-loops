@@ -19,11 +19,14 @@ const BUILTIN_PROVIDERS = Object.freeze({
  * different scoped config, and it stays additive — this function never reads
  * outside its `config` argument.
  *
- * `config?.tracker?.provider` selects a built-in provider (default
- * `"github"`); an unknown provider fails closed rather than silently falling
- * back to GitHub. External providers are a post-1.0 consumer concern:
- * `config?.tracker?.plugin` is reserved for that (a module specifier a
- * consumer's own resolver loads and passes here as `deps.providers`) — not
+ * `config?.tracker?.provider` selects a provider FROM THE REGISTERED
+ * `providers` map (default `"github"`, the only one registered out of the
+ * box) — the registry is extensible, not built-in-only: a consumer passes
+ * `{ providers: { ...builtins, jira: createJiraAdapter } }` to register an
+ * external provider (post-1.0 consumer concern). An unknown provider (not in
+ * whatever `providers` was actually passed) fails closed rather than
+ * silently falling back to GitHub. `config?.tracker?.plugin` is reserved for
+ * a consumer's own module-loading resolver in front of this — not
  * implemented in this pass (non-goal, #1408).
  *
  * @param {import("../config/config.mjs").DevLoopConfig|null|undefined} config
@@ -36,7 +39,8 @@ export function resolveTrackerAdapter(config, { env, ghCommand, providers = BUIL
   if (typeof factory !== "function") {
     throw new Error(
       `Unknown tracker.provider "${provider}" — no adapter is registered for it. ` +
-      `Built in: ${Object.keys(providers).join(", ")}. ` +
+      `Registered: ${Object.keys(providers).join(", ")} ("github" is the built-in default; ` +
+      `any others listed here were registered by the caller). ` +
       `An external provider is a post-1.0 consumer concern: register it by passing ` +
       `{ providers: { ...builtins, "${provider}": createYourAdapter } } to resolveTrackerAdapter ` +
       `(setting tracker.provider in .devloops alone does not register one).`,

@@ -192,7 +192,7 @@ test("resolve-tracker-local-spec fails closed with a clear, actionable error whe
     // Names the offending provider and confirms only "github" is built in —
     // does not require the reader to know resolveTrackerAdapter internals.
     assert.match(payload.error, /Unknown tracker\.provider "bogus"/);
-    assert.match(payload.error, /Built in: github/);
+    assert.match(payload.error, /Registered: github/);
     assert.equal("usage" in payload, false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });

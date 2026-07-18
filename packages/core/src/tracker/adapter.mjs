@@ -37,6 +37,11 @@
  * @property {(ref: TrackerRef, edits: {title?: string, body?: string, assignees?: string[], milestone?: string}) => Promise<{edited: string[]}>} editIssue
  * @property {(ref: TrackerRef, body: string) => Promise<{commentUrl: string}>} commentIssue
  * @property {(filter: {repo: string, state?: string, labels?: string[], limit?: number}) => Promise<TrackerIssue[]>} listIssues
+ *   Every returned object is Issue-shaped (same field names as getIssue), but
+ *   a provider's underlying list call may not fetch per-item detail fields —
+ *   the built-in github provider's `gh issue list` returns only
+ *   id/title/state, so `body`/`url`/`assignees` are populated empty ("", [])
+ *   rather than omitted, not truly fetched. Call getIssue for those fields.
  * @property {(ref: TrackerRef) => Promise<{hasOpenLinkedPr: boolean, prNumber: number|null}|null>} detectLinkedPr
  * @property {(cfg: object) => Promise<object>} [ensureBoard]
  * @property {(board: object) => Promise<object[]>} [listQueueItems]

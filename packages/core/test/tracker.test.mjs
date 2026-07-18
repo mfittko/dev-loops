@@ -160,6 +160,18 @@ test("github adapter listIssues and commentIssue wrap the underlying gh calls", 
   const issues = await adapter.listIssues({ repo: "acme/widgets" });
   assert.equal(issues.length, 1);
   assert.equal(issues[0].state, "open");
+  // Interface conformance (the Tracker interface's Issue shape, not the raw
+  // {number,title,state,labels} coreListIssues shape): "id", not "number",
+  // and every field getIssue documents is present (body/url/assignees empty
+  // — gh issue list does not fetch per-item detail — rather than omitted).
+  assert.deepEqual(issues[0], {
+    id: 1,
+    title: "A",
+    body: "",
+    url: "",
+    state: "open",
+    assignees: [],
+  });
   const comment = await adapter.commentIssue({ repo: "acme/widgets", id: 1 }, "hi");
   assert.equal(comment.commentUrl, "https://github.com/acme/widgets/issues/1#issuecomment-1");
 });
@@ -263,7 +275,15 @@ test("resolveTrackerAdapter honors config.tracker.provider and fails closed on a
   assert.equal(isTrackerAdapter(adapter), true);
   assert.throws(
     () => resolveTrackerAdapter({ tracker: { provider: "jira" } }),
-    /Unknown tracker\.provider "jira".*Built in: github/s,
+    /Unknown tracker\.provider "jira".*Registered: github/s,
+  );
+});
+
+test("resolveTrackerAdapter's unknown-provider error lists whatever registry was actually passed (registered, not just built-in)", () => {
+  const providers = { github: createGithubTrackerAdapter, jira: createNoopTrackerAdapter };
+  assert.throws(
+    () => resolveTrackerAdapter({ tracker: { provider: "shortcut" } }, { providers }),
+    /Unknown tracker\.provider "shortcut".*Registered: github, jira/s,
   );
 });
 

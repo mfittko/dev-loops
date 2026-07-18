@@ -93,7 +93,22 @@ export function createGithubTrackerAdapter({ env = process.env, ghCommand = "gh"
 
   async function listIssues({ repo, state, labels, limit }) {
     const result = await coreListIssues({ repo, state, labels, limit }, deps);
-    return result.issues;
+    // Normalize to the Tracker interface's Issue shape (same field names as
+    // getIssue), not the raw {number,title,state,labels} coreListIssues
+    // shape. `gh issue list` only returns number/title/state/labels — body/
+    // url/assignees are per-item fields `gh issue view` fetches, and this
+    // repo's list path never had them; fetching them here would be an N+1 gh
+    // call per listed issue. They are populated empty ("", []) rather than
+    // omitted, so every listIssues() result is still Issue-shaped (see
+    // TrackerAdapter.listIssues JSDoc in ./adapter.mjs).
+    return result.issues.map((issue) => ({
+      id: issue.number,
+      title: issue.title,
+      body: "",
+      url: "",
+      state: issue.state,
+      assignees: [],
+    }));
   }
 
   async function detectLinkedPr({ repo, id }) {
