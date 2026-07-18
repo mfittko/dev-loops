@@ -107,6 +107,13 @@ const GateConfig = z.strictObject({
   angles: z.array(z.string().trim().min(1)).describe("Review lenses this gate fans out to.").optional(),
   excludeAngles: z.array(z.string().trim().min(1)).default([]).describe("Angles removed from the resolved angle list."),
   mandatoryAngles: z.array(z.string().trim().min(1)).default([]).describe("Angles that always run, regardless of diff-based dynamic selection."),
+  // Additive, non-mandatory counterpart to mandatoryAngles (#1392): a consumer
+  // extraAngles list unions with (never clobbers) the shipped angles, so a
+  // repo can add a custom review lens without copy-pasting/maintaining the
+  // whole upstream angles array. Unlike mandatoryAngles, an extraAngles member
+  // does NOT survive dynamicAngles pruning — it stays eligible for the same
+  // diff-driven selection as any other configured angle. See resolveGateAngles.
+  extraAngles: z.array(z.string().trim().min(1)).default([]).describe("Angles additively unioned into the resolved angle list; unlike mandatoryAngles, these remain eligible for dynamic pruning."),
   required: z.boolean().default(true).describe("Whether this gate must run."),
   requireCi: z.boolean().default(true).describe("Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure."),
   blockCleanOnFindingSeverities: z
@@ -1325,7 +1332,7 @@ export function resolveRefinement(config) {
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
- * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean }}
+ * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], extraAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean }}
  */
 export function resolveGateConfig(config, gate) {
   const gateConfig = config?.gates?.[gate];
@@ -1338,6 +1345,9 @@ export function resolveGateConfig(config, gate) {
       : [],
     mandatoryAngles: gateConfig?.mandatoryAngles && Array.isArray(gateConfig.mandatoryAngles)
       ? gateConfig.mandatoryAngles.map(a => (typeof a === "string" ? a.trim() : "")).filter(a => a.length > 0)
+      : [],
+    extraAngles: gateConfig?.extraAngles && Array.isArray(gateConfig.extraAngles)
+      ? gateConfig.extraAngles.map(a => (typeof a === "string" ? a.trim() : "")).filter(a => a.length > 0)
       : [],
     required: gateConfig?.required ?? true,
     requireCi: gateConfig?.requireCi ?? true,
@@ -1541,10 +1551,16 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
 /**
  * Resolve review angles for a specific gate from the merged dev-loop config.
  *
- * Merges mandatoryAngles with the configured candidate angles, filters
- * through excludeAngles, and deduplicates. Returns null only when both
- * angles and mandatoryAngles are absent/empty for the given gate (caller
- * falls back to skill-defined defaults).
+ * Unions mandatoryAngles and extraAngles into the configured candidate
+ * angles, filters through excludeAngles, and deduplicates:
+ * `((angles ∪ extraAngles) ∪ mandatoryAngles) − excludeAngles` (#1392).
+ * extraAngles is additive but NOT mandatory — a duplicate against angles or
+ * mandatoryAngles is a no-op (deduplicated by the Set union, appears exactly
+ * once, never errors, and does not change that angle's existing
+ * mandatory/prunable status); a member also in excludeAngles is removed
+ * (exclude applied last, same as any other angle). Returns null only when
+ * angles, mandatoryAngles, and extraAngles are all absent/empty for the given
+ * gate (caller falls back to skill-defined defaults).
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
@@ -1552,9 +1568,9 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
  */
 export function resolveGateAngles(config, gate) {
   const gateConfig = resolveGateConfig(config, gate);
-  if (gateConfig.angles === null && gateConfig.mandatoryAngles.length === 0) return null;
+  if (gateConfig.angles === null && gateConfig.mandatoryAngles.length === 0 && gateConfig.extraAngles.length === 0) return null;
   const excluded = new Set(gateConfig.excludeAngles);
-  const merged = [...new Set([...gateConfig.mandatoryAngles, ...(gateConfig.angles ?? [])])];
+  const merged = [...new Set([...gateConfig.mandatoryAngles, ...(gateConfig.angles ?? []), ...gateConfig.extraAngles])];
   return merged.filter(a => !excluded.has(a));
 }
 
