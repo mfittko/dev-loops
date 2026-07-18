@@ -232,7 +232,7 @@ stateDiagram-v2
   RederiveNextAction --> StopAskHuman
   RetryCheck --> ResumeAtProgress
   ReviewFixReReview --> ResumeAtProgress
-  StopAskHuman --> [*]
+  StopAskHuman --> ResumeAtProgress
   ResumeAtProgress --> RunInProgress
 ```
 
