@@ -155,6 +155,8 @@ test("each write-back hygiene detector independently fires on its own defect (no
   // matches) can't leave every fixture green.
   assert.match("## Refinement notes (auto)", RATIONALE_SECTION_RE);
   assert.match("Suggested: cap it here, or fail closed instead.", UNRESOLVED_OPTION_RE);
+  // dotAll: the "Suggested: … or …" split across a markdown-list newline still trips it.
+  assert.match("Suggested:\n- cap it here\n- or fail closed instead", UNRESOLVED_OPTION_RE);
   assert.match("Considered defect #1 (truncation).", BARE_HASH_RE);
   // The proxy is bare-only: a backticked reference is not flagged (this proves the
   // backtick lookbehind fires). Note the proxy would ALSO match a genuine BARE
