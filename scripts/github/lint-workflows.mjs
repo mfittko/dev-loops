@@ -12,14 +12,20 @@
 // be on a contributor's PATH. Missing binary -> warn and exit 0 (never blocks
 // local `npm run verify` on a tooling-availability gap). A real lint FINDING
 // with the binary present -> exit non-zero, same as any other failing verify
-// leg. CI always installs the pinned version below, so the enforcement itself
-// never has a way to no-op.
+// leg. The CI PR matrix's `test:workflows` leg always installs the pinned
+// version below first, so THAT leg's enforcement is real. Other `npm run
+// verify` callers that don't install actionlint (e.g. npm-publish.yml) still
+// hit the same ENOENT -> warn-and-skip path; they rely on the PR matrix leg
+// having already enforced this before merge.
 import { spawnSync } from "node:child_process";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 
-// Keep in sync with the `Install actionlint` step in .github/workflows/ci.yml.
+// Single source of truth for the pinned version + archive checksum; a test
+// asserts .github/workflows/ci.yml's "Install actionlint" step matches both,
+// so a version bump can't silently desync the two.
 export const ACTIONLINT_VERSION = "1.7.12";
+export const ACTIONLINT_LINUX_AMD64_SHA256 = "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8";
 
 export function runActionlint(args, { cwd = process.cwd(), actionlintBin = "actionlint" } = {}) {
   return spawnSync(actionlintBin, args, { cwd, encoding: "utf8" });
