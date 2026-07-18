@@ -613,7 +613,7 @@ test("detect-checkpoint-evidence fails pre-merge check when only partial draft g
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     const payload = JSON.parse(result.stderr);
@@ -654,7 +654,7 @@ test("detect-checkpoint-evidence always fails before merge when gate comments ar
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -825,7 +825,7 @@ test("detect-checkpoint-evidence reports gh failures deterministically", async (
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -885,7 +885,7 @@ test("detect-checkpoint-evidence fails pre-merge with unresolved review threads 
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -946,7 +946,7 @@ test("detect-checkpoint-evidence fails pre-merge when graphql review-thread fetc
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1693,7 +1693,7 @@ test("detect-checkpoint-evidence fails pre-merge with unresolved human review th
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
