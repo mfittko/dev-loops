@@ -23,13 +23,16 @@ name: Gate evidence
 #
 # Trigger staleness (the thread/comment axis) was a real gap: the verdict
 # depends on PR comment history + thread resolution, and pull_request events
-# don't re-fire when a thread is opened/resolved, a review is submitted, or a
-# standalone review comment opens a thread. Closed by also re-firing on
-# pull_request_review (submitted), pull_request_review_thread
-# (resolved/unresolved), and pull_request_review_comment (created) — all three
+# don't re-fire when a review is submitted or a review comment opens a new
+# thread. Closed by also re-firing on pull_request_review (submitted) and
+# pull_request_review_comment (created) — the two events through which a NEW
+# unresolved thread appears, which is the stale-green direction that matters
+# here. (GitHub Actions has no `pull_request_review_thread` workflow trigger —
+# thread resolve/unresolve is a webhook but not an `on:` event — so it is not
+# used; the two events above cover a newly-appearing unresolved thread.) Both
 # are triggered by base-repo actions and run in the base-repo context, so they
 # get this workflow's declared permissions (including `statuses: write`) even
-# when the PR head is a fork, and all carry the same `pull_request` object
+# when the PR head is a fork, and both carry the same `pull_request` object
 # (number, draft, head.sha, ...) that this workflow already reads.
 #
 # Head-SHA mismatch on those three event types: unlike `pull_request` (whose
@@ -50,8 +53,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
     types: [submitted]
-  pull_request_review_thread:
-    types: [resolved, unresolved]
   pull_request_review_comment:
     types: [created]
 

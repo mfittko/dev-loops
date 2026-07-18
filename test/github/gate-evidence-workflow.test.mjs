@@ -1,19 +1,31 @@
 import { parse as parseYaml } from "yaml";
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
 
-// Pins #1385: gate-evidence must re-fire on review-thread state changes (not
-// just push/ready), so a required green check can't go stale on the thread
-// axis. Head-staleness (synchronize) and the draft no-op guard must survive
-// unchanged.
-test("gate-evidence workflow re-fires on review submission, thread resolve/unresolve, and standalone review comments", async () => {
+// Pins #1385: gate-evidence must re-fire when a NEW unresolved thread can appear
+// (review submitted, or a review comment opens a thread) — so a required green
+// check can't go stale on the thread axis. Head-staleness (synchronize) and the
+// draft no-op guard must survive unchanged. NOTE: GitHub Actions has NO
+// `pull_request_review_thread` workflow trigger (thread resolve/unresolve is a
+// webhook but not an `on:` event); using it makes the whole workflow file
+// server-side-invalid, so it must never be added.
+const VALID_PR_WORKFLOW_EVENTS = new Set([
+  "pull_request", "pull_request_target", "pull_request_review", "pull_request_review_comment",
+]);
+test("gate-evidence workflow re-fires on review submission and standalone review comments, with only valid Actions triggers", async () => {
   const content = await readRepo(".github/workflows/gate-evidence.yml");
   const workflow = parseYaml(content);
   const triggers = workflow.on;
 
   assert.deepEqual(triggers.pull_request.types, ["opened", "synchronize", "reopened", "ready_for_review"]);
   assert.deepEqual(triggers.pull_request_review.types, ["submitted"]);
-  assert.deepEqual(triggers.pull_request_review_thread.types, ["resolved", "unresolved"]);
   assert.deepEqual(triggers.pull_request_review_comment.types, ["created"]);
+
+  // Guard against a recurrence of the invalid `pull_request_review_thread` trigger
+  // (and any other non-existent event) that GitHub's parser rejects wholesale.
+  assert.ok(!("pull_request_review_thread" in triggers), "pull_request_review_thread is not a valid Actions trigger");
+  for (const event of Object.keys(triggers)) {
+    assert.ok(VALID_PR_WORKFLOW_EVENTS.has(event), `unknown/invalid workflow trigger: ${event}`);
+  }
 
   const job = workflow.jobs["gate-evidence-runner"];
   // Draft PRs must still no-op regardless of which event triggered the run —
