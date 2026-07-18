@@ -1,3 +1,22 @@
+// Determinism (issue #1405). The root cause of the intermittent failures
+// here was shared on-disk state, not a fixture-vs-clock comparison: some
+// `runNode` calls omitted `cwd`, so the spawned CLI inherited the real
+// process cwd and resolved its runner-coordination file via
+// `git rev-parse --git-common-dir` — a path SHARED across every worktree
+// over this one `.git`. A stale leftover coordination file from another
+// run/worktree then flipped stale-runner age assertions. The fix: every
+// `runNode` that can reach coordination passes `cwd: tempDir` (a per-test
+// mkdtemp dir where `--git-common-dir` fails, so the coordination root
+// anchors to the isolated temp dir). Any new spawn that touches
+// coordination MUST set `cwd: tempDir`.
+//
+// Related convention: never read the real wall clock here either — no bare,
+// argument-less Date constructor, and no read of the current epoch millis off the Date global. Production seams
+// that need "now" (`detectStaleRunner` in scripts/loop/_stale-runner-detection.mjs;
+// `claimRunnerOwnership`/`assertRunnerOwnership` in
+// scripts/loop/_pr-runner-coordination.mjs) already accept an injected
+// `now`; pass a fixed value through it. Enforced mechanically by
+// test/github/deterministic-fixture-time.test.mjs.
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -603,7 +622,7 @@ test("detect-checkpoint-evidence fails pre-merge check when only partial draft g
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     const payload = JSON.parse(result.stderr);
@@ -644,7 +663,7 @@ test("detect-checkpoint-evidence always fails before merge when gate comments ar
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -815,7 +834,7 @@ test("detect-checkpoint-evidence reports gh failures deterministically", async (
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -875,7 +894,7 @@ test("detect-checkpoint-evidence fails pre-merge with unresolved review threads 
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -936,7 +955,7 @@ test("detect-checkpoint-evidence fails pre-merge when graphql review-thread fetc
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1683,7 +1702,7 @@ test("detect-checkpoint-evidence fails pre-merge with unresolved human review th
       },
     ]);
 
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
