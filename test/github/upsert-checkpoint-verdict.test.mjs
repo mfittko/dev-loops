@@ -406,6 +406,23 @@ test("summarizeCheckpointVerdictText keeps failing validation to a concise excer
 });
 
 
+test("a long failure/CI excerpt bounds with a plain ellipsis — never the forbidden truncated-marker — in a posted comment", () => {
+  // The digest excerpt is lossy-by-design condensation of captured log output;
+  // it bounds (not fails closed) so a long error message never blocks posting a
+  // findings verdict — but it must NEVER emit the `…[truncated N chars]` marker,
+  // which the posted-comment contract forbids from any posted comment.
+  const longFailure = `AssertionError: ${"x".repeat(300)}`;
+  const summary = summarizeCheckpointVerdictText([
+    "> npm test",
+    "ℹ fail 1",
+    `✖ ${longFailure}`,
+  ].join("\n"));
+  assert.doesNotMatch(summary, /\[truncated/, "posted excerpt must not carry the forbidden truncated-marker");
+  assert.match(summary, /…/, "over-length excerpt is bounded with a plain ellipsis");
+  // The excerpt is bounded (not the full 300 chars) yet the whole summary posts.
+  assert.ok(summary.length < longFailure.length, "the long line is condensed, not posted verbatim");
+});
+
 test("summarizeCheckpointVerdictText fails closed instead of truncating a long single-line narrative", () => {
   // Pre-fix, this rendered `summarized` ending in a `…[truncated N chars]`
   // marker — audit-trail corruption in a posted gate comment. Content over the

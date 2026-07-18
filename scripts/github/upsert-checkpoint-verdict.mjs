@@ -6,7 +6,6 @@ import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { truncateText } from "@dev-loops/core/bash-exit-one";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -169,6 +168,15 @@ function enforcePostedCommentLimit(value, limit, fieldLabel) {
   }
   return text;
 }
+// Bound a digest excerpt (a single captured CI/failure log line) to a length
+// with a plain ellipsis — NEVER the `…[truncated N chars]` marker, which the
+// posted-comment contract forbids from appearing in any posted comment. The
+// excerpt is lossy-by-design condensation of captured output (not authored
+// prose), so it bounds rather than fails closed.
+function boundExcerpt(text, limit) {
+  const value = String(text);
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+}
 function pushUnique(values, value) {
   if (value.length > 0 && !values.includes(value)) {
     values.push(value);
@@ -207,14 +215,14 @@ function buildVerboseValidationSummary(lines) {
       && /\b(?:github\s+ci|ci|checks?|workflow)\b/i.test(line)
       && /\b(?:pass(?:ed)?|green|success(?:ful)?|fail(?:ed)?|red|pending|blocked)\b/i.test(line)
     ) {
-      ciLine = truncateText(line, MAX_GATE_COMMENT_EXCERPT_LENGTH);
+      ciLine = boundExcerpt(line, MAX_GATE_COMMENT_EXCERPT_LENGTH);
       continue;
     }
     if (
       failureExcerpt === null
       && (/^✖\s*/u.test(line) || /^FAIL\b/u.test(line) || /\b(?:AssertionError|TypeError|ReferenceError|SyntaxError)\b/u.test(line) || /\bError:/u.test(line))
     ) {
-      failureExcerpt = truncateText(line.replace(/^✖\s*/u, ""), MAX_GATE_COMMENT_EXCERPT_LENGTH);
+      failureExcerpt = boundExcerpt(line.replace(/^✖\s*/u, ""), MAX_GATE_COMMENT_EXCERPT_LENGTH);
       continue;
     }
     if (/\bpass(?:ed)?\b/i.test(line)) {
@@ -1221,20 +1229,24 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // read --findings-file at all (avoids a spurious hard failure if a caller passes
   // both and the file is missing/invalid even though it would be ignored anyway).
   if (!structuredFindings && options.findingsFile) {
+    // Only genuine read failures are wrapped as "Cannot read ..."; the empty and
+    // over-limit checks are argument-validation failures (parseError, carrying
+    // usage) and must propagate as such — not be masked as a file-read error.
+    let fileContent;
     try {
-      const fileContent = await readFile(options.findingsFile, "utf8");
-      const trimmedEnd = fileContent.replace(/\n+$/, "");
-      if (trimmedEnd.length === 0) {
-        throw new Error(`--findings-file "${options.findingsFile}" is empty or contains only whitespace`);
-      }
-      // The gate evidence note is NOT spliced into the file content here — it
-      // renders as its own `**Gate evidence note:**` line (see
-      // renderGateReviewCommentBody), driven by coordination.gateEvidenceNote
-      // passed straight through below.
-      options.findingsSummary = enforcePostedCommentLimit(trimmedEnd, MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-file content");
+      fileContent = await readFile(options.findingsFile, "utf8");
     } catch (err) {
       throw new Error(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);
     }
+    const trimmedEnd = fileContent.replace(/\n+$/, "");
+    if (trimmedEnd.length === 0) {
+      throw parseError(`--findings-file "${options.findingsFile}" is empty or contains only whitespace`);
+    }
+    // The gate evidence note is NOT spliced into the file content here — it
+    // renders as its own `**Gate evidence note:**` line (see
+    // renderGateReviewCommentBody), driven by coordination.gateEvidenceNote
+    // passed straight through below.
+    options.findingsSummary = enforcePostedCommentLimit(trimmedEnd, MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-file content");
   }
   // The findings-summary the comment is compared/round-tripped against. With a
   // structured render this is the single-line digest (what the marker parser
@@ -1396,7 +1408,11 @@ async function main() {
     }
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
-    process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+    // formatCliError surfaces `error.usage` when present, so an over-limit
+    // posted-comment field thrown from execution context (findings-file, gate
+    // evidence note, structured render) carries the same usage payload as an
+    // arg-parse failure — the fail-closed error is actionable everywhere.
+    process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   }
 }
