@@ -38,6 +38,33 @@ unified gate schema as `draft`/`preApproval` (some knobs, e.g.
 `schemas/dev-loop-config.schema.json` and
 `packages/core/src/config/extension-defaults.yaml` for the full shape.
 
+### Added (tracker-agnostic seam, #1408)
+
+`@dev-loops/core/tracker` ships the generic `Tracker` provider
+interface/registry (mirrors the existing harness-adapter idiom): Issues
+(required — `parseRef`/`getIssue`/`createIssue`/`editIssue`/`commentIssue`/
+`listIssues`/`detectLinkedPr`) and Board (optional capability). GitHub ships
+as the v1 built-in default provider (`createGithubTrackerAdapter`); no
+external tracker (Jira/Shortcut/…) is implemented — the seam makes one a
+post-1.0 consumer plugin (`tracker.provider` + `resolveTrackerAdapter({ providers })`).
+
+New `.devloops` block:
+
+```yaml
+tracker:
+  provider: github   # registry key; default. See skills/docs/tracker-seam-contract.md
+  board:              # supersedes the deprecated queue.board
+    title: "My Queue"
+```
+
+`strategy: "tracker-first"` renames the former `"github-first"`
+(provider-neutral); `"github-first"` and `queue.board` are both still
+accepted as deprecated aliases (normalized with a load-time warning —
+`tracker.board`/`queue.board` and `queue.projectNumber`/`queue.boardTitle`
+are two separate migrations, see the #1404 table above for the latter).
+Behavior with the shipped `github` default is unchanged. See
+[Tracker Seam Contract](skills/docs/tracker-seam-contract.md).
+
 ## 1.0.0-rc.2 - 2026-07-17
 
 Second release candidate: closes out the pre-1.0 backlog surfaced during the rc.1 window.

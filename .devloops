@@ -95,9 +95,11 @@ localImplementation:
     maxFiles: 2
     maxLines: 20 # micro-PR ceiling (#1043)
 
-queue:
+tracker:
   board:
     title: "dev-loops Queue"
+
+queue:
   maxParallel: 3
   maxAutoFiledIssues: 10
   reDispatchMaxRetries: 1
