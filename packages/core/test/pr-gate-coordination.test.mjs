@@ -428,7 +428,13 @@ test("round-cap exhaustion opens the pre-approval gate window even without a cur
   assert.match(result.reason, /pre_approval_gate/i);
 });
 
-test("significant post-convergence changes at the round cap reopen a new Copilot cycle", () => {
+// #1387: at ROUND_CAP_CLEAN_FALLBACK, a post-convergence significant change must
+// NOT force rerequest_copilot_review — the round cap makes that rerequest
+// impossible (request-copilot-review.mjs suppresses it), so the only allowed
+// action would be a dead end. The pre_approval_gate fan-out reviews the
+// current post-cap head, which IS the review of the significant change —
+// matching detect-copilot-loop-state's own ROUND_CAP_CLEAN_FALLBACK nextAction.
+test("post-convergence significant change at the round cap allows pre_approval_gate instead of an impossible rerequest (#1387)", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,
     currentHeadSha: "fedcba987654",
@@ -446,11 +452,41 @@ test("significant post-convergence changes at the round cap reopen a new Copilot
     preApprovalGateMarker: gate({ visible: false }),
   });
 
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  // The impossible rerequest must never be offered — the round cap forbids it.
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+});
+
+// #1387: below the cap, a not-yet-settled review cycle (e.g. a significant
+// post-convergence change landed on a newer head) still reopens a new Copilot
+// cycle (no regression) — a rerequest is always POSSIBLE below the cap, so
+// only AT the cap (where it is impossible) does the routing change.
+test("post-convergence significant change below the round cap still reopens a new Copilot cycle (#1387 no regression)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    sameHeadCleanConverged: false,
+    ciStatus: "success",
+    copilotReviewRoundCount: 3,
+    maxCopilotRounds: 5,
+    postConvergenceSignificantChange: true,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
   assert.equal(result.gateBoundary, PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW);
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
   assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
-  assert.match(result.reason, /significant post-convergence changes/i);
 });
 
 // #896: a post-cap commit leaves the head unreviewed by Copilot. The interpreter
@@ -696,16 +732,14 @@ test("interpretLoopState (handoff) and evaluatePrGateCoordination (coordination-
   assert(!gateResult.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
 });
 
-// Full parity (#1103, #1126): at the cap WITH a significant post-convergence
-// change, both detectors reopen the Copilot cycle. The significance boolean is
-// computed by the SHARED detectPostConvergenceSignificantChange (scripts/loop/
-// _post-convergence-change.mjs). This test covers the DETECT side (core level)
-// and the handoff BASELINE it flips from. The handoff FLIP itself (clean-fallback
-// → re-request/watch on a significant change, and staying stopped on a doc-only
-// change) is covered by the copilot-pr-handoff integration tests
-// "re-requests Copilot review at the cap when a significant post-convergence
-// change lands" / "stays at round_cap_clean_fallback ... doc-only".
-test("interpretLoopState (handoff baseline) and evaluatePrGateCoordination (detect) reopen the cycle at the cap WITH a significant post-convergence change (#1103, #1126)", () => {
+// #1387 (supersedes the prior #1103/#1126 expectation): at the cap WITH a
+// significant post-convergence change, the round cap makes a fresh Copilot
+// cycle impossible (request-copilot-review.mjs suppresses the re-request), so
+// detect-copilot-loop-state's own ROUND_CAP_CLEAN_FALLBACK nextAction says
+// "continue to pre_approval_gate instead of re-requesting Copilot review" —
+// evaluatePrGateCoordination must agree, not offer the one impossible action
+// while forbidding the one loop-state says to take.
+test("interpretLoopState (handoff baseline) and evaluatePrGateCoordination (detect) agree at the cap WITH a significant post-convergence change — pre_approval_gate, not an impossible rerequest (#1387)", () => {
   const refinementConfig = { maxCopilotRounds: 2 };
   const snapshot = {
     prExists: true,
@@ -722,6 +756,7 @@ test("interpretLoopState (handoff baseline) and evaluatePrGateCoordination (dete
   // Same clean-fallback baseline both scripts derive from the snapshot.
   const handoffInterpretation = interpretLoopState(snapshot, refinementConfig);
   assert.equal(handoffInterpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.match(handoffInterpretation.nextAction, /continue to pre_approval_gate instead of re-requesting/i);
 
   // detect's path with the shared significant-change signal = true.
   const gateResult = evaluatePrGateCoordination({
@@ -741,23 +776,29 @@ test("interpretLoopState (handoff baseline) and evaluatePrGateCoordination (dete
     preApprovalGateMarker: gate({ visible: false }),
   });
 
-  assert.equal(gateResult.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
-  assert(gateResult.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
-  assert(gateResult.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  // The two detectors must agree: neither dead-ends on the impossible rerequest.
+  assert.equal(gateResult.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(gateResult.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!gateResult.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!gateResult.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
 });
 
 // Parity (#1165 — in-flight-rerequest race): the SAME snapshot at the cap, clean,
 // but with a Copilot review REQUESTED and pending on the CURRENT head (a
 // --force-rerequest in flight) plus a significant post-convergence change. Both
-// authorities must gate pre_approval_gate until the fresh review lands.
+// authorities must gate pre_approval_gate until the fresh review lands. This is
+// the independent unsettled-review-entry guard (#1190) — orthogonal to #1387's
+// round-cap routing fix: an outstanding request on the CURRENT head still
+// refuses pre_approval_gate even though the round-cap-clean-fallback branch
+// itself now allows it for a significant change with no outstanding request.
 //
 // Note the interpreter (handoff's base) deliberately routes a pending at-cap
 // request to ROUND_CAP_CLEAN_FALLBACK — it cannot see significance (that needs gh
 // compare I/O). copilot-pr-handoff.mjs therefore flips this to
 // waiting_for_copilot_review when a review is pending on the current head (proven
 // by the "in-flight force-rerequest" integration tests). detect's evaluator, fed
-// the shared significant-change signal, forbids run_pre_approval_gate here. Both
-// gate pre-approval — no divergence.
+// the outstanding copilotReviewRequestStatus, waits for the pending review here.
+// Both gate pre-approval — no divergence.
 test("interpretLoopState (handoff) and evaluatePrGateCoordination (detect) both gate pre_approval with a pending review + significant change at the cap (#1165)", () => {
   const refinementConfig = { maxCopilotRounds: 2 };
   const snapshot = {
@@ -779,7 +820,9 @@ test("interpretLoopState (handoff) and evaluatePrGateCoordination (detect) both 
   const handoffInterpretation = interpretLoopState(snapshot, refinementConfig);
   assert.equal(handoffInterpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
 
-  // detect's path with the shared significant-change signal = true.
+  // detect's path with the shared significant-change signal = true AND the
+  // outstanding review-request status wired through (the independent #1190
+  // gate-entry re-check reads this directly, not derived from lifecycleState).
   const gateResult = evaluatePrGateCoordination({
     pr: 503,
     currentHeadSha: "cafef00dbeef",
@@ -790,6 +833,7 @@ test("interpretLoopState (handoff) and evaluatePrGateCoordination (detect) both 
     ciStatus: snapshot.ciStatus,
     copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
     maxCopilotRounds: refinementConfig.maxCopilotRounds,
+    copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus,
     postConvergenceSignificantChange: true,
     draftGate: gate({ visible: true, headSha: "cafef00", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "cafef00", verdict: "clean", contractComplete: true }),
@@ -797,9 +841,9 @@ test("interpretLoopState (handoff) and evaluatePrGateCoordination (detect) both 
     preApprovalGateMarker: gate({ visible: false }),
   });
 
-  // Both gate pre-approval: detect forbids run_pre_approval_gate outright; handoff
-  // waits for the pending review (never advancing to pre_approval).
-  assert.equal(gateResult.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  // Both gate pre-approval: detect waits for the outstanding review instead of
+  // entering pre_approval_gate; handoff waits for the same pending review.
+  assert.equal(gateResult.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW);
   assert(gateResult.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 

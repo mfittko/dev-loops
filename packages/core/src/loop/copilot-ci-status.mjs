@@ -5,6 +5,42 @@ const STATUS_CONTEXT_FAILURE_STATES = new Set(["FAILURE", "ERROR"]);
 const STATUS_CONTEXT_PENDING_STATES = new Set(["PENDING", "EXPECTED"]);
 const STATUS_CONTEXT_SUCCESS_STATES = new Set(["SUCCESS"]);
 
+/**
+ * Name of the server-side "Gate evidence" check dev-loops posts on its own
+ * pull requests (`.github/workflows/gate-evidence.yml`). Its conclusion is
+ * DERIVED from the loop's own progress (a clean current-head
+ * pre_approval_gate verdict), not an independent build/test signal — so the
+ * loop must exclude it, by this exact name only, when deriving the CI status
+ * that gates its own pre_approval step. Otherwise the loop could never post
+ * the very verdict that would turn this check green (#1358).
+ */
+export const LOOP_DERIVED_CI_CHECK_NAME = "gate-evidence";
+
+function checkEntryName(entry) {
+  if (typeof entry?.name === "string" && entry.name.length > 0) return entry.name;
+  if (typeof entry?.context === "string" && entry.context.length > 0) return entry.context;
+  return "";
+}
+
+/**
+ * Split rollup/check-run entries into those matching `targetName` and the rest.
+ * Shared by both statusCheckRollup-shaped and check-runs-shaped payloads —
+ * both use `.name` (check-runs also use `.context` for legacy StatusContext).
+ *
+ * @param {Array<object>} entries
+ * @param {string} targetName
+ * @returns {{ matched: Array<object>, rest: Array<object> }}
+ */
+export function partitionEntriesByCheckName(entries, targetName) {
+  const list = Array.isArray(entries) ? entries : [];
+  const matched = [];
+  const rest = [];
+  for (const entry of list) {
+    (checkEntryName(entry) === targetName ? matched : rest).push(entry);
+  }
+  return { matched, rest };
+}
+
 function normalizeHeadScopedCiStatus(status) {
   return VALID_HEAD_SCOPED_CI_STATUSES.has(status) ? status : "none";
 }
@@ -252,4 +288,27 @@ export function normalizeHeadScopedCiContract({
   }
 
   return buildCiContract(overallStatus);
+}
+
+/**
+ * Derive a loop-safe CI status from a PR `statusCheckRollup` snapshot: the
+ * `LOOP_DERIVED_CI_CHECK_NAME` entry (`gate-evidence`) is excluded from the
+ * status computation before it can block, and surfaced separately so a
+ * genuinely failing check right beside it can never be masked. Every reason
+ * gate-evidence can be red (missing draft_gate/pre_approval evidence,
+ * unresolved threads, a stale runner) is independently tracked elsewhere in
+ * the loop snapshot, so excluding it here loses no real signal: `status`
+ * stays a plain "success" (not an "unconfirmed" crediblyGreen) when it is the
+ * only excluded failure and everything else is green.
+ *
+ * @param {Array<object>} rollup
+ * @returns {{ status: "success"|"failure"|"pending"|"none", excludedFailureDetails: Array<string> }}
+ */
+export function deriveLoopCiStatusFromRollup(rollup) {
+  const { matched, rest } = partitionEntriesByCheckName(rollup, LOOP_DERIVED_CI_CHECK_NAME);
+  const status = normalizeStatusCheckRollupStatus(rest);
+  const excludedFailureDetails = matched.length > 0 && normalizeStatusCheckRollupStatus(matched) === "failure"
+    ? [LOOP_DERIVED_CI_CHECK_NAME]
+    : [];
+  return { status, excludedFailureDetails };
 }

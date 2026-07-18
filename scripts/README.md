@@ -729,6 +729,20 @@ Required:
 - `--repo <owner/name>`
 - `--pr <number>`
 
+Optional:
+- `--skip-fanout-ledger-check` — skips only the fan-out findings-log
+  ledger/provenance/angle-coverage layer of `gates.requireFanoutEvidence`
+  enforcement (that ledger is a gitignored, worktree-local `tmp/` file, invisible
+  to a stateless remote verifier); the comment-derived executionMode/inlineReason
+  check (including the light-mode inline exception) still applies. Used by the
+  `gate-evidence` CI check (`.github/workflows/gate-evidence.yml`); client-side
+  callers should omit it.
+
+When the `gh` binary is not on PATH, gh calls fall back to GitHub's REST/GraphQL
+API directly, given a `GH_TOKEN`/`GITHUB_TOKEN` in the environment — so a gh-less
+session can still read gate evidence instead of having no option but to bypass
+the check.
+
 Success output shape:
 - `{ "ok": true, "repo": "owner/repo", "pr": 17, "currentHeadSha": "abc1234", "draftGate": { ... }, "preApprovalGate": { ... }, "draftGateMarker": { ... }, "preApprovalGateMarker": { ... } }`
 - each gate summary includes `visible`, `headSha`, `verdict`, `findingsSummary`, `nextAction`, `commentId`, `commentUrl`, and `updatedAt`
