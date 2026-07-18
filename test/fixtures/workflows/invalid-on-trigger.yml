@@ -1,0 +1,17 @@
+# Deliberately-broken workflow fixture for the lint-workflows.mjs negative test
+# (issue #1409, root cause #1385): `pull_request_review_thread` is a webhook
+# event, not a valid GitHub Actions `on:` trigger, so this whole file is
+# server-side-invalid — exactly the failure mode actionlint must catch before
+# review. Lives OUTSIDE .github/workflows/ on purpose: GitHub Actions would try
+# (and fail) to run it if it were a real workflow file in that directory.
+name: Deliberately invalid fixture — do not move into .github/workflows
+
+on:
+  pull_request_review_thread:
+    types: [resolved]
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "should never run"
