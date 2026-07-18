@@ -36,8 +36,16 @@ Implementation: `packages/core/src/tracker/`
   REQUIRED_METHODS and freezes the result; `isTrackerAdapter()`;
   `hasBoardCapability()`.
 - `github-adapter.mjs` — `createGithubTrackerAdapter()`, the v1 built-in
-  reference implementation (a facade over the existing `gh` issue calls and
-  Projects board tooling already in the repo).
+  reference implementation (a facade over the existing `gh` issue calls,
+  now `packages/core/src/github/issue-ops.mjs`). It is a full Issues
+  provider but only PARTIAL Board: `listQueueItems`/`setItemStatus` are
+  wired (the two board primitives already extracted to
+  `packages/core/src/projects/*.mjs`); `ensureBoard`/`addQueueItem`/
+  `reorderItem`/`archiveItems` still live only as `scripts/projects/*.mjs`
+  CLI tools and are NOT (yet) wired into the adapter — `packages/core` must
+  not import from repo-root `scripts/`. `hasBoardCapability()` is therefore
+  `false` for the built-in github adapter; those four writers stay on their
+  existing direct `gh`/CLI path, unaffected by this seam.
 - `noop-adapter.mjs` — `createNoopTrackerAdapter()`, for tests.
 - `index.mjs` — `resolveTrackerAdapter(config, deps?)`, the provider registry.
 
@@ -51,7 +59,8 @@ tracker:
   provider: github              # registry key; default. External: provider + plugin (see below)
   board:                        # supersedes the deprecated queue.board
     title: "My Queue"
-  fieldMappings:                 # logical column -> provider-native status value
+queue:
+  statusColumns:                 # the github provider's logical-column -> Status mapping
     next_up: "Next Up"           # the fail-closed PICKUP column resolve-active-board-item.mjs reads
     in_progress: "In Progress"
     ready_for_review: "In Progress"
@@ -63,14 +72,24 @@ strategy: tracker-first          # renamed from "github-first" (still accepted, 
 - `tracker.board` supersedes `queue.board` (deprecated, still accepted with a
   load-time warning — see `resolveTrackerBoard` in
   `packages/core/src/config/config.mjs`).
-- `tracker.fieldMappings` keys are the real logical columns from
-  `LOGICAL_COLUMN` in `packages/core/src/loop/queue-board-sync.mjs`:
-  `next_up`, `in_progress`, `ready_for_review`, `done`. Unset keys fall back
-  to the provider's own default column names
-  (`DEFAULT_STATE_COLUMN_NAMES` for the shipped github provider).
-- `strategy: "tracker-first"` renames the former `"github-first"`;
-  `"github-first"` is still accepted (normalized with a load-time warning) —
-  see `ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED` in
+- **No `tracker.fieldMappings` key.** The github provider's logical-column ->
+  Status mapping is the existing, already-load-bearing `queue.statusColumns`
+  (read by `loadStateColumnMap` in
+  `packages/core/src/loop/queue-board-sync.mjs`, keyed by the real
+  `LOGICAL_COLUMN` values: `next_up`, `in_progress`, `ready_for_review`,
+  `done`; unset keys fall back to `DEFAULT_STATE_COLUMN_NAMES`). Adding a
+  second, tracker-owned mapping key would collide with that live one, not
+  replace it — so the tracker seam documents `queue.statusColumns` as
+  *the* github provider's mapping rather than inventing a parallel one. A
+  future external provider defines its own logical -> status mapping (its
+  shape is provider-specific) when one is actually implemented.
+- `strategy: "tracker-first"` renames the former `"github-first"`.
+  `"github-first"` is still accepted: `loadDevLoopConfig` normalizes it to
+  `"tracker-first"` (with a load-time warning) BEFORE that layer's own
+  schema validation runs — the schema enum itself only lists
+  `"tracker-first"` (see the generated `schemas/dev-loop-config.schema.json`,
+  which lists only the canonical value, by design). See
+  `ARTIFACT-STRATEGY-ENUM-FAIL-CLOSED` in
   [Artifact Authority Contract](artifact-authority-contract.md).
 
 ## Adding a tracker plugin (post-1.0)
@@ -114,8 +133,10 @@ shape; it does not need to change.
   capability is possible later; `provider` may expand to
   `issues.provider`/`board.provider` sugar without a breaking rename. Not
   implemented in v1 — exactly one provider resolves one adapter per repo.
-- **Field-mapping DSLs or provider auto-discovery** — add only when a real
-  second provider needs them.
+- **A generic/tracker-owned field-mapping key, or provider auto-discovery** —
+  the github provider's mapping is `queue.statusColumns` (see Config above);
+  a real second provider defines its own shape when it exists, rather than
+  generalizing one now for a provider that doesn't.
 - **The PR/VCS-host seam** (see Scope above) — orthogonal, tracked
   separately if ever wanted.
 
