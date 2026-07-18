@@ -133,20 +133,6 @@ export function isMergeCapableCommand(command) {
     .some((segment) => segmentIsGhPrMerge(segment) || isGitMergeCompletionCommand(segment));
 }
 
-/**
- * Whether `command` contains a `git stash` invocation (any subcommand: bare, `push`, `pop`,
- * `apply`, `save`, `list`, ...) in ANY shell segment. `refs/stash` is a single ref shared by every
- * worktree over this repo's one `.git` directory, so a stash from one worktree can pop into
- * another's — the PreToolUse gate blocks it outright on the target repo (see
- * `docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout`).
- * @param {string} command @returns {boolean}
- */
-export function commandContainsGitStash(command) {
-  return command
-    .split(SHELL_SEGMENT_SEPARATOR)
-    .some((segment) => /^git\s+stash(?:\s|$)/i.test(segment.trim()));
-}
-
 /** @param {string} command @returns {string} */
 export function firstShellSegment(command) {
   return command.trim().split(SHELL_SEGMENT_SEPARATOR)[0]?.trim() ?? "";
@@ -158,15 +144,16 @@ function shellSegments(command) {
 }
 
 /**
- * Leading prefix a `gh pr <verb>` segment may carry before the `gh` executable:
- * a run of `NAME=value` env assignments, optional `command`/`env`/`exec` wrapper
- * words, and an absolute/relative path on the gh binary (`/usr/bin/gh`).
+ * Leading prefix a command segment may carry before its real executable: a run of `NAME=value`
+ * env assignments, optional `command`/`env`/`exec` wrapper words, and an absolute/relative path on
+ * the binary (`/usr/bin/gh`, `/usr/bin/git`). Shared by every classifier in this file that must
+ * catch its verb behind these forms (`gh pr <verb>`, `git stash`, ...).
  *
  * Note: this is a pragmatic normalizer, not a full shell tokenizer. Subshell
  * `(gh pr create)`, `{ …; }` group, `-R=value` short-flag, and backslash-escaped
  * `\gh` forms are deliberately out of scope.
  */
-const GH_PR_VERB_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env|exec)\\s+)*(?:\\S*/)?";
+const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env|exec)\\s+)*(?:\\S*/)?";
 
 /**
  * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").
@@ -178,7 +165,36 @@ const GH_PR_VERB_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env
  * match — their first token is `node`, not `gh`.
  */
 function ghSubcmdVerbRegex(subcmd, verb) {
-  return new RegExp(`^${GH_PR_VERB_PREFIX}gh\\s+${subcmd}\\s+${verb}(?:\\s|$)`, "i");
+  return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+${subcmd}\\s+${verb}(?:\\s|$)`, "i");
+}
+
+/**
+ * A run of git global options that may appear between `git` and the subcommand: `-C <path>`,
+ * `-c <name>=<value>` (each consumes the following token as its value), `--git-dir=<path>`,
+ * `--work-tree=<path>`, or any other bare flag (`-x`, `--long-option`) that takes no value.
+ * Pragmatic normalizer, not a full git CLI parser.
+ */
+const GIT_GLOBAL_OPTION_RUN =
+  "(?:(?:-C|-c)\\s+\\S+\\s+|--(?:git-dir|work-tree)=\\S+\\s+|--?[A-Za-z][\\w-]*\\s+)*";
+
+/**
+ * Whether `command` contains a `git stash` invocation (any subcommand: bare, `push`, `pop`,
+ * `apply`, `save`, `list`, ...) in ANY shell segment — including behind the same env-assignment /
+ * `command`/`env`/`exec` wrapper / binary-path prefix (`GIT_DIR=.git git stash`, `command git
+ * stash`, `/usr/bin/git stash`) and git global options between `git` and `stash` (`git -C /tmp
+ * stash`, `git -c name=value stash pop`) that the sibling `gh` classifiers in this file already
+ * tolerate. Anchored per-segment, so `git stashed`, `git commit -m "git stash"`, or a path literal
+ * containing "git stash" never match. `refs/stash` is a single ref shared by every worktree over
+ * this repo's one `.git` directory, so a stash from one worktree can pop into another's — the
+ * PreToolUse gate blocks it outright on the target repo (see
+ * `docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout`).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGitStash(command) {
+  const re = new RegExp(`^${SHELL_EXEC_PREFIX}git\\s+${GIT_GLOBAL_OPTION_RUN}stash(?:\\s|$)`, "i");
+  return command
+    .split(SHELL_SEGMENT_SEPARATOR)
+    .some((segment) => re.test(segment.trim()));
 }
 
 /** Build the `gh pr <verb>` prefix matcher — delegates to the generic subcmd matcher (DRY). */

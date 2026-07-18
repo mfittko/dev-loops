@@ -278,3 +278,26 @@ test("commandContainsGitStash detects bare stash and subcommands anywhere in the
   assert.equal(commandContainsGitStash("git status"), false);
   assert.equal(commandContainsGitStash("git stash-list-alias"), false);
 });
+
+test("commandContainsGitStash catches the same env-assignment/wrapper/path prefixes as the gh classifiers", () => {
+  assert.equal(commandContainsGitStash("GIT_DIR=.git git stash"), true);
+  assert.equal(commandContainsGitStash("command git stash"), true);
+  assert.equal(commandContainsGitStash("env git stash"), true);
+  assert.equal(commandContainsGitStash("exec git stash"), true);
+  assert.equal(commandContainsGitStash("/usr/bin/git stash"), true);
+});
+
+test("commandContainsGitStash catches git global options between `git` and `stash`", () => {
+  assert.equal(commandContainsGitStash("git -C /tmp stash"), true);
+  assert.equal(commandContainsGitStash("git -c foo=bar stash pop"), true);
+  assert.equal(commandContainsGitStash("git --git-dir=/foo/.git stash"), true);
+  assert.equal(commandContainsGitStash("git --work-tree=/foo stash"), true);
+  // combined prefix + global option
+  assert.equal(commandContainsGitStash("/usr/bin/git -C /tmp stash"), true);
+});
+
+test("commandContainsGitStash does not false-positive on stashed/quoted/embedded occurrences", () => {
+  assert.equal(commandContainsGitStash("git stashed"), false);
+  assert.equal(commandContainsGitStash('git commit -m "git stash"'), false);
+  assert.equal(commandContainsGitStash('echo "/tmp/git stash notes.txt"'), false);
+});
