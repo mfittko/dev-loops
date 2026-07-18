@@ -217,6 +217,82 @@ Run the workflow on a state graph. The set of possible moves is closed and lista
 
 A state graph guarantees the behavior a prompt can only request. When the next step has to be knowable at any moment, the coordination layer itself should rest on something checkable.
 
+## The loop heals itself
+
+dev-loops treats a failure as a state to recover from. A failed CI check or a fail-closed tool response — a gate or wrapper that stops and surfaces the error — is detected and recorded on the pull request. The loop re-derives the next action from authoritative state and takes exactly one of three recovery moves: retry the check, run the review-fix-re-review loop until the change converges (bounded by a round cap, `refinement.maxCopilotRounds`), or stop and ask a human. Run progress is preserved as the recovery point, so the work resumes where it left off. Failing closed keeps the failure visible and red, so the loop recovers from the true state.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> RunInProgress
+  RunInProgress --> DetectedRecorded: check fails / fails closed
+  DetectedRecorded --> RederiveNextAction
+  RederiveNextAction --> RetryCheck
+  RederiveNextAction --> ReviewFixReReview
+  RederiveNextAction --> StopAskHuman
+  RetryCheck --> ResumeAtProgress
+  ReviewFixReReview --> ResumeAtProgress
+  StopAskHuman --> ResumeAtProgress
+  ResumeAtProgress --> RunInProgress
+```
+
+*Diagram 5 — Self-healing recovery. A failed check or fail-closed stop is detected and recorded, then the loop re-derives the next action and takes one of three recovery moves before resuming at the preserved progress.*
+
+<!-- figure
+      <div class="flow" role="img" aria-label="Self-healing recovery: a run in progress hits a failed check or fail-closed stop, which is detected and recorded, then the loop re-derives the next action and takes one of three recovery moves — retry the check, review-fix-re-review until it converges, or stop and ask a human — before resuming at the preserved progress and returning to the run.">
+        <div class="node start">Run&nbsp;in&nbsp;progress</div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">check fails / fails closed</span></div>
+        <div class="node">Detected&nbsp;&amp;&nbsp;recorded</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Re-derive&nbsp;the&nbsp;next&nbsp;action</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="flow-col">
+          <div class="node">Retry&nbsp;the&nbsp;check</div>
+          <div class="node">Review&nbsp;&rarr;&nbsp;fix&nbsp;&rarr;&nbsp;re-review&nbsp;(round-capped)</div>
+          <div class="node">Stop&nbsp;&amp;&nbsp;ask&nbsp;a&nbsp;human</div>
+        </div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Resume&nbsp;at&nbsp;preserved&nbsp;progress</div>
+      </div>
+-->
+
+## The loop improves itself
+
+The same machinery that ships a change also sharpens the next one. Grilling refines a raw issue into a locked spec before any code is written. The fan-out review angles (Diagram 3), extendable per repository, and the review-fix rounds tighten the change while it is in flight. After merge, a retrospective records advisory findings on the change; where they warrant it, the conductor can open follow-ups as new tracked issues, carrying improvement from one change into the next.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> GrillRefine
+  GrillRefine --> Implement
+  Implement --> FanOutReview
+  FanOutReview --> ReviewFixConverge
+  ReviewFixConverge --> Merge
+  Merge --> Retrospective
+  Retrospective --> FollowUps: conductor can open, as warranted
+  FollowUps --> GrillRefine
+```
+
+*Diagram 6 — Self-improving feedback loop. Grilling locks a spec before code, the fan-out and review-fix rounds tighten the change in flight, and a post-merge retrospective records advisory findings the conductor can open as follow-ups that feed the next cycle.*
+
+<!-- figure
+      <div class="flow" role="img" aria-label="Self-improving loop: grilling refines an issue into a locked spec, which is implemented, reviewed by fan-out angles, converged through review-fix rounds, and merged; a post-merge retrospective records advisory findings that the conductor can open as follow-up issues, feeding back into grilling the next issue.">
+        <div class="node start">Grill&nbsp;&amp;&nbsp;refine&nbsp;into&nbsp;a&nbsp;locked&nbsp;spec</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Implement</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Fan-out&nbsp;review&nbsp;angles</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Review/fix&nbsp;rounds&nbsp;converge</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node">Merge</div>
+        <div class="edge"><span class="arrow">&rarr;</span></div>
+        <div class="node accent">Retrospective&nbsp;(advisory)</div>
+        <div class="edge"><span class="arrow">&rarr;</span><span class="edge-label">conductor can open, then back to grilling</span></div>
+        <div class="node">Follow-ups&nbsp;(new&nbsp;tracked&nbsp;issues)</div>
+      </div>
+-->
+
 # Part 2 — Make the waiting visible
 
 Closing the handoffs is half the work. The other half is the gap itself. A change that used to take an afternoon now lands in seconds. The diff shows up before you've finished reading the request. Generation, the part we spent decades trying to speed up, is now fast enough to be routine.
@@ -237,7 +313,7 @@ flowchart LR
   D --> E[Act]
   E --> F[Recover]
 ```
-*Diagram 5 — The interrupt-cost chain. A five-minute question triggers five transitions, and the answer itself is only one of them.*
+*Diagram 7 — The interrupt-cost chain. A five-minute question triggers five transitions, and the answer itself is only one of them.*
 
 <!-- figure
       <div class="flow" role="img" aria-label="Interrupt cost: one interruption forces five transitions — Notice, Switch, Rebuild state, Act, then Recover — before the original work resumes.">
@@ -270,7 +346,7 @@ flowchart LR
   C --> W[Work resumes]
   W -. next ambiguity .-> Q
 ```
-*Diagram 6 — One handoff round trip. Every question the state can't answer becomes an ask → answer → confirm cycle, and the work waits until it closes — then the next ambiguity restarts it.*
+*Diagram 8 — One handoff round trip. Every question the state can't answer becomes an ask → answer → confirm cycle, and the work waits until it closes — then the next ambiguity restarts it.*
 
 <!-- figure
       <div class="flow" role="img" aria-label="Handoff round trip: Receiver asks, Sender answers, Receiver confirms, work resumes — then the cycle repeats on the next ambiguity.">
@@ -322,7 +398,7 @@ flowchart LR
   C --> D[Verify outcomes]
   D --> A
 ```
-*Diagram 7 — The measurement loop. Capture, measure, change, verify — then back to capture. It repeats as a cycle, because the slowest transition moves as you fix things.*
+*Diagram 9 — The measurement loop. Capture, measure, change, verify — then back to capture. It repeats as a cycle, because the slowest transition moves as you fix things.*
 
 <!-- figure
       <div class="flow" role="img" aria-label="Measurement loop: Capture state, Measure waits, Change the process, Verify outcomes — then loop back to capture.">
@@ -361,7 +437,7 @@ flowchart TD
   O --> C[CI wait + post-merge reclaim run only where state says safe]
 ```
 
-*Diagram 8 — Grounding "observable state" in real mechanisms. The board carries owner and next step, the gate trail carries the latest decision, the resolver answers whose move it is, and safe automation runs on that confirmed state.*
+*Diagram 10 — Grounding "observable state" in real mechanisms. The board carries owner and next step, the gate trail carries the latest decision, the resolver answers whose move it is, and safe automation runs on that confirmed state.*
 
 <!-- figure
       <svg class="tree-svg" viewBox="0 0 640 360" role="img" aria-label="Observable state feeds the board, gate trail, and resolver, which let the next actor start and let safe automation run.">
