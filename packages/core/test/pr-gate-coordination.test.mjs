@@ -603,6 +603,31 @@ test("round_cap_clean_fallback still blocks on failing CI — genuinely-blocked 
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
+// #1371 re-verify: crediblyGreen is never accepted unconditionally — the
+// round-cap clean fallback rejects it identically to a real CI failure
+// (fail-closed), same as every other post-draft boundary.
+test("round_cap_clean_fallback blocks on crediblyGreen CI — unconfirmed CI is never accepted (#1371)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 892,
+    currentHeadSha: "ef84bca2deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: false,
+    ciStatus: "crediblyGreen",
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.lifecycleState, STATE.BLOCKED_NEEDS_USER_DECISION);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /unconfirmed/i);
+});
+
 // #896: the formal-request guard must not fire for a round-cap clean fallback —
 // a post-cap clean head Copilot will not re-review. sameHeadCleanConverged is false
 // here (Copilot did not review THIS head), so the pre-#896 escape would not apply;
