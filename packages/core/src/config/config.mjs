@@ -693,7 +693,7 @@ export const FileConfigSchema = z.strictObject({
   workflow: WorkflowConfig.partial().describe("Workflow posture: draft-first, retrospectives, dev mode, async start.").optional(),
   localImplementation: LocalImplementationConfig.partial().describe("Local implementation dispatch (light mode for small scoped changes).").optional(),
   queue: QueueConfig.partial().describe("Queue mode: parallelism, auto-filing caps, and Projects board opt-in.").optional(),
-  tracker: TrackerConfig.partial().describe("Tracker seam config: provider (default \"github\"), board, and logical-column field mappings.").optional(),
+  tracker: TrackerConfig.partial().describe("Tracker seam config: provider (default \"github\") and board. The github provider's logical-column->Status mapping is the existing queue.statusColumns; a future external provider defines its own.").optional(),
   internalPathPatterns: InternalPatternsConfig.describe("Regex whitelist for internal-only PR detection.").optional(),
   worktree: WorktreeConfig.partial().describe("Worktree provisioning: gitignored files/dirs copied or symlinked into fresh worktrees.").optional(),
   uiReview: UiReviewConfig.partial().describe("UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps.").optional(),

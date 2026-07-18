@@ -711,7 +711,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Tracker seam config: provider (default \"github\"), board, and logical-column field mappings."
+      "description": "Tracker seam config: provider (default \"github\") and board. The github provider's logical-column->Status mapping is the existing queue.statusColumns; a future external provider defines its own."
     },
     "internalPathPatterns": {
       "minItems": 1,
