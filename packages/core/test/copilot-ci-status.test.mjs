@@ -9,6 +9,9 @@ import {
   normalizeHeadScopedCheckRunsStatus,
   normalizeHeadScopedCommitStatus,
   normalizeHeadScopedCiContract,
+  deriveLoopCiStatusFromRollup,
+  partitionEntriesByCheckName,
+  LOOP_DERIVED_CI_CHECK_NAME,
 } from "../src/loop/copilot-ci-status.mjs";
 
 test("normalizeStatusCheckRollupStatus returns failure over pending for mixed rollup entries", () => {
@@ -198,4 +201,70 @@ test("summarizeHeadScopedCheckRunsSignal returns failureDetails undefined when n
 
   assert.equal(summary.status, "success");
   assert.equal(summary.failureDetails, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// deriveLoopCiStatusFromRollup / gate-evidence exclusion (#1358)
+// ---------------------------------------------------------------------------
+
+test("LOOP_DERIVED_CI_CHECK_NAME is the gate-evidence check", () => {
+  assert.equal(LOOP_DERIVED_CI_CHECK_NAME, "gate-evidence");
+});
+
+test("partitionEntriesByCheckName splits rollup entries by name/context", () => {
+  const { matched, rest } = partitionEntriesByCheckName(
+    [
+      { name: "gate-evidence", status: "COMPLETED", conclusion: "FAILURE" },
+      { name: "test-scripts", status: "COMPLETED", conclusion: "SUCCESS" },
+      { context: "gate-evidence" },
+    ],
+    "gate-evidence",
+  );
+
+  assert.equal(matched.length, 2);
+  assert.equal(rest.length, 1);
+  assert.equal(rest[0].name, "test-scripts");
+});
+
+// #1387: gate-evidence red-alone must derive plain "success", not an
+// "unconfirmed" crediblyGreen — every reason it can be red is independently
+// tracked elsewhere in the loop snapshot, so excluding it loses no signal.
+test("deriveLoopCiStatusFromRollup: gate-evidence as the ONLY failing check yields success and excludes it", () => {
+  const result = deriveLoopCiStatusFromRollup([
+    { name: "gate-evidence", status: "COMPLETED", conclusion: "FAILURE" },
+    { name: "test-scripts", status: "COMPLETED", conclusion: "SUCCESS" },
+    { name: "test-core", status: "COMPLETED", conclusion: "SUCCESS" },
+  ]);
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(result.excludedFailureDetails, ["gate-evidence"]);
+});
+
+test("deriveLoopCiStatusFromRollup: a real failing check alongside gate-evidence still fails (not masked)", () => {
+  const result = deriveLoopCiStatusFromRollup([
+    { name: "gate-evidence", status: "COMPLETED", conclusion: "FAILURE" },
+    { name: "test-scripts", status: "COMPLETED", conclusion: "FAILURE" },
+  ]);
+
+  assert.equal(result.status, "failure");
+  assert.deepEqual(result.excludedFailureDetails, ["gate-evidence"]);
+});
+
+test("deriveLoopCiStatusFromRollup: all-green rollup with no gate-evidence entry is unchanged", () => {
+  const result = deriveLoopCiStatusFromRollup([
+    { name: "test-scripts", status: "COMPLETED", conclusion: "SUCCESS" },
+  ]);
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(result.excludedFailureDetails, []);
+});
+
+test("deriveLoopCiStatusFromRollup: a passing gate-evidence entry does not get reported as excluded", () => {
+  const result = deriveLoopCiStatusFromRollup([
+    { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS" },
+    { name: "test-scripts", status: "COMPLETED", conclusion: "SUCCESS" },
+  ]);
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(result.excludedFailureDetails, []);
 });

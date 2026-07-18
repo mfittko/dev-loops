@@ -1,0 +1,73 @@
+name: Gate evidence
+
+# Server-side enforcement of the draft_gate / pre_approval_gate contract
+# (skills/docs/merge-preconditions.md, MERGE-PRECOND-REQUIRED items 3-4). Runs on
+# GitHub's own token so that — once an operator makes this a required check in
+# branch protection on the default branch — an API-driven ready/merge transition
+# (gh CLI, MCP/REST, web UI) cannot bypass the gates the client-side tooling
+# already enforces. Until then it runs and reports but does not block merge.
+#
+# Skipped entirely while the PR is a draft (draft_gate is not required yet, and a
+# draft PR cannot be merged regardless); GitHub Actions treats a skipped job on a
+# required check as passing, so this never blocks draft work.
+#
+# Two inherent limitations of a pull_request-triggered, head-run check (both
+# accepted by design, neither a bypass):
+#   - Head-provenance: the workflow and the scripts it runs come from the PR's
+#     own head, so a PR could edit this file or the detector to forge a green
+#     check on itself. This is the "self-reported / not un-forgeable" caveat in
+#     docs/gate-review-sub-loop-contract.md; the un-forgeable provenance bridge
+#     (harness attestation) is #1358's explicit non-goal. Merge is maintainer-
+#     gated, so forging requires the merger to self-modify.
+#   - Trigger staleness: the verdict depends on PR comment history + thread
+#     resolution, which pull_request events don't re-fire on. For HEAD staleness
+#     this fails closed (a new commit re-triggers synchronize; missing/stale
+#     current-head evidence -> red). But the comment/thread dimension is NOT
+#     re-evaluated between triggering events: a NEW unresolved thread appearing
+#     after the last push/ready event leaves the SHA-pinned green check stale
+#     until the next push -> a residual false-green window on the thread axis.
+#     Bounded by the draft-first flow (re-evaluates on ready_for_review after the
+#     verdict is posted) and the maintainer-gated merge, but real; closing it
+#     (re-verify at merge / broaden triggers) is tracked separately. Not a reason
+#     to treat this check as the sole merge guard.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  gate-evidence:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      # --skip-fanout-ledger-check: the fan-out findings-log ledger is a
+      # gitignored, worktree-local tmp/ file that only the machine that ran the
+      # review has on disk, so this stateless runner can never see it. This check
+      # still enforces the part that IS remotely verifiable: a clean draft_gate
+      # verdict, and a clean pre_approval_gate verdict on the current head,
+      # including the documented light-mode inline exception.
+      - name: Verify draft_gate / pre_approval_gate evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/github/detect-checkpoint-evidence.mjs \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --skip-fanout-ledger-check
