@@ -52,7 +52,7 @@ test("JS safe-integer sentinels are stripped from the generated schema", () => {
 });
 
 // Minimal JSON Schema (draft 2020-12) matcher covering exactly the construct
-// subset generateConfigJsonSchema emits (type/const/oneOf/properties+
+// subset generateConfigJsonSchema emits (type/const/enum/oneOf/properties+
 // required/items/additionalProperties/minLength) — not a general-purpose
 // validator. No JSON-Schema validation library (e.g. ajv) is installed in
 // this repo; this is the few-lines-not-a-dependency version scoped to what
@@ -64,6 +64,7 @@ function matchesSchema(schema, value) {
   if (schema.oneOf) return schema.oneOf.some((s) => matchesSchema(s, value));
   if (schema.anyOf) return schema.anyOf.some((s) => matchesSchema(s, value));
   if ("const" in schema) return value === schema.const;
+  if (Array.isArray(schema.enum)) return schema.enum.includes(value);
   switch (schema.type) {
     case "string":
       return typeof value === "string" && (schema.minLength === undefined || value.length >= schema.minLength);
@@ -106,6 +107,10 @@ test("generated schema accepts a bare-string angle (gates.<gate>.angles[]) — r
     matchesSchema(schema, { version: 1, gates: { draft: { angles: [{ name: "scope", mandatory: true }] } } }),
     "generated schema must still accept the full angle-object form"
   );
+  // enum enforcement: the matcher must reject an out-of-enum value (guards the
+  // helper from silently ignoring `enum`, which would let it false-pass).
+  assert.ok(matchesSchema(schema, { version: 1, strategy: "github-first" }), "valid enum value must match");
+  assert.ok(!matchesSchema(schema, { version: 1, strategy: "bogus" }), "out-of-enum strategy must NOT match");
 });
 
 test("shipped config layers parse under the validator the schema is extracted from", async () => {
