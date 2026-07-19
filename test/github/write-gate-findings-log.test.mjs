@@ -488,6 +488,107 @@ test("parseProvenanceJson rejects INTERNALLY-INCONSISTENT provenance (closes the
   assert.equal(ok.distinctReviewers, 2);
 });
 
+// --- One-scoped-reviewer-per-fresh-angle floor (always-on write-time, #1431) ---
+
+test("parseProvenanceJson rejects one reviewer covering two fresh angles (under-provisioned ledger)", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-a" }],
+    })),
+    /--provenance\.perAngle fan-out provenance violates the one-scoped-reviewer-per-angle contract/,
+  );
+});
+
+test("parseProvenanceJson accepts one distinct reviewer per fresh angle", () => {
+  const prov = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 2,
+    perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-b" }],
+  }));
+  assert.equal(prov.distinctReviewers, 2);
+});
+
+test("parseProvenanceJson exempts a carried angle from the pairing floor (same reviewer as a fresh angle is not a collision)", () => {
+  const prov = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 1,
+    perAngle: [
+      { angle: "scope", reviewer: "review-a" },
+      { angle: "safety", reviewer: "review-a", carriedFromHead: "abc1234" },
+    ],
+  }));
+  assert.equal(prov.perAngle.length, 2);
+});
+
+test("writeGateFindingsLog rejects a 2-fresh-angle/1-reviewer ledger (write-time floor, always-on)", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: "[]",
+      provenance: JSON.stringify({
+        distinctReviewers: 1,
+        perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "coverage", reviewer: "review-a" }],
+      }),
+    });
+  }, /one-scoped-reviewer-per-angle contract/);
+});
+
+test("writeGateFindingsLog accepts a one-reviewer-per-fresh-angle ledger", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-pairing-"));
+    try {
+      const result = await writeGateFindingsLog({
+        repo: "a/b",
+        pr: 1,
+        gate: "pre_approval_gate",
+        headSha: "abc1234500000000000000000000000000000000",
+        verdict: "clean",
+        findings: "[]",
+        provenance: JSON.stringify({
+          distinctReviewers: 2,
+          perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix", reviewer: "review-b" }],
+        }),
+        tmpRoot: tmpDir,
+      }, { repoRoot });
+      assert.equal(result.ok, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("writeGateFindingsLog accepts a carried-angle ledger that reuses the prior head's reviewer for a fresh angle", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-carried-"));
+    try {
+      const result = await writeGateFindingsLog({
+        repo: "a/b",
+        pr: 1,
+        gate: "pre_approval_gate",
+        // Full 40-hex primary head SHA (current contract); carriedFromHead may
+        // stay a short 7-64 hex prefix.
+        headSha: "abc1234500000000000000000000000000000000",
+        verdict: "clean",
+        findings: "[]",
+        provenance: JSON.stringify({
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "pr-checklist-matrix", reviewer: "review-a" },
+            { angle: "dry", reviewer: "review-a", carriedFromHead: "abc1234" },
+          ],
+        }),
+        tmpRoot: tmpDir,
+      }, { repoRoot });
+      assert.equal(result.ok, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("writeGateFindingsLog records provenance in the ledger when passed", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-test-"));
   try {
@@ -601,7 +702,7 @@ test("writeGateFindingsLog surfaces the foreign-angle warning on the result when
     try {
       const result = await writeGateFindingsLog({
         repo: "a/b", pr: 1, gate: "pre_approval_gate", headSha: "abc1234500000000000000000000000000000000", verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "dry", reviewer: "r1" }, { angle: "pr-checklist-matrix" }, { angle: "made-up-angle" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "r1" }, { angle: "pr-checklist-matrix", reviewer: "r2" }, { angle: "made-up-angle", reviewer: "r3" }] }),
         tmpRoot,
       }, { repoRoot });
       assert.equal(result.ok, true);

@@ -516,13 +516,41 @@ recorded in `perAngle` (distinct by `reviewer`, else `dispatchId`; a bare `{angl
 not a countable reviewer). You cannot claim more reviewers than you recorded dispatch
 entries for — this closes the `{distinctReviewers: 2, perAngle: []}` loophole.
 
-Enforcement is opt-in via **`gates.requireFanoutProvenance`** (default **false**). When
-enabled, it layers ON TOP of `requireFanoutEvidence` (it only takes effect while fan-out
-evidence enforcement is active): each required `fanout_fanin` gate's ledger must record
-internally-consistent provenance with `provenance.distinctReviewers >= 2` (a floor of
-**2** is the smallest count that is not a single agent). When the flag is off, behavior is
-byte-identical to today (no new failures) — the Claude-Code path, which already honors
-child fan-out, is a validated no-op.
+**One scoped reviewer per fresh angle (always-on write-time floor).** `fanout_fanin`
+execution mandates one independent reviewer per resolved angle — recording an
+internally-consistent `distinctReviewers` count is not enough on its own, because one
+reviewer could still cover two angles without that count ever going inconsistent. The
+write path additionally rejects, unconditionally (not gated by `requireFanoutProvenance`),
+any `perAngle` where two **fresh** angles (angles WITHOUT `carriedFromHead`) share one
+reviewer identity, **and** any fresh angle recording no reviewer identity at all (a bare
+`{angle}` entry is permitted only as a carried entry; a fresh entry must carry `reviewer`
+or `dispatchId`) — the error names the colliding or anonymous angle(s). The check enforces
+the per-identity relation itself, so a padded ledger (duplicate-angle entries inflating
+the distinct-reviewer count) cannot slip one reviewer covering two fresh angles. A `carriedFromHead`
+angle is exempt from this pairing check entirely (see
+[Angle carry-forward](#angle-carry-forward-fail-closed)) — recording the prior head's
+reviewer identity on the carried entry is preferred (honest attribution) but optional,
+and reusing that identity on a carried angle is never a collision. The sanctioned
+non-fan-out path for a single-reviewer run is `executionMode: inline_single_agent` with
+a recorded `--inline-reason`, not a `fanout_fanin` ledger that pairs one reviewer across
+angles. The shared helper is `fanoutReviewerPairingError` (paired with
+`countFreshAngles`) in `@dev-loops/core/loop/gate-fanin`.
+
+Enforcement of the `distinctReviewers` floor itself is opt-in via
+**`gates.requireFanoutProvenance`** (default **false**). When enabled, it layers ON TOP of
+`requireFanoutEvidence` (it only takes effect while fan-out evidence enforcement is
+active): each required `fanout_fanin` gate's ledger must record internally-consistent
+provenance with `provenance.distinctReviewers >= max(2, <fresh-angle count>)` — a floor of
+**2** is the smallest count that is not a single agent, and the floor SCALES UP with the
+number of fresh (non-carried) angles recorded in `perAngle`, since a compliant ledger
+can never have fewer distinct fresh reviewers than fresh angles. The read path also
+re-validates the per-identity pairing itself (the same `fanoutReviewerPairingError`
+check as the write path, at both the pre-merge enforcement and the cross-checkout
+ledger selector): the ledger is a worktree-local file, so the reader never assumes the
+write-time floor produced it — a hand-crafted padded ledger that meets the cardinality
+floor still fails. When the flag is off,
+behavior is byte-identical to today (no new failures) — the Claude-Code path, which
+already honors child fan-out, is a validated no-op.
 
 **Honest caveat (this is NOT un-forgeable):** recorded provenance is self-reported — it is
 written by the same agent whose independence it claims — so a determined single agent can

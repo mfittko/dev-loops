@@ -1224,6 +1224,121 @@ test("buildPreMergeGateCheck with requireProvenance ON fails closed when distinc
   );
 });
 
+// --- Reader floor scales with the fresh-angle count (#1431) ---
+
+test("buildPreMergeGateCheck with requireProvenance ON fails closed when distinctReviewers < scaled fresh-angle floor", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        // 3 fresh angles but only 2 distinct reviewer identities — the floor
+        // scales to max(FANOUT_PROVENANCE_MIN_REVIEWERS, 3) = 3.
+        provenance: {
+          distinctReviewers: 2,
+          perAngle: [
+            { angle: "scope", reviewer: "review-a" },
+            { angle: "safety", reviewer: "review-b" },
+            { angle: "coverage", reviewer: "review-a" },
+          ],
+        },
+      },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("requireFanoutProvenance") && f.includes("need provenance.distinctReviewers >= 3") && f.includes("got 2")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck with requireProvenance ON rejects a PADDED ledger even when the cardinality floor is met", () => {
+  // 3 distinct identities >= 3 distinct fresh angles satisfies the cardinality
+  // floor, but reviewer "review-a" still covers two fresh angles — the read
+  // path must re-validate the per-identity pairing because the ledger is a
+  // worktree-local file the write-time floor may never have seen.
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: {
+          distinctReviewers: 3,
+          perAngle: [
+            { angle: "scope", reviewer: "review-a" },
+            { angle: "safety", reviewer: "review-a" },
+            { angle: "scope", reviewer: "review-b" },
+            { angle: "coverage", reviewer: "review-c" },
+          ],
+        },
+      },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("one-scoped-reviewer-per-angle") && f.includes('reviewer "review-a"')),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck with requireProvenance ON passes a compliant ledger at the scaled fresh-angle floor", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: {
+          distinctReviewers: 3,
+          perAngle: [
+            { angle: "scope", reviewer: "review-a" },
+            { angle: "safety", reviewer: "review-b" },
+            { angle: "coverage", reviewer: "review-c" },
+          ],
+        },
+      },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck with requireProvenance ON: a carried angle does not inflate the fresh-angle floor", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        // Only 1 fresh angle (scope); safety is carried forward and exempt —
+        // the floor stays at the FANOUT_PROVENANCE_MIN_REVIEWERS default (2),
+        // not 2 fresh angles.
+        provenance: {
+          distinctReviewers: 2,
+          perAngle: [
+            { angle: "scope", reviewer: "review-a" },
+            { angle: "safety", reviewer: "review-b", carriedFromHead: "abc1234" },
+          ],
+        },
+      },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
 test("buildPreMergeGateCheck with requireProvenance OFF (default) adds NO new failure even when provenance is absent (Claude-Code non-regression)", () => {
   // requireProvenance falsy => today's behavior exactly: fanout_fanin + ledger present passes.
   const off = buildPreMergeGateCheck(cleanEvidence(), 0, null, {

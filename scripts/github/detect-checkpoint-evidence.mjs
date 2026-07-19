@@ -16,7 +16,7 @@ import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
-import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, countFreshAngles, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
@@ -357,10 +357,28 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
           failures.push(
             `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (${consistencyErr}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
           );
-        } else if (reviewers === null || reviewers < FANOUT_PROVENANCE_MIN_REVIEWERS) {
-          failures.push(
-            `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${FANOUT_PROVENANCE_MIN_REVIEWERS}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
-          );
+        } else {
+          // The floor scales with the fresh (non-carried) angle count: one
+          // reviewer per fresh angle at minimum FANOUT_PROVENANCE_MIN_REVIEWERS
+          // (#1431) — a ledger recording more fresh angles than distinct
+          // reviewers could only have paired one reviewer across angles.
+          const freshAngleCount = countFreshAngles(prov.perAngle);
+          const requiredReviewers = Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, freshAngleCount);
+          // Re-validate the per-identity pairing here too: the ledger is a
+          // worktree-local file, so the read path must not trust that the
+          // write-time floor produced it (a hand-crafted padded ledger can
+          // satisfy the cardinality floor while one reviewer covers two
+          // fresh angles).
+          const pairingErr = fanoutReviewerPairingError(prov.perAngle);
+          if (reviewers === null || reviewers < requiredReviewers) {
+            failures.push(
+              `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${requiredReviewers}${requiredReviewers > FANOUT_PROVENANCE_MIN_REVIEWERS ? ` [max(${FANOUT_PROVENANCE_MIN_REVIEWERS}, ${freshAngleCount} fresh angle(s))]` : ""}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
+            );
+          } else if (pairingErr !== null) {
+            failures.push(
+              `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (${pairingErr}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
+            );
+          }
         }
       }
       // Angle-coverage enforcement: independent of requireFanoutProvenance.
@@ -511,7 +529,8 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
   const { requireProvenance = false, mandatoryAngles = [], anglePool = null, rejectForeignAngles = true } = criteria;
   const satisfies = (prov) => {
     if (provenanceConsistencyError(prov) !== null) return false;
-    if (requireProvenance && prov.distinctReviewers < FANOUT_PROVENANCE_MIN_REVIEWERS) return false;
+    if (requireProvenance && prov.distinctReviewers < Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshAngles(prov.perAngle))) return false;
+    if (requireProvenance && fanoutReviewerPairingError(prov.perAngle) !== null) return false;
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
     if (missingMandatory.length > 0) return false;
     if (foreignAngles.length > 0 && rejectForeignAngles) return false;

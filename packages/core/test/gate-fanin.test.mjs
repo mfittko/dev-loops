@@ -11,6 +11,8 @@ import {
   countDistinctReviewers,
   provenanceConsistencyError,
   checkFanoutAngleCoverage,
+  countFreshAngles,
+  fanoutReviewerPairingError,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -234,6 +236,98 @@ describe("provenance consistency (closes the self-produced loophole)", () => {
     assert.match(provenanceConsistencyError({ distinctReviewers: 1.5, perAngle: [] }), /non-negative integer/);
     assert.match(provenanceConsistencyError({ distinctReviewers: 2, perAngle: [] }), /perAngle must be non-empty/);
     assert.match(provenanceConsistencyError({ distinctReviewers: 2, perAngle: [{ angle: "a", reviewer: "x" }] }), /exceeds distinct recorded reviewer identities/);
+  });
+});
+
+describe("countFreshAngles (#1431 — one-reviewer-per-angle enforcement)", () => {
+  test("counts distinct angles without carriedFromHead", () => {
+    assert.equal(countFreshAngles([]), 0);
+    assert.equal(countFreshAngles([{ angle: "a" }, { angle: "b" }]), 2);
+    assert.equal(countFreshAngles([{ angle: "a" }, { angle: "a" }]), 1); // dedup by angle
+    assert.equal(countFreshAngles("nope"), 0);
+  });
+
+  test("excludes carried angles (carriedFromHead marks a reused, not fresh, verdict)", () => {
+    assert.equal(countFreshAngles([{ angle: "a" }, { angle: "b", carriedFromHead: "abc1234" }]), 1);
+    assert.equal(countFreshAngles([{ angle: "a", carriedFromHead: "abc1234" }]), 0);
+  });
+});
+
+describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh angle)", () => {
+  test("accepts one distinct reviewer identity per fresh angle", () => {
+    assert.equal(fanoutReviewerPairingError([]), null);
+    assert.equal(fanoutReviewerPairingError([{ angle: "a", reviewer: "x" }]), null);
+    assert.equal(
+      fanoutReviewerPairingError([{ angle: "a", reviewer: "x" }, { angle: "b", reviewer: "y" }]),
+      null,
+    );
+    assert.equal(fanoutReviewerPairingError(null), null);
+    assert.equal(fanoutReviewerPairingError("nope"), null);
+  });
+
+  test("identity via dispatchId also satisfies the pairing floor", () => {
+    assert.equal(
+      fanoutReviewerPairingError([{ angle: "a", dispatchId: "d1" }, { angle: "b", dispatchId: "d2" }]),
+      null,
+    );
+  });
+
+  test("a dispatchId collision is labeled dispatchId in the error, not reviewer", () => {
+    const error = fanoutReviewerPairingError([
+      { angle: "a", dispatchId: "d1" },
+      { angle: "b", dispatchId: "d1" },
+    ]);
+    assert.match(error, /dispatchId "d1" is recorded for fresh angles: a, b/);
+    assert.doesNotMatch(error, /reviewer "d1"/);
+  });
+
+  test("detects one reviewer collapsing two fresh angles (collision)", () => {
+    const error = fanoutReviewerPairingError([
+      { angle: "a", reviewer: "x" },
+      { angle: "b", reviewer: "x" },
+    ]);
+    assert.match(error, /one-scoped-reviewer-per-angle contract/);
+    assert.match(error, /reviewer "x" is recorded for fresh angles: a, b/);
+    assert.match(error, /inline_single_agent/);
+  });
+
+  test("a padded ledger (duplicate-angle entries) cannot mask a reviewer covering two fresh angles", () => {
+    // 2 distinct identities >= 2 distinct angles would satisfy a cardinality
+    // check, but reviewer "x" still covers both fresh angles.
+    const error = fanoutReviewerPairingError([
+      { angle: "a", reviewer: "x" },
+      { angle: "b", reviewer: "x" },
+      { angle: "a", reviewer: "y" },
+    ]);
+    assert.match(error, /reviewer "x" is recorded for fresh angles: a, b/);
+  });
+
+  test("detects a fresh angle recording no reviewer identity at all", () => {
+    const error = fanoutReviewerPairingError([
+      { angle: "a", reviewer: "x" },
+      { angle: "b" },
+    ]);
+    assert.match(error, /fresh angle\(s\) with no recorded reviewer identity: b/);
+  });
+
+  test("a carried angle is EXEMPT — sharing its prior reviewer with a fresh angle is not a collision", () => {
+    assert.equal(
+      fanoutReviewerPairingError([
+        { angle: "a", reviewer: "x" },
+        { angle: "b", reviewer: "x", carriedFromHead: "abc1234" },
+      ]),
+      null,
+    );
+  });
+
+  test("two carried angles sharing the same prior reviewer are both exempt", () => {
+    assert.equal(
+      fanoutReviewerPairingError([
+        { angle: "a", reviewer: "x", carriedFromHead: "abc1234" },
+        { angle: "b", reviewer: "x", carriedFromHead: "abc1234" },
+      ]),
+      null,
+    );
   });
 });
 

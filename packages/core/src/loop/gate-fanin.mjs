@@ -63,14 +63,30 @@ export function countDistinctReviewers(perAngle) {
   const ids = new Set();
   for (const e of perAngle) {
     if (!e || typeof e !== "object" || Array.isArray(e)) continue;
-    const id = typeof e.reviewer === "string" && e.reviewer.trim().length > 0
-      ? e.reviewer.trim()
-      : typeof e.dispatchId === "string" && e.dispatchId.trim().length > 0
-        ? e.dispatchId.trim()
-        : null;
-    if (id) ids.add(id);
+    const identity = reviewerIdentity(e);
+    if (identity) ids.add(identity.id);
   }
   return ids.size;
+}
+
+/**
+ * The single identity-selection rule for a perAngle entry: a non-empty
+ * `reviewer` wins, else a non-empty `dispatchId`, else no identity. Returns
+ * `{ id, label }` (label = which field carried the identity, for error
+ * messages) or null. Shared by countDistinctReviewers and
+ * fanoutReviewerPairingError so the two can never diverge.
+ *
+ * @param {object} entry — a perAngle entry
+ * @returns {{ id: string, label: "reviewer"|"dispatchId" }|null}
+ */
+function reviewerIdentity(entry) {
+  if (typeof entry.reviewer === "string" && entry.reviewer.trim().length > 0) {
+    return { id: entry.reviewer.trim(), label: "reviewer" };
+  }
+  if (typeof entry.dispatchId === "string" && entry.dispatchId.trim().length > 0) {
+    return { id: entry.dispatchId.trim(), label: "dispatchId" };
+  }
+  return null;
 }
 
 /**
@@ -114,6 +130,82 @@ export function provenanceConsistencyError(prov) {
     return `provenance.distinctReviewers (${claimed}) exceeds distinct recorded reviewer identities (${recorded})`;
   }
   return null;
+}
+
+/**
+ * Count DISTINCT "fresh" angles in a `perAngle` array — angles reviewed AT
+ * THIS head, i.e. entries WITHOUT `carriedFromHead`. A carried angle's clean
+ * verdict was reused from a prior head's review (see
+ * @dev-loops/core/loop/gate-carry-forward), not freshly reviewed here, so it
+ * is exempt from the one-reviewer-per-fresh-angle pairing contract below. Pure.
+ *
+ * @param {unknown} perAngle
+ * @returns {number}
+ */
+export function countFreshAngles(perAngle) {
+  if (!Array.isArray(perAngle)) return 0;
+  const angles = new Set();
+  for (const e of perAngle) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    if (typeof e.carriedFromHead === "string" && e.carriedFromHead.trim().length > 0) continue;
+    if (typeof e.angle === "string" && e.angle.trim().length > 0) angles.add(e.angle.trim());
+  }
+  return angles.size;
+}
+
+/**
+ * Validate the one-scoped-reviewer-per-fresh-angle contract (fanout_fanin
+ * execution mandates one independent reviewer per resolved angle; #1431): no
+ * two FRESH angles (angles without `carriedFromHead` — see
+ * {@link countFreshAngles}) may share one reviewer identity (`reviewer`,
+ * else `dispatchId` — matching {@link countDistinctReviewers}'s identity
+ * rule). Carried angles keep their prior reviewer and are exempt. Pure;
+ * shared by the write path (write-gate-findings-log.mjs, always-on) and the
+ * merge-evidence read path (detect-checkpoint-evidence.mjs, scaling the
+ * `requireFanoutProvenance` floor) so both agree.
+ *
+ * Returns an actionable error string naming the offending angle(s) when the
+ * contract is violated (a reviewer covering >1 fresh angle, or a fresh angle
+ * recording no reviewer identity at all — which also silently lowers the
+ * distinct-reviewer count below the fresh-angle count), or `null` when it
+ * holds (including when `perAngle` has no fresh angles).
+ *
+ * @param {unknown} perAngle
+ * @returns {string|null}
+ */
+export function fanoutReviewerPairingError(perAngle) {
+  if (!Array.isArray(perAngle)) return null;
+  const freshAngles = new Set();
+  const anglesByIdentity = new Map();
+  const anonymousAngles = [];
+  for (const e of perAngle) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    if (typeof e.carriedFromHead === "string" && e.carriedFromHead.trim().length > 0) continue;
+    const angle = typeof e.angle === "string" ? e.angle.trim() : "";
+    if (!angle) continue;
+    freshAngles.add(angle);
+    const identity = reviewerIdentity(e);
+    if (identity) {
+      if (!anglesByIdentity.has(identity.id)) anglesByIdentity.set(identity.id, { angles: new Set(), label: identity.label });
+      anglesByIdentity.get(identity.id).angles.add(angle);
+    } else {
+      anonymousAngles.push(angle);
+    }
+  }
+  const freshAngleCount = freshAngles.size;
+  const distinctFreshReviewers = anglesByIdentity.size;
+  // Enforce the relation itself, not its cardinality shadow: a padded ledger
+  // (duplicate-angle entries) can satisfy distinctReviewers >= freshAngleCount
+  // while one identity still covers two fresh angles.
+  const details = [];
+  for (const [id, { angles, label }] of anglesByIdentity) {
+    if (angles.size > 1) details.push(`${label} "${id}" is recorded for fresh angles: ${[...angles].join(", ")}`);
+  }
+  if (anonymousAngles.length > 0) {
+    details.push(`fresh angle(s) with no recorded reviewer identity: ${anonymousAngles.join(", ")}`);
+  }
+  if (details.length === 0) return null;
+  return `fan-out provenance violates the one-scoped-reviewer-per-angle contract (${distinctFreshReviewers} distinct reviewer(s) for ${freshAngleCount} fresh angle(s)): ${details.join("; ")} — use executionMode inline_single_agent + --inline-reason for a sanctioned single-reviewer run`;
 }
 
 /**

@@ -13,6 +13,10 @@ gates:
   # ledger), not an inline single-agent run. This repo runs enforcement on its
   # own gates; dynamic angle resolution (below) scopes the fan-out per change.
   requireFanoutEvidence: true
+  # Enforce one distinct reviewer identity per fresh (non-carried) fan-out
+  # angle — no two freshly-reviewed angles may share a reviewer. See
+  # skills/docs/gate-review-sub-loop-contract.md.
+  requireFanoutProvenance: true
   draft:
     dynamic:
       subtractive: true
