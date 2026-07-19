@@ -273,6 +273,50 @@ test("ensure: workspace self-link survives re-provisioning an existing worktree 
   }
 });
 
+test("ensure: a real node process resolves @dev-loops/core to the worktree's OWN packages/core (#1432)", async () => {
+  const repo = makeRepo();
+  try {
+    // "main" (not "exports") so a bare `import.meta.resolve("@dev-loops/core")`
+    // resolves via Node's legacy fallback — matches how a workspace package
+    // with no top-level "." export still resolves the package root.
+    mkdirSync(path.join(repo.root, "packages/core"), { recursive: true });
+    writeFileSync(
+      path.join(repo.root, "packages/core/package.json"),
+      '{"name":"@dev-loops/core","type":"module","main":"./index.mjs"}\n',
+    );
+    writeFileSync(path.join(repo.root, "packages/core/index.mjs"), "export const marker = \"root\";\n");
+    writeFileSync(path.join(repo.root, ".gitignore"), "node_modules/\n");
+    repo.git("add", "-A");
+    repo.git("commit", "-q", "-m", "add resolvable packages/core");
+    repo.git("fetch", "-q", "origin");
+
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1432, base: "origin/main" });
+    assert.equal(res.ok, true);
+
+    // Diverge the worktree's OWN copy from the checkout's, simulating an
+    // in-progress edit — proves resolution follows the worktree, not a copy
+    // that merely happens to start out identical.
+    writeFileSync(path.join(res.path, "packages/core/index.mjs"), "export const marker = \"worktree\";\n");
+
+    const script = [
+      "const resolved = import.meta.resolve('@dev-loops/core');",
+      "const mod = await import(resolved);",
+      "console.log(JSON.stringify({ resolved, marker: mod.marker }));",
+    ].join("\n");
+    const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: res.path,
+      encoding: "utf8",
+    });
+    const { resolved, marker } = JSON.parse(out);
+    const resolvedPath = new URL(resolved).pathname;
+    const { realpathSync } = await import("node:fs");
+    assert.equal(path.dirname(resolvedPath), realpathSync(path.join(res.path, "packages/core")));
+    assert.equal(marker, "worktree", "resolved module content is the worktree's OWN edit, not the checkout's");
+  } finally {
+    repo.cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Provisioning is invoked (injected core) and fails soft
 // ---------------------------------------------------------------------------
