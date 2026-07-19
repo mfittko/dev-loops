@@ -1,7 +1,7 @@
 # SPEC: Outer dev-loop queue mode
 
 **Issue:** [#556](https://github.com/mfittko/dev-loops/issues/556)
-**Status:** Implemented — queue-mode is the live shipped pickup path
+**Status:** Partially implemented — the board pickup source (Next Up) is the live shipped path; the autonomous queue driver described below remains deliberately unwired (no-op adapter)
 **Branch:** `issue/556-queue-mode`
 
 ## 1. Overview
