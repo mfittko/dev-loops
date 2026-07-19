@@ -15,16 +15,16 @@ outro: closer
 
 > New here? Start with [Introducing dev-loops](./introducing-dev-loops.md) for the overview and [the deep dive](./dev-loops-deep-dive.md) for the mechanics. This article is the history: how the system arrived at its current shape.
 
-Most projects explain what they are. This one can explain *why it is the way it is*, because it kept the receipts. Forty architecture decisions live in the repository as dated records under `docs/decisions/`, each linking the pull request or issue that made it real. Reading them in order is like watching the system argue itself into its current form — and reverse course twice when the argument turned out wrong.
+This project can explain *why it is the way it is*, because it kept the receipts. Forty architecture decisions live in the repository as dated records under `docs/decisions/`, each linking the pull request or issue that made it real. Reading them in order is like watching the system argue itself into its current form, and reverse course twice when the argument turned out wrong.
 
 This article walks that record. Every figure below was re-derived from the repository at the time of writing.
 
 <!-- metrics:start -->
-- **68** days from first commit to the v1.0.0-rc.3 release candidate
-- **1,328** commits across 687 merged pull requests
+- **68** days from the first commit to the v1.0.0-rc.3 release candidate
+- **1,320** commits at rc.3, across 687 merged pull requests
 - **26** tagged releases, with 7 reverts — about 1% of merged PRs, mostly in release mechanics and doc rewrites
 - **40** recorded architecture decisions, 2 of them later superseded
-- **2,972** automated checks, up from a suite of 146 test files to 190
+- **279** test files by rc.3, up from 5 at the first commit
 <!-- metrics:end -->
 
 ## The method is the point
@@ -35,13 +35,13 @@ The record itself is plain: context, decision, consequences, and a dated link to
 
 ## Era one: the next step is always known
 
-The earliest records fix the idea the whole system rests on. Work flows through a deterministic state graph where the next action for any change is computed, not remembered (records 0001 and 0002). A single startup resolver reads authoritative state and hands back a bounded task with the exact files to read and the exact stop conditions (record 0011, and the handoff envelope in record 0016). Loss of a temporary artifact degrades fidelity and the run still recovers, because the graph, not the chat transcript, is the source of truth.
+The earliest records fix the idea the whole system rests on. Work flows through a deterministic state graph where the next action for any change is computed from that graph each time (records 0001 and 0002). A single startup resolver reads authoritative state and hands back a bounded task with the exact files to read and the exact stop conditions (record 0011, and the handoff envelope in record 0016). Loss of a temporary artifact degrades fidelity and the run still recovers, because the source of truth is the state graph, which the chat transcript only mirrors.
 
 This is what lets an agent pick up work mid-flight without guessing. The state is on the board; whoever is free reads the next card and pulls it.
 
 ## Era two: the gate
 
-Seventeen days in, on 2026-05-29, the review model arrived that still defines the project (record 0006): two gates, a draft gate before review and a pre-approval gate before merge, with merge authority reserved for a human (record 0007). Gate verdicts became durable, fail-closed evidence rather than an agent's say-so — a comment the coordinator refuses to post unless the checks actually succeeded (record 0008).
+Seventeen days in, on 2026-05-29, the review model arrived that still defines the project (record 0006): two gates, a draft gate before review and a pre-approval gate before merge, with merge authority reserved for a human (record 0007). Gate verdicts became durable, fail-closed evidence backed by the real check result — a comment the coordinator refuses to post unless the checks actually succeeded (record 0008).
 
 The consequence compounds through everything after it. Once a green result has to come from the real check, the agent can no longer assume the build passed. The single most common failure of an autonomous coder — declaring success over an unverified assumption — is closed off at the seam.
 
@@ -63,14 +63,14 @@ The second reversal lives here too. An enforced retrospective gate, meant to mak
 
 The record shows learning at the policy level. The stronger question is whether the code and the delivery got better in measurable terms, and the repository answers it directly.
 
-The clearest external signal is review pressure. Counting Copilot's review comments per thousand added lines, week over week, the density fell as the internal gates came online and held — roughly halving from the early weeks to the recent ones. The reviewer that sits outside the system found less to say as the system's own checks caught more first.
+One external signal points the right way. A separate pass over the review history found Copilot's review comments per thousand added lines falling as the internal gates came online and held. The external reviewer found less to say once the system's own checks were catching problems first.
 
-Escaped defects stayed rare. Across nearly seven hundred merged pull requests, the count of changes that had to be reverted sits at seven, and those cluster in release mechanics and documentation rewrites rather than gated code paths. The test suite grew alongside the surface it guards, from 146 files to 190, and the contract tests — the ones that fail the build when a rule or an output shape drifts — grew fastest, because each hard-won convention got a guard so it could not quietly erode.
+Escaped defects stayed rare. Across nearly seven hundred merged pull requests, the count of changes that had to be reverted sits at seven, and those cluster in release mechanics and documentation rewrites. The test suite grew alongside the surface it guards, from 5 files at the first commit to 279, and the contract tests — the ones that fail the build when a rule or an output shape drifts — grew fastest, because each hard-won convention got a guard so it could not quietly erode.
 
-None of this is a claim that the process is finished. Two of forty decisions were wrong enough to reverse, and the reversals are in the log on purpose. The point is narrower and, for an AI-assisted project, unusual: the system changed its own rules deliberately, wrote down why each time, and the numbers moved the right way while it did.
+The process is still evolving, and the log says so. Two of forty decisions were wrong enough to reverse, and the reversals are in the log on purpose. The point is narrow and, for an AI-assisted project, unusual: the system changed its own rules deliberately, wrote down why each time, and the numbers moved the right way while it did.
 
 ## What the log is for
 
-A decision record is cheap to write and expensive to skip. Skip it, and six weeks later nobody remembers whether the absolute links in the installed docs were a considered choice or an accident, whether the retrospective was meant to block merges, whether one-reviewer-per-angle was a rule or a habit. The log answers all three, with dates and links, because someone wrote three paragraphs at the moment the decision was made.
+A decision record takes three paragraphs to write, and skipping it costs weeks later. Skip it, and six weeks on nobody remembers whether the absolute links in the installed docs were a considered choice or an accident, whether the retrospective was meant to block merges, whether one-reviewer-per-angle was a rule or a habit. The log answers all three, with dates and links, because someone wrote three paragraphs at the moment the decision was made.
 
 That is the whole practice. The next step is always known, the gate never trusts an assumption, and when a decision turns out wrong, the record of it stays — so the correction has something to point back to.

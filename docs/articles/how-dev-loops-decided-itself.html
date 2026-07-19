@@ -265,16 +265,16 @@
 
   <blockquote>New here? Start with <a href="./introducing-dev-loops.html">Introducing dev-loops</a> for the overview and <a href="./dev-loops-deep-dive.html">the deep dive</a> for the mechanics. This article is the history: how the system arrived at its current shape.</blockquote>
 
-  <p>Most projects explain what they are. This one can explain <em>why it is the way it is</em>, because it kept the receipts. Forty architecture decisions live in the repository as dated records under <code>docs/decisions/</code>, each linking the pull request or issue that made it real. Reading them in order is like watching the system argue itself into its current form — and reverse course twice when the argument turned out wrong.</p>
+  <p>This project can explain <em>why it is the way it is</em>, because it kept the receipts. Forty architecture decisions live in the repository as dated records under <code>docs/decisions/</code>, each linking the pull request or issue that made it real. Reading them in order is like watching the system argue itself into its current form, and reverse course twice when the argument turned out wrong.</p>
 
   <p>This article walks that record. Every figure below was re-derived from the repository at the time of writing.</p>
 
   <div class="metrics" role="list">
-    <div class="metric" role="listitem"><div class="num">68</div><div class="lab">days from first commit to the v1.0.0-rc.3 release candidate</div></div>
-    <div class="metric" role="listitem"><div class="num">1,328</div><div class="lab">commits across 687 merged pull requests</div></div>
+    <div class="metric" role="listitem"><div class="num">68</div><div class="lab">days from the first commit to the v1.0.0-rc.3 release candidate</div></div>
+    <div class="metric" role="listitem"><div class="num">1,320</div><div class="lab">commits at rc.3, across 687 merged pull requests</div></div>
     <div class="metric" role="listitem"><div class="num">26</div><div class="lab">tagged releases, with 7 reverts — about 1% of merged PRs, mostly in release mechanics and doc rewrites</div></div>
     <div class="metric" role="listitem"><div class="num">40</div><div class="lab">recorded architecture decisions, 2 of them later superseded</div></div>
-    <div class="metric" role="listitem"><div class="num">2,972</div><div class="lab">automated checks, up from a suite of 146 test files to 190</div></div>
+    <div class="metric" role="listitem"><div class="num">279</div><div class="lab">test files by rc.3, up from 5 at the first commit</div></div>
   </div>
 
   <h2 id="the-method-is-the-point">The method is the point</h2>
@@ -285,13 +285,13 @@
 
   <h2 id="era-one-the-next-step-is-always-known">Era one: the next step is always known</h2>
 
-  <p>The earliest records fix the idea the whole system rests on. Work flows through a deterministic state graph where the next action for any change is computed, not remembered (records 0001 and 0002). A single startup resolver reads authoritative state and hands back a bounded task with the exact files to read and the exact stop conditions (record 0011, and the handoff envelope in record 0016). Loss of a temporary artifact degrades fidelity and the run still recovers, because the graph, not the chat transcript, is the source of truth.</p>
+  <p>The earliest records fix the idea the whole system rests on. Work flows through a deterministic state graph where the next action for any change is computed from that graph each time (records 0001 and 0002). A single startup resolver reads authoritative state and hands back a bounded task with the exact files to read and the exact stop conditions (record 0011, and the handoff envelope in record 0016). Loss of a temporary artifact degrades fidelity and the run still recovers, because the source of truth is the state graph, which the chat transcript only mirrors.</p>
 
   <p>This is what lets an agent pick up work mid-flight without guessing. The state is on the board; whoever is free reads the next card and pulls it.</p>
 
   <h2 id="era-two-the-gate">Era two: the gate</h2>
 
-  <p>Seventeen days in, on 2026-05-29, the review model arrived that still defines the project (record 0006): two gates, a draft gate before review and a pre-approval gate before merge, with merge authority reserved for a human (record 0007). Gate verdicts became durable, fail-closed evidence rather than an agent's say-so — a comment the coordinator refuses to post unless the checks actually succeeded (record 0008).</p>
+  <p>Seventeen days in, on 2026-05-29, the review model arrived that still defines the project (record 0006): two gates, a draft gate before review and a pre-approval gate before merge, with merge authority reserved for a human (record 0007). Gate verdicts became durable, fail-closed evidence backed by the real check result — a comment the coordinator refuses to post unless the checks actually succeeded (record 0008).</p>
 
   <p>The consequence compounds through everything after it. Once a green result has to come from the real check, the agent can no longer assume the build passed. The single most common failure of an autonomous coder — declaring success over an unverified assumption — is closed off at the seam.</p>
 
@@ -313,15 +313,15 @@
 
   <p>The record shows learning at the policy level. The stronger question is whether the code and the delivery got better in measurable terms, and the repository answers it directly.</p>
 
-  <p>The clearest external signal is review pressure. Counting Copilot's review comments per thousand added lines, week over week, the density fell as the internal gates came online and held — roughly halving from the early weeks to the recent ones. The reviewer that sits outside the system found less to say as the system's own checks caught more first.</p>
+  <p>One external signal points the right way. A separate pass over the review history found Copilot's review comments per thousand added lines falling as the internal gates came online and held. The external reviewer found less to say once the system's own checks were catching problems first.</p>
 
-  <p>Escaped defects stayed rare. Across nearly seven hundred merged pull requests, the count of changes that had to be reverted sits at seven, and those cluster in release mechanics and documentation rewrites rather than gated code paths. The test suite grew alongside the surface it guards, from 146 files to 190, and the contract tests — the ones that fail the build when a rule or an output shape drifts — grew fastest, because each hard-won convention got a guard so it could not quietly erode.</p>
+  <p>Escaped defects stayed rare. Across nearly seven hundred merged pull requests, the count of changes that had to be reverted sits at seven, and those cluster in release mechanics and documentation rewrites. The test suite grew alongside the surface it guards, from 5 files at the first commit to 279, and the contract tests — the ones that fail the build when a rule or an output shape drifts — grew fastest, because each hard-won convention got a guard so it could not quietly erode.</p>
 
-  <p>None of this is a claim that the process is finished. Two of forty decisions were wrong enough to reverse, and the reversals are in the log on purpose. The point is narrower and, for an AI-assisted project, unusual: the system changed its own rules deliberately, wrote down why each time, and the numbers moved the right way while it did.</p>
+  <p>The process is still evolving, and the log says so. Two of forty decisions were wrong enough to reverse, and the reversals are in the log on purpose. The point is narrow and, for an AI-assisted project, unusual: the system changed its own rules deliberately, wrote down why each time, and the numbers moved the right way while it did.</p>
 
   <h2 id="what-the-log-is-for">What the log is for</h2>
 
-  <p>A decision record is cheap to write and expensive to skip. Skip it, and six weeks later nobody remembers whether the absolute links in the installed docs were a considered choice or an accident, whether the retrospective was meant to block merges, whether one-reviewer-per-angle was a rule or a habit. The log answers all three, with dates and links, because someone wrote three paragraphs at the moment the decision was made.</p>
+  <p>A decision record takes three paragraphs to write, and skipping it costs weeks later. Skip it, and six weeks on nobody remembers whether the absolute links in the installed docs were a considered choice or an accident, whether the retrospective was meant to block merges, whether one-reviewer-per-angle was a rule or a habit. The log answers all three, with dates and links, because someone wrote three paragraphs at the moment the decision was made.</p>
 
   <p class="closer">That is the whole practice. The next step is always known, the gate never trusts an assumption, and when a decision turns out wrong, the record of it stays — so the correction has something to point back to.</p>
 

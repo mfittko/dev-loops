@@ -40,6 +40,7 @@ export const REGISTERED_ARTIFACT_PATHS = Object.freeze([
   "docs/presentations/dev-loops-deep-dive.html",
   "docs/articles/introducing-dev-loops.html",
   "docs/articles/dev-loops-deep-dive.html",
+  "docs/articles/how-dev-loops-decided-itself.html",
 ]);
 
 export const VIEWER_ARTIFACT_ID = "inspect-run-viewer";
