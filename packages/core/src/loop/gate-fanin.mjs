@@ -63,14 +63,30 @@ export function countDistinctReviewers(perAngle) {
   const ids = new Set();
   for (const e of perAngle) {
     if (!e || typeof e !== "object" || Array.isArray(e)) continue;
-    const id = typeof e.reviewer === "string" && e.reviewer.trim().length > 0
-      ? e.reviewer.trim()
-      : typeof e.dispatchId === "string" && e.dispatchId.trim().length > 0
-        ? e.dispatchId.trim()
-        : null;
-    if (id) ids.add(id);
+    const identity = reviewerIdentity(e);
+    if (identity) ids.add(identity.id);
   }
   return ids.size;
+}
+
+/**
+ * The single identity-selection rule for a perAngle entry: a non-empty
+ * `reviewer` wins, else a non-empty `dispatchId`, else no identity. Returns
+ * `{ id, label }` (label = which field carried the identity, for error
+ * messages) or null. Shared by countDistinctReviewers and
+ * fanoutReviewerPairingError so the two can never diverge.
+ *
+ * @param {object} entry — a perAngle entry
+ * @returns {{ id: string, label: "reviewer"|"dispatchId" }|null}
+ */
+function reviewerIdentity(entry) {
+  if (typeof entry.reviewer === "string" && entry.reviewer.trim().length > 0) {
+    return { id: entry.reviewer.trim(), label: "reviewer" };
+  }
+  if (typeof entry.dispatchId === "string" && entry.dispatchId.trim().length > 0) {
+    return { id: entry.dispatchId.trim(), label: "dispatchId" };
+  }
+  return null;
 }
 
 /**
@@ -168,12 +184,10 @@ export function fanoutReviewerPairingError(perAngle) {
     const angle = typeof e.angle === "string" ? e.angle.trim() : "";
     if (!angle) continue;
     freshAngles.add(angle);
-    const hasReviewer = typeof e.reviewer === "string" && e.reviewer.trim().length > 0;
-    const hasDispatchId = typeof e.dispatchId === "string" && e.dispatchId.trim().length > 0;
-    const id = hasReviewer ? e.reviewer.trim() : hasDispatchId ? e.dispatchId.trim() : null;
-    if (id) {
-      if (!anglesByIdentity.has(id)) anglesByIdentity.set(id, { angles: new Set(), label: hasReviewer ? "reviewer" : "dispatchId" });
-      anglesByIdentity.get(id).angles.add(angle);
+    const identity = reviewerIdentity(e);
+    if (identity) {
+      if (!anglesByIdentity.has(identity.id)) anglesByIdentity.set(identity.id, { angles: new Set(), label: identity.label });
+      anglesByIdentity.get(identity.id).angles.add(angle);
     } else {
       anonymousAngles.push(angle);
     }
