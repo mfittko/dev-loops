@@ -1,7 +1,7 @@
 # SPEC: Outer dev-loop queue mode
 
 **Issue:** [#556](https://github.com/mfittko/dev-loops/issues/556)
-**Status:** Draft — intake refinement
+**Status:** Implemented — queue-mode is the live shipped pickup path
 **Branch:** `issue/556-queue-mode`
 
 ## 1. Overview

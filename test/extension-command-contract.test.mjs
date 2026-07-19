@@ -5,6 +5,8 @@ import path from "node:path";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 
 import registerExtension, { syncPackagedAgents } from "../extension/index.ts";
+import { buildWidgetLines } from "../extension/presentation.ts";
+import { SETUP_GUIDANCE } from "../lib/dev-loops-core.mjs";
 
 function createPiDouble({ commandResults = new Map(), tools = [], commands = [] } = {}) {
   const events = new Map();
@@ -250,6 +252,26 @@ test("status and doctor use the reduced readiness surface", async () => {
   assert(statusLines.some((line) => /Local loop readiness: needs setup/i.test(line)));
   assert(statusLines.some((line) => /Remote GitHub\/Copilot readiness: needs setup/i.test(line)));
   assert.equal(statusLines.some((line) => /local-dev-loop-skill/i.test(line)), false);
+});
+
+test("extension setup guidance is the shared core map, overriding only git-repo (#1421)", () => {
+  const failingChecks = ["gh-installed", "gh-auth", "subagent-command", "git-repo"].map((id) => ({
+    id,
+    label: id,
+    ok: false,
+    detail: "unused",
+  }));
+
+  const widgetLines = buildWidgetLines("status", failingChecks);
+
+  // The 3 shared checks render byte-identical to the core/CLI guidance map.
+  assert(widgetLines.includes(`1. ${SETUP_GUIDANCE["gh-installed"]}`));
+  assert(widgetLines.includes(`2. ${SETUP_GUIDANCE["gh-auth"]}`));
+  assert(widgetLines.includes(`3. ${SETUP_GUIDANCE["subagent-command"]}`));
+
+  // git-repo is the deliberate per-surface override — Pi-specific wording, not the base CLI wording.
+  assert.equal(widgetLines.includes(`4. ${SETUP_GUIDANCE["git-repo"]}`), false);
+  assert(widgetLines.includes("4. Open Pi inside a git repository checkout before using the shared loops."));
 });
 
 test("hide still clears the widget and unknown commands fall back to help", async () => {

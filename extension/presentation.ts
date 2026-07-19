@@ -1,13 +1,13 @@
 import type { DevLoopCheck, DevLoopCheckId } from './checks.ts';
-import { describeReadiness, DEV_LOOP_CHECK_IDS, summarizeChecks, renderCheckLines } from '../lib/dev-loops-core.mjs';
+import { describeReadiness, DEV_LOOP_CHECK_IDS, SETUP_GUIDANCE as BASE_SETUP_GUIDANCE, summarizeChecks, renderCheckLines } from '../lib/dev-loops-core.mjs';
 
 export type DevLoopsAction = 'doctor' | 'help' | 'status' | 'hide';
 export type InspectAction = 'open' | 'resume' | 'status' | 'stop' | 'restart';
 
+// Shared 3-of-4 checks are byte-identical to the CLI's wording; only `git-repo` diverges
+// because Pi's workflow is "open Pi inside a repo", not "run a command inside a repo".
 const SETUP_GUIDANCE: Record<(typeof DEV_LOOP_CHECK_IDS)[number], string> = {
-  'gh-installed': 'Install GitHub CLI to enable remote GitHub/Copilot workflows.',
-  'gh-auth': 'Run `gh auth login` so remote GitHub/Copilot workflows can use your GitHub session.',
-  'subagent-command': 'Install or enable subagent support so the `subagent` command is available.',
+  ...BASE_SETUP_GUIDANCE,
   'git-repo': 'Open Pi inside a git repository checkout before using the shared loops.',
 };
 
