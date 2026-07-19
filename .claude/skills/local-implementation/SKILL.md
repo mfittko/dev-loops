@@ -340,7 +340,7 @@ The merged plan must include:
 - acceptance criteria
 - definition of done
 - when a bounded audit artifact exists: prioritized findings, highest-value follow-up candidates, and an explicit statement of what this phase will not rewrite or broaden
-- RFC escalation notes for any RFC-worthy technical decisions that must go to the parent session / human operator instead of being silently resolved during refinement
+- RFC escalation notes for any RFC-worthy technical decisions that must go to the parent session / human operator instead of being silently resolved during refinement; accepted decisions are persisted as ADRs per the [Decision record contract](../docs/decision-record-contract.md)
 - for any new CLI surface: explicit success-output and malformed-argument/error-contract expectations
 - for any watcher/predicate-driven behavior: explicit timeout semantics plus negative-case detection rules for non-target identities or events
 - for package-first phases in a source-loaded workspace: explicit expectations about whether callers consume shared logic through workspace/source adapters or published package import paths during local development

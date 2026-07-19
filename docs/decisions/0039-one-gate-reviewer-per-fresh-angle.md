@@ -1,0 +1,17 @@
+# 0039. Enforce one gate reviewer per fresh angle, at write time and read time
+
+## Status
+
+Accepted — 2026-07-19 ([PR 1433](https://github.com/mfittko/dev-loops/pull/1433))
+
+## Context
+
+Fan-out provenance recording landed opt-in in 2026-07 ([issue 1110](https://github.com/mfittko/dev-loops/issues/1110), [PR 1163](https://github.com/mfittko/dev-loops/pull/1163)), but the enforcement floor was a constant `2` behind a `gates.requireFanoutProvenance` flag that defaulted off — and this repo had not enabled it. Under that gap, gate fan-outs drifted toward grouping several review angles into fewer reviewer agents to save tokens, ending with a single reviewer covering all five pre-approval angles during the 1415ff wave: a self-approval shape that defeats the independent-perspectives value the fan-out exists to buy, while still satisfying the artifact-based `requireFanoutEvidence` check (a single agent can self-produce every per-angle artifact plus the ledger). The write path validated provenance consistency but no reviewer floor at all, so under-provisioned ledgers with `provenance.distinctReviewers: 1` were durably recorded and passed pre-merge. The operator ordered a root-cause fix hardened at all three layers ([issue 1431](https://github.com/mfittko/dev-loops/issues/1431), [PR 1433](https://github.com/mfittko/dev-loops/pull/1433)), specified in `skills/docs/gate-review-sub-loop-contract.md`.
+
+## Decision
+
+Each fresh review angle gets exactly one scoped reviewer, and the machine enforces the rule twice. At write time, `write-gate-findings-log.mjs` unconditionally rejects any `fanout_fanin` provenance where two fresh (non-`carriedFromHead`) angles share one reviewer identity or a fresh angle records no identity at all — the check enforces the per-identity relation itself via the pure `fanoutReviewerPairingError` helper in `@dev-loops/core/loop/gate-fanin`, so a padded ledger cannot mask a collision behind an inflated cardinality. At read time, `detect-checkpoint-evidence.mjs` re-validates the same pairing and scales the minimum-distinct-reviewer floor to `max(2, fresh-angle count)`; the floor is opt-in via `gates.requireFanoutProvenance` and this repo's `.devloops` enables it, while carried-forward angles stay exempt because they honestly attribute the prior head's reviewer. The contract states plainly that self-reported provenance is not un-forgeable, deferring attested recording of who actually ran each review to the Pi-harness bridge. We rejected advisory-only contract text (the drift already happened under it) and grouping with a declared cap (still a self-approval shape at the cap); the sanctioned cheap paths are an explicit `inline_single_agent` verdict with `--inline-reason`, and light-mode dispatch.
+
+## Consequences
+
+Fan-out reviews cost more tokens — one agent per fresh angle, no grouping — but their independence is now verifiable from the ledger rather than asserted, and both the pre-merge enforcement loop and the cross-checkout ledger selector re-check the pairing so a hand-crafted below-floor checkout cannot shadow a passing one. Token pressure has a sanctioned outlet (inline single-agent with a recorded reason, or light mode) instead of a silent degradation path. The floor proved itself immediately: the very next PR's draft gate reached five distinct reviewers only after correcting an initial pairing the check caught, hours after the enforcement shipped. What remains open is forgery by a determined recorder — closing that gap is scoped to harness-level attestation, not this ledger.

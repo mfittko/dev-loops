@@ -28,5 +28,6 @@
 ## RFC-escalation sanity check
 - confirm RFC-worthy technical decisions are escalated to the parent session / human operator
 - confirm the parent-session receiving boundary and decision ownership remain explicit
+- confirm accepted policy-level or architecture-shaping decisions are persisted as ADRs per the [Decision record contract](../../docs/decision-record-contract.md)
 
 ## Required revisions

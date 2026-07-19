@@ -1,0 +1,17 @@
+# 0032. Drive releases from a tag push and publish prereleases to channel dist-tags that can never become latest
+
+## Status
+
+Accepted — 2026-07-14 ([PR 1347](https://github.com/mfittko/dev-loops/pull/1347))
+
+## Context
+
+Releasing needed to be reproducible from a single operator action, without hand-built GitHub Releases or manual npm publishes; the automated tag-to-Release flow landed via [issue 996](https://github.com/mfittko/dev-loops/issues/996) ([PR 997](https://github.com/mfittko/dev-loops/pull/997), commit `d29bad52`). The first cut relied on event chaining — `on: release` triggering the npm publish — which silently skipped publishing because a `GITHUB_TOKEN`-created Release never emits the `release` event; [issue 1187](https://github.com/mfittko/dev-loops/issues/1187) ([PR 1188](https://github.com/mfittko/dev-loops/pull/1188), commit `8cda46da`) replaced it with an explicit `workflow_dispatch`. The pipeline was also stable-only: `npm publish` defaulted to the `latest` dist-tag and every Release was marked `--latest`, so a `v1.0.0-rc.N` tag would have hijacked the default install — the opposite of an opt-in release candidate. The 1.0 approach (rc soak with consumers before a stable tag) made a safe prerelease channel a prerequisite, delivered via [issue 1346](https://github.com/mfittko/dev-loops/issues/1346) ([PR 1347](https://github.com/mfittko/dev-loops/pull/1347), commit `ae5c20a0`). The resulting flow is documented in `skills/docs/release-runbook.md`.
+
+## Decision
+
+Pushing a `v<version>` tag is the only manual release step. `.github/workflows/release.yml` verifies the tagged commit is an ancestor of `origin/main`, extracts the matching CHANGELOG section — failing closed if absent, so an undocumented version never gets an empty Release — creates the GitHub Release idempotently, and explicitly dispatches `.github/workflows/npm-publish.yml` with `gh workflow run --ref <tag>`, rejecting `on: release` event chaining because token-created Releases emit no event. `scripts/release/resolve-npm-dist-tag.mjs` resolves the dist-tag from the version alone: a stable version maps to `latest`; a prerelease maps to the alphabetic token of its first prerelease identifier (`rc`, `next`, `beta`, …) and never to `latest`, with non-SemVer input rejected rather than guessed and the pathological `-latest` prerelease coerced to `next`. The Release flag reuses the same resolver — `latest` means `--latest`, anything else `--prerelease` — so the GitHub Release marking and the npm dist-tag cannot drift. We rejected hand-built Releases and manual `npm publish` outright, and rejected a fail-open resolver that would let a garbled tag publish as stable.
+
+## Consequences
+
+Release candidates are opt-in (`npm install dev-loops@rc`) and can never become the default install, which enabled the pre-1.0 rc soak policy: rc.1 through rc.3 were cut this way while the `v1.0.0` stable tag was held for consumer soak. The version bump, generated-asset stamping (the `npx dev-loops@<version>` pins and plugin manifest via `scripts/claude/generate-claude-assets.mjs`), and the CHANGELOG section must all land on `main` before tagging — `verify` fails on a stale manifest, and a missing CHANGELOG section requires committing it and force-moving the tag. The workflows are idempotent per package and per Release, so a partially failed run is safe to re-run. Hand-publishing a Release in the UI remains supported through the residual `release: published` trigger on the publish workflow.
