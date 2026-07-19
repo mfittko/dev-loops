@@ -16,26 +16,12 @@ gates:
   draft:
     dynamic:
       subtractive: true
+    # Only per-layer DELTAS live here — angles that merely restate an
+    # extension-defaults.yaml draft-pool entry byte-for-byte are a no-op under
+    # merge-by-name (D3) and have been trimmed. This repo's draft gate keeps
+    # the full shipped draft pool at its shipped persona/prompt/order except
+    # for the two explicit drops below.
     angles:
-      - scope
-      - coverage
-      - correctness
-      - ci-guard
-      - contract-surface
-      - input-validation
-      - determinism
-      - no-op
-      - link-check
-      - packaging-runtime
-      - state-concurrency
-      - config-drift
-      - gate-evidence
-      - name: pr-description
-        mandatory: true
-      - pr-comments
-      - contradiction-lens
-      - code-conformance
-      - semantic-drift
       # Shipped in extension-defaults.yaml's draft pool but intentionally not
       # run by this repo's own draft gate (pre-1.0 config-schema redesign,
       # #1404: gates.<gate>.angles now merges BY NAME across config layers —
@@ -52,11 +38,14 @@ gates:
   preApproval:
     dynamic:
       subtractive: true
+    # Only per-layer DELTAS live here (see the draft-gate comment above for
+    # why byte-identical restatements were trimmed). This repo's preApproval
+    # gate keeps the full shipped preApproval pool at its shipped
+    # persona/prompt/order except for the deltas below: two angles promoted
+    # to mandatory, and two additions not in the shipped preApproval pool.
     # Mandatory angles always run in the fan-out (never dropped by dynamic
     # resolution); fully configurable — set `mandatory: true` on any angle.
     angles:
-      - name: pr-checklist-matrix
-        mandatory: true
       - name: acceptance-criteria
         mandatory: true
         persona: review
@@ -65,21 +54,9 @@ gates:
         mandatory: true
       - name: contradiction-lens
         mandatory: true
-      - dry
-      - kiss
-      - srp
-      - soc
-      - deep
-      - docs
-      - ocp
-      - lsp
-      - isp
-      - dip
       - name: renderer-security
         persona: review
         prompt: Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
-      - correctness-final
-      - ui-validation
     blockCleanOnFindingSeverities:
       - must-fix
       - worth-fixing-now
