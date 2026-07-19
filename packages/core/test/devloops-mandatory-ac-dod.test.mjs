@@ -83,3 +83,27 @@ describe(".devloops mandatory AC/DoD angle (pre_approval_gate)", () => {
     }
   });
 });
+
+// Repo-root .devloops keeps only per-layer DELTAS on top of
+// extension-defaults.yaml's shipped angle pools (#1415): byte-identical
+// restatements were trimmed, leaving only the enabled:false drops and the
+// mandatory/addition overrides above. This pins the draft-gate drops so a
+// future edit can't silently let threat-model/renderer-security merge back in.
+describe(".devloops draft-gate angle drops (draft gate)", () => {
+  test("draft excludes threat-model and renderer-security but keeps the rest of the shipped draft pool", async () => {
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+
+    const gate = resolveGateConfig(config, "draft");
+    assert.deepEqual(gate.excludeAngles.sort(), ["renderer-security", "threat-model"]);
+
+    const draftAngles = resolveGateAngles(config, "draft");
+    assert.ok(!draftAngles.includes("threat-model"));
+    assert.ok(!draftAngles.includes("renderer-security"));
+    // A handful of the shipped draft-pool angles this repo's .devloops no
+    // longer restates must still resolve (inherited from extension-defaults).
+    for (const angle of ["scope", "coverage", "ci-guard", "pr-description"]) {
+      assert.ok(draftAngles.includes(angle), `draft angles must still include shipped angle "${angle}"`);
+    }
+  });
+});
