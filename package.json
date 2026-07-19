@@ -31,6 +31,7 @@
     "test:dev-loop": "node --test --test-reporter ./test/failure-summary-reporter.mjs skills/dev-loop/scripts/dev-mode-context.test.mjs skills/dev-loop/scripts/render-template.test.mjs skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs",
     "test:playwright:viewer": "PW_UI_SLICE=inspect-run-viewer playwright test --project=inspect-run-viewer",
     "test:playwright:deep-dive": "PW_UI_SLICE=deep-dive-deck playwright test --project=deep-dive-deck",
+    "test:playwright:how-decided-deck": "PW_UI_SLICE=how-decided-deck playwright test --project=how-decided-deck",
     "test:playwright:intro-deck": "PW_UI_SLICE=intro-deck playwright test --project=intro-deck",
     "test:playwright:intro-article": "PW_UI_SLICE=intro-article playwright test --project=intro-article",
     "test:playwright:ui-review-drive": "PW_UI_SLICE=ui-review-drive playwright test --project=ui-review-drive",

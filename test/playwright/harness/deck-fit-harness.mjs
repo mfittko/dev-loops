@@ -260,6 +260,22 @@ export const DECK_REGISTRY = {
       { id: "setup", stateName: "Setup" },
     ],
   },
+  "how-decided-deck": {
+    sliceId: "how-decided-deck",
+    deck: "how-dev-loops-decided-itself.html",
+    mobileCapture: { id: "the-log", stateName: "The log" },
+    sectionIds: [
+      { id: "hero", stateName: "Hero", capture: true },
+      { id: "the-log", stateName: "The log", capture: true },
+      { id: "state-graph", stateName: "State graph", capture: true },
+      { id: "the-gate", stateName: "The gate", capture: true },
+      { id: "reversal-local-first", stateName: "Reversal: local-first", capture: true },
+      { id: "self-review", stateName: "Self-review", capture: true },
+      { id: "reversal-retro", stateName: "Reversal: retrospective", capture: true },
+      { id: "outcomes", stateName: "Outcomes", capture: true },
+      { id: "close", stateName: "Close", capture: true },
+    ],
+  },
   "deep-dive-deck": {
     sliceId: "deep-dive-deck",
     deck: "dev-loops-deep-dive.html",

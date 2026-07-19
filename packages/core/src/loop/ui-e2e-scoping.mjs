@@ -38,6 +38,7 @@ export const VIEWER_SOURCE_PATHS = Object.freeze([
 export const REGISTERED_ARTIFACT_PATHS = Object.freeze([
   "docs/presentations/introducing-dev-loops.html",
   "docs/presentations/dev-loops-deep-dive.html",
+  "docs/presentations/how-dev-loops-decided-itself.html",
   "docs/articles/introducing-dev-loops.html",
   "docs/articles/dev-loops-deep-dive.html",
   "docs/articles/how-dev-loops-decided-itself.html",
