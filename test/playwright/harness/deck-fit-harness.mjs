@@ -316,6 +316,10 @@ export const ARTICLE_REGISTRY = {
     sliceId: "deep-dive-article",
     file: "dev-loops-deep-dive.html",
   },
+  "how-decided-article": {
+    sliceId: "how-decided-article",
+    file: "how-dev-loops-decided-itself.html",
+  },
 };
 
 export function articleRegistryEntry(key) {

@@ -20,11 +20,11 @@ Most projects explain what they are. This one can explain *why it is the way it 
 This article walks that record. Every figure below was re-derived from the repository at the time of writing.
 
 <!-- metrics:start -->
-- 68 days from first commit to the v1.0.0-rc.3 release candidate
-- 1,328 commits across 687 merged pull requests
-- 26 tagged releases, 7 reverts (about 1% of merged PRs), mostly in release mechanics and doc rewrites rather than gated code
-- 40 recorded architecture decisions, 2 of them later superseded
-- The automated test suite grew from 146 test files to 190, and now runs 2,972 checks
+- **68** days from first commit to the v1.0.0-rc.3 release candidate
+- **1,328** commits across 687 merged pull requests
+- **26** tagged releases, with 7 reverts — about 1% of merged PRs, mostly in release mechanics and doc rewrites
+- **40** recorded architecture decisions, 2 of them later superseded
+- **2,972** automated checks, up from a suite of 146 test files to 190
 <!-- metrics:end -->
 
 ## The method is the point

@@ -35,6 +35,7 @@
     "test:playwright:intro-article": "PW_UI_SLICE=intro-article playwright test --project=intro-article",
     "test:playwright:ui-review-drive": "PW_UI_SLICE=ui-review-drive playwright test --project=ui-review-drive",
     "test:playwright:deep-dive-article": "PW_UI_SLICE=deep-dive-article playwright test --project=deep-dive-article",
+    "test:playwright:how-decided-article": "PW_UI_SLICE=how-decided-article playwright test --project=how-decided-article",
     "smoke:headless": "node scripts/claude/headless-info-smoke.mjs",
     "test:docs": "node scripts/docs/validate-links.mjs && node scripts/docs/validate-rule-ownership.mjs",
     "test:workflows": "node scripts/github/lint-workflows.mjs",
