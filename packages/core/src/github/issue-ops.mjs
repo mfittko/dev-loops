@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { runChild as defaultRunChild } from "../cli/primitives.mjs";
 import { parseJsonText } from "./review-threads.mjs";
 import { parseRepoSlug } from "./repo-slug.mjs";
@@ -62,7 +62,36 @@ export function buildCreateArgs(options) {
   return args;
 }
 
+// Reject a --body-file path that does not RESOLVE (following symlinks) to a
+// regular file. The CLI layer's literal-string rejections (`-`, `/dev/stdin`,
+// `/dev/fd/N`, ...) only catch known stdin-device spellings; a symlink to one
+// of those devices (or to /dev/null, a FIFO, etc.) dodges that regex yet still
+// reads as empty/non-file when `gh` re-reads the same path with stdin ignored.
+// `statSync` follows symlinks, so this closes that gap regardless of path shape.
+function assertRegularFilePath(path) {
+  if (!statSync(path).isFile()) {
+    throw new Error(`--body-file must be a regular file: ${path}`);
+  }
+}
+
+// Read (for validation only — the actual gh call still forwards the path, see
+// buildCreateArgs) and reject a --body-file that isn't a regular file or whose
+// content is empty/whitespace-only. This is the real guard behind the CLI's
+// stdin-device rejection: `gh` is spawned with stdin ignored, so it re-reads
+// the same path fresh — this validates what gh will actually see, not just the
+// path's literal spelling.
+export async function resolveCreateBody(options) {
+  if (options.bodyFile === undefined) return options.body;
+  assertRegularFilePath(options.bodyFile);
+  return await readFile(options.bodyFile, "utf8");
+}
+
 export async function createIssue(options, { env = process.env, ghCommand = "gh", run = defaultRunChild } = {}) {
+  const body = await resolveCreateBody(options);
+  if (typeof body !== "string" || body.trim().length === 0) {
+    const source = options.bodyFile !== undefined ? `--body-file ${options.bodyFile}` : "--body";
+    throw new Error(`issue body resolved empty from ${source} — refusing to create a bodyless issue`);
+  }
   const args = buildCreateArgs(options);
   const result = await run(ghCommand, args, env);
   if (result.code !== 0) {
@@ -126,12 +155,55 @@ export async function buildEditArgs(options) {
   return { args, edited };
 }
 
+// gh's own --reason values are space-separated ("not planned"), but the
+// CLI-facing flag value stays the underscore form (`not_planned`) since it's
+// stable and shell-friendly without quoting; map it here at the gh-args
+// boundary rather than changing the public flag value.
+const REASON_ARG_BY_CLI_VALUE = { not_planned: "not planned" };
+
+// Build the `gh issue close`/`gh issue reopen` args for a --state change. Kept
+// as a separate `gh` call from `gh issue edit` — that command has no --state
+// flag, so a state change is its own invocation, run after the edit call.
+export function buildStateChangeArgs(options) {
+  if (options.state === "closed") {
+    const args = ["issue", "close", String(options.issue), "--repo", options.repo];
+    if (options.reason !== undefined) {
+      args.push("--reason", REASON_ARG_BY_CLI_VALUE[options.reason] ?? options.reason);
+    }
+    return args;
+  }
+  if (options.state !== "open") {
+    // Fail closed: this is an exported seam, so an unexpected state must never
+    // silently degrade into a reopen.
+    throw new Error(`invalid state ${JSON.stringify(options.state)} — expected "open" or "closed"`);
+  }
+  return ["issue", "reopen", String(options.issue), "--repo", options.repo];
+}
+
 export async function editIssue(options, { env = process.env, ghCommand = "gh", run = defaultRunChild } = {}) {
   const { args, edited } = await buildEditArgs(options);
-  const result = await run(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh issue edit failed: ${detail}`);
+  // Skip the edit call entirely when --state is the only change requested —
+  // `gh issue edit` with no field flags errors ("no changed fields").
+  if (edited.length > 0) {
+    const result = await run(ghCommand, args, env);
+    if (result.code !== 0) {
+      const detail = result.stderr.trim() || `exit code ${result.code}`;
+      throw new Error(`gh issue edit failed: ${detail}`);
+    }
+  }
+  if (options.state !== undefined) {
+    const stateArgs = buildStateChangeArgs(options);
+    const result = await run(ghCommand, stateArgs, env);
+    if (result.code !== 0) {
+      const verb = options.state === "closed" ? "close" : "reopen";
+      const detail = result.stderr.trim() || `exit code ${result.code}`;
+      // Surface the edits that DID land before the state change failed, so a
+      // caller (or a human reading the error) knows the field edits are not
+      // rolled back — only the state change itself failed.
+      const landed = edited.length > 0 ? ` after edits were applied: ${edited.join(", ")}` : "";
+      throw new Error(`state change failed${landed} — gh issue ${verb} failed: ${detail}`);
+    }
+    edited.push("state");
   }
   return { ok: true, repo: options.repo, issue: options.issue, edited };
 }

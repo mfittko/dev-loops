@@ -199,7 +199,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "reconcile-draft": "Reconcile non-draft PR",
   },
   issue: {
-    edit: "Edit issue title/body/assignees/milestone",
+    edit: "Edit issue title/body/assignees/milestone/state (close/reopen)",
     create: "Create an issue",
   },
   queue: QUEUE_DESCRIPTIONS,
