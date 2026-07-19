@@ -542,7 +542,12 @@ active): each required `fanout_fanin` gate's ledger must record internally-consi
 provenance with `provenance.distinctReviewers >= max(2, <fresh-angle count>)` — a floor of
 **2** is the smallest count that is not a single agent, and the floor SCALES UP with the
 number of fresh (non-carried) angles recorded in `perAngle`, since a compliant ledger
-can never have fewer distinct fresh reviewers than fresh angles. When the flag is off,
+can never have fewer distinct fresh reviewers than fresh angles. The read path also
+re-validates the per-identity pairing itself (the same `fanoutReviewerPairingError`
+check as the write path, at both the pre-merge enforcement and the cross-checkout
+ledger selector): the ledger is a worktree-local file, so the reader never assumes the
+write-time floor produced it — a hand-crafted padded ledger that meets the cardinality
+floor still fails. When the flag is off,
 behavior is byte-identical to today (no new failures) — the Claude-Code path, which
 already honors child fan-out, is a validated no-op.
 
