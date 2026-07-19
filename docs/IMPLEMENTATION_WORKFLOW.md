@@ -105,7 +105,7 @@ Keep issue-specific execution plans in GitHub issues/PRs or `tmp/`, not in repo-
 When the user explicitly chooses the local phased path:
 - work one phase at a time
 - refine the active phase before coding it
-- use the dedicated refiner role for phase-refinement work when available, while escalating RFC-worthy decisions to the parent session / human operator; persist accepted decisions as ADRs per `skills/docs/decision-record-contract.md`
+- use the dedicated refiner role for phase-refinement work when available, while escalating RFC-worthy decisions to the parent session / human operator; persist accepted decisions as ADRs per the [decision record contract](../skills/docs/decision-record-contract.md)
 - when the active local spec is tracker-backed, treat the tracker issue as canonical and do not bootstrap a duplicate phase doc
 - keep durable decisions in docs and execution traces in `tmp/`
 - use fan-out / fan-in / review before implementation

@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed | Accepted | Superseded by a markdown link to the superseding record (`Superseded by` + link)
+<!-- exactly one of: Proposed / Accepted / "Superseded by" + a markdown link to the superseding record — see ADR-STATUS-VALUES -->
+Proposed
 
 ## Context
 
