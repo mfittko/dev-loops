@@ -308,9 +308,10 @@ test("ensure: a real node process resolves @dev-loops/core to the worktree's OWN
       encoding: "utf8",
     });
     const { resolved, marker } = JSON.parse(out);
-    const resolvedPath = new URL(resolved).pathname;
+    const { fileURLToPath } = await import("node:url");
+    const resolvedPath = fileURLToPath(resolved);
     const { realpathSync } = await import("node:fs");
-    assert.equal(path.dirname(resolvedPath), realpathSync(path.join(res.path, "packages/core")));
+    assert.equal(realpathSync(path.dirname(resolvedPath)), realpathSync(path.join(res.path, "packages/core")));
     assert.equal(marker, "worktree", "resolved module content is the worktree's OWN edit, not the checkout's");
   } finally {
     repo.cleanup();
