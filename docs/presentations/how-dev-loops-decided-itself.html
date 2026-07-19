@@ -253,7 +253,7 @@
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
-          <li>A decision earns a record when it shapes policy or architecture. Routine features and fixes stay out.</li>
+          <li>Records are reserved for decisions that shape policy or architecture; routine features and fixes are not recorded.</li>
           <li>Each record is plain: context, decision, consequences, and a dated link to the accepting pull request or issue.</li>
           <li>When a later decision overturns an earlier one, the old record stays and its status flips to superseded, with a link forward.</li>
           <li>Nothing is quietly deleted, so the history stays legible even where it doubled back.</li>
@@ -276,12 +276,12 @@
         <ul class="tight-list">
           <li>Work flows through a deterministic state graph where the next action for any change is computed from that graph each time (records 0001 and 0002).</li>
           <li>A startup resolver hands back a bounded task with the exact files to read and the exact stop conditions (records 0011 and 0016).</li>
-          <li>Lose a temporary artifact and the run still recovers, because the source of truth is the state graph, which the chat transcript only mirrors.</li>
+          <li>Lose a temporary artifact and the run still recovers, because the source of truth is the state graph, and the chat transcript is a disposable reflection of it.</li>
         </ul>
       </div>
       <div class="glass-card">
         <p class="card-label">Why it matters</p>
-        <p>An agent picks up work mid-flight without guessing. The state is on the board; whoever is free reads the next card and pulls it.</p>
+        <p>An agent picks up work mid-flight and computes the next step from the state graph. The state is on the board; whoever is free reads the next card and pulls it.</p>
       </div>
     </div>
   </div>
@@ -290,7 +290,7 @@
 <section class="slide" id="the-gate">
   <div class="slide-inner">
     <p class="kicker">Era two &middot; day seventeen</p>
-    <h2>The Gate Never Trusts an Assumption</h2>
+    <h2>Every Gate Verdict Comes From a Real Check</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <ul class="tight-list">
@@ -301,7 +301,7 @@
       </div>
       <div class="metric-card">
         <p class="card-label">The failure it closes</p>
-        <p>Once a green result has to come from the real check, the agent can no longer declare success over an unverified assumption. The most common failure of an autonomous coder is closed off at the seam.</p>
+        <p>Once a green result has to come from the real check, the agent's success claim has to match that result. The most common failure of an autonomous coder is closed off at the seam.</p>
       </div>
     </div>
   </div>
@@ -310,7 +310,7 @@
 <section class="slide" id="reversal-local-first">
   <div class="slide-inner">
     <p class="kicker">Era three &middot; the first reversal</p>
-    <h2>Tracker-First Became Local-First</h2>
+    <h2>The Default Flipped to Local-First</h2>
     <div class="grid grid-2">
       <div class="glass-card">
         <p class="card-label">Superseded &mdash; record 0003 (2026-05-15)</p>
@@ -388,7 +388,7 @@
     <div class="hero-card">
       <p class="kicker">What the log is for</p>
       <h2>The Correction Has Something to Point Back To</h2>
-      <p class="hero-copy">The next step is always known, the gate never trusts an assumption, and when a decision turns out wrong, the record of it stays. A decision record takes three paragraphs to write, and skipping it costs weeks later.</p>
+      <p class="hero-copy">The next step is always computable, every gate verdict comes from a real check, and when a decision turns out wrong its record stays. A decision record takes three paragraphs to write and saves weeks of rework later.</p>
     </div>
   </div>
 </section>

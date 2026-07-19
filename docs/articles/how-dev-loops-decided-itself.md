@@ -35,7 +35,7 @@ The record itself is plain: context, decision, consequences, and a dated link to
 
 ## Era one: the next step is always known
 
-The earliest records fix the idea the whole system rests on. Work flows through a deterministic state graph where the next action for any change is computed from that graph each time (records 0001 and 0002). A single startup resolver reads authoritative state and hands back a bounded task with the exact files to read and the exact stop conditions (record 0011, and the handoff envelope in record 0016). Loss of a temporary artifact degrades fidelity and the run still recovers, because the source of truth is the state graph, which the chat transcript only mirrors.
+The earliest records fix the idea the whole system rests on. Work flows through a deterministic state graph where the next action for any change is computed from that graph each time (records 0001 and 0002). A single startup resolver reads authoritative state and hands back a bounded task with the exact files to read and the exact stop conditions (record 0011, and the handoff envelope in record 0016). Loss of a temporary artifact degrades fidelity and the run still recovers, because the source of truth is the state graph, and the chat transcript is a disposable reflection of it.
 
 This is what lets an agent pick up work mid-flight without guessing. The state is on the board; whoever is free reads the next card and pulls it.
 
@@ -71,6 +71,6 @@ The process is still evolving, and the log says so. Two of forty decisions were 
 
 ## What the log is for
 
-A decision record takes three paragraphs to write, and skipping it costs weeks later. Skip it, and six weeks on nobody remembers whether the absolute links in the installed docs were a considered choice or an accident, whether the retrospective was meant to block merges, whether one-reviewer-per-angle was a rule or a habit. The log answers all three, with dates and links, because someone wrote three paragraphs at the moment the decision was made.
+A decision record takes three paragraphs to write and saves weeks of rework later. Skip it, and six weeks on nobody remembers whether the absolute links in the installed docs were a considered choice or an accident, whether the retrospective was meant to block merges, whether one-reviewer-per-angle was a rule or a habit. The log answers all three, with dates and links, because someone wrote three paragraphs at the moment the decision was made.
 
 That is the whole practice. The next step is always known, the gate never trusts an assumption, and when a decision turns out wrong, the record of it stays — so the correction has something to point back to.
