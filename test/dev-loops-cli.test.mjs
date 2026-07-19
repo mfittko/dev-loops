@@ -8,6 +8,7 @@ import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { createCliRuntime, runCli } from "../cli/index.mjs";
+import { SETUP_GUIDANCE } from "../lib/dev-loops-core.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -110,6 +111,38 @@ test("CLI renderer keeps shared status behavior and shell-friendly argument erro
   assert.equal(malformedStdout.read(), "");
   assert.match(malformedStderr.read(), /`status` does not accept additional arguments\./);
   assert.match(malformedStderr.read(), /Usage:\n- dev-loops status/);
+});
+
+test("CLI setup guidance for failing checks is the shared core map (#1421)", async () => {
+  const failingRuntime = createRuntime({
+    async commandExists() {
+      return false;
+    },
+    async ghAuthOk() {
+      return false;
+    },
+    async insideGitRepo() {
+      return false;
+    },
+    async getSubagentAvailability() {
+      return { ok: false, availableDetail: "n/a", unavailableDetail: "missing subagent" };
+    },
+  });
+
+  const statusStdout = createBufferStream();
+  const statusExitCode = await runCli({
+    argv: ["status"],
+    runtime: failingRuntime,
+    stdout: statusStdout.stream,
+    stderr: createBufferStream().stream,
+  });
+
+  assert.equal(statusExitCode, 0);
+  const output = statusStdout.read();
+  assert(output.includes(`1. ${SETUP_GUIDANCE["gh-installed"]}`));
+  assert(output.includes(`2. ${SETUP_GUIDANCE["gh-auth"]}`));
+  assert(output.includes(`3. ${SETUP_GUIDANCE["subagent-command"]}`));
+  assert(output.includes(`4. ${SETUP_GUIDANCE["git-repo"]}`));
 });
 
 test("CLI help leads with dev-loop as the primary workflow entry", async () => {

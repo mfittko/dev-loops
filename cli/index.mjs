@@ -11,6 +11,7 @@ import {
   renderCheckLines,
   summarizeChecks,
   DEV_LOOP_CHECK_IDS,
+  SETUP_GUIDANCE,
 } from "../lib/dev-loops-core.mjs";
 
 // Zero-dep preflight: a Claude Code plugin marketplace checkout ships
@@ -212,13 +213,6 @@ const SUBCOMMAND_DESCRIPTIONS = {
   },
 };
 
-const CLI_SETUP_GUIDANCE = {
-  "gh-installed": "Install GitHub CLI to enable remote GitHub/Copilot workflows.",
-  "gh-auth": "Run `gh auth login` so remote GitHub/Copilot workflows can use your GitHub session.",
-  "subagent-command": "Install or enable subagent support so the `subagent` command is available.",
-  "git-repo": "Run the command from a git repository checkout before using repo-scoped workflows.",
-};
-
 function spawnResult(command, args, options = {}) {
   try {
     const result = spawnSync(command, args, { encoding: "utf8", ...options });
@@ -312,7 +306,7 @@ function buildCliUsageLines(action) {
 
 function orderedCliSetupSteps(checks) {
   const byId = new Map(checks.map((c) => [c.id, c]));
-  const steps = [...new Set(DEV_LOOP_CHECK_IDS.filter((id) => byId.get(id)?.ok === false).map((id) => CLI_SETUP_GUIDANCE[id]))];
+  const steps = [...new Set(DEV_LOOP_CHECK_IDS.filter((id) => byId.get(id)?.ok === false).map((id) => SETUP_GUIDANCE[id]))];
   if (steps.length > 0) return steps.map((step, i) => `${i + 1}. ${step}`);
   return [
     "1. Use `/dev-loop` (Claude Code) or `/skill:dev-loop` (Pi) to start or continue a dev loop — the single public entry.",
