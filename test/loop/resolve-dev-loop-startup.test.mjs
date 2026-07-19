@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { resolverTestEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   buildResolveDevLoopStartupResult,
@@ -207,7 +207,7 @@ test("buildResolveDevLoopStartupResult normalizes a null input instead of throwi
   // throw a TypeError before routing can fail closed.
   let result;
   assert.doesNotThrow(() => {
-    result = buildResolveDevLoopStartupResult(null, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } });
+    result = buildResolveDevLoopStartupResult(null, { env: resolverTestEnv() });
   });
   assert.ok(result && typeof result === "object");
   assert.ok(typeof result.bundleKind === "string");
@@ -224,7 +224,7 @@ test("buildResolveDevLoopStartupResult maps local implementation to the local ro
     },
     artifactState: "not_applicable",
     loopState: "active",
-  }, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } });
+  }, { env: resolverTestEnv() });
 
   assert.equal(result.bundleKind, "resolved");
   assert.equal(result.selectedStrategy, "local_implementation");
@@ -248,7 +248,7 @@ test("buildResolveDevLoopStartupResult maps the ui-review intent to the ui-revie
     },
     artifactState: "open",
     loopState: "pr_ui_review_start",
-  }, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" }, cwd: os.tmpdir() });
+  }, { env: resolverTestEnv(), cwd: os.tmpdir() });
 
   assert.equal(result.bundleKind, "resolved");
   assert.equal(result.selectedStrategy, "ui_review");
@@ -272,7 +272,7 @@ test("buildResolveDevLoopStartupResult maps linked Copilot follow-up to the PR f
     artifactState: "open",
     issueLinkageResolution: "resolved_linked_pr",
     loopState: "unresolved_feedback_present",
-  }, { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: os.tmpdir() });
+  }, { env: resolverTestEnv(), cwd: os.tmpdir() });
 
   assert.equal(result.bundleKind, "resolved");
   assert.equal(result.selectedStrategy, "copilot_pr_followup");
@@ -480,7 +480,7 @@ test("buildResolveDevLoopStartupResult maps durable-artifact 'required' to check
         artifactState: "not_applicable",
         loopState: "active",
       },
-      { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: tempDir },
+      { env: resolverTestEnv(), cwd: tempDir },
     );
 
     // The resolver auto-reads the checkpoint file and maps "required" → "missing".
@@ -519,7 +519,7 @@ test("buildResolveDevLoopStartupResult overrides caller-provided state with on-d
         loopState: "active",
         retrospectiveCheckpointState: "complete",
       },
-      { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: tempDir },
+      { env: resolverTestEnv(), cwd: tempDir },
     );
 
     // On-disk "required" overrides caller-provided "complete". The resolver
@@ -555,7 +555,7 @@ test("buildResolveDevLoopStartupResult fails closed when checkpoint file is malf
         artifactState: "not_applicable",
         loopState: "active",
       },
-      { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: tempDir },
+      { env: resolverTestEnv(), cwd: tempDir },
     );
 
     // Malformed file -> fail closed with missing checkpoint state -> needs_reconcile.
@@ -590,7 +590,7 @@ test("buildResolveDevLoopStartupResult fails closed when checkpoint file has unr
         artifactState: "not_applicable",
         loopState: "active",
       },
-      { env: { DEVLOOPS_RUN_ID: "test-run-123" }, cwd: tempDir },
+      { env: resolverTestEnv(), cwd: tempDir },
     );
 
     // Unrecognized state -> fail closed with missing -> needs_reconcile.
@@ -616,7 +616,7 @@ test("buildResolveDevLoopStartupResult rejects async-required strategy without D
       issueLinkageResolution: "resolved_linked_pr",
       loopState: "unresolved_feedback_present",
     },
-    { env: {} },
+    { env: resolverTestEnv({ DEVLOOPS_RUN_ID: undefined }) },
   );
 
   assert.equal(result.ok, false);
@@ -638,7 +638,7 @@ test("buildResolveDevLoopStartupResult allows async-required strategy with DEVLO
       issueLinkageResolution: "resolved_linked_pr",
       loopState: "unresolved_feedback_present",
     },
-    { env: { DEVLOOPS_RUN_ID: "test-run-123" } },
+    { env: resolverTestEnv() },
   );
 
   assert.equal(result.ok, true);
@@ -659,7 +659,7 @@ test("buildResolveDevLoopStartupResult allows async-required strategy when async
       issueLinkageResolution: "resolved_linked_pr",
       loopState: "unresolved_feedback_present",
     },
-    { env: {}, asyncStartMode: "allowed" },
+    { env: resolverTestEnv({ DEVLOOPS_RUN_ID: undefined }), asyncStartMode: "allowed" },
   );
 
   assert.equal(result.ok, true);
@@ -679,7 +679,7 @@ test("buildResolveDevLoopStartupResult does not enforce async-start on local_imp
       artifactState: "not_applicable",
       loopState: "active",
     },
-    { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } },
+    { env: resolverTestEnv() },
   );
 
   assert.equal(result.ok, true);
@@ -859,7 +859,7 @@ test("resolver bypasses worktree check with DEVLOOPS_WORKTREE_BYPASS=1 from main
     const env = {
       ...process.env,
       PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}`,
-      DEVLOOPS_WORKTREE_BYPASS: "1",
+      ...resolverTestEnv(),
     };
 
     const result = buildResolveDevLoopStartupResult(
@@ -893,7 +893,7 @@ test("resolver does not block non-local_implementation strategies from main chec
     const env = {
       ...process.env,
       PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}`,
-      DEVLOOPS_RUN_ID: "test-run-123",
+      ...resolverTestEnv(),
     };
 
     const result = buildResolveDevLoopStartupResult(
@@ -1006,10 +1006,7 @@ test("runCli --issue uses config inputSource=phase-docs to choose phase-doc loca
     const ghStub = await writeGhStubHelper(tempDir, []);
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: {
-        ...ghStub.env,
-        DEVLOOPS_WORKTREE_BYPASS: "1",
-      },
+      env: { ...ghStub.env, ...resolverTestEnv() },
     });
 
     assert.equal(result.code, 0, result.stderr);
@@ -1051,15 +1048,10 @@ for (const strategyValue of ["tracker-first", "github-first"]) {
       const ghStub = await writeGhStubHelper(tempDir, [], { repeatLastOnOverflow: true, logCalls: true });
       const result = await runNode(["--issue", "511"], {
         cwd: tempDir,
-        env: {
-          ...ghStub.env,
-          // Satisfy the async-start contract explicitly (CI has no ambient
-          // DEVLOOPS_RUN_ID; without this the CLI fails closed and the
-          // tracker-read path is never reached).
-          DEVLOOPS_RUN_ID: "test-run-123",
-          DEVLOOPS_WORKTREE_BYPASS: "1",
-          DEVLOOPS_OWNERSHIP_BYPASS: "1",
-        },
+        // resolverTestEnv() satisfies the async-start contract explicitly (CI
+        // has no ambient run-id marker; without it the CLI fails closed and
+        // the tracker-read path is never reached).
+        env: { ...ghStub.env, ...resolverTestEnv() },
       });
 
       assert.equal(result.code, 0, result.stderr);
@@ -1093,7 +1085,7 @@ test("local-first phase-doc intake fires no tracker artifact / Copilot call befo
     const ghStub = await writeGhStubHelper(tempDir, [], { logCalls: true });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv() },
     });
 
     assert.equal(result.code, 0, result.stderr);
@@ -1137,11 +1129,7 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "735"], {
       cwd: tempDir,
-      env: {
-        ...ghStub.env,
-        DEVLOOPS_WORKTREE_BYPASS: "1",
-        DEVLOOPS_RUN_ID: "test-run-copilot-author",
-      },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_RUN_ID: "test-run-copilot-author", DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1176,11 +1164,7 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "735"], {
       cwd: tempDir,
-      env: {
-        ...ghStub.env,
-        DEVLOOPS_WORKTREE_BYPASS: "1",
-        DEVLOOPS_RUN_ID: "test-run-external-author",
-      },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_RUN_ID: "test-run-external-author", DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1228,7 +1212,7 @@ test("--issue assigned_to_other fails closed naming the foreign assignee (no rea
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1254,7 +1238,7 @@ test("--issue: a claim-contested race's raced-past loser sees only the tiebreak 
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1274,7 +1258,7 @@ test("--issue unassigned fails closed naming the exact claim command (no readine
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1298,7 +1282,7 @@ test("--issue assigned to the viewer (assigned_to_me) proceeds", async () => {
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1321,7 +1305,7 @@ test("DEVLOOPS_OWNERSHIP_BYPASS=1 skips the ownership gate for read-only inspect
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_OWNERSHIP_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv() },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1344,7 +1328,7 @@ test("--issue assigned_to_copilot is unchanged: proceeds and never resolves a vi
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1365,7 +1349,7 @@ test("--issue fails closed with a distinct reason when the viewer login cannot b
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1389,7 +1373,7 @@ test("--pr assigned_to_other fails closed naming the foreign assignee", async ()
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1411,7 +1395,7 @@ test("--pr unassigned fails closed naming the exact claim command", async () => 
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1437,7 +1421,7 @@ test("--pr assigned to the viewer proceeds", async () => {
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1464,7 +1448,7 @@ test("--pr --ui-review routes to the ui_review strategy end-to-end (issue #1362)
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740", "--ui-review"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1494,7 +1478,7 @@ test("--pr --ui-review still fails closed on foreign PR ownership (no bypass, is
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740", "--ui-review"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1517,7 +1501,7 @@ test("--pr assigned to copilot-swe-agent takes the unchanged copilot path, not t
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1550,7 +1534,7 @@ test("PR assigned to copilot skips the linked-issue ownership check entirely", a
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1624,7 +1608,7 @@ test("--issue co-assigned to the viewer AND another human is contested (assigned
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1656,7 +1640,7 @@ test("--pr continuation fails closed when the PR's linked issue is assigned to a
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1687,7 +1671,7 @@ test("--pr continuation proceeds when the linked issue is merely unassigned (onl
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_RUN_ID: "test-run-123" },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1754,7 +1738,7 @@ test("buildResolveDevLoopStartupResult threads canonicalSpecSource:pr_body onto 
       authorization: "authorized",
     },
   };
-  const result = buildResolveDevLoopStartupResult(input, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } });
+  const result = buildResolveDevLoopStartupResult(input, { env: resolverTestEnv() });
   assert.equal(result.selectedStrategy, "local_implementation");
   assert.equal(result.canonicalSpecSource, "pr_body");
 });
@@ -1777,7 +1761,7 @@ test("buildResolveDevLoopStartupResult omits canonicalSpecSource on the default 
       authorization: "authorized",
     },
   };
-  const result = buildResolveDevLoopStartupResult(input, { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } });
+  const result = buildResolveDevLoopStartupResult(input, { env: resolverTestEnv() });
   assert.equal("canonicalSpecSource" in result, false);
 });
 
@@ -1799,7 +1783,7 @@ test("ADDITIVE: --lightweight only adds canonicalSpecSource; the rest of the res
       authorization: "authorized",
     },
   };
-  const opts = { env: { DEVLOOPS_WORKTREE_BYPASS: "1" } };
+  const opts = { env: resolverTestEnv() };
   const def = buildResolveDevLoopStartupResult(structuredClone(baseInput), opts);
   const lite = buildResolveDevLoopStartupResult({ ...structuredClone(baseInput), canonicalSpecSource: "pr_body" }, opts);
   assert.equal(lite.canonicalSpecSource, "pr_body");
@@ -1824,7 +1808,7 @@ test("runCli --issue --lightweight threads canonicalSpecSource:pr_body onto the 
     const ghStub = await writeGhStubHelper(tempDir, []);
     const result = await runNode(["--issue", "1025", "--lightweight"], {
       cwd: tempDir,
-      env: { ...ghStub.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...ghStub.env, ...resolverTestEnv() },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -2142,7 +2126,7 @@ test("runCli --input STRIPS an injected canonicalSpecSource (injection guard, en
     });
     const result = await runNode(["--input", inputPath], {
       cwd: tempDir,
-      env: { ...process.env, DEVLOOPS_WORKTREE_BYPASS: "1" },
+      env: { ...process.env, ...resolverTestEnv() },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout.trim());
