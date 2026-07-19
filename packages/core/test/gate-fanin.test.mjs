@@ -282,6 +282,17 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
     assert.match(error, /inline_single_agent/);
   });
 
+  test("a padded ledger (duplicate-angle entries) cannot mask a reviewer covering two fresh angles", () => {
+    // 2 distinct identities >= 2 distinct angles would satisfy a cardinality
+    // check, but reviewer "x" still covers both fresh angles.
+    const error = fanoutReviewerPairingError([
+      { angle: "a", reviewer: "x" },
+      { angle: "b", reviewer: "x" },
+      { angle: "a", reviewer: "y" },
+    ]);
+    assert.match(error, /reviewer "x" is recorded for fresh angles: a, b/);
+  });
+
   test("detects a fresh angle recording no reviewer identity at all", () => {
     const error = fanoutReviewerPairingError([
       { angle: "a", reviewer: "x" },

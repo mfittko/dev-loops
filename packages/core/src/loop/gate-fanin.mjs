@@ -182,7 +182,9 @@ export function fanoutReviewerPairingError(perAngle) {
   }
   const freshAngleCount = freshAngles.size;
   const distinctFreshReviewers = anglesByIdentity.size;
-  if (distinctFreshReviewers >= freshAngleCount) return null;
+  // Enforce the relation itself, not its cardinality shadow: a padded ledger
+  // (duplicate-angle entries) can satisfy distinctReviewers >= freshAngleCount
+  // while one identity still covers two fresh angles.
   const details = [];
   for (const [id, angles] of anglesByIdentity) {
     if (angles.size > 1) details.push(`reviewer "${id}" is recorded for fresh angles: ${[...angles].join(", ")}`);
@@ -190,7 +192,8 @@ export function fanoutReviewerPairingError(perAngle) {
   if (anonymousAngles.length > 0) {
     details.push(`fresh angle(s) with no recorded reviewer identity: ${anonymousAngles.join(", ")}`);
   }
-  return `fan-out provenance violates the one-scoped-reviewer-per-angle contract (${distinctFreshReviewers} distinct reviewer(s) for ${freshAngleCount} fresh angle(s))${details.length > 0 ? `: ${details.join("; ")}` : ""} — use executionMode inline_single_agent + --inline-reason for a sanctioned single-reviewer run`;
+  if (details.length === 0) return null;
+  return `fan-out provenance violates the one-scoped-reviewer-per-angle contract (${distinctFreshReviewers} distinct reviewer(s) for ${freshAngleCount} fresh angle(s)): ${details.join("; ")} — use executionMode inline_single_agent + --inline-reason for a sanctioned single-reviewer run`;
 }
 
 /**

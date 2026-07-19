@@ -21,7 +21,7 @@ Optional:
   --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead? }] }
                                  carriedFromHead (7-64 hex) marks an angle whose clean verdict was carried forward from that prior head (reviewer stays the prior reviewer)
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
-                                 no two fresh (non-carried) angles may share one reviewer identity — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
+                                 no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}

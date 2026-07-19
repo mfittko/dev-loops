@@ -516,13 +516,17 @@ recorded in `perAngle` (distinct by `reviewer`, else `dispatchId`; a bare `{angl
 not a countable reviewer). You cannot claim more reviewers than you recorded dispatch
 entries for — this closes the `{distinctReviewers: 2, perAngle: []}` loophole.
 
-**One scoped reviewer per fresh angle (always-on write-time floor, #1431).** `fanout_fanin`
+**One scoped reviewer per fresh angle (always-on write-time floor).** `fanout_fanin`
 execution mandates one independent reviewer per resolved angle — recording an
 internally-consistent `distinctReviewers` count is not enough on its own, because one
 reviewer could still cover two angles without that count ever going inconsistent. The
 write path additionally rejects, unconditionally (not gated by `requireFanoutProvenance`),
 any `perAngle` where two **fresh** angles (angles WITHOUT `carriedFromHead`) share one
-reviewer identity — the error names the colliding angle(s). A `carriedFromHead` angle
+reviewer identity, **and** any fresh angle recording no reviewer identity at all (a bare
+`{angle}` entry is permitted only as a carried entry; a fresh entry must carry `reviewer`
+or `dispatchId`) — the error names the colliding or anonymous angle(s). The check enforces
+the per-identity relation itself, so a padded ledger (duplicate-angle entries inflating
+the distinct-reviewer count) cannot slip one reviewer covering two fresh angles. A `carriedFromHead` angle
 keeps its prior head's reviewer and is exempt from this pairing check (see
 [Angle carry-forward](#angle-carry-forward-fail-closed)): reusing that reviewer's
 identity on a carried angle is honest attribution, not a collision. The sanctioned

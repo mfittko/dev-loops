@@ -1650,10 +1650,11 @@ export function resolveRequireFanoutEvidence(config) {
 }
 
 /**
- * Minimum distinct reviewer count for a fanout_fanin ledger to satisfy
- * requireFanoutProvenance. A floor of 2 is the smallest count that is not a
- * single agent; it raises the bar but does not prove independence (provenance
- * is self-reported — see the honest caveat in
+ * ABSOLUTE minimum distinct reviewer count for a fanout_fanin ledger to
+ * satisfy requireFanoutProvenance; the effective read-time floor scales to
+ * max(this, the ledger's fresh-angle count). A floor of 2 is the smallest
+ * count that is not a single agent; it raises the bar but does not prove
+ * independence (provenance is self-reported — see the honest caveat in
  * skills/docs/gate-review-sub-loop-contract.md).
  */
 export const FANOUT_PROVENANCE_MIN_REVIEWERS = 2;
