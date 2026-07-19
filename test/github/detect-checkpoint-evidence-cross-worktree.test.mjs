@@ -232,6 +232,86 @@ test("residual shadow: a below-floor ledger in cwd checkout does NOT shadow a sa
   }
 });
 
+// Hand-craft a ledger file directly (bypassing writeGateFindingsLog): the read
+// path must not trust that the write-time floor produced the worktree-local
+// file, so forged ledgers are exactly what these fixtures simulate.
+async function writeRawLedger(repoRoot, provenance) {
+  const logPath = buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" });
+  const fullPath = path.join(repoRoot, logPath);
+  await mkdir(path.dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, JSON.stringify({
+    repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD,
+    verdict: "clean", loggedAt: "2026-07-19T00:00:00.000Z", findings: [], provenance,
+  }), "utf8");
+}
+
+test("selector scaled floor: a hand-crafted 3-fresh-angle/2-reviewer shadow does NOT satisfy (floor scales past the constant)", async () => {
+  const { base, repoA, repoB } = await makeRepoWithWorktrees();
+  try {
+    // repoB (cwd, enumerated first): distinctReviewers 2 meets the CONSTANT
+    // floor but not the scaled max(2, 3 fresh angles) — a reverted selector
+    // would wrongly accept this shadow.
+    await writeRawLedger(repoB, {
+      distinctReviewers: 2,
+      perAngle: [
+        { angle: "dry", reviewer: "review-a" },
+        { angle: "kiss", reviewer: "review-b" },
+        { angle: "pr-checklist-matrix", reviewer: "review-a" },
+      ],
+    });
+    await writeGateFindingsLog(
+      {
+        repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
+      },
+      { repoRoot: repoA },
+    );
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: "42", currentHeadSha: HEAD,
+      draftGateMarker: NO_DRAFT_MARKER, preApprovalGateMarker: PA_MARKER,
+      config: PROV_CONFIG, cwd: repoB,
+    });
+    const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.ok(pa && pa.provenance, "must read the satisfying provenance, not the under-scaled shadow");
+    assert.equal(pa.provenance.distinctReviewers, 3, "satisfying ledger preferred over the under-scaled-floor shadow");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("selector pairing: a hand-crafted PADDED shadow (cardinality met, one reviewer on two fresh angles) does NOT satisfy", async () => {
+  const { base, repoA, repoB } = await makeRepoWithWorktrees();
+  try {
+    await writeRawLedger(repoB, {
+      distinctReviewers: 3,
+      perAngle: [
+        { angle: "dry", reviewer: "review-a" },
+        { angle: "kiss", reviewer: "review-a" },
+        { angle: "dry", reviewer: "review-b" },
+        { angle: "pr-checklist-matrix", reviewer: "review-c" },
+      ],
+    });
+    await writeGateFindingsLog(
+      {
+        repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
+      },
+      { repoRoot: repoA },
+    );
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: "42", currentHeadSha: HEAD,
+      draftGateMarker: NO_DRAFT_MARKER, preApprovalGateMarker: PA_MARKER,
+      config: PROV_CONFIG, cwd: repoB,
+    });
+    const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.ok(pa && pa.provenance, "must read the satisfying provenance, not the padded shadow");
+    const reviewers = new Set(pa.provenance.perAngle.map((e) => e.reviewer));
+    assert.equal(reviewers.size, 3, "each fresh angle keeps its own reviewer in the accepted ledger");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 // --- Angle-coverage enforcement blocks merge on bad provenance (#1196) ---
 // Config declaring a mandatory preApproval angle, independent of requireFanoutProvenance.
 const ANGLE_CONFIG = {
