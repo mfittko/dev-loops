@@ -198,11 +198,13 @@ test("editIssue: --state closed (no reason) calls gh issue close and reports sta
   assert.deepEqual(calls, [["issue", "close", "9", "--repo", "o/n"]]);
 });
 
-test("editIssue: --state closed --reason not_planned passes --reason to gh issue close", async () => {
+test("editIssue: --state closed --reason not_planned maps to gh's space-form \"not planned\"", async () => {
+  // gh issue close rejects the underscore form client-side; the CLI-facing flag value
+  // stays `not_planned` (stable/shell-friendly) but the gh arg must be the space form.
   const { run, calls } = stubGh();
   const result = await editIssue({ repo: "o/n", issue: 9, state: "closed", reason: "not_planned" }, { run });
   assert.deepEqual(result.edited, ["state"]);
-  assert.deepEqual(calls, [["issue", "close", "9", "--repo", "o/n", "--reason", "not_planned"]]);
+  assert.deepEqual(calls, [["issue", "close", "9", "--repo", "o/n", "--reason", "not planned"]]);
 });
 
 test("editIssue: --state open calls gh issue reopen", async () => {
@@ -227,6 +229,43 @@ test("editIssue: throws when the gh issue close call fails", async () => {
   await assert.rejects(
     () => editIssue({ repo: "o/n", issue: 9, state: "closed" }, { run }),
     /gh issue close failed: already closed/,
+  );
+});
+
+test("editIssue: a close failure after a successful field edit reports the edits that landed", async () => {
+  const calls = [];
+  const run = async (_cmd, args) => {
+    calls.push(args);
+    // First call (the edit) succeeds; second call (the close) fails.
+    return calls.length === 1
+      ? { code: 0, stdout: "", stderr: "" }
+      : { code: 1, stdout: "", stderr: "already closed" };
+  };
+  await assert.rejects(
+    () => editIssue({ repo: "o/n", issue: 9, title: "New", state: "closed" }, { run }),
+    /state change failed after edits were applied: title — gh issue close failed: already closed/,
+  );
+});
+
+test("editIssue: throws when the gh issue reopen call fails", async () => {
+  const { run } = stubGh({ code: 1, stderr: "not closed" });
+  await assert.rejects(
+    () => editIssue({ repo: "o/n", issue: 9, state: "open" }, { run }),
+    /gh issue reopen failed: not closed/,
+  );
+});
+
+test("editIssue: a reopen failure after a successful field edit reports the edits that landed", async () => {
+  const calls = [];
+  const run = async (_cmd, args) => {
+    calls.push(args);
+    return calls.length === 1
+      ? { code: 0, stdout: "", stderr: "" }
+      : { code: 1, stdout: "", stderr: "not closed" };
+  };
+  await assert.rejects(
+    () => editIssue({ repo: "o/n", issue: 9, body: "New body", state: "open" }, { run }),
+    /state change failed after edits were applied: body — gh issue reopen failed: not closed/,
   );
 });
 

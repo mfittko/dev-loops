@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -110,6 +110,32 @@ test("createIssue: fails closed on an empty/whitespace-only --body", async () =>
     () => createIssue({ repo: "o/n", title: "T", body: "   \n", labels: [], assignees: [] }, { run }),
     /issue body resolved empty/,
   );
+});
+
+test("createIssue: rejects a --body-file that resolves to a non-regular file (a symlink to /dev/null)", async () => {
+  // A symlink to a device dodges the CLI layer's literal stdin-path regex (it
+  // isn't spelled "-"/"/dev/stdin"/etc.) but still isn't a regular file once
+  // resolved — the core guard must catch it by resolving the symlink, not the
+  // literal path string.
+  const dir = mkdtempSync(join(tmpdir(), "create-issue-"));
+  const linkPath = join(dir, "not-a-file");
+  symlinkSync("/dev/null", linkPath);
+  const { run } = stubGh();
+  await assert.rejects(
+    () => createIssue({ repo: "o/n", title: "T", bodyFile: linkPath, labels: [], assignees: [] }, { run }),
+    /--body-file must be a regular file/,
+  );
+});
+
+test("createIssue: accepts a --body-file that is a symlink to a real regular file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "create-issue-"));
+  const realPath = join(dir, "real.md");
+  writeFileSync(realPath, "Body from a symlinked file");
+  const linkPath = join(dir, "link.md");
+  symlinkSync(realPath, linkPath);
+  const { run, calls } = stubGh();
+  await createIssue({ repo: "o/n", title: "T", bodyFile: linkPath, labels: [], assignees: [] }, { run });
+  assert.deepEqual(calls[0], ["issue", "create", "--repo", "o/n", "--title", "T", "--body-file", linkPath]);
 });
 
 test("createIssue: throws when gh fails", async () => {
