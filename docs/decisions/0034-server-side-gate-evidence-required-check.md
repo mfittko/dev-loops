@@ -1,0 +1,17 @@
+# 0034. Enforce gate evidence server-side via a required CI check, keeping the findings-log ledger client-side
+
+## Status
+
+Accepted
+
+## Context
+
+Every gate-evidence enforcement point lived on the client / `gh`-CLI path — the PreToolUse Bash hook and local loop tooling — so any API-driven ready or merge transition (MCP/REST, the web UI, an un-hooked `gh`) reached ready-for-review or merge without ever touching draft-gate or pre-approval-gate verification. [PR 1383](https://github.com/mfittko/dev-loops/pull/1383) closed that bypass with a `gate-evidence` workflow (`.github/workflows/gate-evidence.yml`) that re-runs `scripts/github/detect-checkpoint-evidence.mjs` on every non-draft PR, and `skills/docs/merge-preconditions.md` codifies it as the server-side merge precondition. Two gaps surfaced immediately after: `pull_request` triggers do not re-fire on review-thread resolution, leaving a stale-green window on the thread axis ([issue 1385](https://github.com/mfittko/dev-loops/issues/1385), fixed by [PR 1402](https://github.com/mfittko/dev-loops/pull/1402)), and once required, the check's own commit status deadlocked the loop's pre-approval CI wait ([issue 1412](https://github.com/mfittko/dev-loops/issues/1412), fixed by [PR 1414](https://github.com/mfittko/dev-loops/pull/1414)).
+
+## Decision
+
+We run a `gate-evidence` required CI check that re-executes detect-checkpoint-evidence under GitHub's own `GITHUB_TOKEN` for every non-draft PR, making the platform — not client tooling — the authority for merge preconditions across all paths. The check verifies exactly what a stateless runner can see in public PR state: a clean `draft_gate` comment, a clean current-head `pre_approval_gate` comment, the executionMode / light-mode-inline exception, and unresolved review threads; the worktree-local fan-out findings-log ledger under gitignored `tmp/gate-findings/` is deliberately excluded via `--skip-fanout-ledger-check`, while default client-side callers omit the flag and keep full enforcement. We rejected building an artifact-publishing "un-forgeable provenance bridge" to move the ledger server-side, and we rejected treating a passing-run snapshot as durable: the workflow also re-fires on `pull_request_review` and `pull_request_review_comment` events and posts an explicit commit status to the PR head SHA, closing the thread-axis stale-green window. Because the check's status attaches to the same head SHA the loop polls, the loop's CI-wait logic excludes the gate-evidence status from its own pass/fail set and reports a missing status as pending rather than failure.
+
+## Consequences
+
+The enforcement boundary now sits on the platform, so no choice of client — hooked or not — can reach merge without server-verified gate evidence, and enforcement becomes binding once branch protection on `main` requires the check. The split between server-verifiable evidence (comment verdicts, head SHAs, thread state) and deliberately client-only evidence (the findings-log ledger) is now a documented constraint that future gate work must respect: the ledger's client-side residency is a stated limit, not an oversight. Event-driven re-verification carries a known ceiling — GitHub Actions has no thread-resolve trigger, so a resolve that arrives without any new review activity is only re-caught on the next push, review, or comment. Any tooling that waits on CI must treat the gate-evidence status as self-referential and keep it out of its own readiness calculus, or it deadlocks the very transition the check guards.

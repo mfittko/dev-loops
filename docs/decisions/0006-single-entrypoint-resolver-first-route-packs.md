@@ -1,0 +1,17 @@
+# 0006. Adopt a single public dev-loop entrypoint with resolver-first startup and route packs
+
+## Status
+
+Accepted
+
+## Context
+
+The workflow surface had sprawled into overlapping public skills — copilot-dev-loop, copilot-autopilot, and reviewer loops — each carrying its own drifting startup prose, so agents guessed routes and synthesized state instead of reading it ([PR 88](https://github.com/mfittko/dev-loops/pull/88), [PR 114](https://github.com/mfittko/dev-loops/pull/114)). Skill-driven startup let a session act on stale or invented state because nothing deterministic computed the current route before the LLM started reading instructions. A declutter-first taxonomy ([PR 114](https://github.com/mfittko/dev-loops/pull/114)) and an authoritative startup/resume bundle ([PR 140](https://github.com/mfittko/dev-loops/pull/140)) laid the groundwork; visibility was then narrowed by keeping dev-loop as the only visible entrypoint ([PR 146](https://github.com/mfittko/dev-loops/pull/146)), removing the direct Copilot entrypoints ([PR 153](https://github.com/mfittko/dev-loops/pull/153)), deleting dead seams ([PR 203](https://github.com/mfittko/dev-loops/pull/203)), and collapsing autopilot into the canonical skill ([PR 205](https://github.com/mfittko/dev-loops/pull/205)). The monolithic skill was finally split into route packs with resolver-first startup ([PR 313](https://github.com/mfittko/dev-loops/pull/313)), and the script surface converged the same way onto one CLI subcommand router ([issue 548](https://github.com/mfittko/dev-loops/issues/548), [PR 557](https://github.com/mfittko/dev-loops/pull/557)).
+
+## Decision
+
+Exactly one public entrypoint — the `dev-loop` skill — fronts all workflow entry; internal loop names are demoted from user-facing messaging, and autopilot is collapsed into the façade rather than kept as a parallel surface. Startup runs resolver-first: the deterministic resolver (`resolveAuthoritativeStartupResumeBundle`, invoked via `scripts/loop/resolve-dev-loop-startup.mjs`) computes the authoritative route, `requiredReads`, and `nextAction` before any skill logic executes. The skill acts as a thin dispatcher that loads only the route pack selected by the resolved strategy (copilot-pr-followup, local-implementation, issue-intake, final-approval) and forbids preloading route packs before strategy selection. We rejected the alternative of keeping sibling public entrypoints per loop, and we rejected prose-driven startup where the skill text itself decides the route. The script surface follows the same shape: a single `dev-loops` CLI with a subcommand router replaces scattered standalone scripts.
+
+## Consequences
+
+Every subsequent strategy — spike, ui-review, lightweight — registers as a resolver route behind the façade rather than as a sibling entrypoint, and the resolver already carries `--spike`, `--ui-review`, and `--lightweight` flags on that pattern. Taxonomy guardrail tests (`test/contracts/public-facade-doc-contracts.test.mjs`) enforce that only the workflow-entrypoint skill is user-invocable and that role agents never claim public-entrypoint framing, so the surface cannot silently re-sprawl. "Trust the resolver" became a house rule: sessions read the computed bundle instead of reconstructing state from chat context. The cost is that every new capability pays the resolver-registration tax up front — route, required reads, and next-action wiring — before it can ship.
