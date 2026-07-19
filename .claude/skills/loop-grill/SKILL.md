@@ -140,7 +140,7 @@ dev-loops issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
 
 (source-repo fallback: `node scripts/github/edit-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-body-path>`)
 
-**Post the rationale as a separate results comment** (`GRILL-SUBLOOP-RATIONALE-COMMENT`): the description and the rationale are two distinct artifacts — never merge them. Write the rationale (gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken) to a second tmp file and post it as its own comment titled `🔬 Grill / refinement results`:
+**Post the rationale as a separate results comment** (`GRILL-SUBLOOP-RATIONALE-COMMENT`): the description and the rationale are two distinct artifacts — never merge them. When the operator accepts an escalated RFC-worthy decision from the rationale, it is persisted as an ADR per the [Decision record contract](../docs/decision-record-contract.md). Write the rationale (gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken) to a second tmp file and post it as its own comment titled `🔬 Grill / refinement results`:
 
 ```
 node scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-rationale-path>
