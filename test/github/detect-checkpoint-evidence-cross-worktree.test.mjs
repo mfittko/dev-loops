@@ -250,13 +250,15 @@ test("selector scaled floor: a hand-crafted 3-fresh-angle/2-reviewer shadow does
   try {
     // repoB (cwd, enumerated first): distinctReviewers 2 meets the CONSTANT
     // floor but not the scaled max(2, 3 fresh angles) — a reverted selector
-    // would wrongly accept this shadow.
+    // would wrongly accept this shadow. Each fresh angle keeps its OWN
+    // reviewer so the pairing branch stays silent and ONLY the scaled term
+    // rejects (mutation-isolated: reverting the scaled term must fail this).
     await writeRawLedger(repoB, {
       distinctReviewers: 2,
       perAngle: [
         { angle: "dry", reviewer: "review-a" },
         { angle: "kiss", reviewer: "review-b" },
-        { angle: "pr-checklist-matrix", reviewer: "review-a" },
+        { angle: "pr-checklist-matrix", reviewer: "review-c" },
       ],
     });
     await writeGateFindingsLog(
@@ -305,8 +307,12 @@ test("selector pairing: a hand-crafted PADDED shadow (cardinality met, one revie
     });
     const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
     assert.ok(pa && pa.provenance, "must read the satisfying provenance, not the padded shadow");
-    const reviewers = new Set(pa.provenance.perAngle.map((e) => e.reviewer));
-    assert.equal(reviewers.size, 3, "each fresh angle keeps its own reviewer in the accepted ledger");
+    // The forged shadow has FOUR perAngle entries (padding); the valid ledger
+    // has three. Entry count is the discriminator a reviewer-set-size check
+    // cannot provide (both ledgers have 3 distinct reviewers) — removing the
+    // selector's pairing call must fail this assertion.
+    assert.equal(pa.provenance.perAngle.length, 3, "must accept the 3-entry valid ledger, not the 4-entry padded shadow");
+    assert.ok(!pa.provenance.perAngle.some((e) => e.angle === "kiss" && e.reviewer === "review-a"), "the padded shadow's colliding entry must not be present");
   } finally {
     await rm(base, { recursive: true, force: true });
   }
