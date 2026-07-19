@@ -1,8 +1,8 @@
-# 0012. Enforce the post-run retrospective as a required checkpoint and pre-merge gate
+# 0009. Enforce the post-run retrospective as a required checkpoint and pre-merge gate
 
 ## Status
 
-Superseded by [0025](0025-retrospective-advisory-reversal.md)
+Superseded by [0024](0024-retrospective-advisory-reversal.md) — 2026-05-29 ([PR 172](https://github.com/mfittko/dev-loops/pull/172))
 
 ## Context
 
@@ -14,4 +14,4 @@ Make the retrospective a required checkpoint whose absence blocks the next quali
 
 ## Consequences
 
-Startup gating worked as designed, but the merge gate deadlocked loops and blocked ordinary product PRs on self-analysis and tooling-classification noise — self-improvement output was in the delivery critical path. The shipped defaults accidentally forced the gate on for every consumer until they were corrected back to off, the internal-tooling requirement was disabled pending rework, and the config wiring itself was reverted once before that. The gate was finally removed entirely: the retrospective is now advisory, its findings travel in the handoff envelope and an advisory PR comment, and it must never block a merge or PR-lifecycle transition (record 0025). The episode became the repo's canonical example of an over-enforced modality: a valuable practice made mandatory at the wrong boundary.
+Startup gating worked as designed, but the merge gate deadlocked loops and blocked ordinary product PRs on self-analysis and tooling-classification noise — self-improvement output was in the delivery critical path. The shipped defaults accidentally forced the gate on for every consumer until they were corrected back to off, the internal-tooling requirement was disabled pending rework, and the config wiring itself was reverted once before that. The gate was finally removed entirely: the retrospective is now advisory, its findings travel in the handoff envelope and an advisory PR comment, and it must never block a merge or PR-lifecycle transition ([record 0024](0024-retrospective-advisory-reversal.md)). The episode became the repo's canonical example of an over-enforced modality: a valuable practice made mandatory at the wrong boundary.

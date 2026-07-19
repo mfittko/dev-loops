@@ -1,8 +1,8 @@
-# 0031. Carry a clean gate angle forward across a head bump only when the delta provably misses its review surface
+# 0030. Carry a clean gate angle forward across a head bump only when the delta provably misses its review surface
 
 ## Status
 
-Accepted
+Accepted — 2026-07-10 ([PR 1325](https://github.com/mfittko/dev-loops/pull/1325))
 
 ## Context
 

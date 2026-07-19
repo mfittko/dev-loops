@@ -1,12 +1,12 @@
-# 0025. Demote the retrospective from merge gate to advisory findings
+# 0024. Demote the retrospective from merge gate to advisory findings
 
 ## Status
 
-Accepted
+Accepted — 2026-07-02 ([PR 1085](https://github.com/mfittko/dev-loops/pull/1085))
 
 ## Context
 
-The enforced retrospective merge gate ([record 0012](0012-retrospective-enforced-merge-gate.md)) repeatedly deadlocked loops, blocking ordinary product PRs on self-analysis and tooling-audit noise rather than code quality. The shipped `extension-defaults.yaml` had also turned the gate on for every consumer, contradicting the opt-in contract ([issue 841](https://github.com/mfittko/dev-loops/issues/841)), and it was defaulted back off ([PR 845](https://github.com/mfittko/dev-loops/pull/845)) with the internal-tooling requirement temporarily disabled outright. That left the modality question — may self-improvement output ever block delivery? — which was escalated and decided as "Reading B: return-only, no artifact, no retro gate" ([issue 1077](https://github.com/mfittko/dev-loops/issues/1077)), implemented in [PR 1085](https://github.com/mfittko/dev-loops/pull/1085). The affected seams are `packages/core/src/loop/pr-gate-coordination.mjs`, the handoff envelope (`packages/core/src/loop/handoff-envelope.mjs`), and `scripts/loop/check-retro-tooling.mjs`.
+The enforced retrospective merge gate ([record 0009](0009-retrospective-enforced-merge-gate.md)) repeatedly deadlocked loops, blocking ordinary product PRs on self-analysis and tooling-audit noise rather than code quality. The shipped `extension-defaults.yaml` had also turned the gate on for every consumer, contradicting the opt-in contract ([issue 841](https://github.com/mfittko/dev-loops/issues/841)), and it was defaulted back off ([PR 845](https://github.com/mfittko/dev-loops/pull/845)) with the internal-tooling requirement temporarily disabled outright. That left the modality question — may self-improvement output ever block delivery? — which was escalated and decided as "Reading B: return-only, no artifact, no retro gate" ([issue 1077](https://github.com/mfittko/dev-loops/issues/1077)), implemented in [PR 1085](https://github.com/mfittko/dev-loops/pull/1085). The affected seams are `packages/core/src/loop/pr-gate-coordination.mjs`, the handoff envelope (`packages/core/src/loop/handoff-envelope.mjs`), and `scripts/loop/check-retro-tooling.mjs`.
 
 ## Decision
 

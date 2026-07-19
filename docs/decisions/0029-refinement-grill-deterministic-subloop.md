@@ -1,8 +1,8 @@
-# 0030. Run the refinement grill as a closed deterministic state machine with the LLM as a bounded input
+# 0029. Run the refinement grill as a closed deterministic state machine with the LLM as a bounded input
 
 ## Status
 
-Accepted
+Accepted — 2026-07-08 ([PR 1278](https://github.com/mfittko/dev-loops/pull/1278))
 
 ## Context
 

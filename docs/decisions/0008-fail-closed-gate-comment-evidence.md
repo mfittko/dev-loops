@@ -1,8 +1,8 @@
-# 0009. Prove gate passage only by fail-closed, head-SHA-keyed PR-comment evidence
+# 0008. Prove gate passage only by fail-closed, head-SHA-keyed PR-comment evidence
 
 ## Status
 
-Accepted
+Accepted — 2026-05-29 ([PR 193](https://github.com/mfittko/dev-loops/pull/193))
 
 ## Context
 

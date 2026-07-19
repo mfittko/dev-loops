@@ -1,8 +1,8 @@
-# 0011. Cap Copilot review rounds, accept the clean fallback, and allow opting out
+# 0012. Cap Copilot review rounds, accept the clean fallback, and allow opting out
 
 ## Status
 
-Accepted
+Accepted — 2026-06-02 ([PR 365](https://github.com/mfittko/dev-loops/pull/365))
 
 ## Context
 

@@ -1,8 +1,8 @@
-# 0029. Make ui_review a first-class dev-loop route with a five-stage CLI pipeline and a per-project recipe contract
+# 0028. Make ui_review a first-class dev-loop route with a five-stage CLI pipeline and a per-project recipe contract
 
 ## Status
 
-Accepted
+Accepted — 2026-07-08 ([PR 1279](https://github.com/mfittko/dev-loops/pull/1279))
 
 ## Context
 

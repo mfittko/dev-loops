@@ -1,8 +1,8 @@
-# 0018. Keep source files authoritative and treat the generated repo wiki as pinned, manual-first navigation output
+# 0019. Keep source files authoritative and treat the generated repo wiki as pinned, manual-first navigation output
 
 ## Status
 
-Accepted
+Accepted — 2026-06-13 ([PR 776](https://github.com/mfittko/dev-loops/pull/776))
 
 ## Context
 

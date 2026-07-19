@@ -1,8 +1,8 @@
-# 0032. Resolve the subagent model-tier policy per harness from config: routine work low, review and refinement high
+# 0031. Resolve the subagent model-tier policy per harness from config: routine work low, review and refinement high
 
 ## Status
 
-Accepted
+Accepted — 2026-07-10 ([PR 1313](https://github.com/mfittko/dev-loops/pull/1313))
 
 ## Context
 

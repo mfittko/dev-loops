@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded by [0023](0023-local-first-default-pr-body-spec.md)
+Superseded by [0018](0018-local-first-default-pr-body-spec.md) — 2026-05-15 ([PR 23](https://github.com/mfittko/dev-loops/pull/23))
 
 ## Context
 

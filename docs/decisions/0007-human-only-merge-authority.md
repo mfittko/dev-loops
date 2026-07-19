@@ -1,8 +1,8 @@
-# 0008. Keep merge human-only: separate final approval from merge authorization, hardened as non-overridable humanMergeOnly
+# 0007. Keep merge human-only: separate final approval from merge authorization, hardened as non-overridable humanMergeOnly
 
 ## Status
 
-Accepted
+Accepted — 2026-05-29 ([PR 179](https://github.com/mfittko/dev-loops/pull/179))
 
 ## Context
 

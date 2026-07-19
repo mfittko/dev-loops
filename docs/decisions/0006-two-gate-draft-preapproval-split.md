@@ -1,8 +1,8 @@
-# 0007. Require two separate, non-substitutable local gates: draft and pre-approval
+# 0006. Require two separate, non-substitutable local gates: draft and pre-approval
 
 ## Status
 
-Accepted
+Accepted — 2026-05-29 ([PR 170](https://github.com/mfittko/dev-loops/pull/170))
 
 ## Context
 

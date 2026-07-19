@@ -1,8 +1,8 @@
-# 0020. Run gate reviews as a fan-out/fan-in of scoped per-angle reviewers over one build-once, hash-enforced context bundle
+# 0021. Run gate reviews as a fan-out/fan-in of scoped per-angle reviewers over one build-once, hash-enforced context bundle
 
 ## Status
 
-Accepted
+Accepted — 2026-06-25 ([PR 881](https://github.com/mfittko/dev-loops/pull/881))
 
 ## Context
 

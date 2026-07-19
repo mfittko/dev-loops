@@ -1,8 +1,8 @@
-# 0006. Adopt a single public dev-loop entrypoint with resolver-first startup and route packs
+# 0011. Adopt a single public dev-loop entrypoint with resolver-first startup and route packs
 
 ## Status
 
-Accepted
+Accepted — 2026-06-01 ([PR 313](https://github.com/mfittko/dev-loops/pull/313))
 
 ## Context
 

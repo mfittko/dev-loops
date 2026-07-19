@@ -1,8 +1,8 @@
-# 0027. Make --jq/--silent a base-CLI guarantee for every JSON-emitting command, enforced by a fail-closed contract test
+# 0025. Make --jq/--silent a base-CLI guarantee for every JSON-emitting command, enforced by a fail-closed contract test
 
 ## Status
 
-Accepted
+Accepted — 2026-07-04 ([PR 1141](https://github.com/mfittko/dev-loops/pull/1141))
 
 ## Context
 

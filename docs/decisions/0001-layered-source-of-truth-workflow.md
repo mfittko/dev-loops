@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — 2026-05-12 ([commit ea2114d2](https://github.com/mfittko/dev-loops/commit/ea2114d27e563260d69f43ef8ff96fdfc93d2f76))
 
 ## Context
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — 2026-05-31 ([commit da3179d8](https://github.com/mfittko/dev-loops/commit/da3179d8b7975378101ff9c87fcbde255aa30aed))
 
 ## Context
 

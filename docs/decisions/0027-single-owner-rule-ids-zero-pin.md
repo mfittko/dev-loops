@@ -1,8 +1,8 @@
-# 0028. Govern docs as contracts: single-owner rule IDs, zero phrase-pins, a conformance harness, and an LLM judge for free prose
+# 0027. Govern docs as contracts: single-owner rule IDs, zero phrase-pins, a conformance harness, and an LLM judge for free prose
 
 ## Status
 
-Accepted
+Accepted — 2026-07-05 ([PR 1183](https://github.com/mfittko/dev-loops/pull/1183))
 
 ## Context
 

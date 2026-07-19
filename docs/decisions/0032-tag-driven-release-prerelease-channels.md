@@ -1,8 +1,8 @@
-# 0021. Drive releases from a tag push and publish prereleases to channel dist-tags that can never become latest
+# 0032. Drive releases from a tag push and publish prereleases to channel dist-tags that can never become latest
 
 ## Status
 
-Accepted
+Accepted — 2026-07-14 ([PR 1347](https://github.com/mfittko/dev-loops/pull/1347))
 
 ## Context
 

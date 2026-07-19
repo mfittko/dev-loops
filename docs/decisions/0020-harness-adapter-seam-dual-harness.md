@@ -1,8 +1,8 @@
-# 0019. Make the runtime harness-agnostic: HarnessAdapter seams, generated per-harness assets, dev-loops identity
+# 0020. Make the runtime harness-agnostic: HarnessAdapter seams, generated per-harness assets, dev-loops identity
 
 ## Status
 
-Accepted
+Accepted — 2026-06-15 ([PR 783](https://github.com/mfittko/dev-loops/pull/783))
 
 ## Context
 

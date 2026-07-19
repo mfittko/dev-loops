@@ -2,7 +2,8 @@
 
 ## Status
 
-<!-- exactly one of: Proposed / Accepted / "Superseded by" + a markdown link to the superseding record — see ADR-STATUS-VALUES -->
+<!-- exactly one of: Proposed / Accepted / "Superseded by" + a markdown link to the superseding record.
+     Accepted and Superseded carry dated acceptance evidence: " — YYYY-MM-DD (<link to the merged PR, closed issue, or commit>)" — see ADR-STATUS-VALUES -->
 Proposed
 
 ## Context

@@ -1,8 +1,8 @@
-# 0024. Make the GitHub Projects board the queue, with Next Up as the sole fail-closed pickup source and refinement required at enqueue
+# 0023. Make the GitHub Projects board the queue, with Next Up as the sole fail-closed pickup source and refinement required at enqueue
 
 ## Status
 
-Accepted
+Accepted — 2026-07-02 ([PR 1097](https://github.com/mfittko/dev-loops/pull/1097))
 
 ## Context
 

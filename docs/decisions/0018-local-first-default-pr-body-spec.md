@@ -1,8 +1,8 @@
-# 0023. Default to local-first with a three-origin spec model; close tracker-first routing as won't-do
+# 0018. Default to local-first with a three-origin spec model; close tracker-first routing as won't-do
 
 ## Status
 
-Accepted
+Accepted — 2026-06-12 ([PR 743](https://github.com/mfittko/dev-loops/pull/743))
 
 ## Context
 
