@@ -172,6 +172,11 @@ export function buildStateChangeArgs(options) {
     }
     return args;
   }
+  if (options.state !== "open") {
+    // Fail closed: this is an exported seam, so an unexpected state must never
+    // silently degrade into a reopen.
+    throw new Error(`invalid state ${JSON.stringify(options.state)} — expected "open" or "closed"`);
+  }
   return ["issue", "reopen", String(options.issue), "--repo", options.repo];
 }
 

@@ -207,6 +207,15 @@ test("editIssue: --state closed --reason not_planned maps to gh's space-form \"n
   assert.deepEqual(calls, [["issue", "close", "9", "--repo", "o/n", "--reason", "not planned"]]);
 });
 
+test("editIssue: an unexpected state value fails closed instead of degrading to reopen", async () => {
+  const { run, calls } = stubGh();
+  await assert.rejects(
+    () => editIssue({ repo: "o/n", issue: 9, state: "archived" }, { run }),
+    /invalid state "archived"/,
+  );
+  assert.deepEqual(calls, []); // no gh invocation happened
+});
+
 test("editIssue: --state open calls gh issue reopen", async () => {
   const { run, calls } = stubGh();
   const result = await editIssue({ repo: "o/n", issue: 9, state: "open" }, { run });
