@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { parseCreateIssueCliArgs, createIssue, runCli } from "../../scripts/github/create-issue.mjs";
 
 function stubGh({ code = 0, stdout, stderr = "" } = {}) {
@@ -49,6 +53,15 @@ test("parseCreateIssueCliArgs: rejects --body-file - (stdin) fail-closed", () =>
   );
 });
 
+test("parseCreateIssueCliArgs: rejects stdin-device --body-file paths (/dev/stdin, /dev/fd/N, /proc/self/fd/N)", () => {
+  for (const rawPath of ["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]) {
+    assert.throws(
+      () => parseCreateIssueCliArgs(["--repo", "o/n", "--title", "t", "--body-file", rawPath]),
+      new RegExp(`--body-file '${rawPath.replace(/\//g, "\\/")}' \\(stdin\\) is not supported`),
+    );
+  }
+});
+
 test("parseCreateIssueCliArgs: collects repeated --label / --assignee", () => {
   const out = parseCreateIssueCliArgs([
     "--repo", "o/n", "--title", "t", "--body", "b",
@@ -71,10 +84,58 @@ test("createIssue: builds gh issue create args and parses issueNumber + url", as
   ]);
 });
 
-test("createIssue: --body-file forwards the path to gh", async () => {
+test("createIssue: --body-file forwards the path to gh (after validating it reads non-empty)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "create-issue-"));
+  const bodyPath = join(dir, "body.md");
+  writeFileSync(bodyPath, "Body from file\nsecond line");
   const { run, calls } = stubGh();
-  await createIssue({ repo: "o/n", title: "T", bodyFile: "body.md", labels: [], assignees: [] }, { run });
-  assert.deepEqual(calls[0], ["issue", "create", "--repo", "o/n", "--title", "T", "--body-file", "body.md"]);
+  await createIssue({ repo: "o/n", title: "T", bodyFile: bodyPath, labels: [], assignees: [] }, { run });
+  assert.deepEqual(calls[0], ["issue", "create", "--repo", "o/n", "--title", "T", "--body-file", bodyPath]);
+});
+
+test("createIssue: fails closed on an empty/whitespace-only --body-file (the real guard behind the stdin trap)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "create-issue-"));
+  const emptyPath = join(dir, "empty.md");
+  writeFileSync(emptyPath, "   \n  ");
+  const { run } = stubGh();
+  await assert.rejects(
+    () => createIssue({ repo: "o/n", title: "T", bodyFile: emptyPath, labels: [], assignees: [] }, { run }),
+    /issue body resolved empty/,
+  );
+});
+
+test("createIssue: fails closed on an empty/whitespace-only --body", async () => {
+  const { run } = stubGh();
+  await assert.rejects(
+    () => createIssue({ repo: "o/n", title: "T", body: "   \n", labels: [], assignees: [] }, { run }),
+    /issue body resolved empty/,
+  );
+});
+
+test("createIssue: rejects a --body-file that resolves to a non-regular file (a symlink to /dev/null)", async () => {
+  // A symlink to a device dodges the CLI layer's literal stdin-path regex (it
+  // isn't spelled "-"/"/dev/stdin"/etc.) but still isn't a regular file once
+  // resolved — the core guard must catch it by resolving the symlink, not the
+  // literal path string.
+  const dir = mkdtempSync(join(tmpdir(), "create-issue-"));
+  const linkPath = join(dir, "not-a-file");
+  symlinkSync("/dev/null", linkPath);
+  const { run } = stubGh();
+  await assert.rejects(
+    () => createIssue({ repo: "o/n", title: "T", bodyFile: linkPath, labels: [], assignees: [] }, { run }),
+    /--body-file must be a regular file/,
+  );
+});
+
+test("createIssue: accepts a --body-file that is a symlink to a real regular file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "create-issue-"));
+  const realPath = join(dir, "real.md");
+  writeFileSync(realPath, "Body from a symlinked file");
+  const linkPath = join(dir, "link.md");
+  symlinkSync(realPath, linkPath);
+  const { run, calls } = stubGh();
+  await createIssue({ repo: "o/n", title: "T", bodyFile: linkPath, labels: [], assignees: [] }, { run });
+  assert.deepEqual(calls[0], ["issue", "create", "--repo", "o/n", "--title", "T", "--body-file", linkPath]);
 });
 
 test("createIssue: throws when gh fails", async () => {

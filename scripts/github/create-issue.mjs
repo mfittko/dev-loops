@@ -15,7 +15,9 @@ Required:
   --title <t>                   Issue title
 Body (exactly one):
   --body <b>                    Issue body as a single argument
-  --body-file <path>            Read the body from a file (- is rejected; stdin is not supported)
+  --body-file <path>            Read the body from a real file (stdin is not supported: "-",
+                                /dev/stdin, /dev/fd/N and /proc/self/fd/N are all rejected;
+                                the resolved body must also be non-empty/non-whitespace)
 Optional:
   --milestone <m>               Milestone to set
   --label <l>                   Label to add (repeatable)
@@ -30,6 +32,9 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
+// Matches the common stdin-device path spellings — /dev/stdin, /dev/fd/N,
+// and /proc/self/fd/N (the bare "-" is rejected separately below).
+const STDIN_DEVICE_PATH_PATTERN = /^(?:\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/self\/fd\/\d+)$/u;
 
 export function parseCreateIssueCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -97,10 +102,14 @@ export function parseCreateIssueCliArgs(argv) {
       if (rawPath.length === 0) {
         throw parseError("--body-file must be a non-empty path");
       }
-      // gh is spawned with stdin ignored, so `--body-file -` would read /dev/null
-      // and silently create an empty-body issue; reject it fail-closed instead.
-      if (rawPath === "-") {
-        throw parseError("--body-file '-' (stdin) is not supported");
+      // gh is spawned with stdin ignored, so `--body-file -` (or any other stdin
+      // device path) would read as empty and silently create a bodyless issue;
+      // reject the known stdin traps fail-closed with an actionable message. The
+      // real guard is the empty-body check in core createIssue() (any other
+      // unreadable/racy source still fails closed there), this just gives a
+      // clearer error for the specific stdin trap.
+      if (rawPath === "-" || STDIN_DEVICE_PATH_PATTERN.test(rawPath)) {
+        throw parseError(`--body-file '${rawPath}' (stdin) is not supported; use --body or a real file path`);
       }
       options.bodyFile = rawPath;
       continue;
