@@ -168,14 +168,12 @@ export function fanoutReviewerPairingError(perAngle) {
     const angle = typeof e.angle === "string" ? e.angle.trim() : "";
     if (!angle) continue;
     freshAngles.add(angle);
-    const id = typeof e.reviewer === "string" && e.reviewer.trim().length > 0
-      ? e.reviewer.trim()
-      : typeof e.dispatchId === "string" && e.dispatchId.trim().length > 0
-        ? e.dispatchId.trim()
-        : null;
+    const hasReviewer = typeof e.reviewer === "string" && e.reviewer.trim().length > 0;
+    const hasDispatchId = typeof e.dispatchId === "string" && e.dispatchId.trim().length > 0;
+    const id = hasReviewer ? e.reviewer.trim() : hasDispatchId ? e.dispatchId.trim() : null;
     if (id) {
-      if (!anglesByIdentity.has(id)) anglesByIdentity.set(id, new Set());
-      anglesByIdentity.get(id).add(angle);
+      if (!anglesByIdentity.has(id)) anglesByIdentity.set(id, { angles: new Set(), label: hasReviewer ? "reviewer" : "dispatchId" });
+      anglesByIdentity.get(id).angles.add(angle);
     } else {
       anonymousAngles.push(angle);
     }
@@ -186,8 +184,8 @@ export function fanoutReviewerPairingError(perAngle) {
   // (duplicate-angle entries) can satisfy distinctReviewers >= freshAngleCount
   // while one identity still covers two fresh angles.
   const details = [];
-  for (const [id, angles] of anglesByIdentity) {
-    if (angles.size > 1) details.push(`reviewer "${id}" is recorded for fresh angles: ${[...angles].join(", ")}`);
+  for (const [id, { angles, label }] of anglesByIdentity) {
+    if (angles.size > 1) details.push(`${label} "${id}" is recorded for fresh angles: ${[...angles].join(", ")}`);
   }
   if (anonymousAngles.length > 0) {
     details.push(`fresh angle(s) with no recorded reviewer identity: ${anonymousAngles.join(", ")}`);

@@ -526,10 +526,11 @@ reviewer identity, **and** any fresh angle recording no reviewer identity at all
 `{angle}` entry is permitted only as a carried entry; a fresh entry must carry `reviewer`
 or `dispatchId`) — the error names the colliding or anonymous angle(s). The check enforces
 the per-identity relation itself, so a padded ledger (duplicate-angle entries inflating
-the distinct-reviewer count) cannot slip one reviewer covering two fresh angles. A `carriedFromHead` angle
-keeps its prior head's reviewer and is exempt from this pairing check (see
-[Angle carry-forward](#angle-carry-forward-fail-closed)): reusing that reviewer's
-identity on a carried angle is honest attribution, not a collision. The sanctioned
+the distinct-reviewer count) cannot slip one reviewer covering two fresh angles. A `carriedFromHead`
+angle is exempt from this pairing check entirely (see
+[Angle carry-forward](#angle-carry-forward-fail-closed)) — recording the prior head's
+reviewer identity on the carried entry is preferred (honest attribution) but optional,
+and reusing that identity on a carried angle is never a collision. The sanctioned
 non-fan-out path for a single-reviewer run is `executionMode: inline_single_agent` with
 a recorded `--inline-reason`, not a `fanout_fanin` ledger that pairs one reviewer across
 angles. The shared helper is `fanoutReviewerPairingError` (paired with

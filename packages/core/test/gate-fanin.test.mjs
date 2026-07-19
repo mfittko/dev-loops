@@ -272,6 +272,15 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
     );
   });
 
+  test("a dispatchId collision is labeled dispatchId in the error, not reviewer", () => {
+    const error = fanoutReviewerPairingError([
+      { angle: "a", dispatchId: "d1" },
+      { angle: "b", dispatchId: "d1" },
+    ]);
+    assert.match(error, /dispatchId "d1" is recorded for fresh angles: a, b/);
+    assert.doesNotMatch(error, /reviewer "d1"/);
+  });
+
   test("detects one reviewer collapsing two fresh angles (collision)", () => {
     const error = fanoutReviewerPairingError([
       { angle: "a", reviewer: "x" },
