@@ -141,6 +141,31 @@ export async function writeJson(filePath, data) {
   await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
+// Standard env for tests that spawn or in-process-call the dev-loop startup
+// resolver. The async-start contract (packages/core/src/loop/async-start-contract.mjs)
+// requires a recognized run-id marker (see run-context.mjs's RUN_ID_MARKERS)
+// for async-dispatch strategies; hand-rolled env objects that omit it are
+// green wherever an ambient marker happens to exist (a harness subagent
+// session) and red in CI (where none does). Route every resolver-spawning
+// test's env through this helper instead of hand-rolling the bypass/run-id
+// keys.
+//
+// Pass `{ DEVLOOPS_RUN_ID: undefined }` to deliberately test the
+// absent-marker fail-closed path — an explicit `undefined` override deletes
+// the key rather than leaving it present-but-undefined.
+export function resolverTestEnv(overrides = {}) {
+  const env = {
+    DEVLOOPS_WORKTREE_BYPASS: "1",
+    DEVLOOPS_OWNERSHIP_BYPASS: "1",
+    DEVLOOPS_RUN_ID: "test-run-resolver-env",
+    ...overrides,
+  };
+  for (const key of Object.keys(env)) {
+    if (env[key] === undefined) delete env[key];
+  }
+  return env;
+}
+
 function buildGhStubScript() {
   return [
     "#!/usr/bin/env node",

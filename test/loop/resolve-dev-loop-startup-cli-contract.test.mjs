@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { writeGhStub } from "../_helpers.mjs";
+import { resolverTestEnv, writeGhStub } from "../_helpers.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const cliPath = path.join(repoRoot, "scripts", "loop", "resolve-dev-loop-startup.mjs");
@@ -91,7 +91,7 @@ test("resolve-dev-loop-startup success stdout keeps documented JSON shape", asyn
     const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
       cwd: repoRoot,
       encoding: "utf8",
-      env: { ...process.env, DEVLOOPS_RUN_ID: "test-run-123" },
+      env: { ...process.env, ...resolverTestEnv() },
       // Note: This test assumes no .pi/dev-loop-retrospective-checkpoint.json
       // exists in repoRoot — the explicit retrospectiveCheckpointState in the
       // input ensures deterministic routing regardless.
