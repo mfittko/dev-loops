@@ -118,7 +118,7 @@ test("round-trip: write valid provenance -> buildFanoutEnforcement reads it -> p
         // dry/kiss/pr-checklist-matrix are real preApproval pool angles (shipped
         // extension defaults); pr-checklist-matrix is also the gate's mandatory
         // angle, so angle-coverage enforcement passes at write time.
-        provenance: JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
       },
       { repoRoot: repoA },
     );
@@ -130,7 +130,7 @@ test("round-trip: write valid provenance -> buildFanoutEnforcement reads it -> p
     assert.equal(enforcement.requireProvenance, true);
     const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
     assert.ok(pa && pa.provenance, "provenance must be read from the ledger");
-    assert.equal(pa.provenance.distinctReviewers, 2);
+    assert.equal(pa.provenance.distinctReviewers, 3);
 
     const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
     assert.equal(check.ok, true, JSON.stringify(check.failures));
@@ -145,10 +145,11 @@ test("round-trip: a below-floor (distinctReviewers:1) ledger FAILS closed", asyn
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        // Bare pr-checklist-matrix entry (no reviewer) satisfies mandatory-angle
-        // coverage without adding a countable reviewer identity — distinctReviewers
-        // stays 1 (below the >=2 floor this test exercises).
-        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix" }] }),
+        // A single fresh angle (the mandatory pr-checklist-matrix) reviewed by
+        // one reviewer satisfies the write-time one-reviewer-per-angle floor
+        // (1 fresh angle, 1 reviewer) while distinctReviewers (1) still sits
+        // below the >=2 read-time floor this test exercises.
+        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "pr-checklist-matrix", reviewer: "review-a" }] }),
       },
       { repoRoot: repoA },
     );
@@ -177,7 +178,7 @@ test("shadow-bug: a provenance-less ledger in an earlier checkout does NOT shado
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
       },
       { repoRoot: repoA },
     );
@@ -188,7 +189,7 @@ test("shadow-bug: a provenance-less ledger in an earlier checkout does NOT shado
     });
     const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
     assert.ok(pa && pa.provenance, "must read the valid provenance, not the shadowing null");
-    assert.equal(pa.provenance.distinctReviewers, 2);
+    assert.equal(pa.provenance.distinctReviewers, 3);
     const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
     assert.equal(check.ok, true, JSON.stringify(check.failures));
   } finally {
@@ -199,12 +200,12 @@ test("shadow-bug: a provenance-less ledger in an earlier checkout does NOT shado
 test("residual shadow: a below-floor ledger in cwd checkout does NOT shadow a satisfying one elsewhere", async () => {
   const { base, repoA, repoB } = await makeRepoWithWorktrees();
   try {
-    // repoB (== cwd, enumerated FIRST) carries a consistent but BELOW-FLOOR ledger
-    // (distinctReviewers:1 — the write path allows it; it only checks consistency).
+    // repoB (== cwd, enumerated FIRST) carries a write-time-valid (one fresh
+    // angle, one reviewer) but READ-floor-BELOW ledger (distinctReviewers:1).
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "pr-checklist-matrix", reviewer: "review-a" }] }),
       },
       { repoRoot: repoB },
     );
@@ -212,7 +213,7 @@ test("residual shadow: a below-floor ledger in cwd checkout does NOT shadow a sa
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
       },
       { repoRoot: repoA },
     );
@@ -223,7 +224,7 @@ test("residual shadow: a below-floor ledger in cwd checkout does NOT shadow a sa
     });
     const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
     assert.ok(pa && pa.provenance, "must read the satisfying provenance, not the below-floor shadow");
-    assert.equal(pa.provenance.distinctReviewers, 2, "satisfying ledger preferred over below-floor");
+    assert.equal(pa.provenance.distinctReviewers, 3, "satisfying ledger preferred over below-floor");
     const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
     assert.equal(check.ok, true, JSON.stringify(check.failures));
   } finally {

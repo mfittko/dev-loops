@@ -6,7 +6,7 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { checkFanoutAngleCoverage, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { checkFanoutAngleCoverage, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> --findings <json> [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -21,6 +21,7 @@ Optional:
   --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead? }] }
                                  carriedFromHead (7-64 hex) marks an angle whose clean verdict was carried forward from that prior head (reviewer stays the prior reviewer)
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
+                                 no two fresh (non-carried) angles may share one reviewer identity — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -158,6 +159,15 @@ export function parseProvenanceJson(raw) {
   const consistencyError = provenanceConsistencyError(normalized);
   if (consistencyError) {
     throw parseError(`--${consistencyError}`);
+  }
+  // One-scoped-reviewer-per-fresh-angle floor (always-on, #1431): no two fresh
+  // (non-carried) angles may share one reviewer identity — closes the gap
+  // where an internally-consistent distinctReviewers count still let one
+  // reviewer cover multiple angles. Carried angles are exempt (see
+  // fanoutReviewerPairingError).
+  const pairingError = fanoutReviewerPairingError(normalized.perAngle);
+  if (pairingError) {
+    throw parseError(`--provenance.perAngle ${pairingError}`);
   }
   return normalized;
 }
