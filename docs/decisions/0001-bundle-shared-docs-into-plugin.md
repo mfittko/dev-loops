@@ -10,7 +10,7 @@ Installed plugin skills referenced the shared workflow contract docs via absolut
 
 ## Decision
 
-We bundle the shared contract docs into the plugin. The repo keeps a single source of truth under `skills/docs/`, mirrored verbatim into the installed plugin layout by the asset generator, and installed skills read the bundled relative copies (`../docs/<contract>.md`) — never a remote URL. Rejected alternatives: absolute `github.com` links (external coupling, drift), and a docs-fetch step at install time (network dependence, cache invalidation complexity).
+We bundle the shared contract docs into the plugin. The repo keeps a single source of truth under `skills/docs/`, mirrored into the installed plugin layout by the asset generator (which strips pi-only blocks during generation), and installed skills read the bundled relative copies (`../docs/<contract>.md`) — never a remote URL. Rejected alternatives: absolute `github.com` links (external coupling, drift), and a docs-fetch step at install time (network dependence, cache invalidation complexity).
 
 ## Consequences
 
