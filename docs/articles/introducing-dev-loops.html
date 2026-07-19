@@ -287,12 +287,12 @@
 
   <p>The loop breaks the compounding by turning each transition into a machine decision with a log. What remains for the human is roughly one bounded decision per change: the merge, plus anything the loop flags as unclear.</p>
 
-  <p>dev-loops is developed with dev-loops, so the honest evidence is its own history. The numbers below come straight from the repository's git log, as of mid-July 2026:</p>
+  <p>dev-loops is developed with dev-loops, so the honest evidence is its own history. The numbers below come straight from the repository's git log, as of July 19, 2026:</p>
 
   <div class="metrics" role="list">
-    <div class="metric" role="listitem"><div class="num">530+</div><div class="lab">pull requests merged in the project's first nine weeks</div></div>
+    <div class="metric" role="listitem"><div class="num">570+</div><div class="lab">pull requests merged in the project's first ten weeks</div></div>
     <div class="metric" role="listitem"><div class="num">~10/day</div><div class="lab">across the most recent two weeks</div></div>
-    <div class="metric" role="listitem"><div class="num">24</div><div class="lab">tagged releases in the same stretch, up to a 1.0 release candidate</div></div>
+    <div class="metric" role="listitem"><div class="num">26</div><div class="lab">tagged releases in the same stretch, up to a 1.0 release candidate</div></div>
     <div class="metric" role="listitem"><div class="num">1</div><div class="lab">human decision per change — the default posture stops at the merge</div></div>
   </div>
 
@@ -377,14 +377,14 @@
 
   <pre><code><span class="cm"># .devloops</span>
 version: 1
-strategy: local-first    <span class="cm"># start from a local plan file; github-first starts from issues</span>
+strategy: local-first    <span class="cm"># start from a local plan file; tracker-first starts from a tracked issue</span>
 inputSource: tracker     <span class="cm"># read the spec from the issue body, or phase-docs</span>
 refinement:
   maxCopilotRounds: 5     <span class="cm"># automated review rounds before converging; 0 turns Copilot off</span>
 autonomy:
   humanMergeOnly: true    <span class="cm"># merge stays a human-only action, regardless of any per-run flag</span></code></pre>
 
-  <p>Three choices shape the experience. Work can start <strong>local-first</strong> — you write a short plan in the repository and the loop opens a pull request straight from it — or <strong>github-first</strong>, where a tracked issue is the starting point. The automated review rounds can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; by default it stops and hands the merge to you. Start with the shipped defaults and dial each setting toward the autonomy your team is comfortable with. From 1.0 onward this configuration surface follows semantic versioning, so a <code>.devloops</code> file you write today keeps working across minor upgrades.</p>
+  <p>Three choices shape the experience. Work can start <strong>local-first</strong> — you write a short plan in the repository and the loop opens a pull request straight from it — or <strong>tracker-first</strong>, where a tracked issue is the starting point (<code>github-first</code> is a deprecated but still-accepted alias for the same setting). The automated review rounds can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; by default it stops and hands the merge to you. Start with the shipped defaults and dial each setting toward the autonomy your team is comfortable with. From 1.0 onward this configuration surface follows semantic versioning, so a <code>.devloops</code> file you write today keeps working across minor upgrades.</p>
 
   <hr class="rule" />
 
