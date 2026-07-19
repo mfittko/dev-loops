@@ -1129,7 +1129,7 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "735"], {
       cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_RUN_ID: "test-run-copilot-author" }) },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_RUN_ID: "test-run-copilot-author", DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1164,7 +1164,7 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "735"], {
       cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_RUN_ID: "test-run-external-author" }) },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_RUN_ID: "test-run-external-author", DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1282,7 +1282,7 @@ test("--issue assigned to the viewer (assigned_to_me) proceeds", async () => {
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv() },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1328,7 +1328,7 @@ test("--issue assigned_to_copilot is unchanged: proceeds and never resolves a vi
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
       cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv() },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1421,7 +1421,7 @@ test("--pr assigned to the viewer proceeds", async () => {
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv() },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1448,7 +1448,7 @@ test("--pr --ui-review routes to the ui_review strategy end-to-end (issue #1362)
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740", "--ui-review"], {
       cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv() },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1501,7 +1501,7 @@ test("--pr assigned to copilot-swe-agent takes the unchanged copilot path, not t
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv() },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1534,7 +1534,7 @@ test("PR assigned to copilot skips the linked-issue ownership check entirely", a
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv() },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
@@ -1671,7 +1671,7 @@ test("--pr continuation proceeds when the linked issue is merely unassigned (onl
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv() },
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
