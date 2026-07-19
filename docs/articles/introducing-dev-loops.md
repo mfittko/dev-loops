@@ -34,12 +34,12 @@ Coordination is the cost that compounds. Every change carries a handful of trans
 
 The loop breaks the compounding by turning each transition into a machine decision with a log. What remains for the human is roughly one bounded decision per change: the merge, plus anything the loop flags as unclear.
 
-dev-loops is developed with dev-loops, so the honest evidence is its own history. The numbers below come straight from the repository's git log, as of mid-July 2026:
+dev-loops is developed with dev-loops, so the honest evidence is its own history. The numbers below come straight from the repository's git log, as of July 19, 2026:
 
 <!-- metrics:start -->
-- **530+** pull requests merged in the project's first nine weeks
+- **570+** pull requests merged in the project's first ten weeks
 - **~10/day** across the most recent two weeks
-- **24** tagged releases in the same stretch, up to a 1.0 release candidate
+- **26** tagged releases in the same stretch, up to a 1.0 release candidate
 - **1** human decision per change — the default posture stops at the merge
 <!-- metrics:end -->
 
@@ -153,7 +153,7 @@ On Pi the same set is reachable as subcommands of one command: `/dev-loops start
 ```yaml
 # .devloops
 version: 1
-strategy: local-first    # start from a local plan file; github-first starts from issues
+strategy: local-first    # start from a local plan file; tracker-first starts from a tracked issue
 inputSource: tracker     # read the spec from the issue body, or phase-docs
 refinement:
   maxCopilotRounds: 5     # automated review rounds before converging; 0 turns Copilot off
@@ -161,7 +161,7 @@ autonomy:
   humanMergeOnly: true    # merge stays a human-only action, regardless of any per-run flag
 ```
 
-Three choices shape the experience. Work can start **local-first** — you write a short plan in the repository and the loop opens a pull request straight from it — or **github-first**, where a tracked issue is the starting point. The automated review rounds can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; by default it stops and hands the merge to you. Start with the shipped defaults and dial each setting toward the autonomy your team is comfortable with. From 1.0 onward this configuration surface follows semantic versioning, so a `.devloops` file you write today keeps working across minor upgrades.
+Three choices shape the experience. Work can start **local-first** — you write a short plan in the repository and the loop opens a pull request straight from it — or **tracker-first**, where a tracked issue is the starting point (`github-first` is a deprecated but still-accepted alias for the same setting). The automated review rounds can lean on Copilot or run without it. And the loop merges on its own only if you explicitly allow it; by default it stops and hands the merge to you. Start with the shipped defaults and dial each setting toward the autonomy your team is comfortable with. From 1.0 onward this configuration surface follows semantic versioning, so a `.devloops` file you write today keeps working across minor upgrades.
 
 ## Where to go deeper
 
