@@ -32,8 +32,8 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
-// Matches /dev/fd/N and /proc/self/fd/N — the other common stdin-device
-// aliases beyond the bare "-" and /dev/stdin (also rejected explicitly below).
+// Matches the common stdin-device path spellings — /dev/stdin, /dev/fd/N,
+// and /proc/self/fd/N (the bare "-" is rejected separately below).
 const STDIN_DEVICE_PATH_PATTERN = /^(?:\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/self\/fd\/\d+)$/u;
 
 export function parseCreateIssueCliArgs(argv) {
