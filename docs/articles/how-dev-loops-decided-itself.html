@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<!-- GENERATED from docs/articles/how-dev-loops-decided-itself.md by scripts/pages/render-article.mjs — do not edit; edit the markdown and regenerate. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
+<title>How dev-loops Decided Itself Into Shape</title>
+<style>
+  :root {
+    --ground-1: #08101f;
+    --ground-2: #0b1220;
+    --ground-3: #0f172a;
+    --ink: #e5e7eb;
+    --heading: #f8fafc;
+    --copy: #cbd5e1;
+    --accent: #a78bfa;
+    --accent-soft: #ddd6fe;
+    --kicker: #93c5fd;
+    --card-border: rgba(148, 163, 184, 0.18);
+    --node-border: rgba(129, 140, 248, 0.4);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font);
+    color: var(--ink);
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+    background:
+      radial-gradient(circle at 85% 4%, rgba(139, 92, 246, 0.22), transparent 26%),
+      radial-gradient(circle at 12% 2%, rgba(59, 130, 246, 0.16), transparent 22%),
+      linear-gradient(180deg, var(--ground-1) 0%, var(--ground-2) 38%, var(--ground-3) 100%);
+    background-attachment: fixed;
+  }
+
+  .wrap {
+    max-width: 48rem;
+    margin: 0 auto;
+    padding: clamp(2rem, 6vw, 4rem) clamp(1.1rem, 5vw, 2rem) 5rem;
+  }
+
+  /* One column at every width: prose and boxes fill the same wrap, so all
+     left/right edges line up. Desktop widens the column; nothing floats in a
+     narrower centered measure beside a full-width box. */
+  @media (min-width: 900px) {
+    .wrap { max-width: 56rem; }
+  }
+
+  .kicker {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 0.72rem;
+    color: var(--kicker);
+    margin: 0 0 0.6rem;
+    font-weight: 600;
+  }
+
+  h1, h2 { color: var(--heading); letter-spacing: -0.02em; margin-top: 0; }
+  h1 { font-weight: 760; font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.08; margin-bottom: 0.9rem; }
+  h2 { font-weight: 720; font-size: clamp(1.35rem, 3.4vw, 1.85rem); line-height: 1.15; margin: 2.6rem 0 0.9rem; }
+
+  /* part divider: the two big movements of a two-part deep dive */
+  .part {
+    margin: 3.4rem 0 1.4rem;
+    padding-top: 2.2rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+  }
+  .part .kicker { margin-bottom: 0.4rem; }
+  .part h2 { margin-top: 0; font-size: clamp(1.5rem, 3.8vw, 2.1rem); }
+
+  .lede {
+    color: var(--copy);
+    font-size: clamp(1.08rem, 2.4vw, 1.28rem);
+    line-height: 1.5;
+    margin: 0 0 2rem;
+  }
+
+  p { line-height: 1.72; font-size: 1.05rem; color: var(--ink); margin: 0 0 1.15rem; }
+  strong { color: var(--accent-soft); }
+  em { color: #e2e8f0; font-style: italic; }
+  ul, ol { line-height: 1.7; padding-left: 1.3rem; margin: 0 0 1.15rem; }
+  li + li { margin-top: 0.5rem; }
+  a { color: var(--kicker); text-decoration: none; border-bottom: 1px solid rgba(147, 197, 253, 0.35); }
+  a:hover { border-bottom-color: var(--kicker); }
+
+  /* callout: a left-accent glass panel for asides (e.g. a cross-link nudge) */
+  blockquote {
+    margin: 1.6rem 0;
+    padding: 0.9rem 1.2rem;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid var(--card-border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 14px 14px 0;
+    color: var(--copy);
+  }
+  blockquote p { margin: 0; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 6px;
+    padding: 0.05em 0.4em;
+    color: #e2e8f0;
+    overflow-wrap: anywhere;
+  }
+
+  pre {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.6));
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    padding: 1rem 1.15rem;
+    margin: 0 0 1.3rem;
+    overflow-x: auto;
+  }
+  pre code {
+    background: none;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    font-size: 0.86rem;
+    line-height: 1.6;
+    color: #e2e8f0;
+    white-space: pre;
+  }
+  pre code .cm { color: #94a3b8; }
+
+  .hero-card {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.6));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.3);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-radius: 24px;
+    padding: 1.6rem 1.7rem;
+    margin-bottom: 2.6rem;
+  }
+  .hero-card .lede { margin-bottom: 0; }
+
+  /* diagram figure: glass card + horizontal-scroll safety for wide flows */
+  figure {
+    margin: 1.8rem 0 2rem;
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.8), rgba(15, 23, 42, 0.62));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-radius: 20px;
+    padding: 1.3rem 1.35rem 1.1rem;
+  }
+  .diagram-scroll { overflow-x: auto; padding-bottom: 0.35rem; }
+  figcaption {
+    color: var(--copy);
+    font-size: 0.9rem;
+    line-height: 1.45;
+    margin-top: 1rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+    padding-top: 0.8rem;
+  }
+  figcaption b { color: var(--accent-soft); font-weight: 650; }
+
+  /* inline flow nodes (ported from the deck's inline-flow technique) */
+  .flow { display: flex; align-items: center; gap: 0; min-width: max-content; }
+  .flow-col { display: flex; flex-direction: column; gap: 0.55rem; justify-content: center; }
+  .node {
+    background: linear-gradient(180deg, rgba(24, 36, 61, 0.92), rgba(17, 24, 39, 0.82));
+    border: 1px solid var(--node-border);
+    border-radius: 14px;
+    padding: 0.55rem 0.85rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: #e2e8f0;
+    white-space: nowrap;
+    text-align: center;
+  }
+  .node.accent { border-color: rgba(167, 139, 250, 0.7); color: var(--accent-soft); }
+  .node.start { border-color: rgba(147, 197, 253, 0.6); color: var(--kicker); }
+  .edge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: rgba(148, 163, 184, 0.85);
+    padding: 0 0.6rem;
+    min-width: 3rem;
+  }
+  .edge .arrow { font-size: 1.1rem; line-height: 1; }
+  .edge.dashed .arrow { color: rgba(167, 139, 250, 0.75); }
+  .edge .edge-label {
+    font-size: 0.64rem;
+    color: var(--kicker);
+    text-align: center;
+    margin-top: 0.2rem;
+    max-width: 7.5rem;
+    line-height: 1.2;
+  }
+
+  /* SVG diagrams scale within their scroll container */
+  .diagram-scroll svg { display: block; height: auto; }
+  .diagram-scroll svg text { font-family: var(--mono); fill: #e2e8f0; }
+  .diagram-scroll svg .lab { fill: var(--kicker); font-family: var(--font); }
+
+  /* tree grounding diagram scales down on mobile */
+  .tree-svg { width: 100%; height: auto; display: block; }
+  .tree-svg text { font-family: var(--mono); fill: #e2e8f0; }
+  .tree-svg .lbl { fill: var(--kicker); font-family: var(--font); }
+
+  .closer {
+    color: var(--accent-soft);
+    font-weight: 620;
+    font-size: clamp(1.12rem, 2.6vw, 1.4rem);
+    line-height: 1.4;
+    margin: 1.6rem 0 0;
+  }
+
+  /* metric row for the proof numbers */
+  .metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    margin: 1.8rem 0 2rem;
+  }
+  .metric {
+    flex: 1 1 8rem;
+    min-width: 0;
+    background: linear-gradient(180deg, rgba(24, 36, 61, 0.82), rgba(17, 24, 39, 0.72));
+    border: 1px solid var(--node-border);
+    border-radius: 16px;
+    padding: 1rem 1.1rem;
+  }
+  .metric .num { font-size: 1.5rem; font-weight: 720; color: var(--accent-soft); line-height: 1.05; }
+  .metric .lab { font-size: 0.82rem; color: var(--copy); margin-top: 0.4rem; line-height: 1.35; }
+
+  .rule { border: 0; border-top: 1px solid rgba(148, 163, 184, 0.16); margin: 3rem 0; }
+
+  .deeper {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 1.2rem 1.35rem;
+    margin-top: 2rem;
+  }
+  .deeper h2 { margin-top: 0; font-size: 1.2rem; }
+  .deeper p { margin-bottom: 0; font-size: 0.98rem; color: var(--copy); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<article class="article">
+
+  <header class="hero-card">
+    <p class="kicker">dev-loops</p>
+    <h1>How dev-loops Decided Itself Into Shape</h1>
+    <p class="lede">Over 68 days the project made forty architecture-shaping decisions, wrote each one down, and reversed the two that turned out wrong. This is the history read straight from that record.</p>
+  </header>
+
+  <blockquote>New here? Start with <a href="./introducing-dev-loops.html">Introducing dev-loops</a> for the overview and <a href="./dev-loops-deep-dive.html">the deep dive</a> for the mechanics. This article is the history: how the system arrived at its current shape.</blockquote>
+
+  <p>This project can explain <em>why it is the way it is</em>, because it kept the receipts. Forty architecture decisions live in the repository as dated records under <code>docs/decisions/</code>, each linking the pull request or issue that made it real. Reading them in order is like watching the system argue itself into its current form, and reverse course twice when the argument turned out wrong.</p>
+
+  <p>This article walks that record. Every figure below was re-derived from the repository at the time of writing.</p>
+
+  <div class="metrics" role="list">
+    <div class="metric" role="listitem"><div class="num">68</div><div class="lab">days from the first commit to the v1.0.0-rc.3 release candidate</div></div>
+    <div class="metric" role="listitem"><div class="num">1,320</div><div class="lab">commits at rc.3, across 687 merged pull requests</div></div>
+    <div class="metric" role="listitem"><div class="num">26</div><div class="lab">tagged releases, with 7 reverts — about 1% of merged PRs, mostly in release mechanics and doc rewrites</div></div>
+    <div class="metric" role="listitem"><div class="num">40</div><div class="lab">recorded architecture decisions, 2 of them later superseded</div></div>
+    <div class="metric" role="listitem"><div class="num">279</div><div class="lab">test files by rc.3, up from 5 at the first commit</div></div>
+  </div>
+
+  <h2 id="the-method-is-the-point">The method is the point</h2>
+
+  <p>A decision earns a record when it shapes policy or architecture — a review economics choice, a seam other work has to build against, or a reversal of something already established. Routine features and fixes stay out. That bar keeps the log to the load-bearing forty, which is few enough to read in a sitting and honest enough to include the mistakes.</p>
+
+  <p>The record itself is plain: context, decision, consequences, and a dated link to the accepting event. When a later decision overturns an earlier one, the old record stays and its status flips to superseded, with a link forward. Nothing is quietly deleted, so the history stays legible even where it doubled back.</p>
+
+  <h2 id="era-one-the-next-step-is-always-known">Era one: the next step is always known</h2>
+
+  <p>The earliest records fix the idea the whole system rests on. Work flows through a deterministic state graph where the next action for any change is computed from that graph each time (records 0001 and 0002). A single startup resolver reads authoritative state and hands back a bounded task with the exact files to read and the exact stop conditions (record 0011, and the handoff envelope in record 0016). Loss of a temporary artifact degrades fidelity and the run still recovers, because the source of truth is the state graph, and the chat transcript is a disposable reflection of it.</p>
+
+  <p>This is what lets an agent pick up work mid-flight without guessing. The state is on the board; whoever is free reads the next card and pulls it.</p>
+
+  <h2 id="era-two-the-gate">Era two: the gate</h2>
+
+  <p>Seventeen days in, on 2026-05-29, the review model arrived that still defines the project (record 0006): two gates, a draft gate before review and a pre-approval gate before merge, with merge authority reserved for a human (record 0007). Gate verdicts became durable, fail-closed evidence backed by the real check result — a comment the coordinator refuses to post unless the checks actually succeeded (record 0008).</p>
+
+  <p>The consequence compounds through everything after it. Once a green result has to come from the real check, the agent can no longer assume the build passed. The single most common failure of an autonomous coder — declaring success over an unverified assumption — is closed off at the seam.</p>
+
+  <h2 id="era-three-portability-then-a-reversal">Era three: portability, then a reversal</h2>
+
+  <p>The runtime began coupled to one agent harness. The adapter-seam decision decoupled it (record 0020), routing every harness dependency through frozen, validated boundaries with implementations for each host and a generator that fails the build on drift. The system could now run under more than one harness without a parallel copy of its assets.</p>
+
+  <p>Then the first big reversal. The project had started tracker-first: every change minted a GitHub issue, went through refinement ceremony, and produced a phase document (record 0003, 2026-05-15). Operating experience showed most work is specified and reviewed better locally, before it touches the tracker. So the default flipped to local-first, with a lightweight path that treats a pull request description itself as the spec (record 0018, 2026-06-12, supersedes 0003). The old record stays in the log, marked superseded, because the wrong turn is part of the history worth keeping.</p>
+
+  <h2 id="era-four-the-loop-turns-on-itself">Era four: the loop turns on itself</h2>
+
+  <p>The later records are the system improving its own machinery. Review fans out into independent angles and fans back in (record 0021). A round cap keeps the Copilot review loop from spinning (record 0012). Every operator-facing tool gained a uniform, machine-readable output contract, enforced by a test that fails the build if a new command ships without it (record 0025). Rule identifiers became single-owner and permanent (record 0027).</p>
+
+  <p>The sharpest of these came from a mistake the system caught in itself. Gate reviews had drifted toward grouping several review angles into one agent to save tokens, which quietly recreates a single reviewer approving their own bundle. The fix made one scoped reviewer per fresh angle a machine-enforced requirement at both write and read time (record 0039) — and the new floor then caught its own author miscounting reviewer provenance within hours of shipping.</p>
+
+  <p>The second reversal lives here too. An enforced retrospective gate, meant to make the system reflect before merging, kept deadlocking ordinary product work on self-analysis noise (record 0009). The decision that followed made the retrospective advisory: its findings travel in the handoff envelope and a comment, and never block a merge (record 0024, 2026-07-02, supersedes 0009). A valuable practice had been mounted at the wrong boundary, and the log records both the mounting and the correction.</p>
+
+  <h2 id="did-it-actually-get-better">Did it actually get better?</h2>
+
+  <p>The record shows learning at the policy level. The stronger question is whether the code and the delivery got better in measurable terms, and the repository answers it directly.</p>
+
+  <p>One external signal points the right way. A separate pass over the review history found Copilot's review comments per thousand added lines falling as the internal gates came online and held. The external reviewer found less to say once the system's own checks were catching problems first.</p>
+
+  <p>Escaped defects stayed rare. Across nearly seven hundred merged pull requests, the count of changes that had to be reverted sits at seven, and those cluster in release mechanics and documentation rewrites. The test suite grew alongside the surface it guards, from 5 files at the first commit to 279, and the contract tests — the ones that fail the build when a rule or an output shape drifts — grew fastest, because each hard-won convention got a guard so it could not quietly erode.</p>
+
+  <p>The process is still evolving, and the log says so. Two of forty decisions were wrong enough to reverse, and the reversals are in the log on purpose. The point is narrow and, for an AI-assisted project, unusual: the system changed its own rules deliberately, wrote down why each time, and the numbers moved the right way while it did.</p>
+
+  <h2 id="what-the-log-is-for">What the log is for</h2>
+
+  <p>A decision record takes three paragraphs to write and saves weeks of rework later. Skip it, and six weeks on nobody remembers whether the absolute links in the installed docs were a considered choice or an accident, whether the retrospective was meant to block merges, whether one-reviewer-per-angle was a rule or a habit. The log answers all three, with dates and links, because someone wrote three paragraphs at the moment the decision was made.</p>
+
+  <p class="closer">That is the whole practice. The next step is always known, the gate never trusts an assumption, and when a decision turns out wrong, the record of it stays — so the correction has something to point back to.</p>
+
+</article>
+</div>
+</body>
+</html>

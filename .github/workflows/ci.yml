@@ -165,6 +165,7 @@ jobs:
         run: |
           npm run test:playwright:intro-deck
           npm run test:playwright:deep-dive
+          npm run test:playwright:how-decided-deck
 
   article-smoke:
     needs:
@@ -183,3 +184,4 @@ jobs:
         run: |
           npm run test:playwright:intro-article
           npm run test:playwright:deep-dive-article
+          npm run test:playwright:how-decided-article

@@ -56,6 +56,7 @@ const SHELL_PATH = path.join(REPO_ROOT, "scripts", "pages", "article-shell.html"
 export const RENDERED_ARTICLES = [
   { md: "introducing-dev-loops.md", html: "introducing-dev-loops.html" },
   { md: "dev-loops-deep-dive.md", html: "dev-loops-deep-dive.html" },
+  { md: "how-dev-loops-decided-itself.md", html: "how-dev-loops-decided-itself.html" },
 ];
 
 // Quote-escaping matters even under the strict CSP: rendered text is also
