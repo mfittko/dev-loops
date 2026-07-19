@@ -6,10 +6,11 @@ import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: edit-issue.mjs --repo <owner/name> --issue <number> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>]
-Edit issue title/body/assignees/milestone. Thin wrapper over \`gh issue edit\` — use this
-instead of an agent-level raw \`gh issue edit\` so the loop's internal-tooling record
-stays clean (siblings: edit-pr.mjs, comment-issue.mjs).
+const USAGE = `Usage: edit-issue.mjs --repo <owner/name> --issue <number> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>] [--state <open|closed>] [--reason <completed|not_planned>]
+Edit issue title/body/assignees/milestone/state. Thin wrapper over \`gh issue edit\`
+(plus \`gh issue close\`/\`gh issue reopen\` for --state) — use this instead of an
+agent-level raw \`gh issue edit\`/\`gh issue close\`/\`gh issue reopen\` so the loop's
+internal-tooling record stays clean (siblings: edit-pr.mjs, comment-issue.mjs).
 Required:
   --repo <owner/name>           Repository slug (e.g. owner/repo)
   --issue <number>              Issue number
@@ -23,8 +24,14 @@ At least one edit:
                                 (--title/--body/--body-file reject empty or
                                 whitespace-only values; use --milestone "" only
                                 to clear the milestone)
+  --state <open|closed>         Close or reopen the issue (a separate \`gh issue
+                                close\`/\`gh issue reopen\` call, run after any
+                                other edits above; valid alone or combined)
+  --reason <completed|not_planned>
+                                Close reason; only valid together with
+                                --state closed
 Output (stdout, JSON):
-  { "ok": true, "repo": "owner/repo", "issue": 17, "edited": ["title", "body", ...] }
+  { "ok": true, "repo": "owner/repo", "issue": 17, "edited": ["title", "body", ..., "state"] }
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage"?: "..." }
 ${JQ_OUTPUT_USAGE}
@@ -47,6 +54,8 @@ export function parseEditIssueCliArgs(argv) {
       "add-assignee": { type: "string", multiple: true },
       "remove-assignee": { type: "string", multiple: true },
       milestone: { type: "string" },
+      state: { type: "string" },
+      reason: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -63,6 +72,8 @@ export function parseEditIssueCliArgs(argv) {
     addAssignees: [],
     removeAssignees: [],
     milestone: undefined,
+    state: undefined,
+    reason: undefined,
     jq: undefined,
     silent: false,
   };
@@ -137,6 +148,22 @@ export function parseEditIssueCliArgs(argv) {
       options.milestone = token.value;
       continue;
     }
+    if (token.name === "state") {
+      const s = requireTokenValue(token, parseError).trim();
+      if (s !== "open" && s !== "closed") {
+        throw parseError(`--state must be "open" or "closed" (got: "${s}")`);
+      }
+      options.state = s;
+      continue;
+    }
+    if (token.name === "reason") {
+      const r = requireTokenValue(token, parseError).trim();
+      if (r !== "completed" && r !== "not_planned") {
+        throw parseError(`--reason must be "completed" or "not_planned" (got: "${r}")`);
+      }
+      options.reason = r;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -146,15 +173,19 @@ export function parseEditIssueCliArgs(argv) {
   if (options.body !== undefined && options.bodyFile !== undefined) {
     throw parseError("--body and --body-file are mutually exclusive; pass only one");
   }
+  if (options.reason !== undefined && options.state !== "closed") {
+    throw parseError("--reason is only valid together with --state closed");
+  }
   const hasEdit =
     options.title !== undefined ||
     options.body !== undefined ||
     options.bodyFile !== undefined ||
     options.addAssignees.length > 0 ||
     options.removeAssignees.length > 0 ||
-    options.milestone !== undefined;
+    options.milestone !== undefined ||
+    options.state !== undefined;
   if (!hasEdit) {
-    throw parseError("Editing an issue requires at least one of --title/--body/--body-file/--add-assignee/--remove-assignee/--milestone");
+    throw parseError("Editing an issue requires at least one of --title/--body/--body-file/--add-assignee/--remove-assignee/--milestone/--state");
   }
   try {
     parseRepoSlug(options.repo);

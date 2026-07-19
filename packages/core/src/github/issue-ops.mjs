@@ -62,7 +62,22 @@ export function buildCreateArgs(options) {
   return args;
 }
 
+// Read (for validation only — the actual gh call still forwards the path, see
+// buildCreateArgs) and reject an empty/whitespace-only body. This is the real
+// guard behind the CLI's stdin-device rejection: `gh` is spawned with stdin
+// ignored, so even a body resolved non-empty here can still reach `gh` as
+// nothing if the path is some other unreadable/racy source — the substantive
+// check is content, not path shape.
+export async function resolveCreateBody(options) {
+  return options.bodyFile === undefined ? options.body : await readFile(options.bodyFile, "utf8");
+}
+
 export async function createIssue(options, { env = process.env, ghCommand = "gh", run = defaultRunChild } = {}) {
+  const body = await resolveCreateBody(options);
+  if (typeof body !== "string" || body.trim().length === 0) {
+    const source = options.bodyFile !== undefined ? `--body-file ${options.bodyFile}` : "--body";
+    throw new Error(`issue body resolved empty from ${source} — refusing to create a bodyless issue`);
+  }
   const args = buildCreateArgs(options);
   const result = await run(ghCommand, args, env);
   if (result.code !== 0) {
@@ -126,12 +141,40 @@ export async function buildEditArgs(options) {
   return { args, edited };
 }
 
+// Build the `gh issue close`/`gh issue reopen` args for a --state change. Kept
+// as a separate `gh` call from `gh issue edit` — that command has no --state
+// flag, so a state change is its own invocation, run after the edit call.
+export function buildStateChangeArgs(options) {
+  if (options.state === "closed") {
+    const args = ["issue", "close", String(options.issue), "--repo", options.repo];
+    if (options.reason !== undefined) {
+      args.push("--reason", options.reason);
+    }
+    return args;
+  }
+  return ["issue", "reopen", String(options.issue), "--repo", options.repo];
+}
+
 export async function editIssue(options, { env = process.env, ghCommand = "gh", run = defaultRunChild } = {}) {
   const { args, edited } = await buildEditArgs(options);
-  const result = await run(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh issue edit failed: ${detail}`);
+  // Skip the edit call entirely when --state is the only change requested —
+  // `gh issue edit` with no field flags errors ("no changed fields").
+  if (edited.length > 0) {
+    const result = await run(ghCommand, args, env);
+    if (result.code !== 0) {
+      const detail = result.stderr.trim() || `exit code ${result.code}`;
+      throw new Error(`gh issue edit failed: ${detail}`);
+    }
+  }
+  if (options.state !== undefined) {
+    const stateArgs = buildStateChangeArgs(options);
+    const result = await run(ghCommand, stateArgs, env);
+    if (result.code !== 0) {
+      const verb = options.state === "closed" ? "close" : "reopen";
+      const detail = result.stderr.trim() || `exit code ${result.code}`;
+      throw new Error(`gh issue ${verb} failed: ${detail}`);
+    }
+    edited.push("state");
   }
   return { ok: true, repo: options.repo, issue: options.issue, edited };
 }

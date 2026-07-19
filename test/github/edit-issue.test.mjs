@@ -160,3 +160,80 @@ test("editIssue: --remove-assignee builds gh args and reports the edited field",
     "--add-assignee", "a", "--remove-assignee", "b", "--remove-assignee", "c",
   ]);
 });
+
+test("parseEditIssueCliArgs: --state alone is a valid edit", () => {
+  const out = parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--state", "closed"]);
+  assert.equal(out.state, "closed");
+});
+
+test("parseEditIssueCliArgs: rejects an invalid --state value", () => {
+  assert.throws(
+    () => parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--state", "archived"]),
+    /--state must be "open" or "closed"/,
+  );
+});
+
+test("parseEditIssueCliArgs: rejects an invalid --reason value", () => {
+  assert.throws(
+    () => parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--state", "closed", "--reason", "duplicate"]),
+    /--reason must be "completed" or "not_planned"/,
+  );
+});
+
+test("parseEditIssueCliArgs: rejects --reason without --state closed", () => {
+  assert.throws(
+    () => parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--reason", "completed"]),
+    /--reason is only valid together with --state closed/,
+  );
+  assert.throws(
+    () => parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--state", "open", "--reason", "completed"]),
+    /--reason is only valid together with --state closed/,
+  );
+});
+
+test("editIssue: --state closed (no reason) calls gh issue close and reports state", async () => {
+  const { run, calls } = stubGh();
+  const result = await editIssue({ repo: "o/n", issue: 9, state: "closed" }, { run });
+  assert.deepEqual(result.edited, ["state"]);
+  assert.deepEqual(calls, [["issue", "close", "9", "--repo", "o/n"]]);
+});
+
+test("editIssue: --state closed --reason not_planned passes --reason to gh issue close", async () => {
+  const { run, calls } = stubGh();
+  const result = await editIssue({ repo: "o/n", issue: 9, state: "closed", reason: "not_planned" }, { run });
+  assert.deepEqual(result.edited, ["state"]);
+  assert.deepEqual(calls, [["issue", "close", "9", "--repo", "o/n", "--reason", "not_planned"]]);
+});
+
+test("editIssue: --state open calls gh issue reopen", async () => {
+  const { run, calls } = stubGh();
+  const result = await editIssue({ repo: "o/n", issue: 9, state: "open" }, { run });
+  assert.deepEqual(result.edited, ["state"]);
+  assert.deepEqual(calls, [["issue", "reopen", "9", "--repo", "o/n"]]);
+});
+
+test("editIssue: --body combined with --state closed runs edit then close, in order", async () => {
+  const { run, calls } = stubGh();
+  const result = await editIssue({ repo: "o/n", issue: 9, body: "New body", state: "closed", reason: "completed" }, { run });
+  assert.deepEqual(result.edited, ["body", "state"]);
+  assert.deepEqual(calls, [
+    ["issue", "edit", "9", "--repo", "o/n", "--body", "New body"],
+    ["issue", "close", "9", "--repo", "o/n", "--reason", "completed"],
+  ]);
+});
+
+test("editIssue: throws when the gh issue close call fails", async () => {
+  const { run } = stubGh({ code: 1, stderr: "already closed" });
+  await assert.rejects(
+    () => editIssue({ repo: "o/n", issue: 9, state: "closed" }, { run }),
+    /gh issue close failed: already closed/,
+  );
+});
+
+test("runCli: --state closed reports state in edited via --jq", async () => {
+  const { run } = stubGh();
+  const stdout = captureStream();
+  const code = await runCli(["--repo", "o/n", "--issue", "9", "--state", "closed", "--jq", ".edited[0]"], { run, stdout });
+  assert.equal(code, 0);
+  assert.equal(stdout.get().trim(), "state");
+});
