@@ -276,9 +276,10 @@ test("ensure: workspace self-link survives re-provisioning an existing worktree 
 test("ensure: a real node process resolves @dev-loops/core to the worktree's OWN packages/core (#1432)", async () => {
   const repo = makeRepo();
   try {
-    // "main" (not "exports") so a bare `import.meta.resolve("@dev-loops/core")`
-    // resolves via Node's legacy fallback — matches how a workspace package
-    // with no top-level "." export still resolves the package root.
+    // "main" with the `exports` field omitted entirely, so a bare
+    // `import.meta.resolve("@dev-loops/core")` resolves via Node's legacy
+    // main fallback. (The real @dev-loops/core ships an `exports` map; this
+    // fixture only needs SOME resolvable entry to prove which copy wins.)
     mkdirSync(path.join(repo.root, "packages/core"), { recursive: true });
     writeFileSync(
       path.join(repo.root, "packages/core/package.json"),
