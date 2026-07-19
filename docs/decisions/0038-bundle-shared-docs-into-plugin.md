@@ -1,4 +1,4 @@
-# 0039. Bundle shared contract docs into the plugin instead of linking to the repo
+# 0038. Bundle shared contract docs into the plugin instead of linking to the repo
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Installed plugin skills referenced the shared workflow contract docs via absolute `github.com` links into this repository (the scheme captured in record 0034). That coupled every installed consumer to the repo's public availability, branch layout, and network access, and let installed skills silently drift from the docs they were written against — links resolved to the default branch, not the contract text the installed plugin version shipped with. The operator rejected the external-link scheme at a policy checkpoint during [issue 1381](https://github.com/mfittko/dev-loops/issues/1381), and [PR 1424](https://github.com/mfittko/dev-loops/pull/1424) implemented the replacement by migrating the referenced contract docs wholesale from repo-root `docs/` into `skills/docs/`.
+Installed plugin skills referenced the shared workflow contract docs via absolute `github.com` links into this repository (a scheme that was implemented but rejected at the operator checkpoint before merging). That coupled every installed consumer to the repo's public availability, branch layout, and network access, and let installed skills silently drift from the docs they were written against — links resolved to the default branch, not the contract text the installed plugin version shipped with. The operator rejected the external-link scheme at a policy checkpoint during [issue 1381](https://github.com/mfittko/dev-loops/issues/1381), and [PR 1424](https://github.com/mfittko/dev-loops/pull/1424) implemented the replacement by migrating the referenced contract docs wholesale from repo-root `docs/` into `skills/docs/`.
 
 ## Decision
 

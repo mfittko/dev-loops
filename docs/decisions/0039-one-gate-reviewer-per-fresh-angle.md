@@ -1,4 +1,4 @@
-# 0040. Enforce one gate reviewer per fresh angle, at write time and read time
+# 0039. Enforce one gate reviewer per fresh angle, at write time and read time
 
 ## Status
 

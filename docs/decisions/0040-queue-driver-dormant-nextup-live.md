@@ -1,4 +1,4 @@
-# 0041. Keep the autonomous queue driver dormant; make Next Up board pickup the live path
+# 0040. Keep the autonomous queue driver dormant; make Next Up board pickup the live path
 
 ## Status
 
