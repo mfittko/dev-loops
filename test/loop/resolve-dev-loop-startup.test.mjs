@@ -14,6 +14,8 @@ import {
   parseResolveDevLoopStartupCliArgs,
   summarizeCanonicalState,
   resolveIssuelessLightweightEligibility,
+  STRATEGY_OWNERSHIP_GATE,
+  ownershipGateAppliesToStrategy,
 } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 
 const scriptPath = path.resolve("scripts/loop/resolve-dev-loop-startup.mjs");
@@ -1465,24 +1467,84 @@ test("--pr --ui-review routes to the ui_review strategy end-to-end (issue #1362)
   }
 });
 
-test("--pr --ui-review still fails closed on foreign PR ownership (no bypass, issue #1362)", async () => {
+test("--pr --ui-review succeeds on foreign PR ownership (ui_review is exempt from the ownership gate, issue #1444)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ui-review-pr-foreign-"));
   try {
     await initRepoWithOrigin(tempDir);
+    // No "api user" entry: ui_review is exempt from the ownership gate
+    // (STRATEGY_OWNERSHIP_GATE.ui_review === false), so the viewer login is
+    // never resolved — a reviewer can run a UI review against a foreign PR.
+    // If the exemption regressed, the unstubbed claims-mode call would fail
+    // closed and this test would catch it.
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
         stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
       },
-      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740", "--ui-review"], {
       cwd: tempDir,
       env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
-    assert.equal(result.code, 1);
-    assert.equal(result.stdout, "");
-    assert.match(result.stderr, /PR #740 is assigned to foreign-dev, not the current viewer/);
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.selectedStrategy, "ui_review");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr --ui-review succeeds on an unassigned PR (ui_review is exempt from the ownership gate, issue #1444)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ui-review-pr-unassigned-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--ui-review"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.selectedStrategy, "ui_review");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--pr --ui-review skips the linked-issue foreign-ownership check too (issue #1444)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-ui-review-pr-linked-issue-foreign-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    // Linked issue #511 is foreign-owned, but NO stub entry for its assignee
+    // read and NO "api user" entry: a ui_review PR must never reach the
+    // linked-issue ownership loop at all.
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          assignees: [],
+          closingIssuesReferences: [{ number: 511 }],
+          body: "",
+        }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--ui-review"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.selectedStrategy, "ui_review");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1679,6 +1741,73 @@ test("--pr continuation proceeds when the linked issue is merely unassigned (onl
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Ownership gate SCOPING to code-changing sub-loops only (issue #1444, ADR
+// 0042, refining ADR 0033's universal gate): ui_review and wait_watch are
+// pure read/observe strategies and must never be blocked by the
+// single-contributor ownership gate; every code-changing or merge-authority
+// strategy stays gated, and an unknown/unlisted strategy fails closed.
+// ---------------------------------------------------------------------------
+
+test("STRATEGY_OWNERSHIP_GATE exempts only ui_review and wait_watch; every other listed strategy is gated", () => {
+  assert.equal(STRATEGY_OWNERSHIP_GATE.ui_review, false);
+  assert.equal(STRATEGY_OWNERSHIP_GATE.wait_watch, false);
+  for (const gatedStrategy of [
+    "local_implementation",
+    "issue_intake",
+    "copilot_pr_followup",
+    "external_pr_followup",
+    "reviewer_fixer",
+    "final_approval",
+  ]) {
+    assert.equal(STRATEGY_OWNERSHIP_GATE[gatedStrategy], true, `expected ${gatedStrategy} to be gated`);
+  }
+});
+
+test("ownershipGateAppliesToStrategy fails closed (gated) for an unknown/unlisted strategy", () => {
+  assert.equal(ownershipGateAppliesToStrategy("some_future_strategy_not_in_the_map"), true);
+  assert.equal(ownershipGateAppliesToStrategy(undefined), true);
+});
+
+test("ownershipGateAppliesToStrategy is exempt for ui_review and wait_watch, gated for the rest", () => {
+  assert.equal(ownershipGateAppliesToStrategy("ui_review"), false);
+  assert.equal(ownershipGateAppliesToStrategy("wait_watch"), false);
+  assert.equal(ownershipGateAppliesToStrategy("local_implementation"), true);
+  assert.equal(ownershipGateAppliesToStrategy("final_approval"), true);
+});
+
+test("wait_watch (state-derived, e.g. via --input) is exempt: a waiting canonical state with a foreign-assigned PR succeeds", () => {
+  const result = buildResolveDevLoopStartupResult({
+    artifactState: "open",
+    loopState: "waiting",
+    currentState: {
+      target: { kind: "pr", issue: null, pr: 740, linkedPr: null, branch: null, phase: null },
+      ownership: "external_human",
+      nextActor: "external_human",
+      status: "waiting",
+      authorization: "authorized",
+    },
+  }, { env: resolverTestEnv() });
+  assert.equal(result.ok, true);
+  assert.equal(result.selectedStrategy, "wait_watch");
+});
+
+test("wait_watch (state-derived) is exempt: a waiting canonical state with an unassigned PR succeeds", () => {
+  const result = buildResolveDevLoopStartupResult({
+    artifactState: "open",
+    loopState: "waiting",
+    currentState: {
+      target: { kind: "pr", issue: null, pr: 740, linkedPr: null, branch: null, phase: null },
+      ownership: "local",
+      nextActor: "local",
+      status: "waiting",
+      authorization: "authorized",
+    },
+  }, { env: resolverTestEnv() });
+  assert.equal(result.ok, true);
+  assert.equal(result.selectedStrategy, "wait_watch");
 });
 
 // ---------------------------------------------------------------------------

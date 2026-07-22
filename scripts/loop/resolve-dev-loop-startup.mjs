@@ -160,6 +160,27 @@ const STRATEGY_ASYNC_DISPATCH = {
   ui_review: false,
   none: false,
 };
+// Single-contributor ownership gate scope (issue #1444 / ADR 0042, refining
+// ADR 0033's universal gate): only code-changing or merge-authoritative
+// sub-loops require ownership. Pure read/observe strategies (a running-app
+// review, or waiting/watching an in-flight external run) never claim or
+// write anything, so a reviewer must be able to run them against work they
+// do not own. Unknown/unlisted strategies resolve to gated via the `?? true`
+// fallback below — fail closed, matching every other unknown-key posture in
+// this file (see the STRATEGY_REQUIRED_READS unknown-strategy-key throw).
+export const STRATEGY_OWNERSHIP_GATE = {
+  local_implementation: true,
+  issue_intake: true,
+  copilot_pr_followup: true,
+  external_pr_followup: true,
+  reviewer_fixer: true,
+  final_approval: true,
+  ui_review: false,
+  wait_watch: false,
+};
+export function ownershipGateAppliesToStrategy(strategyKey) {
+  return STRATEGY_OWNERSHIP_GATE[strategyKey] ?? true;
+}
 const parseError = buildParseError(USAGE);
 export function parseResolveDevLoopStartupCliArgs(argv) {
   const options = {
@@ -486,12 +507,17 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       issueReadiness = "needs_clarification";
       warnings.push(`issueReadiness: using default "${issueReadiness}" — gh issue view failed`);
     }
-    // Single-contributor ownership gate (#1377): a failed read defaults to an
-    // empty assignee list (today's warn+default posture for the READ), but the
-    // ownership GATE below then applies uniformly regardless of why the issue
-    // looks unassigned — resolve-dev-loop-startup is the one seam every
-    // implementation route passes through, so "unassigned but being worked" is
-    // impossible by construction.
+    // Single-contributor ownership gate (#1377, scoped by #1444): a failed
+    // read defaults to an empty assignee list (today's warn+default posture
+    // for the READ). Classification here uses `classifyOwnership(assignees,
+    // null)` — never the viewer login — because the copilot check
+    // short-circuits before any viewer comparison, so this is always safe
+    // regardless of gate/bypass state and is enough to derive
+    // issueAssignmentState (which only distinguishes copilot vs not-copilot;
+    // see the comment below). The real ownership-gate ENFORCEMENT (which does
+    // need the viewer login to tell assigned_to_me from assigned_to_other) is
+    // deferred below, after peeking the strategy the pure routing evaluator
+    // would select for this canonical state.
     let assignees = [];
     try {
       const assigneesJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "assignees"], repoRoot);
@@ -499,31 +525,19 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     } catch {
       warnings.push('issueAssignmentState: using default "unassigned" — gh issue view failed');
     }
-    // Bypassed (read-only inspection, e.g. info.mjs): classify without ever
-    // resolving the viewer login, so a preview never needs `gh api user` or
-    // fails on its absence.
-    const issueOwnershipGateActive = !ownershipGateBypassed(env);
-    const issueOwnership = issueOwnershipGateActive
-      ? resolveOwnershipState(assignees, repoRoot)
-      : classifyOwnership(assignees, null);
-    if (issueOwnershipGateActive) {
-      enforceOwnershipGate(issueOwnership, {
-        describeArtifact: `Issue #${issue}`,
-        claimCommand: `node scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
-      });
-    }
-    // Only assigned_to_me and assigned_to_copilot pass the gate above. The pure
+    const routingOwnership = classifyOwnership(assignees, null);
+    // Only assigned_to_me and assigned_to_copilot pass the gate below. The pure
     // routing evaluator's issueAssignmentState authoritative issue-state input
     // (not a variation parameter — see public-dev-loop-contract.md) only
     // distinguishes copilot vs not-copilot (DEV_LOOP_ISSUE_ASSIGNMENT_STATE has
     // no assigned_to_me value) — assigned_to_me is passed through as
-    // "unassigned" for that purpose; the gate above already proved the viewer
-    // is the sole human owner.
-    const issueAssignmentState = issueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT
+    // "unassigned" for that purpose; the gate below already proves the viewer
+    // is the sole human owner whenever it applies.
+    const issueAssignmentState = routingOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT
       ? "assigned_to_copilot"
       : "unassigned";
     const loopState = "issue_intake_start";
-    return {
+    const result = {
       intent: "start_issue_locally",
       mode: "bounded_handoff",
       targetPreference: resolvedTargetPreference,
@@ -544,6 +558,27 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         authorization: "authorized",
       },
     };
+    // Scoped single-contributor ownership gate (#1444, ADR 0042): peek the
+    // strategy the pure routing evaluator would select for this exact
+    // canonical state, then enforce ownership only when that strategy is
+    // gated (STRATEGY_OWNERSHIP_GATE). Every strategy reachable from the
+    // --issue path today (local_implementation, issue_intake) is gated, so
+    // this peek is defensive/future-proofing rather than a live branch — but
+    // it is the one mechanism, shared with the --pr path below, so a future
+    // issue-reachable exempt strategy is covered for free. Bypassed
+    // (read-only inspection, e.g. info.mjs) skips enforcement entirely,
+    // regardless of strategy — resolveAuthoritativeStartupResumeBundle itself
+    // never shells out, so this peek costs no extra gh calls.
+    if (!ownershipGateBypassed(env)) {
+      const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
+      if (ownershipGateAppliesToStrategy(peekedStrategy)) {
+        enforceOwnershipGate(resolveOwnershipState(assignees, repoRoot), {
+          describeArtifact: `Issue #${issue}`,
+          claimCommand: `node scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
+        });
+      }
+    }
+    return result;
   }
   let artifactState;
   let prAssignees = [];
@@ -559,52 +594,13 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   } catch {
     artifactState = "open";
   }
-  // Single-contributor ownership gate (#1377): same fail-closed shape as the
-  // --issue path (assigned_to_other -> foreign-ownership error, unassigned ->
-  // not-claimed error naming edit-pr.mjs). A failed read defaults to an empty
-  // assignee list, which the gate treats as unassigned — consistent with the
-  // --issue path's posture. Bypassed (read-only inspection): classify without
-  // resolving the viewer login, mirroring the --issue path above.
-  const prOwnershipGateActive = !ownershipGateBypassed(env);
-  const prOwnership = prOwnershipGateActive
-    ? resolveOwnershipState(prAssignees, repoRoot)
-    : classifyOwnership(prAssignees, null);
-  if (prOwnershipGateActive) {
-    enforceOwnershipGate(prOwnership, {
-      describeArtifact: `PR #${pr}`,
-      claimCommand: `node scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
-    });
-    // A PR whose linked issue is foreign-owned is foreign too — the issue owner
-    // owns the whole loop. This only checks for a FOREIGN linked issue (not
-    // unassigned): the PR's own ownership above already gates the unclaimed
-    // case, and an unassigned linked issue is not evidence anyone else owns it.
-    // Copilot-assigned PRs short-circuit: the Copilot-first flow governs them,
-    // and their path stays immune to viewer-login resolution entirely.
-    for (const linkedIssueNumber of prOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT ? [] : linkedIssueNumbers) {
-      let linkedIssueAssignees;
-      try {
-        const linkedIssueJson = ghJson(["issue", "view", String(linkedIssueNumber), "--repo", repo, "--json", "assignees"], repoRoot);
-        linkedIssueAssignees = linkedIssueJson.assignees || [];
-      } catch {
-        // Warn-on-failure posture, same as other reads: an unreadable linked
-        // issue cannot block continuation on its own.
-        continue;
-      }
-      const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot);
-      if (linkedIssueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
-        throw new Error(
-          `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.`,
-        );
-      }
-    }
-  }
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);
   // `--ui-review` (issue #1362) routes the PR to the ui_review strategy
   // instead of the default continue_on_pr/copilot_pr_followup path; every
   // other field (ownership/nextActor/artifactState/etc.) stays identical —
   // only intent + loopState change, and only when the flag is set, so the
   // plain --pr path is byte-unchanged.
-  return {
+  const result = {
     intent: uiReview ? "review_pr_ui" : "continue_on_pr",
     mode: "bounded_handoff",
     targetPreference: resolvedTargetPreference,
@@ -619,6 +615,50 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       authorization: "authorized",
     },
   };
+  // Scoped single-contributor ownership gate (#1377, scoped by #1444 / ADR
+  // 0042): peek the strategy the pure routing evaluator would select for this
+  // canonical state (ui_review for --ui-review, one of the
+  // copilot/external/reviewer-fixer follow-up strategies otherwise), then
+  // enforce ownership — including the linked-issue foreign check — only when
+  // that strategy is gated. A ui_review peek is exempt, so a reviewer can run
+  // `/loop-review-ui` against a PR (and its linked issue) they do not own.
+  // Bypassed (read-only inspection): skip enforcement entirely, mirroring the
+  // --issue path above.
+  if (!ownershipGateBypassed(env)) {
+    const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
+    if (ownershipGateAppliesToStrategy(peekedStrategy)) {
+      const prOwnership = resolveOwnershipState(prAssignees, repoRoot);
+      enforceOwnershipGate(prOwnership, {
+        describeArtifact: `PR #${pr}`,
+        claimCommand: `node scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
+      });
+      // A PR whose linked issue is foreign-owned is foreign too — the issue
+      // owner owns the whole loop. This only checks for a FOREIGN linked
+      // issue (not unassigned): the PR's own ownership above already gates
+      // the unclaimed case, and an unassigned linked issue is not evidence
+      // anyone else owns it. Copilot-assigned PRs short-circuit: the
+      // Copilot-first flow governs them, and their path stays immune to
+      // viewer-login resolution entirely.
+      for (const linkedIssueNumber of prOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT ? [] : linkedIssueNumbers) {
+        let linkedIssueAssignees;
+        try {
+          const linkedIssueJson = ghJson(["issue", "view", String(linkedIssueNumber), "--repo", repo, "--json", "assignees"], repoRoot);
+          linkedIssueAssignees = linkedIssueJson.assignees || [];
+        } catch {
+          // Warn-on-failure posture, same as other reads: an unreadable linked
+          // issue cannot block continuation on its own.
+          continue;
+        }
+        const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot);
+        if (linkedIssueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
+          throw new Error(
+            `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.`,
+          );
+        }
+      }
+    }
+  }
+  return result;
 }
 /**
  * Read + validate a `--plan-file` path and build a local_phase startup input.
