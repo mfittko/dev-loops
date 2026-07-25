@@ -16,7 +16,7 @@ css: ./style.css
   <div class="chip-row pt-5">
     <span class="pill">deterministic state</span>
     <span class="pill">bounded loops</span>
-    <span class="pill">GitHub evidence</span>
+    <span class="pill">tracker + review evidence</span>
     <span class="pill">human authority</span>
   </div>
 </div>
@@ -32,24 +32,24 @@ css: ./style.css
 <p class="card-label">Ralph loops</p>
 <ul class="mini-list">
   <li>Persist across repeated runs.</li>
-  <li>Keep context in durable artifacts.</li>
+  <li>Keep state in durable artifacts.</li>
   <li>Make one bounded move per cycle.</li>
 </ul>
 </div>
 <div class="glass-card">
 <p class="card-label">Karpathy loops</p>
 <ul class="mini-list">
-  <li>Evaluate each candidate.</li>
-  <li>Keep improvements, discard regressions.</li>
-  <li>Turn iteration into search.</li>
+  <li>Evaluate every candidate.</li>
+  <li>Keep improvements; revert regressions.</li>
+  <li>Turn iteration into measurable search.</li>
 </ul>
 </div>
 <div class="glass-card">
 <p class="card-label">Graph engineering</p>
 <ul class="mini-list">
-  <li>Encode known paths and cycles.</li>
-  <li>Mix deterministic and agentic steps.</li>
-  <li>Make transitions inspectable.</li>
+  <li>Encode paths, branches, waits, and cycles.</li>
+  <li>Mix deterministic and agentic nodes.</li>
+  <li>Make control flow inspectable.</li>
 </ul>
 </div>
 </div>
@@ -68,7 +68,7 @@ css: ./style.css
 <div class="glass-card">
 <ul class="tight-list">
   <li>The graph models the <strong>current state of the change</strong>.</li>
-  <li>The surface projects the <strong>next actor, action, gate, wait, or stop</strong>.</li>
+  <li>The surface projects the <strong>next actor, action, gate, wait, stop, or reconcile path</strong>.</li>
   <li>Agents are replaceable executors inside bounded transitions.</li>
   <li>Every action returns to authoritative facts before the next move.</li>
 </ul>
@@ -92,7 +92,7 @@ flowchart LR
 
 <p class="kicker">Architecture</p>
 
-## Five Planes, One Loop
+## Five Planes, One Repeating Traversal
 
 ```mermaid {scale: 0.67}
 flowchart LR
@@ -105,7 +105,40 @@ flowchart LR
 ```
 
 <div class="glass-card mt-5">
-<p class="section-lead">The execution context can disappear. The state model, backend evidence, and contracts remain sufficient to resume.</p>
+<p class="section-lead">The execution context can disappear. Backend evidence, state models, and contracts remain sufficient to reconstruct the next move.</p>
+</div>
+
+---
+
+<p class="kicker">The public surface</p>
+
+## The Surface Is Compiled from Modeled State
+
+<div class="grid grid-cols-2 gap-5 items-start">
+<div class="glass-card">
+<p class="card-label">Canonical state dimensions</p>
+<ul class="tight-list">
+  <li><strong>target</strong> — which artifact is active?</li>
+  <li><strong>ownership</strong> — which durable owner or strategy family is responsible?</li>
+  <li><strong>nextActor</strong> — who must act now?</li>
+  <li><strong>status</strong> — active, waiting, blocked, approval-ready, merge-ready, done?</li>
+  <li><strong>authorization</strong> — permitted, needs confirmation, or forbidden?</li>
+</ul>
+</div>
+<div class="glass-card">
+<p class="card-label">Projected control surface</p>
+<ul class="tight-list">
+  <li>route kind and internal strategy</li>
+  <li>next action and selected gate</li>
+  <li>wait and timeout semantics</li>
+  <li>stop or reconcile reason</li>
+  <li>handoff envelope and required evidence</li>
+</ul>
+</div>
+</div>
+
+<div class="metric-card mt-5">
+<p class="hero-copy">Start, continue, inspect, steer, wait, approve, and merge are views and transitions over the same model — not parallel workflows.</p>
 </div>
 
 ---
@@ -118,11 +151,10 @@ flowchart LR
 <div class="glass-card">
 <p class="card-label">Public graph</p>
 <ul class="mini-list">
-  <li>target</li>
-  <li>ownership</li>
-  <li>next actor</li>
-  <li>status</li>
-  <li>authorization</li>
+  <li>artifact + ownership</li>
+  <li>status + authorization</li>
+  <li>execution mode</li>
+  <li>operator-visible next action</li>
 </ul>
 </div>
 <div class="glass-card">
@@ -133,8 +165,7 @@ flowchart LR
   <li>implementation</li>
   <li>draft gate</li>
   <li>feedback resolution</li>
-  <li>pre-approval</li>
-  <li>merge</li>
+  <li>pre-approval + merge</li>
 </ul>
 </div>
 <div class="glass-card">
@@ -149,7 +180,7 @@ flowchart LR
 </div>
 </div>
 
-<div class="soft-note">The conductor composes the machines through contracts instead of flattening them into one giant prompt.</div>
+<div class="soft-note">The conductor composes state machines through contracts instead of flattening them into one giant prompt.</div>
 
 ---
 
@@ -171,8 +202,8 @@ flowchart LR
 <ul class="tight-list">
   <li><strong>One bounded move</strong>, then control returns to the resolver.</li>
   <li>The refresh catches new reviews, CI changes, head changes, steering, merges, and closures.</li>
-  <li>No worker is allowed to carry stale assumptions forward as truth.</li>
-  <li>Fresh sessions resume from facts, not chat memory.</li>
+  <li>No worker carries stale assumptions forward as truth.</li>
+  <li>Fresh sessions resume from facts, not conversational memory.</li>
 </ul>
 </div>
 </div>
@@ -181,41 +212,39 @@ flowchart LR
 
 <p class="kicker">Backend</p>
 
-## GitHub Is the Evidence Plane
+## GitHub Is the Current Evidence Plane
 
 <div class="grid grid-cols-3 gap-5 items-stretch">
 <div class="glass-card">
-<p class="card-label">Tracker</p>
+<p class="card-label">Tracker + identity</p>
 <ul class="mini-list">
-  <li>work identity</li>
-  <li>specification</li>
-  <li>assignment</li>
+  <li>work identity and spec</li>
+  <li>assignment and queue</li>
   <li>issue ↔ PR linkage</li>
+  <li>provider seam for issues/board</li>
 </ul>
 </div>
 <div class="glass-card">
 <p class="card-label">Review + verification</p>
 <ul class="mini-list">
-  <li>threads and resolutions</li>
+  <li>reviews and threads</li>
   <li>gate verdicts</li>
   <li>CI checks</li>
   <li>head-pinned evidence</li>
 </ul>
 </div>
 <div class="glass-card">
-<p class="card-label">Terminal truth</p>
+<p class="card-label">Terminal truth + recovery</p>
 <ul class="mini-list">
-  <li>merged is observable</li>
-  <li>closed is observable</li>
+  <li>merged and closed are observable</li>
   <li>done cannot be fabricated</li>
-  <li>fresh runs can recover</li>
+  <li>fresh runs can reconstruct state</li>
+  <li>durable comments preserve decisions</li>
 </ul>
 </div>
 </div>
 
-<div class="metric-card mt-5">
-<p class="hero-copy">GitHub is the current reference tracker/review backend — not merely a place to push the final diff.</p>
-</div>
+<div class="soft-note">The tracker seam is provider-pluggable for issues and boards. The PR, review, CI, and Copilot surface remains GitHub-coupled in v1.</div>
 
 ---
 
@@ -230,7 +259,7 @@ flowchart LR
   <li>normalize facts</li>
   <li>interpret state</li>
   <li>enforce transitions</li>
-  <li>verify evidence</li>
+  <li>verify current-head evidence</li>
   <li>fail closed</li>
 </ul>
 </div>
@@ -238,10 +267,10 @@ flowchart LR
 <p class="card-label">Agentic</p>
 <ul class="mini-list">
   <li>refine scope</li>
-  <li>explore the repo</li>
+  <li>explore the repository</li>
   <li>implement</li>
   <li>review through a lens</li>
-  <li>fix and explain</li>
+  <li>diagnose, fix, explain</li>
 </ul>
 </div>
 <div class="glass-card">
@@ -249,7 +278,7 @@ flowchart LR
 <ul class="mini-list">
   <li>resolve ambiguity</li>
   <li>set policy</li>
-  <li>accept risk</li>
+  <li>accept high-risk trade-offs</li>
   <li>authorize merge by default</li>
   <li>remain accountable</li>
 </ul>
@@ -266,7 +295,7 @@ flowchart LR
 <div class="glass-card">
 <p class="card-label">Greenfield</p>
 <ul class="tight-list">
-  <li>Start from a plan or new tracker item.</li>
+  <li>Start from a local plan or new tracker item.</li>
   <li>Establish architecture during refinement.</li>
   <li>Create tests and implementation together.</li>
 </ul>
@@ -282,8 +311,9 @@ flowchart LR
 </div>
 
 <div class="metric-card mt-5">
-<p class="hero-copy"><strong>Codebase age changes the context and evidence — not the state-backed control model.</strong></p>
+<p class="hero-copy"><strong>The toolset has already been used successfully in both contexts.</strong> Codebase age changes context and verification burden — not the state-backed control model.</p>
 </div>
+<div class="soft-note">The deferred Phase 7 second-repo pilot is a formal, reproducible portability proof; it is separate from operational evidence across greenfield and brownfield work.</div>
 
 ---
 
@@ -293,7 +323,7 @@ flowchart LR
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
-<p class="card-label">Operational loop — today</p>
+<p class="card-label">Operational loop — current change</p>
 
 ```mermaid {scale: 0.58}
 flowchart LR
@@ -306,18 +336,43 @@ flowchart LR
 <p class="soft-note">Converges the current change through review, fix, retry, wait, and fail-closed recovery.</p>
 </div>
 <div class="glass-card">
-<p class="card-label">Meta-loop — natural next layer</p>
+<p class="card-label">Learning loop — future changes</p>
 
 ```mermaid {scale: 0.56}
 flowchart LR
-  T[Traces] --> P[Propose graph change]
-  P --> E[Replay / evaluate]
-  E --> K{Better?}
-  K -->|yes| N[Keep]
-  K -->|no| R[Revert]
+  T[Traces] --> D[Retrospective / decision]
+  D --> Q[Follow-up / contract]
+  Q --> G[Test + graph version]
+  G --> T
 ```
 
-<p class="soft-note">Optimizes routing, prompts, models, context, gates, and topology against held-out real tasks.</p>
+<p class="soft-note">Turns outcomes into stronger contracts, tests, review lenses, and routing policy.</p>
+</div>
+</div>
+
+---
+
+<p class="kicker">Next layer</p>
+
+## A Karpathy-Style Meta-Loop over the Surface
+
+<div class="grid grid-cols-2 gap-5 items-start">
+<div class="glass-card">
+<ul class="tight-list">
+  <li>Propose a change to routing, prompts, models, context, gates, or topology.</li>
+  <li>Replay current and candidate graph versions on held-out real tasks.</li>
+  <li>Measure correctness, review burden, latency, cost, and policy violations.</li>
+  <li>Keep the candidate only when it improves inside fixed safety constraints.</li>
+</ul>
+</div>
+<div class="glass-card">
+<p class="card-label">Why dev-loops is a strong substrate</p>
+<ul class="tight-list">
+  <li>The optimization target is versioned and inspectable.</li>
+  <li>States, transitions, gates, and traces are already testable.</li>
+  <li>The evaluator can remain outside the candidate's control.</li>
+  <li>Every accepted graph change can pass through the same PR evidence pipeline.</li>
+</ul>
 </div>
 </div>
 
@@ -330,7 +385,7 @@ flowchart LR
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
 <ul class="tight-list">
-  <li><strong>GitHub</strong> preserves durable work and evidence.</li>
+  <li><strong>The backend</strong> preserves durable work and evidence.</li>
   <li><strong>State machines</strong> define legal progression and recovery.</li>
   <li><strong>The surface</strong> projects status, next action, steering, waits, and approvals.</li>
   <li><strong>Loops</strong> repeatedly traverse the graph.</li>
@@ -340,5 +395,34 @@ flowchart LR
 <div class="metric-card">
 <p class="hero-copy">Ralph contributes persistence. Karpathy contributes measured selection. Graph engineering contributes explicit control.</p>
 <p class="hero-copy"><strong>dev-loops brings them together around modeled state.</strong></p>
+</div>
+</div>
+
+<div class="soft-note">The agent may change. The harness may change. The state graph stays authoritative, and every loop comes back to it.</div>
+
+---
+
+<p class="kicker">References</p>
+
+## Sources and Repository Contracts
+
+<div class="grid grid-cols-2 gap-5 items-start">
+<div class="glass-card">
+<p class="card-label">External framing</p>
+<ul class="tight-list">
+  <li><a href="https://ghuntley.com/ralph/">Geoffrey Huntley — Ralph</a></li>
+  <li><a href="https://github.com/karpathy/autoresearch">Andrej Karpathy — AutoResearch</a></li>
+  <li><a href="https://www.langchain.com/blog/3-years-of-graph-engineering-with-langgraph">LangChain — Three Years of Graph Engineering</a></li>
+</ul>
+</div>
+<div class="glass-card">
+<p class="card-label">dev-loops contracts</p>
+<ul class="tight-list">
+  <li><code>packages/core/src/loop/lifecycle-state.mjs</code></li>
+  <li><code>skills/docs/public-dev-loop-contract.md</code></li>
+  <li><code>skills/docs/pr-lifecycle-contract.md</code></li>
+  <li><code>skills/docs/conductor-routing-contract.md</code></li>
+  <li><code>skills/docs/tracker-seam-contract.md</code></li>
+</ul>
 </div>
 </div>
