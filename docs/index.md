@@ -41,12 +41,14 @@ Start here for repository documentation.
 
 - [Introducing dev-loops](./articles/introducing-dev-loops.md) — start here: what dev-loops is, the proof from its own history, and how to adopt it
 - [dev-loops: A Deep Dive](./articles/dev-loops-deep-dive.md) — deep dive in two parts: why every handoff is an explicit decision on a state graph, then measuring the waiting between actions
+- [The State Graph Is the Surface](./articles/the-state-graph-is-the-surface.md) — reframes dev-loops as a graph/loop control surface: modeled state is authoritative, loops traverse it, and GitHub supplies the durable tracker/review evidence plane
 - [How dev-loops Decided Itself Into Shape](./articles/how-dev-loops-decided-itself.md) — the history: forty dated architecture decisions, the two reversals, and the outcomes, read straight from the decision log
 
 ## Presentations
 
 - [Applied Dev Loops Presentation](./presentations/applied-dev-loops-presentation.md)
 - [Process Observability Presentation](./presentations/process-observability-presentation.md)
+- [The State Graph Is the Surface (deck)](./presentations/state-graph-surface-presentation.md) — the graph/loop reframe in presentation form
 - [How dev-loops Decided Itself Into Shape (deck)](./presentations/how-dev-loops-decided-itself.html) — the evolution/history narrated through the decision log
 - `docs/presentations/style.css`
 
