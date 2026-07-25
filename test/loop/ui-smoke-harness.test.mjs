@@ -7,9 +7,12 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import {
   buildNamedUiStateArtifactPaths,
   captureNamedUiState,
+  launchWebkit,
   normalizeUiStateSegment,
   normalizeViewportSegment,
   normalizeInteractionSegment,
+  PLAYWRIGHT_MISSING_MESSAGE,
+  WEBKIT_MISSING_MESSAGE,
 } from '../playwright/harness/webkit-smoke-harness.mjs';
 
 test('normalizeUiStateSegment collapses UI state names into stable path segments', () => {
@@ -414,4 +417,52 @@ test('captureNamedUiState emits snapshot.json as JSON null when the accessibilit
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// Playwright is an optional peer dependency, so both ways it can be missing must
+// surface a stated install instruction rather than a module-resolution stack
+// trace or an opaque launch error. Imported through the harness re-export, which
+// also proves the shipped adapter module stays reachable from the suite.
+test('launchWebkit reports a missing @playwright/test package with install instructions', async () => {
+  await assert.rejects(
+    () => launchWebkit({}, { importPlaywright: () => Promise.reject(new Error('ERR_MODULE_NOT_FOUND')) }),
+    (err) => {
+      assert.equal(err.message, PLAYWRIGHT_MISSING_MESSAGE);
+      assert.match(err.message, /npm install --save-dev @playwright\/test/);
+      return true;
+    },
+  );
+});
+
+test('launchWebkit reports a missing WebKit binary and names webkit specifically', async () => {
+  // Playwright's own message says `npx playwright install`, which downloads every
+  // browser; the wrapper narrows it to the one browser the stages launch.
+  const importPlaywright = () => Promise.resolve({
+    webkit: { launch: () => Promise.reject(new Error("browserType.launch: Executable doesn't exist at /x/webkit-1/pw_run.sh")) },
+  });
+  await assert.rejects(
+    () => launchWebkit({}, { importPlaywright }),
+    (err) => {
+      assert.equal(err.message, WEBKIT_MISSING_MESSAGE);
+      assert.match(err.message, /playwright install webkit/);
+      return true;
+    },
+  );
+});
+
+test('launchWebkit rethrows an unrelated launch failure unmasked', async () => {
+  const importPlaywright = () => Promise.resolve({
+    webkit: { launch: () => Promise.reject(new Error('connection refused by sandbox')) },
+  });
+  await assert.rejects(() => launchWebkit({}, { importPlaywright }), /connection refused by sandbox/);
+});
+
+test('launchWebkit returns the browser and honors headless', async () => {
+  const launched = [];
+  const importPlaywright = () => Promise.resolve({
+    webkit: { launch: (opts) => { launched.push(opts); return Promise.resolve({ id: 'browser' }); } },
+  });
+  assert.deepEqual(await launchWebkit({}, { importPlaywright }), { id: 'browser' });
+  assert.deepEqual(await launchWebkit({ headless: false }, { importPlaywright }), { id: 'browser' });
+  assert.deepEqual(launched, [{ headless: true }, { headless: false }]);
 });

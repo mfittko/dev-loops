@@ -18,11 +18,11 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { rm } from "node:fs/promises";
-import { webkit } from "@playwright/test";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
 import { authenticate, dismissInterstitials, makeRunStep } from "./ui-review-drive.mjs";
+import { launchWebkit } from "./ui-review-capture.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -254,7 +254,7 @@ async function removeAllCaptures(outputDir) {
 
 export async function captureDescriptorScreen(
   { repoRoot, appUrl, outputDir, descriptor },
-  { loadConfig = loadDevLoopConfig, launchBrowser = () => webkit.launch({ headless: true }) } = {},
+  { loadConfig = loadDevLoopConfig, launchBrowser = launchWebkit } = {},
 ) {
   let browser;
   // The most recent capture bundle written to disk; hoisted so the failure catch

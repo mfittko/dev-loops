@@ -106,6 +106,7 @@ const SUBCOMMAND_ROUTES = {
     "ui-review-diagnose":   "scripts/loop/ui-review-diagnose.mjs",
     "ui-review-report":     "scripts/loop/ui-review-report.mjs",
     "ui-review-teardown":   "scripts/loop/ui-review-teardown.mjs",
+    "visual-grill-capture": "scripts/loop/visual-grill-capture.mjs",
   },
   pr: {
     create:             "scripts/github/create-pr.mjs",
@@ -192,6 +193,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "ui-review-diagnose": "Classify UI-review drive errors and anchor findings to the diff",
     "ui-review-report": "Post the UI-review findings as a pending PR review",
     "ui-review-teardown": "Tear down the UI-review worktree/app and emit the side-effect ledger",
+    "visual-grill-capture": "Drive a headless browser to a described screen and capture it for loop-grill",
   },
   pr: {
     create: "Create PR (always draft, self-assigned by default)",

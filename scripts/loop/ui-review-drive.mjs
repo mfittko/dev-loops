@@ -26,12 +26,11 @@ import { statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { webkit } from "@playwright/test";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
 import { driveUiReview, isErrorResponseStatus, PAGE_ERROR_STACK_MAX_CHARS, DRIVE_SESSION_HEADER } from "@dev-loops/core/loop/ui-review-drive";
-import { captureNamedUiState } from "../../test/playwright/harness/webkit-smoke-harness.mjs";
+import { captureNamedUiState, launchWebkit } from "./ui-review-capture.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -387,7 +386,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // and stamped onto the emitted row manifest so teardown drops exactly those.
   const driveSession = randomUUID();
 
-  const browser = await webkit.launch({ headless: true });
+  const browser = await launchWebkit();
   try {
     const context = await browser.newContext({ extraHTTPHeaders: { [DRIVE_SESSION_HEADER]: driveSession } });
     const page = await context.newPage();

@@ -104,6 +104,11 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
       ["loop", "ensure-worktree", "--help"],
       ["issue", "edit", "--help"],
       ["issue", "create", "--help"],
+      // The browser-driving stages. The install dir has no @playwright/test —
+      // it is an OPTIONAL peer — so these also prove the Playwright load stayed
+      // dynamic: a top-level import would fail the module graph before --help.
+      ["loop", "ui-review-drive", "--help"],
+      ["loop", "visual-grill-capture", "--help"],
     ]) {
       // execFileSync throws on a non-zero exit, so reaching here already means
       // the command succeeded; additionally assert it printed real help (a
