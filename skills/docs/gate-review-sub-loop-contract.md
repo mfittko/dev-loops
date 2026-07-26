@@ -159,7 +159,8 @@ and not a config knob: build context → primer reads → fan-out reads the SAME
 plus its angle-specific briefing.
 
 **Default execution — one-reviewer-as-primer (zero extra cost):** dispatch ONE real
-reviewer first, then release the rest once its response has *started* (see the barrier in
+reviewer first, then release the rest once its prefix write has landed — on its first
+streamed token if the harness streams, else on its completion (see the barrier fallback in
 step 3). No extra spawn, no extra tokens — the first reviewer runs anyway; the others simply
 start after its prefix write has landed. This is why priming is mandatory rather than opt-in:
 in its default form it costs at most a small serialization latency, and it removes an N×
@@ -194,12 +195,19 @@ per-gate accounting is an optional follow-up, not a precondition.)
    byte-identical + hash-recorded).
 2. **Send ONE angle-less primer** over that exact serialized prefix.
 3. **Barrier: await the shared-prefix write landing** before releasing ANY reviewer — the
-   write must precede the parallel reads. The write lands once the primer's request prefix
-   has been processed; **awaiting the primer's completion is the safe default** (a harness
-   exposes completion, not token-level streaming). The one-reviewer-as-primer form above
-   may instead release the rest once the lead reviewer's response has *started*, since the
-   prefix write has landed by then — the two forms differ only in WHEN "the write has
-   landed" is observed, never in the write-before-reads ordering itself.
+   write must precede the parallel reads. The write has landed once the primer has produced
+   ANY model output for that request, so the barrier keys on the earliest such signal the
+   harness exposes:
+   - **If the harness exposes streaming** (a token/first-chunk callback): release the rest on
+     the primer's first streamed token.
+   - **If it only exposes completion** (the common case — an agent/subagent call that returns
+     a finished result): **await the primer's completion.** This is the mandatory fallback and
+     the safe default; never release reviewers off an unobservable "start."
+
+   The two forms of the primer differ only in WHICH signal they key on, never in the
+   write-before-reads ordering. The completion fallback fully serializes the lead reviewer
+   ahead of the rest — a small, bounded latency cost, and the reason the near-free
+   one-reviewer form is still the default rather than a mandatory streaming dependency.
 4. **Release the fan-out over the SAME model and the SAME byte-identical prefix**, so each
    reviewer READS the cache the primer wrote instead of racing to write its own. A
    differing model or prefix defeats reuse and is the same failure the byte-identity rule

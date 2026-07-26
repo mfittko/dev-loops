@@ -1236,6 +1236,20 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
     data = { ...data, strategy: "tracker-first" };
   }
 
+  // Removed `gates.primeSharedPrefix` (#1462): GATE-EXEC-PRIME cache priming is
+  // now mandatory, not a knob. The schema is strictObject, so a stale key would
+  // otherwise drop the WHOLE gates layer as invalid. Strip it before validation
+  // with a deprecation warning — old configs keep loading; priming happens
+  // unconditionally regardless of the removed value.
+  if (data?.gates && Object.prototype.hasOwnProperty.call(data.gates, "primeSharedPrefix")) {
+    warnings.push(
+      `gates.primeSharedPrefix is removed (#1462): cache priming is now mandatory, not configurable. ` +
+      `Remove it from ${path.basename(filePath)}; the key is ignored.`
+    );
+    const { primeSharedPrefix: _removed, ...gatesRest } = data.gates;
+    data = { ...data, gates: gatesRest };
+  }
+
   // Validate the file's structure before merging. Pre-existing behavior
   // (unrelated to the #1404 angle-entry redesign): a schema violation ANYWHERE
   // in this layer's file drops the WHOLE layer (errors is populated, `merged`

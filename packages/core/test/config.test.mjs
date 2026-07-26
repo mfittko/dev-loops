@@ -1415,6 +1415,21 @@ describe("tracker config (#1408)", () => {
     }
   });
 
+  test("gates.primeSharedPrefix (removed #1462) is stripped with a warning, not a hard fail", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-prime-removed-"));
+    try {
+      await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  primeSharedPrefix: false\n  maxFanoutReviewers: 4\n");
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(result.errors, [], "stale key must not drop the gates layer");
+      assert.equal(result.config.gates.maxFanoutReviewers, 4, "rest of the gates layer still loads");
+      assert.equal("primeSharedPrefix" in result.config.gates, false, "removed key does not survive into resolved config");
+      assert.ok(result.warnings.some((w) => /gates\.primeSharedPrefix is removed/.test(w)));
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("queue.board is accepted as a deprecated alias for tracker.board, with a warning", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-tracker-alias-board-"));
     try {
