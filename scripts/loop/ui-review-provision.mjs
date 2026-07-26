@@ -21,7 +21,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe } from "@dev-loops/core/config";
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
-import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
+import { isMainCheckout, isListedWorktree, parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
 import { ensureWorktree } from "./ensure-worktree.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -252,10 +252,14 @@ export function assertNotPrimary({ worktreePath, repoRoot }) {
     return { ok: false, message: `git worktree list failed: ${(err.stderr ?? err.message ?? "").toString().trim()}` };
   }
   const mainWorktreePath = parseMainWorktreePath(listOutput);
-  // The loop's own namespace (<repoRoot>/tmp/worktrees/...) is by construction
-  // a linked worktree, never the primary checkout — resolveWorktreePath places
-  // it inside the repo root, which the containment check below would reject.
-  if (isUnderWorktreePath(worktreePath)) {
+  // The loop's own namespace (<repoRoot>/tmp/worktrees/...) is a linked worktree
+  // that lives INSIDE the repo root, which the containment check below would
+  // reject. Exempt it — but only when it is a GENUINELY LISTED linked worktree
+  // (ensureWorktree runs before this guard, so it is registered by now). A plain
+  // directory that merely contains `tmp/worktrees/` in its path is NOT exempted,
+  // keeping the fail-closed property. (#1456 + review hardening)
+  const listedWorktreePaths = listOutput.split("\n").map((l) => l.trim().split(/\s+/)[0]).filter(Boolean);
+  if (isListedWorktree(worktreePath, listedWorktreePaths)) {
     return { ok: true, mainWorktreePath };
   }
   if (isMainCheckout(worktreePath, mainWorktreePath)) {
