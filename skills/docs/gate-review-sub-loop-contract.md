@@ -168,56 +168,34 @@ review round, records no per-angle disposition, and its `--scope` is the reserve
 angle accounting; it still records the same prefix hash, so a divergent primer prefix fails
 closed like any reviewer).
 
-**Ordered execution (fail-open to unprimed):**
+**Ordered execution:**
 
 1. **Compile the immutable prefix** — Phase 1's `briefing-prefix.txt` (already
    byte-identical + hash-recorded).
-2. **Send the primer request** over that exact serialized prefix, with the cache
-   breakpoint at the prefix end.
-3. **Barrier: await primer completion** before releasing ANY reviewer — the whole point
-   is that the write lands before the parallel reads, so the fan-out MUST NOT start until
-   the primer returns.
-4. **Verify the cache was actually written** — the primer's usage must report
-   `cache_creation` / `cache_write_tokens > 0`. A zero-write primer did not establish the
-   shared prefix (model/prefix/key mismatch, or provider not caching); record it and
-   **proceed UNPRIMED** — the fan-out then runs exactly as the disabled default (correctness
-   is never contingent on a cache hit).
-5. **Release the fan-out pinned to the primer** — every reviewer MUST use the SAME model,
-   the SAME `prompt_cache_key`, the SAME serialized prefix bytes, and an explicit cache
-   breakpoint at the prefix end, so each reviewer READS the cache the primer wrote instead
-   of racing to write its own. A differing model/key/prefix defeats reuse and is the same
-   failure the byte-identity rule already guards against.
+2. **Send ONE angle-less primer** over that exact serialized prefix.
+3. **Barrier: await primer completion** before releasing ANY reviewer — the write must
+   land before the parallel reads, so the fan-out MUST NOT start until the primer returns.
+4. **Release the fan-out over the SAME model and the SAME byte-identical prefix**, so each
+   reviewer READS the cache the primer wrote instead of racing to write its own. A
+   differing model or prefix defeats reuse and is the same failure the byte-identity rule
+   already guards against.
 
 Rationale (why the primer, not just the shared prefix): a parallel fan-out with no primer
 launches every reviewer before any has written the cache — a **cold-cache race** where all
-N pay a cache write and none reads. The barrier + write-verification collapse that to
-1 write + N reads.
+N pay a cache write and none reads. The barrier collapses that to 1 write + N reads.
 
-**Verification/pinning strength is harness-dependent; the core mechanism is not.** The
-barrier (step 3) and the shared-prefix cache reuse work on ANY provider, because Anthropic
-caching matches on the **content-prefix hash** (org + model scoped, not conversation-scoped
-and not requiring an explicit `prompt_cache_key`): once the primer writes the prefix, a
-later byte-identical request to the same model within the TTL cache-READS it. So the
-1-write-N-reads win is available even under a subagent-tool harness.
-
-- **Direct-API provider (e.g. pi):** the full flow applies — the orchestrator issues raw
-  requests, so it can execute step 4 (read `usage.cache_creation` to confirm
-  `cache_write_tokens > 0`) and step 5 (pin the fan-out's `prompt_cache_key` + explicit
-  breakpoint to the primer). Verified and controlled.
-- **Subagent-tool harness (e.g. Claude Code):** the orchestrator spawns reviewers via the
-  Agent tool and CANNOT see a subagent's `usage`, set its `prompt_cache_key`, or place an
-  explicit breakpoint — the harness owns caching. So the primer here is **best-effort and
-  UNVERIFIABLE**: it plausibly still yields 1-write-N-reads (barrier + content-hash reuse),
-  but you cannot prove the write landed, cannot pin the key, and cannot inspect whether the
-  harness's per-spawn constructed prefix is truly byte-identical (a per-spawn-varying header
-  before the briefing block would silently defeat reuse). The risk is asymmetric and cheap
-  — worst case is one extra angle-less spawn (one extra write); best case turns N writes
-  into 1 write + N reads — so enabling it is a reasonable best-effort bet, just without the
-  step-4/5 guarantees.
-
-Default false regardless (opt-in), because the win is unmeasurable from inside a subagent
-harness and the byte-identity of the harness-built prefix is outside this contract's
-control. Regardless of harness, the cold-race cost the primer removes is real.
+**No verification pass — dev-loops runs only on agent harnesses (pi, Claude Code).** There
+is no raw-API path here: the orchestrator spawns primer and reviewers via the harness's
+agent/subagent mechanism and never sees a request's `usage`, cannot set a
+`prompt_cache_key`, and cannot place an explicit cache breakpoint — the harness owns
+caching. So the primer cannot be verified from inside and there is nothing to pin; it
+relies entirely on the barrier + byte-identical prefix + same model producing a
+**content-hash cache reuse** across spawns (Anthropic caching matches on the content-prefix
+hash, org+model scoped — not conversation-scoped, no explicit key required). The bet is
+asymmetric and cheap: worst case is one extra angle-less spawn (one extra write); best case
+turns N writes into 1 write + N reads. Default false (opt-in) because the win is
+unmeasurable from inside the harness and the byte-identity of the harness-built prefix is
+outside this contract's control.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
