@@ -21,7 +21,46 @@ import {
   openServerLogTail,
   toPerStateConsolePayload,
   runCli,
+  authenticate,
 } from "../../scripts/loop/ui-review-drive.mjs";
+
+// #1456 fix 1: a cookie-consent interstitial can overlay the login form and
+// swallow the submit click, so authenticate() must dismiss declared interstitials
+// ON the login page (before submit), not only after auth.
+test("authenticate: dismisses a declared interstitial on the login page before submitting", async () => {
+  const events = [];
+  const fakePage = {
+    goto: async () => { events.push("goto"); },
+    fill: async (sel) => { events.push("fill:" + sel); },
+    click: async (sel) => { events.push("click:" + sel); },
+    waitForSelector: async () => { events.push("success"); },
+    locator: (sel) => ({ first: () => ({
+      waitFor: async () => { events.push("interstitial-waitFor:" + sel); },
+      click: async () => { events.push("interstitial-click:" + sel); },
+    }) }),
+  };
+  const r = await authenticate({
+    page: fakePage,
+    login: { loginUrl: "http://x/login", usernameSelector: "#u", usernameValue: "a", passwordSelector: "#p", passwordValue: "b", submitSelector: "#go", successSelector: "#ok" },
+    interstitials: [{ selector: "#cookie-accept" }],
+  });
+  assert.equal(r.ok, true);
+  const dismissIdx = events.indexOf("interstitial-click:#cookie-accept");
+  const submitIdx = events.indexOf("click:#go");
+  assert.ok(dismissIdx >= 0, "interstitial dismissed on the login page");
+  assert.ok(dismissIdx < submitIdx, "dismissed BEFORE the submit click (so the overlay can't swallow it)");
+});
+
+test("authenticate: no interstitials configured → no dismissal, still authenticates", async () => {
+  const clicks = [];
+  const fakePage = {
+    goto: async () => {}, fill: async () => {}, click: async (s) => clicks.push(s), waitForSelector: async () => {},
+    locator: () => { throw new Error("locator must not be called when no interstitials are declared"); },
+  };
+  const r = await authenticate({ page: fakePage, login: { loginUrl: "http://x", submitSelector: "#go", successSelector: "#ok" } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(clicks, ["#go"]);
+});
 
 // A fake page for the real makeRunStep wiring: the emitter interface
 // (attachPageListeners) + the action/capture methods captureNamedUiState calls.

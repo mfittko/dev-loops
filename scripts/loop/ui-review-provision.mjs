@@ -21,7 +21,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe } from "@dev-loops/core/config";
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
-import { isMainCheckout, parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
+import { isMainCheckout, isListedWorktree, parseMainWorktreePath, parseAllWorktreePaths } from "@dev-loops/core/loop/worktree-guard";
 import { ensureWorktree } from "./ensure-worktree.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -242,8 +242,9 @@ function probe(url) {
   });
 }
 
-/** Assert the resolved worktree is NOT the primary checkout (fail closed). */
-function assertNotPrimary({ worktreePath, repoRoot }) {
+/** Assert the resolved worktree is NOT the primary checkout (fail closed).
+ * Exported for a direct regression test of the loop-worktree-namespace allowance. */
+export function assertNotPrimary({ worktreePath, repoRoot }) {
   let listOutput = "";
   try {
     listOutput = execFileSync("git", ["worktree", "list"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -251,6 +252,15 @@ function assertNotPrimary({ worktreePath, repoRoot }) {
     return { ok: false, message: `git worktree list failed: ${(err.stderr ?? err.message ?? "").toString().trim()}` };
   }
   const mainWorktreePath = parseMainWorktreePath(listOutput);
+  // The loop's own namespace (<repoRoot>/tmp/worktrees/...) is a linked worktree
+  // that lives INSIDE the repo root, which the containment check below would
+  // reject. Exempt it — but only when it is a GENUINELY LISTED linked worktree
+  // (ensureWorktree runs before this guard, so it is registered by now). A plain
+  // directory that merely contains `tmp/worktrees/` in its path is NOT exempted,
+  // keeping the fail-closed property. (#1456 + review hardening)
+  if (isListedWorktree(worktreePath, parseAllWorktreePaths(listOutput))) {
+    return { ok: true, mainWorktreePath };
+  }
   if (isMainCheckout(worktreePath, mainWorktreePath)) {
     return { ok: false, message: `${worktreePath} resolves to the primary checkout`, mainWorktreePath };
   }

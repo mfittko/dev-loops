@@ -281,7 +281,7 @@ export async function captureDescriptorScreen(
     const context = await browser.newContext();
     const page = await context.newPage();
     if (recipe) {
-      const auth = await authenticate({ page, login: recipe.login });
+      const auth = await authenticate({ page, login: recipe.login, interstitials: recipe.interstitials });
       if (!auth.ok) {
         return { ok: false, screenshotPath: null, statePath: null, stopReason: `authentication failed: ${auth.detail}` };
       }
