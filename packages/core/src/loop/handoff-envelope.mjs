@@ -613,14 +613,9 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
 
   const envelope = {
     handoffVersion: ENVELOPE_HANDOFF_VERSION,
-    derivedAt: (now ?? new Date()).toISOString(),
 
     target,
     currentGate: subGate,
-    currentHeadSha: gs.currentHeadSha,
-    ciStatus: gs.ciStatus,
-    unresolvedThreadCount: gs.unresolvedThreadCount,
-    copilotRoundCount: gs.copilotRoundCount,
     maxCopilotRounds: settings?.refinement?.maxCopilotRounds ?? 5,
     executionMode,
 
@@ -673,6 +668,20 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   if (specSource) {
     envelope.specSource = specSource;
   }
+
+  // #1462: the ONLY per-round-varying block, kept LAST. Every field here changes
+  // between builds/rounds (the timestamp, the head SHA, CI status, thread/round
+  // counts); isolating them as the envelope's tail keeps everything above a
+  // byte-stable prefix that a fresh reviewer spawn can cache-READ instead of
+  // re-billing the full contract scaffolding each round. Consumers must treat
+  // gateState as volatile — read it last, or re-derive it fresh via detectors.
+  envelope.gateState = {
+    derivedAt: (now ?? new Date()).toISOString(),
+    currentHeadSha: gs.currentHeadSha,
+    ciStatus: gs.ciStatus,
+    unresolvedThreadCount: gs.unresolvedThreadCount,
+    copilotRoundCount: gs.copilotRoundCount,
+  };
 
   return deepFreeze(envelope);
 }
@@ -940,9 +949,10 @@ export function validateHandoffEnvelope(envelope) {
     }
   }
 
-  // ----- derivedAt (informational, warn on missing) -----
-  if (typeof envelope.derivedAt !== "string" || !envelope.derivedAt.trim()) {
-    warnings.push({ field: "derivedAt", reason: "should be an ISO 8601 timestamp" });
+  // ----- gateState.derivedAt (informational, warn on missing) — #1462 moved the
+  // volatile timestamp into the gateState tail so the rest stays byte-stable -----
+  if (typeof envelope.gateState?.derivedAt !== "string" || !envelope.gateState.derivedAt.trim()) {
+    warnings.push({ field: "gateState.derivedAt", reason: "should be an ISO 8601 timestamp" });
   }
 
   return {

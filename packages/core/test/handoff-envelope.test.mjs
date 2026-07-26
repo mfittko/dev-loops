@@ -186,8 +186,8 @@ test("shape: envelope has correct top-level keys", () => {
   );
 
   assert.equal(env.handoffVersion, ENVELOPE_HANDOFF_VERSION);
-  assert.equal(typeof env.derivedAt, "string");
-  assert.ok(env.derivedAt.endsWith("Z") || env.derivedAt.includes("T"));
+  assert.equal(typeof env.gateState.derivedAt, "string");
+  assert.ok(env.gateState.derivedAt.endsWith("Z") || env.gateState.derivedAt.includes("T"));
   assert.equal(typeof env.target, "object");
   assert.equal(typeof env.currentGate, "string");
   assert.equal(typeof env.executionMode, "string");
@@ -460,10 +460,10 @@ test("gate-state: head SHA, CI status, thread count, round count populate", () =
     defaultOptions
   );
 
-  assert.equal(env.currentHeadSha, "abc123def456");
-  assert.equal(env.ciStatus, "success");
-  assert.equal(env.unresolvedThreadCount, 3);
-  assert.equal(env.copilotRoundCount, 2);
+  assert.equal(env.gateState.currentHeadSha, "abc123def456");
+  assert.equal(env.gateState.ciStatus, "success");
+  assert.equal(env.gateState.unresolvedThreadCount, 3);
+  assert.equal(env.gateState.copilotRoundCount, 2);
 });
 
 test("gate-state: null/undefined values default to null or 0", () => {
@@ -474,10 +474,10 @@ test("gate-state: null/undefined values default to null or 0", () => {
     defaultOptions
   );
 
-  assert.equal(env.currentHeadSha, null);
-  assert.equal(env.ciStatus, null);
-  assert.equal(env.unresolvedThreadCount, 0);
-  assert.equal(env.copilotRoundCount, 0);
+  assert.equal(env.gateState.currentHeadSha, null);
+  assert.equal(env.gateState.ciStatus, null);
+  assert.equal(env.gateState.unresolvedThreadCount, 0);
+  assert.equal(env.gateState.copilotRoundCount, 0);
 });
 
 test("gate-state: empty gate state is safe", () => {
@@ -488,10 +488,10 @@ test("gate-state: empty gate state is safe", () => {
     defaultOptions
   );
 
-  assert.equal(env.currentHeadSha, null);
-  assert.equal(env.ciStatus, null);
-  assert.equal(env.unresolvedThreadCount, 0);
-  assert.equal(env.copilotRoundCount, 0);
+  assert.equal(env.gateState.currentHeadSha, null);
+  assert.equal(env.gateState.ciStatus, null);
+  assert.equal(env.gateState.unresolvedThreadCount, 0);
+  assert.equal(env.gateState.copilotRoundCount, 0);
 });
 
 // ===========================================================================
@@ -796,15 +796,32 @@ test("determinism: injectable now makes derivedAt stable", () => {
   const frozen = "2026-01-01T00:00:00.000Z";
   const e1 = buildDevLoopHandoffEnvelope(issueBundle(99), defaultSettings, {}, defaultOptions, new Date(frozen));
   const e2 = buildDevLoopHandoffEnvelope(issueBundle(99), defaultSettings, {}, defaultOptions, new Date(frozen));
-  assert.strictEqual(e1.derivedAt, frozen);
-  assert.strictEqual(e2.derivedAt, frozen);
-  assert.strictEqual(e1.derivedAt, e2.derivedAt);
+  assert.strictEqual(e1.gateState.derivedAt, frozen);
+  assert.strictEqual(e2.gateState.derivedAt, frozen);
+  assert.strictEqual(e1.gateState.derivedAt, e2.gateState.derivedAt);
 });
 
 test("determinism: derivedAt defaults to current time when now not provided", () => {
   const before = new Date().toISOString();
   const e = buildDevLoopHandoffEnvelope(issueBundle(99), defaultSettings, {}, defaultOptions);
-  assert.ok(e.derivedAt >= before);
+  assert.ok(e.gateState.derivedAt >= before);
+});
+
+// #1462: the whole point — everything ABOVE gateState must be byte-identical
+// across builds where only the volatile gate-state (or the timestamp) differs, so
+// a fresh reviewer spawn cache-READS the stable prefix instead of re-billing it.
+test("#1462: the envelope minus gateState is byte-stable across differing gate-state / timestamps", () => {
+  const frozen1 = "2026-01-01T00:00:00.000Z";
+  const frozen2 = "2026-02-02T00:00:00.000Z";
+  const a = buildDevLoopHandoffEnvelope(issueBundle(7), defaultSettings, { currentHeadSha: "aaa", ciStatus: "success", unresolvedThreadCount: 0, copilotRoundCount: 1 }, defaultOptions, new Date(frozen1));
+  const b = buildDevLoopHandoffEnvelope(issueBundle(7), defaultSettings, { currentHeadSha: "bbb", ciStatus: "pending", unresolvedThreadCount: 4, copilotRoundCount: 3 }, defaultOptions, new Date(frozen2));
+  const stable = (env) => { const { gateState, ...rest } = env; return JSON.stringify(rest); };
+  assert.strictEqual(stable(a), stable(b), "stable prefix must be byte-identical when only gateState/timestamp changes");
+  assert.notStrictEqual(JSON.stringify(a.gateState), JSON.stringify(b.gateState), "gateState is the only part that varies");
+  // gateState MUST be the last key — appending any field after it would move
+  // volatile-adjacent content out of the tail and re-poison the cacheable prefix
+  const keys = Object.keys(a);
+  assert.strictEqual(keys[keys.length - 1], "gateState", "gateState must be positioned last in the envelope");
 });
 
 test("backward-compat: envelope is frozen (top-level)", () => {
@@ -857,7 +874,7 @@ test("edge: neg copilotRoundCount clamps to 0", () => {
     defaultOptions
   );
 
-  assert.equal(env.copilotRoundCount, 0);
+  assert.equal(env.gateState.copilotRoundCount, 0);
 });
 
 // ===========================================================================
@@ -1204,10 +1221,11 @@ test("validate: invalid executionMode returns error", () => {
 });
 
 test("validate: missing derivedAt returns warning", () => {
-  const env = { ...validEnvelope() }; delete env.derivedAt;
+  const base = validEnvelope();
+  const env = { ...base, gateState: { ...base.gateState } }; delete env.gateState.derivedAt;
   const result = validateHandoffEnvelope(env);
   assert.equal(result.ok, true);
-  assert.ok(result.warnings.some(w => w.field === "derivedAt"));
+  assert.ok(result.warnings.some(w => w.field === "gateState.derivedAt"));
 });
 
 test("validate: multiple errors reported together", () => {

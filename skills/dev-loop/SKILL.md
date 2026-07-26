@@ -148,7 +148,7 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
 
 ## Guard rules
 
-**Handoff envelope precedence:** The dev-loop builds the envelope immediately after authoritative-state resolution and treats it as the first handoff artifact. Read it first, load only `requiredReads`, execute `nextAction`. See [Resolve authoritative state](#resolve-authoritative-state). Derivation contract: [Workflow Handoff Contract](../docs/workflow-handoff-contract.md).
+**Handoff envelope precedence:** The dev-loop builds the envelope immediately after authoritative-state resolution and treats it as the first handoff artifact. Read it first, load only `requiredReads`, execute `nextAction`. The envelope's stable body + `requiredReads` are byte-identical across rounds for the same target+gate — the only per-round-varying values live in the trailing `gateState` block, which is **volatile: read it last, or re-derive it fresh via detectors right before acting** (this keeps the stable prefix cache-warm across fresh reviewer spawns — #1462). See [Resolve authoritative state](#resolve-authoritative-state). Derivation contract: [Workflow Handoff Contract](../docs/workflow-handoff-contract.md).
 
 **Handoff contract rule:** When no envelope is present, use the `workflow-handoff-contract.md` contract. Never delegate with abbreviated task summaries. Include deterministic routing inputs, explicit `cwd`, bounded task scope, exit conditions.
 
