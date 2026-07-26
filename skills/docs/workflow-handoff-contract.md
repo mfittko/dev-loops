@@ -170,7 +170,7 @@ interface HandoffEnvelope {
 4. Respect `stopRules` — do not proceed past a gated stop point without authorization.
 5. Use `acceptance` to self-validate before declaring completion.
 6. Use `sanctionedCommands` as the authoritative operation → wrapper map: never call a raw `gh`/`node -e`/`python -c` for an operation the map covers, and never perform an `orchestratorOwned` action.
-7. Treat `gateState` as **volatile and last**: read it after the stable body + `requiredReads`, or re-derive it fresh via detectors right before acting. Never rely on it being cached.
+7. Treat `gateState` as **volatile and last**: read it after the stable body + `requiredReads`. Its detector-sourced fields (head SHA, CI status, thread/round counts) may be re-derived fresh via detectors right before acting; `derivedAt` is a build timestamp, not detector-derived. Never rely on `gateState` being cached.
 
 ## Byte-stable prefix (issue #1462)
 
@@ -193,6 +193,13 @@ rule:** never add a field that varies per round anywhere except inside `gateStat
 The `acceptance` block maps 1:1 into the existing `subagent()` acceptance
 contract shape. When the envelope is present, no separate prose task
 parameter is required.
+
+#1462 relocated the per-round-varying fields (`derivedAt`, `currentHeadSha`,
+`ciStatus`, `unresolvedThreadCount`, `copilotRoundCount`) from the envelope top
+level into the trailing `gateState` block; `handoffVersion` is intentionally left
+at `1` because envelopes are ephemeral (rebuilt each pass, never persisted) and all
+live consumers were updated in the same change — there is no stored envelope to
+migrate. Read moved fields from `envelope.gateState.*`.
 
 ## Non-goals
 

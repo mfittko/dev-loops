@@ -210,6 +210,15 @@ const GatesConfig = z.strictObject({
   // parallel. When the resolved angle set exceeds this cap, the overflow runs
   // in sequential batches and the degradation is recorded in the gate evidence.
   maxFanoutReviewers: z.number().int().min(1).max(64).default(8),
+  // #1462 GATE-EXEC-PRIME: run a cache-primer pass over the byte-identical briefing
+  // prefix BEFORE the parallel fan-out, so the shared prefix is written once and the
+  // N parallel reviewers cache-READ it (1-write-N-reads) instead of racing to write
+  // it (the cold-cache race). DIRECT-API-ONLY (default false): verifying the primer's
+  // cache_write and pinning the fan-out's prompt_cache_key/breakpoint require raw
+  // request access. Under a subagent-tool harness (e.g. Claude Code) the orchestrator
+  // can't see subagent usage or set those controls, so it MUST stay false there.
+  // See skills/docs/gate-review-sub-loop-contract.md GATE-EXEC-PRIME.
+  primeSharedPrefix: z.boolean().default(false),
   // Post the consolidated gate fan-out findings as a visible, marker-tagged PR
   // comment so they are auditable and Copilot/humans are aware of them. Default
   // true (opt-out). The disposition ledger is written regardless; this flag only
@@ -587,6 +596,7 @@ const FileGatesConfig = z.strictObject({
   requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason).").optional(),
   requireFanoutProvenance: z.boolean().describe("Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch).").optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).describe("Cap on parallel gate fan-out reviewers; overflow runs in sequential batches.").optional(),
+  primeSharedPrefix: z.boolean().describe("Run a cache-primer pass over the byte-identical briefing prefix before the parallel fan-out (GATE-EXEC-PRIME) so the shared prefix is written once and reviewers cache-read it (1-write-N-reads). Default false; a concrete win on direct-API providers, opportunistic under caching-managed harnesses.").optional(),
   postFindingsComments: z.boolean().describe("Post consolidated gate findings as a marker-tagged PR comment (default true).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
@@ -1685,6 +1695,12 @@ export function resolveRequireFanoutProvenance(config) {
  */
 export function resolveRejectForeignAngles(config) {
   return config?.gates?.rejectForeignAngles !== false;
+}
+
+// #1462 GATE-EXEC-PRIME: whether to run a cache-primer pass over the byte-identical
+// briefing prefix before the parallel fan-out. Default false (opt-in).
+export function resolvePrimeSharedPrefix(config) {
+  return config?.gates?.primeSharedPrefix === true;
 }
 
 /**

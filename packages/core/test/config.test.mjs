@@ -24,6 +24,7 @@ import {
   resolveGateAngles,
   resolveGateAngleContract,
   resolveRejectForeignAngles,
+  resolvePrimeSharedPrefix,
   resolveGateAnglesDynamic,
   resolveAnglePool,
   resolveWorkflowConfig,
@@ -3836,6 +3837,21 @@ describe("gates.requireFanoutProvenance", () => {
 
   test("floor constant is 2 (smallest count that is not a single agent)", () => {
     assert.equal(FANOUT_PROVENANCE_MIN_REVIEWERS, 2);
+  });
+});
+
+describe("gates.primeSharedPrefix (#1462 GATE-EXEC-PRIME)", () => {
+  test("defaults to false (opt-in) when absent", () => {
+    assert.equal(resolvePrimeSharedPrefix({}), false);
+    assert.equal(resolvePrimeSharedPrefix({ gates: {} }), false);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.primeSharedPrefix, false);
+    assert.equal(resolvePrimeSharedPrefix(parsed.data), false);
+  });
+  test("true only when explicitly enabled", () => {
+    assert.equal(resolvePrimeSharedPrefix({ gates: { primeSharedPrefix: true } }), true);
+    assert.equal(resolvePrimeSharedPrefix({ gates: { primeSharedPrefix: false } }), false);
   });
 });
 
