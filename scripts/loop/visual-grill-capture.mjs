@@ -22,7 +22,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
 import { authenticate, dismissInterstitials, makeRunStep } from "./ui-review-drive.mjs";
-import { launchWebkit } from "./ui-review-capture.mjs";
+import { launchWebkit, toStopReason } from "./ui-review-capture.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -250,14 +250,6 @@ async function removeAllCaptures(outputDir) {
   } catch {
     // ponytail: swallow — best-effort, must not break the fail-closed envelope.
   }
-}
-
-// Collapse a multi-line error into ONE bounded line rather than taking only the
-// first: Playwright's missing-host-libraries error puts its remedy
-// (`npx playwright install-deps`) on a later line, and first-line-only would
-// hand the operator a problem statement with no fix.
-function toStopReason(err) {
-  return (err?.message ?? String(err)).split("\n").map((line) => line.trim()).filter(Boolean).join(" ").slice(0, 300);
 }
 
 export async function captureDescriptorScreen(

@@ -176,9 +176,13 @@ test("root package relative imports never resolve outside the shipped files set"
 // two names needs no resolver: a static specifier is enough to flag.
 const OPTIONAL_PEERS = ["@playwright/test", "@axe-core/playwright"];
 
-// STATIC import statements only, anchored at line start — `await import("...")`
-// is exactly the allowed form here, so it must not match.
-const STATIC_SPECIFIER_RE = /^[ \t]*import\s+(?:[^'"]*\s+from\s+)?["']([^"']+)["']/gm;
+// STATIC import/re-export statements only, anchored at line start —
+// `await import("...")` is exactly the allowed form here, so it must not match.
+// The `export … from` branch keeps `from` MANDATORY (an optional group would
+// false-positive on `export default "…"`), and it matters because this repo's
+// convention is re-export shims: `export { webkit } from "@playwright/test"`
+// breaks a consumer module graph identically to a top-level import.
+const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s+(?:[^'"]*\s+from\s+)?|export\s+[^'"]*\s+from\s+)["']([^"']+)["']/gm;
 
 test("shipped files never statically import an optional peer dependency", async () => {
   const repoRootUrl = new URL("../../", import.meta.url);
@@ -212,6 +216,24 @@ test("shipped files never statically import an optional peer dependency", async 
   }
 
   assert.deepEqual(offenders.sort(), []);
+});
+
+test("STATIC_SPECIFIER_RE catches every static form and no dynamic one", () => {
+  const specifiers = (source) => [...source.matchAll(STATIC_SPECIFIER_RE)].map((m) => m[1]);
+
+  // Static forms — each one breaks a consumer module graph at load time.
+  assert.deepEqual(specifiers('import { webkit } from "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('import "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('import def from "@playwright/test";'), ["@playwright/test"]);
+  // The re-export shim form: this repo's own harness is written this way.
+  assert.deepEqual(specifiers('export { webkit } from "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('export * from "@playwright/test";'), ["@playwright/test"]);
+
+  // Dynamic forms — the sanctioned way to load an optional peer.
+  assert.deepEqual(specifiers('const { webkit } = await import("@playwright/test");'), []);
+  assert.deepEqual(specifiers('  importPlaywright = () => import("@playwright/test")'), []);
+  // A string that merely looks like one must not match.
+  assert.deepEqual(specifiers('export default "@playwright/test";'), []);
 });
 
 // The assert-empty test above cannot distinguish "nothing escapes" from "the

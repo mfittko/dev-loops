@@ -27,10 +27,13 @@ stage the loop-grill uses) launch headless WebKit through Playwright, which is a
 of its weight. Where one is run, install it once —
 `npm install --save-dev @playwright/test @axe-core/playwright`, then
 `npx playwright install webkit`. When either the package or the browser binary is
-missing, both stages stop with those instructions as the stop reason and emit no
-failure entries — a `stopped` drive result must not be threaded into
-`ui-review-diagnose`/`-report`, since those turn every failure into a posted
-finding and would otherwise charge a local setup gap to the PR.
+missing, both stages stop with those instructions as the stop reason and carry no
+failure entries. That is deliberate: `ui-review-diagnose` turns every failure into
+a posted finding and never drops one, so a runner-unavailable stop contributes
+nothing downstream and a local setup gap cannot be charged to the PR. Other
+stopped results are not alike — the missing-recipe stop carries a `must-fix` that
+is only surfaced by threading it onward, so read `failures`, not `stopped`, when
+deciding what to report.
 `@axe-core/playwright` is optional in the same
 way and drives only the computed-a11y artifact: without it every `axe.json` is a
 deterministic JSON `null`, so a11y findings lose their grounding while the rest of

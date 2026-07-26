@@ -14,6 +14,7 @@ import {
   PLAYWRIGHT_MISSING_MESSAGE,
   WEBKIT_MISSING_MESSAGE,
 } from '../playwright/harness/webkit-smoke-harness.mjs';
+import { STOP_REASON_MAX_CHARS, toStopReason } from '../../scripts/loop/ui-review-capture.mjs';
 
 test('normalizeUiStateSegment collapses UI state names into stable path segments', () => {
   assert.equal(normalizeUiStateSegment(' Current PR / Dashboard '), 'current-pr-dashboard');
@@ -430,12 +431,34 @@ test('captureNamedUiState emits snapshot.json as JSON null when the accessibilit
 test('PLAYWRIGHT_MISSING_MESSAGE names both remedies and survives stopReason truncation', () => {
   assert.match(PLAYWRIGHT_MISSING_MESSAGE, /npm install --save-dev @playwright\/test/);
   assert.match(PLAYWRIGHT_MISSING_MESSAGE, /npx playwright install webkit/);
-  // visual-grill truncates stopReason to the first line, capped at 300 chars —
-  // a newline or an overlong message would silently drop the commands there.
-  assert.ok(!PLAYWRIGHT_MISSING_MESSAGE.includes('\n'), 'must stay single-line');
-  assert.ok(PLAYWRIGHT_MISSING_MESSAGE.length <= 300, 'must survive the 300-char slice');
-  assert.ok(!WEBKIT_MISSING_MESSAGE.includes('\n'), 'must stay single-line');
-  assert.ok(WEBKIT_MISSING_MESSAGE.length <= 300, 'must survive the 300-char slice');
+  // Stop reasons are capped, so an overlong message would lose its tail — which
+  // is where the commands are.
+  assert.ok(PLAYWRIGHT_MISSING_MESSAGE.length <= STOP_REASON_MAX_CHARS, 'must survive the stop-reason cap');
+  assert.ok(WEBKIT_MISSING_MESSAGE.length <= STOP_REASON_MAX_CHARS, 'must survive the stop-reason cap');
+});
+
+test('toStopReason collapses a multi-line error instead of keeping only its first line', () => {
+  // Playwright's missing-host-libraries error puts the remedy on a later line;
+  // first-line-only would report the problem and drop the fix.
+  const hostDeps = new Error(
+    'browserType.launch: Host system is missing dependencies to run browsers. Please install them with the following command:\n  sudo npx playwright install-deps',
+  );
+  const reason = toStopReason(hostDeps);
+  assert.ok(!reason.includes('\n'), 'stop reasons are one line');
+  assert.match(reason, /Host system is missing dependencies/);
+  assert.match(reason, /sudo npx playwright install-deps/, 'the remedy survives the collapse');
+});
+
+test('toStopReason bounds a pathological error and does not re-embed the broad playwright remedy', () => {
+  assert.equal(toStopReason(new Error('x'.repeat(5000))).length, STOP_REASON_MAX_CHARS);
+  // WEBKIT_MISSING_MESSAGE deliberately narrows to `install webkit`; appending a
+  // cause that says `npx playwright install` would undo that narrowing.
+  const wrapped = new Error(WEBKIT_MISSING_MESSAGE, {
+    cause: new Error("Executable doesn't exist at /x/pw_run.sh\nPlease run: npx playwright install"),
+  });
+  const reason = toStopReason(wrapped);
+  assert.equal(reason, WEBKIT_MISSING_MESSAGE);
+  assert.doesNotMatch(reason, /playwright install$/);
 });
 
 test('launchWebkit reports a missing @playwright/test package with install instructions', async () => {

@@ -30,7 +30,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
 import { driveUiReview, isErrorResponseStatus, PAGE_ERROR_STACK_MAX_CHARS, DRIVE_SESSION_HEADER } from "@dev-loops/core/loop/ui-review-drive";
-import { captureNamedUiState, launchWebkit } from "./ui-review-capture.mjs";
+import { captureNamedUiState, launchWebkit, toStopReason } from "./ui-review-capture.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -396,11 +396,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     // every failure into a posted finding and never drops one, so emitting one
     // here would put a must-fix on someone's PR for a local missing install.
     // `stopped: true` is the signal not to thread this into diagnose/report.
-    const detail = err?.cause?.message ? `${err.message} (${err.cause.message})` : (err?.message ?? String(err));
     const result = {
       ok: false,
       stopped: true,
-      stopReason: detail,
+      stopReason: toStopReason(err),
       steps: [],
       captures: [],
       failures: [],

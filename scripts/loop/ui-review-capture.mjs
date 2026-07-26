@@ -17,9 +17,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 // here, dynamically, and get a stated install instruction instead of a raw
 // module-resolution stack trace. Same shape as defaultRunAxe's optional
 // @axe-core/playwright load below.
-// Single line on purpose: visual-grill's fail-closed envelope truncates a
-// stopReason to its first line, so a multi-line message would drop the very
-// commands that make it actionable.
+// Single line, and well inside the stop-reason cap below, so the commands
+// survive into every fail-closed envelope that reports them.
 export const PLAYWRIGHT_MISSING_MESSAGE =
   "UI review needs Playwright (an optional peer dependency): run `npm install --save-dev @playwright/test`, then `npx playwright install webkit`";
 
@@ -31,6 +30,26 @@ export const PLAYWRIGHT_MISSING_MESSAGE =
 // is ever launched.
 export const WEBKIT_MISSING_MESSAGE =
   "UI review needs the Playwright WebKit browser: run `npx playwright install webkit`";
+
+export const STOP_REASON_MAX_CHARS = 300;
+
+/**
+ * Shape any error into ONE bounded stop-reason line.
+ *
+ * Collapses rather than taking the first line: Playwright's missing-host-
+ * libraries error puts its remedy (`npx playwright install-deps`) on a later
+ * line, and first-line-only would hand the operator a problem with no fix. The
+ * cap keeps a pathological error from bloating a stage's stdout envelope.
+ */
+export function toStopReason(err) {
+  const detail = err?.message ?? String(err);
+  // The cause matters when the wrapper replaced the original message, but it is
+  // appended only if it adds something — re-embedding Playwright's broad
+  // `npx playwright install` would undo the narrowing WEBKIT_MISSING_MESSAGE does.
+  const cause = err?.cause?.message;
+  const combined = cause && !/playwright install/i.test(cause) ? `${detail} (${cause})` : detail;
+  return combined.split("\n").map((line) => line.trim()).filter(Boolean).join(" ").slice(0, STOP_REASON_MAX_CHARS);
+}
 
 // Only a genuine resolution failure means "not installed". An installed but
 // broken package (bad native binding, a throw during module evaluation) must
