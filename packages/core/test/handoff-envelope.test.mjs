@@ -818,6 +818,10 @@ test("#1462: the envelope minus gateState is byte-stable across differing gate-s
   const stable = (env) => { const { gateState, ...rest } = env; return JSON.stringify(rest); };
   assert.strictEqual(stable(a), stable(b), "stable prefix must be byte-identical when only gateState/timestamp changes");
   assert.notStrictEqual(JSON.stringify(a.gateState), JSON.stringify(b.gateState), "gateState is the only part that varies");
+  // gateState MUST be the last key — appending any field after it would move
+  // volatile-adjacent content out of the tail and re-poison the cacheable prefix
+  const keys = Object.keys(a);
+  assert.strictEqual(keys[keys.length - 1], "gateState", "gateState must be positioned last in the envelope");
 });
 
 test("backward-compat: envelope is frozen (top-level)", () => {

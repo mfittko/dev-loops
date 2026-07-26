@@ -282,10 +282,10 @@ export function renderHandoffEnvelopeSection(envelope) {
       <div class="handoff-hero-copy">
         <p class="handoff-card-kicker">Agent handoff</p>
         <h2>${escapeHtml(identity)}</h2>
-        <p class="handoff-hero-meta">Derived${envelope.derivedAt ? ` at ${escapeHtml(envelope.derivedAt)}` : ""} · Version ${escapeHtml(String(envelope.handoffVersion ?? "unknown"))}</p>
+        <p class="handoff-hero-meta">Derived${envelope.gateState?.derivedAt ? ` at ${escapeHtml(envelope.gateState?.derivedAt)}` : ""} · Version ${escapeHtml(String(envelope.handoffVersion ?? "unknown"))}</p>
         <div class="handoff-hero-badges">
           ${renderBadge(`gate: ${envelope.currentGate ?? "not set"}`, toneForGate(envelope.currentGate))}
-          ${renderBadge(`ci: ${envelope.ciStatus ?? "not set"}`, toneForCi(envelope.ciStatus))}
+          ${renderBadge(`ci: ${envelope.gateState?.ciStatus ?? "not set"}`, toneForCi(envelope.gateState?.ciStatus))}
           ${renderBadge(`mode: ${envelope.executionMode ?? "not set"}`, "info")}
         </div>
       </div>
@@ -297,9 +297,9 @@ export function renderHandoffEnvelopeSection(envelope) {
           content: renderStatGrid([
             { label: "Artifact", valueHtml: renderInlineValue(envelope.target?.kind, "kind") },
             { label: "Target", valueHtml: renderInlineValue(envelope.target?.pr ?? envelope.target?.issue ?? envelope.target?.branch ?? envelope.target?.phase, "target") },
-            { label: "Rounds", valueHtml: `<strong>${renderPlainValue(envelope.copilotRoundCount)}</strong> / ${renderPlainValue(envelope.maxCopilotRounds)}` },
+            { label: "Rounds", valueHtml: `<strong>${renderPlainValue(envelope.gateState?.copilotRoundCount)}</strong> / ${renderPlainValue(envelope.maxCopilotRounds)}` },
             { label: "Isolation", valueHtml: renderInlineValue(envelope.worktreeRequired, "worktreeRequired") },
-            { label: "Threads", valueHtml: renderPlainValue(envelope.unresolvedThreadCount) },
+            { label: "Threads", valueHtml: renderPlainValue(envelope.gateState?.unresolvedThreadCount) },
             { label: "Stop rules", valueHtml: renderPlainValue(Array.isArray(envelope.stopRules) ? envelope.stopRules.length : 0) },
           ]),
         })}
