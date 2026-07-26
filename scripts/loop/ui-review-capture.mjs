@@ -5,9 +5,10 @@
  * This lives under `scripts/loop/` (shipped) rather than `test/` (not shipped)
  * because `ui-review-drive.mjs` and `visual-grill-capture.mjs` depend on it at
  * runtime — a shipped entrypoint must never import from the test tree. The
- * Playwright test suite imports the same surface from here via
- * `test/playwright/harness/webkit-smoke-harness.mjs`, which re-exports it
- * alongside its own fixture-server helpers.
+ * Playwright test suite reaches the capture seams through
+ * `test/playwright/harness/webkit-smoke-harness.mjs`, which re-exports them
+ * alongside its own fixture-server helpers; the stage-envelope helpers
+ * (`toStopReason`, `STOP_REASON_MAX_CHARS`) are imported from here directly.
  */
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -42,13 +43,22 @@ export const STOP_REASON_MAX_CHARS = 300;
  * cap keeps a pathological error from bloating a stage's stdout envelope.
  */
 export function toStopReason(err) {
-  const detail = err?.message ?? String(err);
-  // The cause matters when the wrapper replaced the original message, but it is
-  // appended only if it adds something — re-embedding Playwright's broad
-  // `npx playwright install` would undo the narrowing WEBKIT_MISSING_MESSAGE does.
+  // Total by construction: this runs inside handlers that owe the caller a
+  // structured envelope, so a thrown non-Error must not crash the formatter.
+  const detail = String(err?.message ?? err);
+  // Keyed on the wrapper's own identity, not on the cause's wording: matching
+  // "playwright install" as a substring would also swallow the host-deps remedy
+  // (`playwright install-deps`), which is precisely what launchWebkit preserves.
   const cause = err?.cause?.message;
-  const combined = cause && !/playwright install/i.test(cause) ? `${detail} (${cause})` : detail;
-  return combined.split("\n").map((line) => line.trim()).filter(Boolean).join(" ").slice(0, STOP_REASON_MAX_CHARS);
+  const combined = cause && detail !== WEBKIT_MISSING_MESSAGE ? `${detail} (${cause})` : detail;
+
+  // Keep the headline plus any remedy lines, rather than every line: Playwright
+  // puts remedies on later lines (so first-line-only would drop the fix), but a
+  // browser-walk failure's `Call log:` carries selectors and element markup from
+  // the app under test, which has no business in a stage envelope.
+  const [headline = "", ...rest] = combined.split("\n").map((line) => line.trim()).filter(Boolean);
+  const remedies = rest.filter((line) => /\b(npx|sudo|npm install|yarn|pnpm)\b/i.test(line));
+  return [headline, ...remedies].join(" ").slice(0, STOP_REASON_MAX_CHARS);
 }
 
 // Only a genuine resolution failure means "not installed". An installed but
@@ -62,7 +72,12 @@ export async function launchWebkit({ headless = true } = {}, { importPlaywright 
   try {
     playwright = await importPlaywright();
   } catch (err) {
-    if (!MODULE_ABSENT_CODES.has(err?.code)) throw err;
+    // The code alone is not enough: a transitive dependency missing from INSIDE
+    // an installed @playwright/test raises the same codes, and reporting that as
+    // "not installed" hides the real cause. Require the error to name the
+    // package itself before claiming it is absent.
+    const names = typeof err?.message === "string" && err.message.includes("@playwright/test");
+    if (!MODULE_ABSENT_CODES.has(err?.code) || !names) throw err;
     throw new Error(PLAYWRIGHT_MISSING_MESSAGE, { cause: err });
   }
   const webkit = playwright?.webkit;

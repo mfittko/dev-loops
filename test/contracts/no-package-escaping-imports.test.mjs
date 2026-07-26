@@ -6,7 +6,7 @@
 // depth-independent: each relative specifier is resolved against its importing
 // file and asserted to stay within that package's directory.
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -59,7 +59,9 @@ test("packages/*/src relative imports never resolve outside their package root",
     }
   }
 
-  assert.deepEqual(offenders, []);
+  // Sorted for the same reason the scans below are: a real failure's diff must
+  // reproduce across filesystems, not vary with readdir order.
+  assert.deepEqual(offenders.sort(), []);
 });
 
 // The same hazard one level up: the ROOT package ships only the dirs named in
@@ -73,7 +75,9 @@ test("packages/*/src relative imports never resolve outside their package root",
 // suffix heuristic would silently drop a dir from the scan (and misreport
 // imports into it), in the very check whose point is to track the live list.
 export async function resolveShippedDirs(files, repoRootUrl) {
-  const dirs = [];
+  // A Set: "scripts/" and "./scripts" normalize to the same dir, and walking it
+  // twice would double-report every offender it finds.
+  const dirs = new Set();
   for (const entry of files) {
     // npm's "files" also accepts globs and negations. Those would stat as ENOENT
     // and be dropped, silently shrinking BOTH the walk list and the allowlist —
@@ -86,16 +90,16 @@ export async function resolveShippedDirs(files, repoRootUrl) {
     // equal to a path.relative() result.
     const name = path.normalize(entry).replace(/[\\/]+$/, "");
     if (entry.endsWith("/")) {
-      dirs.push(name);
+      dirs.add(name);
       continue;
     }
     try {
-      if ((await stat(new URL(name, repoRootUrl))).isDirectory()) dirs.push(name);
+      if ((await stat(new URL(name, repoRootUrl))).isDirectory()) dirs.add(name);
     } catch (err) {
       if (err.code !== "ENOENT") throw err; // absent entry ships nothing to scan
     }
   }
-  return dirs;
+  return [...dirs];
 }
 
 /**
@@ -182,7 +186,12 @@ const OPTIONAL_PEERS = ["@playwright/test", "@axe-core/playwright"];
 // false-positive on `export default "…"`), and it matters because this repo's
 // convention is re-export shims: `export { webkit } from "@playwright/test"`
 // breaks a consumer module graph identically to a top-level import.
-const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s+(?:[^'"]*\s+from\s+)?|export\s+[^'"]*\s+from\s+)["']([^"']+)["']/gm;
+// `import\s*` (not `\s+`) so the minified no-whitespace form
+// `import{webkit}from"@playwright/test"` is caught too — a shipped dir here
+// contains a minified vendor bundle. `import("x")` still cannot match: the
+// optional group requires a literal `from`, and the fallback requires a quote
+// immediately after `import`.
+const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[^'"]*?\bfrom\s*)?|export\s*[^'"]*?\bfrom\s*)["']([^"']+)["']/gm;
 
 test("shipped files never statically import an optional peer dependency", async () => {
   const repoRootUrl = new URL("../../", import.meta.url);
@@ -228,6 +237,9 @@ test("STATIC_SPECIFIER_RE catches every static form and no dynamic one", () => {
   // The re-export shim form: this repo's own harness is written this way.
   assert.deepEqual(specifiers('export { webkit } from "@playwright/test";'), ["@playwright/test"]);
   assert.deepEqual(specifiers('export * from "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('import {\n  webkit,\n} from "@playwright/test";'), ["@playwright/test"]);
+  // The minified form, which a shipped vendor bundle can legitimately contain.
+  assert.deepEqual(specifiers('import{webkit}from"@playwright/test";'), ["@playwright/test"]);
 
   // Dynamic forms — the sanctioned way to load an optional peer.
   assert.deepEqual(specifiers('const { webkit } = await import("@playwright/test");'), []);
@@ -293,7 +305,33 @@ test("resolveShippedDirs classifies a files entry by what it is on disk, not by 
       // "gone" (no slash, not on disk) reaches the ENOENT branch; "./withslash/"
       // pins the ./-prefix normalization.
       await resolveShippedDirs(["withslash/", "noslash", "README.md", "absent/", "gone", "./withslash/"], repoRootUrl),
-      ["withslash", "noslash", "absent", "withslash"],
+      // "./withslash/" normalizes onto "withslash" and is deduped, so the dir is
+      // walked once rather than double-reporting every offender inside it.
+      ["withslash", "noslash", "absent"],
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("findEscapingImports refuses to swallow a mid-walk ENOENT rather than truncating the scan", async () => {
+  // The anti-fail-open property the dir-exists probe was scoped for: past that
+  // probe, an ENOENT means a dangling symlink or a concurrent delete. Swallowing
+  // it would skip the rest of the dir and still report success.
+  const fixture = await mkdtemp(path.join(tmpdir(), "escaping-dangling-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "shipped"), { recursive: true });
+    // Sorts before any real file, so the walk reaches it first.
+    await symlink(path.join(fixture, "nonexistent-target.mjs"), path.join(fixture, "shipped", "aaa-dangling.mjs"));
+    await writeFile(path.join(fixture, "shipped", "zzz.mjs"), "export const z = 1;\n");
+
+    await assert.rejects(
+      () => findEscapingImports({ repoRootUrl, shippedDirs: ["shipped"] }),
+      (err) => {
+        assert.equal(err.code, "ENOENT");
+        return true;
+      },
     );
   } finally {
     await rm(fixture, { recursive: true, force: true });

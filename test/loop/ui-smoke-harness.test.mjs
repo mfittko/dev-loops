@@ -461,6 +461,39 @@ test('toStopReason bounds a pathological error and does not re-embed the broad p
   assert.doesNotMatch(reason, /playwright install$/);
 });
 
+test('toStopReason appends the cause for the missing-package wrapper — the path a consumer actually hits', () => {
+  // This is the composed string the drive envelope really shows when Playwright
+  // is absent, and it was previously asserted nowhere.
+  const reason = toStopReason(
+    new Error(PLAYWRIGHT_MISSING_MESSAGE, { cause: new Error("Cannot find package '@playwright/test' imported from /x/y.mjs") }),
+  );
+  assert.match(reason, /npm install --save-dev @playwright\/test/);
+  assert.match(reason, /npx playwright install webkit/);
+  assert.match(reason, /Cannot find package/, 'the underlying cause is kept, not discarded');
+});
+
+test('toStopReason keeps remedy lines but drops page-derived call-log noise', () => {
+  // The collapse exists for remedies on later lines; it must not become a
+  // channel for selectors and element markup from the app under test.
+  const reason = toStopReason(new Error([
+    'locator.click: Timeout exceeded',
+    'Call log:',
+    '  - waiting for locator("#submit")',
+    '  - <input value="hunter2" name="password"/> resolved to visible',
+  ].join('\n')));
+  assert.match(reason, /Timeout exceeded/);
+  assert.doesNotMatch(reason, /hunter2/);
+  assert.doesNotMatch(reason, /Call log/);
+});
+
+test('toStopReason is total for a thrown non-Error', () => {
+  // It runs inside handlers that owe the caller a structured envelope, so it
+  // must never be the thing that throws.
+  assert.equal(toStopReason({ message: 42 }), '42');
+  assert.equal(toStopReason('plain string'), 'plain string');
+  assert.equal(toStopReason(undefined), 'undefined');
+});
+
 test('launchWebkit reports a missing @playwright/test package with install instructions', async () => {
   // Every code that means "not resolvable", not just the common one.
   for (const code of ['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']) {

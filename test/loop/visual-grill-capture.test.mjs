@@ -11,6 +11,7 @@ import {
   captureDescriptorScreen,
   MAX_DESCRIPTOR_STEPS,
 } from "../../scripts/loop/visual-grill-capture.mjs";
+import { WEBKIT_MISSING_MESSAGE } from "../../scripts/loop/ui-review-capture.mjs";
 
 const tempFiles = [];
 after(() => {
@@ -372,4 +373,37 @@ test("captureDescriptorScreen: a step that throws fails closed rather than fabri
   );
   assert.equal(result.ok, false);
   assert.match(result.stopReason, /selector not found/);
+});
+
+// Every other test here injects launchBrowser, so the DEFAULT that wires the
+// guarded dynamic load into this stage is never taken — deleting it kept the
+// suite green. @playwright/test is a devDependency so it always resolves;
+// pointing PLAYWRIGHT_BROWSERS_PATH at an empty dir makes the launch fail on
+// the missing binary, exercising the real default end to end.
+test("captureDescriptorScreen: the default launchBrowser really wires launchWebkit into the stage", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "grill-defaultlauncher-"));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const previous = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dir, "no-browsers");
+  let result;
+  try {
+    // launchBrowser deliberately OMITTED.
+    result = await captureDescriptorScreen(
+      {
+        repoRoot: dir,
+        appUrl: "http://127.0.0.1:9/",
+        outputDir: path.join(dir, "out"),
+        descriptor: { name: "probe", steps: [{ action: "goto", path: "/" }] },
+      },
+      { loadConfig: async () => ({ config: {} }) },
+    );
+  } finally {
+    if (previous === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+    else process.env.PLAYWRIGHT_BROWSERS_PATH = previous;
+  }
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stopReason, WEBKIT_MISSING_MESSAGE);
+  assert.equal(result.screenshotPath, null);
 });
