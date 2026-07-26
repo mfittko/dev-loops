@@ -172,6 +172,11 @@ with the briefing prefix **verbatim and ONLY** (no angle suffix), which runs the
 (no findings artifact). Cleaner to reason about; costs one extra angle-less spawn. Use it
 where an explicit primer is preferred; otherwise the one-reviewer form is the default.
 
+**The `<gate>-prime` scope and "no findings artifact" details below apply ONLY to the
+dedicated angle-less primer variant.** In the default one-reviewer-as-primer path there is
+no separate priming run: the lead reviewer is a normal reviewer that produces normal
+findings under its own angle scope, and there is no `<gate>-prime` sentinel to account for.
+
 **The primer MUST be the `review`-agent request envelope, not a bespoke `context-reader`.**
 Byte-identical *artifact* bytes are necessary but NOT sufficient: the cache key is the whole
 **request prefix through the breakpoint** — model, tools + tool ordering, system/project/
@@ -193,7 +198,9 @@ per-gate accounting is an optional follow-up, not a precondition.)
 
 1. **Compile the immutable prefix** — Phase 1's `briefing-prefix.txt` (already
    byte-identical + hash-recorded).
-2. **Send ONE angle-less primer** over that exact serialized prefix.
+2. **Prime the shared prefix** over that exact serialized prefix — by default dispatch the
+   lead reviewer first (one-reviewer-as-primer); or, in the dedicated-primer variant, send
+   ONE angle-less primer. Either way the same byte-identical prefix is written once.
 3. **Barrier: await the shared-prefix write landing** before releasing ANY reviewer — the
    write must precede the parallel reads. The write has landed once the primer has produced
    ANY model output for that request, so the barrier keys on the earliest such signal the
