@@ -246,9 +246,13 @@ export function openServerLogTail(logPath, { maxBytes = SERVER_LOG_TAIL_MAX_BYTE
 /** Drive the dev-login recipe in the browser and confirm the session by waiting
  * for `successSelector`. Fail closed: any timeout/throw => {ok:false} with a
  * stated reason, so the core STOPS rather than driving an unauthenticated app. */
-export async function authenticate({ page, login, timeoutMs = 15000 }) {
+export async function authenticate({ page, login, interstitials = [], timeoutMs = 15000 }) {
   try {
     await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
+    // A config-declared interstitial (cookie consent) can overlay the login
+    // form and swallow the submit click — dismiss on the login page too, not
+    // only after auth (dismissal stays best-effort and idempotent).
+    await dismissInterstitials({ page, interstitials });
     if (login.usernameSelector && login.usernameValue != null) {
       await page.fill(login.usernameSelector, login.usernameValue);
     }
@@ -400,7 +404,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
         driveSession,
       },
       {
-        authenticate: () => authenticate({ page, login: recipe.login }),
+        authenticate: () => authenticate({ page, login: recipe.login, interstitials: recipe.interstitials }),
         dismissInterstitials: ({ interstitials }) => dismissInterstitials({ page, interstitials }),
         runStep: makeRunStep({ page, outputDir: options.outputDir, sliceCapturedEvents }),
         getCapturedEvents,

@@ -6,7 +6,26 @@ import path from "node:path";
 
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe, DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN } from "@dev-loops/core/config";
-import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations } from "../../scripts/loop/ui-review-provision.mjs";
+import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations, assertNotPrimary } from "../../scripts/loop/ui-review-provision.mjs";
+import { execFileSync } from "node:child_process";
+
+// #1456 fix 2: the loop's own worktree namespace (<repoRoot>/tmp/worktrees/...)
+// is a linked worktree by construction, but it lives INSIDE the repo root, so the
+// primary-checkout containment check used to reject it. assertNotPrimary must
+// accept it (isUnderWorktreePath early-return) instead of failing closed.
+test("assertNotPrimary: accepts the loop's own tmp/worktrees namespace (not the primary checkout)", () => {
+  const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  const wt = path.join(repoRoot, "tmp", "worktrees", "issue-1456-namespace-probe");
+  const r = assertNotPrimary({ worktreePath: wt, repoRoot });
+  assert.equal(r.ok, true, "loop worktree namespace is allowed");
+});
+
+test("assertNotPrimary: still rejects the primary checkout root", () => {
+  const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  const r = assertNotPrimary({ worktreePath: repoRoot, repoRoot });
+  assert.equal(r.ok, false, "the primary checkout is still refused (fail closed)");
+  assert.match(r.message, /primary checkout/);
+});
 
 // A "fixture project": a temp dir whose .devloops declares a ui-review run
 // recipe. The real config resolver reads it; the rest of the IO is injected.
