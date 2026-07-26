@@ -67,17 +67,28 @@ export function toStopReason(err) {
 // the real cause.
 const MODULE_ABSENT_CODES = new Set(["ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED"]);
 
+// Node names the UNRESOLVED specifier first: "Cannot find package 'X' imported
+// from <importer>". Anchor on that specifier — a bare substring test also
+// matches the importer path, so a transitive dependency missing from inside an
+// installed @playwright/test (…/node_modules/@playwright/test/index.mjs) would
+// be misreported as "Playwright is not installed".
+const PLAYWRIGHT_UNRESOLVED_RE = /Cannot find (?:package|module) ['"]@playwright\/test['"]/;
+
+function isPlaywrightItselfAbsent(err) {
+  if (!MODULE_ABSENT_CODES.has(err?.code)) return false;
+  // The package resolves but exposes no usable entry — installed yet unusable,
+  // and reinstalling is still the right remedy, so accept it without the
+  // specifier check (this code carries no "Cannot find" text).
+  if (err.code === "ERR_PACKAGE_PATH_NOT_EXPORTED") return true;
+  return typeof err.message === "string" && PLAYWRIGHT_UNRESOLVED_RE.test(err.message);
+}
+
 export async function launchWebkit({ headless = true } = {}, { importPlaywright = () => import("@playwright/test") } = {}) {
   let playwright;
   try {
     playwright = await importPlaywright();
   } catch (err) {
-    // The code alone is not enough: a transitive dependency missing from INSIDE
-    // an installed @playwright/test raises the same codes, and reporting that as
-    // "not installed" hides the real cause. Require the error to name the
-    // package itself before claiming it is absent.
-    const names = typeof err?.message === "string" && err.message.includes("@playwright/test");
-    if (!MODULE_ABSENT_CODES.has(err?.code) || !names) throw err;
+    if (!isPlaywrightItselfAbsent(err)) throw err;
     throw new Error(PLAYWRIGHT_MISSING_MESSAGE, { cause: err });
   }
   const webkit = playwright?.webkit;

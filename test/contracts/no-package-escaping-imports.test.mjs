@@ -227,6 +227,19 @@ test("shipped files never statically import an optional peer dependency", async 
   assert.deepEqual(offenders.sort(), []);
 });
 
+// The static-import guard above is hardcoded to these two names, so it stays
+// green even if the declarations vanish. Pin the declarations themselves too —
+// otherwise the only check that they are OPTIONAL peers (and not runtime
+// dependencies) is the packed-install smoke, which self-skips on registry trouble.
+test("the optional peers are declared as optional peerDependencies, not runtime dependencies", async () => {
+  const pkg = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+  for (const peer of OPTIONAL_PEERS) {
+    assert.ok(pkg.peerDependencies?.[peer], `${peer} must be declared in peerDependencies`);
+    assert.equal(pkg.peerDependenciesMeta?.[peer]?.optional, true, `${peer} must be marked optional`);
+    assert.ok(!pkg.dependencies?.[peer], `${peer} must not be a runtime dependency`);
+  }
+});
+
 test("STATIC_SPECIFIER_RE catches every static form and no dynamic one", () => {
   const specifiers = (source) => [...source.matchAll(STATIC_SPECIFIER_RE)].map((m) => m[1]);
 

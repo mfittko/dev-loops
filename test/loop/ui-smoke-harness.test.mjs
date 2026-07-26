@@ -494,6 +494,24 @@ test('toStopReason is total for a thrown non-Error', () => {
   assert.equal(toStopReason(undefined), 'undefined');
 });
 
+test('launchWebkit does not mislabel a transitive resolution failure inside an installed Playwright', async () => {
+  // The realistic corrupt-install shape. Node names the UNRESOLVED specifier
+  // first and the IMPORTER second — and the importer path contains
+  // "@playwright/test", so a substring test would wrongly report the package as
+  // missing and tell the consumer to install what they already have.
+  const transitive = Object.assign(
+    new Error("Cannot find package 'playwright-core' imported from /app/node_modules/@playwright/test/index.mjs"),
+    { code: 'ERR_MODULE_NOT_FOUND' },
+  );
+  await assert.rejects(
+    () => launchWebkit({}, { importPlaywright: () => Promise.reject(transitive) }),
+    (err) => {
+      assert.equal(err, transitive, 'the real cause is rethrown, not replaced');
+      return true;
+    },
+  );
+});
+
 test('launchWebkit reports a missing @playwright/test package with install instructions', async () => {
   // Every code that means "not resolvable", not just the common one.
   for (const code of ['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']) {
