@@ -16,7 +16,8 @@ template.
 | Caller options (`repoRoot`, `worktreeCwd`) | `cwd` |
 | Gate state (detectors) + strategy defaults | `currentGate`, `worktreeRequired` |
 | Settings (`.devloops` at repo root + `defaults.yaml`) | `gateConfig`, `stopRules`, `asyncStartMode`, `requireDraftFirst`, `maxCopilotRounds` |
-| Gate state (detectors) | `gateState.{derivedAt, currentHeadSha, ciStatus, unresolvedThreadCount, copilotRoundCount}` (the volatile tail — see below) |
+| Gate state (detectors) | `gateState.{currentHeadSha, ciStatus, unresolvedThreadCount, copilotRoundCount}` (the volatile tail — see below) |
+| Envelope builder (timestamp) | `gateState.derivedAt` (build time, not detector-derived) |
 | Canonical sanctioned-command map (`scripts/loop/sanctioned-commands.mjs`) | `sanctionedCommands` |
 
 ## Sanctioned commands (MANDATORY DEFAULT — issue #1081)
