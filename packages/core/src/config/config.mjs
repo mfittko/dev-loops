@@ -213,11 +213,12 @@ const GatesConfig = z.strictObject({
   // #1462 GATE-EXEC-PRIME: run a cache-primer pass over the byte-identical briefing
   // prefix BEFORE the parallel fan-out, so the shared prefix is written once and the
   // N parallel reviewers cache-READ it (1-write-N-reads) instead of racing to write
-  // it (the cold-cache race). DIRECT-API-ONLY (default false): verifying the primer's
-  // cache_write and pinning the fan-out's prompt_cache_key/breakpoint require raw
-  // request access. Under a subagent-tool harness (e.g. Claude Code) the orchestrator
-  // can't see subagent usage or set those controls, so it MUST stay false there.
-  // See skills/docs/gate-review-sub-loop-contract.md GATE-EXEC-PRIME.
+  // it (the cold-cache race). Default false (opt-in). The barrier + content-hash cache
+  // reuse work on any provider; only VERIFYING the write (usage.cache_creation) and
+  // PINNING the fan-out's prompt_cache_key/breakpoint need raw request access — so under
+  // a subagent-tool harness (e.g. Claude Code) the primer is best-effort/unverifiable
+  // (still plausibly 1-write-N-reads), while a direct-API provider gets the verified,
+  // pinned flow. See skills/docs/gate-review-sub-loop-contract.md GATE-EXEC-PRIME.
   primeSharedPrefix: z.boolean().default(false),
   // Post the consolidated gate fan-out findings as a visible, marker-tagged PR
   // comment so they are auditable and Copilot/humans are aware of them. Default

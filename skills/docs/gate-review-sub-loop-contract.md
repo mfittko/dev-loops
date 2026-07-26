@@ -193,21 +193,31 @@ launches every reviewer before any has written the cache — a **cold-cache race
 N pay a cache write and none reads. The barrier + write-verification collapse that to
 1 write + N reads.
 
-**This is a direct-API-provider feature; under a subagent-tool harness it is a no-op**
-(hence opt-in, default false). Steps 4–5 require capabilities only the orchestrator issuing
-raw model requests has: reading the primer response's `usage.cache_creation`
-(`cache_write_tokens > 0`), and pinning the fan-out's `prompt_cache_key` + explicit cache
-breakpoint to the primer. Under a caching-managed **subagent-tool harness (e.g. Claude
-Code)** the orchestrator spawns reviewers via the Agent tool and NEVER sees a subagent's
-per-request `usage`, cannot set its `prompt_cache_key`, and cannot place an explicit
-breakpoint — the harness owns caching entirely. So there the primer's write is
-unverifiable and its key/breakpoint unpinnable: `gates.primeSharedPrefix` MUST stay false
-(the extra angle-less spawn would be pure cost with no controllable payoff), and Phase 2
-runs exactly as the default — cross-spawn reuse remains the opportunistic bonus
-`GATE-EXEC-BUILD-ONCE-SEED` already describes. Enable the flag ONLY on a direct-API
-provider (e.g. pi) where the orchestrator controls the request and can execute steps 4–5.
-Note the cold-race cost the primer removes is real regardless of harness — it is just that
-only the direct-API path can *act* on it here.
+**Verification/pinning strength is harness-dependent; the core mechanism is not.** The
+barrier (step 3) and the shared-prefix cache reuse work on ANY provider, because Anthropic
+caching matches on the **content-prefix hash** (org + model scoped, not conversation-scoped
+and not requiring an explicit `prompt_cache_key`): once the primer writes the prefix, a
+later byte-identical request to the same model within the TTL cache-READS it. So the
+1-write-N-reads win is available even under a subagent-tool harness.
+
+- **Direct-API provider (e.g. pi):** the full flow applies — the orchestrator issues raw
+  requests, so it can execute step 4 (read `usage.cache_creation` to confirm
+  `cache_write_tokens > 0`) and step 5 (pin the fan-out's `prompt_cache_key` + explicit
+  breakpoint to the primer). Verified and controlled.
+- **Subagent-tool harness (e.g. Claude Code):** the orchestrator spawns reviewers via the
+  Agent tool and CANNOT see a subagent's `usage`, set its `prompt_cache_key`, or place an
+  explicit breakpoint — the harness owns caching. So the primer here is **best-effort and
+  UNVERIFIABLE**: it plausibly still yields 1-write-N-reads (barrier + content-hash reuse),
+  but you cannot prove the write landed, cannot pin the key, and cannot inspect whether the
+  harness's per-spawn constructed prefix is truly byte-identical (a per-spawn-varying header
+  before the briefing block would silently defeat reuse). The risk is asymmetric and cheap
+  — worst case is one extra angle-less spawn (one extra write); best case turns N writes
+  into 1 write + N reads — so enabling it is a reasonable best-effort bet, just without the
+  step-4/5 guarantees.
+
+Default false regardless (opt-in), because the win is unmeasurable from inside a subagent
+harness and the byte-identity of the harness-built prefix is outside this contract's
+control. Regardless of harness, the cold-race cost the primer removes is real.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
