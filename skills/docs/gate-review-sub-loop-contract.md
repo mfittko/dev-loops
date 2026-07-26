@@ -168,26 +168,35 @@ materialized context bytes, and the breakpoint position + TTL. A primer spawned 
 different agent (different system prompt, tool set, or model) writes a DIFFERENT cache that
 the `review` reviewers never read. So the primer is literally a fan-out reviewer minus the
 angle suffix — same agent, same envelope — or it is useless. Because it is angle-less it is
-NOT a review round, records no per-angle disposition, and its `--scope` is the reserved
-`<gate>-prime` sentinel (excluded from fan-in and from `verify-briefing-prefixes.mjs` angle
-accounting; it still records the same prefix hash, so a divergent primer prefix fails closed
-like any reviewer).
+NOT a review round and **produces no findings artifact, so fan-in ignores it.** If it runs
+the invariant block's `verify-fresh-review-context.mjs` check, it uses the reserved
+`<gate>-prime` scope and records the SAME prefix hash as the reviewers — so it passes
+`verify-briefing-prefixes.mjs` **by construction** (a same-hash sentinel is never a
+mismatch), never a spurious failure. (`verify-briefing-prefixes.mjs` does not today special-
+case `<gate>-prime`; because the primer's hash matches the reviewers', no exclusion is
+required for correctness. Teaching that verifier to treat `-prime` as a non-angle in its
+per-gate accounting is an optional follow-up, not a precondition.)
 
 **Pragmatic alternative (no dedicated primer spawn):** instead of an angle-less primer, let
-ONE real reviewer act as the primer — dispatch it first, and release the remaining reviewers
-once its response has *started* (the shared prefix is written by then). This trades a small
-amount of initial parallelism (one reviewer runs slightly ahead) for one fewer spawn, and
-guarantees the primer envelope equals the reviewer envelope by construction. Either form
-satisfies this rule; the dedicated-primer form is cleaner to reason about, the
-one-reviewer form is cheaper.
+ONE real reviewer act as the primer — dispatch it first, then release the remaining
+reviewers once the shared-prefix write has landed (see the barrier note in step 3). This
+trades a small amount of initial parallelism (one reviewer runs slightly ahead) for one
+fewer spawn, and guarantees the primer envelope equals the reviewer envelope by
+construction. Either form satisfies this rule; the dedicated-primer form is cleaner to
+reason about, the one-reviewer form is cheaper.
 
 **Ordered execution:**
 
 1. **Compile the immutable prefix** — Phase 1's `briefing-prefix.txt` (already
    byte-identical + hash-recorded).
 2. **Send ONE angle-less primer** over that exact serialized prefix.
-3. **Barrier: await primer completion** before releasing ANY reviewer — the write must
-   land before the parallel reads, so the fan-out MUST NOT start until the primer returns.
+3. **Barrier: await the shared-prefix write landing** before releasing ANY reviewer — the
+   write must precede the parallel reads. The write lands once the primer's request prefix
+   has been processed; **awaiting the primer's completion is the safe default** (a harness
+   exposes completion, not token-level streaming). The one-reviewer-as-primer form above
+   may instead release the rest once the lead reviewer's response has *started*, since the
+   prefix write has landed by then — the two forms differ only in WHEN "the write has
+   landed" is observed, never in the write-before-reads ordering itself.
 4. **Release the fan-out over the SAME model and the SAME byte-identical prefix**, so each
    reviewer READS the cache the primer wrote instead of racing to write its own. A
    differing model or prefix defeats reuse and is the same failure the byte-identity rule
