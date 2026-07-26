@@ -484,7 +484,7 @@
         },
         "primeSharedPrefix": {
           "type": "boolean",
-          "description": "Run a cache-primer pass over the byte-identical briefing prefix before the parallel fan-out (GATE-EXEC-PRIME) so the shared prefix is written once and reviewers cache-read it (1-write-N-reads). Default false; a concrete win on direct-API providers, opportunistic under caching-managed harnesses."
+          "description": "Run a cache-primer pass over the byte-identical briefing prefix before the parallel fan-out (GATE-EXEC-PRIME) so the shared prefix is written once and reviewers cache-read it (1-write-N-reads) instead of the cold-cache race. Default false; best-effort under the agent harnesses dev-loops runs on (no raw-API path to verify the write or pin a key)."
         },
         "postFindingsComments": {
           "type": "boolean",
