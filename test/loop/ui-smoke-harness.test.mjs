@@ -423,17 +423,34 @@ test('captureNamedUiState emits snapshot.json as JSON null when the accessibilit
 // surface a stated install instruction rather than a module-resolution stack
 // trace or an opaque launch error. Imported through the harness re-export, which
 // also proves the shipped adapter module stays reachable from the suite.
+// Pin the message's CONTENT against literals. `assert.equal(err.message,
+// PLAYWRIGHT_MISSING_MESSAGE)` alone is self-referential — it compares the
+// constant to itself, so deleting half the remedy from the constant keeps every
+// test green.
+test('PLAYWRIGHT_MISSING_MESSAGE names both remedies and survives stopReason truncation', () => {
+  assert.match(PLAYWRIGHT_MISSING_MESSAGE, /npm install --save-dev @playwright\/test/);
+  assert.match(PLAYWRIGHT_MISSING_MESSAGE, /npx playwright install webkit/);
+  // visual-grill truncates stopReason to the first line, capped at 300 chars —
+  // a newline or an overlong message would silently drop the commands there.
+  assert.ok(!PLAYWRIGHT_MISSING_MESSAGE.includes('\n'), 'must stay single-line');
+  assert.ok(PLAYWRIGHT_MISSING_MESSAGE.length <= 300, 'must survive the 300-char slice');
+  assert.ok(!WEBKIT_MISSING_MESSAGE.includes('\n'), 'must stay single-line');
+  assert.ok(WEBKIT_MISSING_MESSAGE.length <= 300, 'must survive the 300-char slice');
+});
+
 test('launchWebkit reports a missing @playwright/test package with install instructions', async () => {
-  const absent = Object.assign(new Error("Cannot find package '@playwright/test'"), { code: 'ERR_MODULE_NOT_FOUND' });
-  await assert.rejects(
-    () => launchWebkit({}, { importPlaywright: () => Promise.reject(absent) }),
-    (err) => {
-      assert.equal(err.message, PLAYWRIGHT_MISSING_MESSAGE);
-      assert.match(err.message, /npm install --save-dev @playwright\/test/);
-      assert.equal(err.cause, absent, 'the original resolution error is preserved as cause');
-      return true;
-    },
-  );
+  // Every code that means "not resolvable", not just the common one.
+  for (const code of ['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']) {
+    const absent = Object.assign(new Error("Cannot find package '@playwright/test'"), { code });
+    await assert.rejects(
+      () => launchWebkit({}, { importPlaywright: () => Promise.reject(absent) }),
+      (err) => {
+        assert.equal(err.message, PLAYWRIGHT_MISSING_MESSAGE, `code ${code} should report the package as missing`);
+        assert.equal(err.cause, absent, 'the original resolution error is preserved as cause');
+        return true;
+      },
+    );
+  }
 });
 
 test('launchWebkit does not mislabel an installed-but-broken @playwright/test as missing', async () => {

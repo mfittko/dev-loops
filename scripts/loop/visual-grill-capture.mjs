@@ -252,6 +252,14 @@ async function removeAllCaptures(outputDir) {
   }
 }
 
+// Collapse a multi-line error into ONE bounded line rather than taking only the
+// first: Playwright's missing-host-libraries error puts its remedy
+// (`npx playwright install-deps`) on a later line, and first-line-only would
+// hand the operator a problem statement with no fix.
+function toStopReason(err) {
+  return (err?.message ?? String(err)).split("\n").map((line) => line.trim()).filter(Boolean).join(" ").slice(0, 300);
+}
+
 export async function captureDescriptorScreen(
   { repoRoot, appUrl, outputDir, descriptor },
   { loadConfig = loadDevLoopConfig, launchBrowser = launchWebkit } = {},
@@ -330,7 +338,7 @@ export async function captureDescriptorScreen(
     // subtree — a step that threw mid-write (after screenshot.png, before returning)
     // leaves a partial bundle `last` doesn't reference.
     await removeAllCaptures(outputDir);
-    return { ok: false, screenshotPath: null, statePath: null, stopReason: (err?.message ?? String(err)).split("\n")[0].slice(0, 300) };
+    return { ok: false, screenshotPath: null, statePath: null, stopReason: toStopReason(err) };
   } finally {
     // Best-effort teardown: a close() error must not mask the returned envelope.
     try {
@@ -355,7 +363,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   } catch (err) {
     // Truncate consistently with the other fail-closed envelopes so a pathological
     // parse error can't bloat stdout/stderr or make jq parsing brittle.
-    const result = { ok: false, screenshotPath: null, statePath: null, stopReason: (err?.message ?? String(err)).split("\n")[0].slice(0, 300) };
+    const result = { ok: false, screenshotPath: null, statePath: null, stopReason: toStopReason(err) };
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
     return;
   }

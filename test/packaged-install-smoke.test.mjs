@@ -104,10 +104,12 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
     // Asserted rather than assumed: if it were ever made non-optional (or moved
     // to dependencies) the stage --help runs below would still pass, and the
     // dynamic-import regression guard they provide would quietly stop guarding.
-    assert.ok(
-      !existsSync(path.join(installDir, "node_modules/@playwright/test")),
-      "@playwright/test must not be installed by a consumer — it is an optional peer",
-    );
+    for (const peer of ["@playwright/test", "@axe-core/playwright"]) {
+      assert.ok(
+        !existsSync(path.join(installDir, "node_modules", peer)),
+        `${peer} must not be installed by a consumer — it is an optional peer`,
+      );
+    }
 
     for (const args of [
       ["loop", "pre-flight-gate", "--help"],

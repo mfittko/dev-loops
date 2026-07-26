@@ -390,16 +390,20 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   try {
     browser = await launchBrowser();
   } catch (err) {
-    // An unavailable runner (Playwright or the WebKit binary absent) is a
-    // setup gap, not a crash: keep the documented stdout envelope so the stage
-    // stays threadable, same as the missing-recipe path above.
+    // An unavailable runner (Playwright or the WebKit binary absent) is a gap in
+    // THIS machine's setup, not a defect in the PR — so it stops the walk with a
+    // stated reason and deliberately carries NO `failures` entry. Stage 3 turns
+    // every failure into a posted finding and never drops one, so emitting one
+    // here would put a must-fix on someone's PR for a local missing install.
+    // `stopped: true` is the signal not to thread this into diagnose/report.
+    const detail = err?.cause?.message ? `${err.message} (${err.cause.message})` : (err?.message ?? String(err));
     const result = {
       ok: false,
       stopped: true,
-      stopReason: err?.message ?? String(err),
+      stopReason: detail,
       steps: [],
       captures: [],
-      failures: [{ kind: "drive-runner-unavailable", severity: "must-fix", message: err?.message ?? String(err) }],
+      failures: [],
       caps: {},
       appUrl: options.appUrl ?? null,
       driveSession: null,

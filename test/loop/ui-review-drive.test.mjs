@@ -23,6 +23,7 @@ import {
   runCli,
   authenticate,
 } from "../../scripts/loop/ui-review-drive.mjs";
+import { PLAYWRIGHT_MISSING_MESSAGE } from "../../scripts/loop/ui-review-capture.mjs";
 
 // #1456 fix 1: a cookie-consent interstitial can overlay the login form and
 // swallow the submit click, so authenticate() must dismiss declared interstitials
@@ -495,19 +496,33 @@ test("runCli: an unavailable browser runner fails closed inside the documented e
   let out = "";
   const stdout = { write: (s) => { out += s; return true; } };
   const stderr = { write: () => true };
-  const launchBrowser = () => Promise.reject(new Error("UI review needs Playwright (an optional peer dependency)"));
+  // Reject with the REAL exported constant, not a hand-written stand-in: the
+  // documented promise is that a consumer sees the install commands in
+  // stopReason, and a stubbed message would assert nothing about that.
+  const launchBrowser = () => Promise.reject(new Error(PLAYWRIGHT_MISSING_MESSAGE));
 
   await runCli(
     ["--repo-root", dir, "--app-url", "http://127.0.0.1:4000", "--output-dir", path.join(dir, "out")],
     { stdout, stderr, launchBrowser },
   );
+  const exitCode = process.exitCode;
   process.exitCode = 0;
 
   const r = JSON.parse(out);
   assert.equal(r.ok, false);
   assert.equal(r.stopped, true);
-  assert.match(r.stopReason, /needs Playwright/);
-  assert.equal(r.failures[0].kind, "drive-runner-unavailable");
+  assert.notEqual(exitCode, 0, "a fail-closed stage must exit non-zero");
+  // Both halves of the remedy survive into the envelope the operator reads.
+  assert.match(r.stopReason, /npm install --save-dev @playwright\/test/);
+  assert.match(r.stopReason, /npx playwright install webkit/);
+  // A local setup gap must NOT become a finding: Stage 3 turns every failure
+  // into a posted PR finding and never drops one.
+  assert.deepEqual(r.failures, []);
+  // The full documented envelope shape, not a sampled subset.
+  assert.deepEqual(r.steps, []);
+  assert.deepEqual(r.captures, []);
+  assert.deepEqual(r.logs, []);
+  assert.equal(r.appUrl, "http://127.0.0.1:4000");
   assert.equal(r.driveSession, null);
   assert.deepEqual(r.rowManifest, []);
 });
