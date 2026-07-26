@@ -147,18 +147,29 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   `context-build/validation-and-risks.md`) and synthesize the outputs into the review
   handoff artifacts
 
-### Phase 1.5 — Cache primer (optional; `gates.primeSharedPrefix`)
+### Phase 1.5 — Cache primer (MANDATORY)
 
 <!-- rule: GATE-EXEC-PRIME -->
-`GATE-EXEC-PRIME`: When `gates.primeSharedPrefix` is true (default false), the gate pass
-MUST, after Phase 1 renders the byte-identical `<gate>-<headSha>.briefing-prefix.txt` and
-BEFORE the Phase 2 parallel fan-out, run exactly ONE **primer pass**: spawn a single
-scoped `review` agent seeded with that briefing prefix **verbatim and ONLY** — the same
-invariant block every reviewer receives, with **no angle suffix** — instructed to run the
-mandatory `verify-fresh-review-context.mjs` startup check, confirm the context, and return
-immediately **without reviewing** (it produces no findings artifact). Its sole purpose is
-to establish the shared-prefix prompt-cache once, so the subsequent parallel fan-out batch
-**cache-READS** the invariant prefix instead of each reviewer writing it (1-write-N-reads).
+`GATE-EXEC-PRIME`: **Every** gate fan-out MUST prime the shared prefix. After Phase 1
+renders the byte-identical `<gate>-<headSha>.briefing-prefix.txt` and BEFORE the reviewers
+read it, establish the shared-prefix cache **once** so the fan-out **cache-READS** the
+invariant prefix instead of each reviewer racing to write it (1-write-N-reads) — the
+cold-cache race the build-once bundle otherwise leaves on the table. This is not optional
+and not a config knob: build context → primer reads → fan-out reads the SAME context bundle
+plus its angle-specific briefing.
+
+**Default execution — one-reviewer-as-primer (zero extra cost):** dispatch ONE real
+reviewer first, then release the rest once its response has *started* (see the barrier in
+step 3). No extra spawn, no extra tokens — the first reviewer runs anyway; the others simply
+start after its prefix write has landed. This is why priming is mandatory rather than opt-in:
+in its default form it costs at most a small serialization latency, and it removes an N×
+cache-write on every fan-out.
+
+**Alternative — dedicated angle-less primer:** spawn a single scoped `review` agent seeded
+with the briefing prefix **verbatim and ONLY** (no angle suffix), which runs the mandatory
+`verify-fresh-review-context.mjs` check, confirms context, and returns **without reviewing**
+(no findings artifact). Cleaner to reason about; costs one extra angle-less spawn. Use it
+where an explicit primer is preferred; otherwise the one-reviewer form is the default.
 
 **The primer MUST be the `review`-agent request envelope, not a bespoke `context-reader`.**
 Byte-identical *artifact* bytes are necessary but NOT sufficient: the cache key is the whole
@@ -176,14 +187,6 @@ mismatch), never a spurious failure. (`verify-briefing-prefixes.mjs` does not to
 case `<gate>-prime`; because the primer's hash matches the reviewers', no exclusion is
 required for correctness. Teaching that verifier to treat `-prime` as a non-angle in its
 per-gate accounting is an optional follow-up, not a precondition.)
-
-**Pragmatic alternative (no dedicated primer spawn):** instead of an angle-less primer, let
-ONE real reviewer act as the primer — dispatch it first, then release the remaining
-reviewers once the shared-prefix write has landed (see the barrier note in step 3). This
-trades a small amount of initial parallelism (one reviewer runs slightly ahead) for one
-fewer spawn, and guarantees the primer envelope equals the reviewer envelope by
-construction. Either form satisfies this rule; the dedicated-primer form is cleaner to
-reason about, the one-reviewer form is cheaper.
 
 **Ordered execution:**
 
@@ -213,11 +216,12 @@ agent/subagent mechanism and never sees a request's `usage`, cannot set a
 caching. So the primer cannot be verified from inside and there is nothing to pin; it
 relies entirely on the barrier + byte-identical prefix + same model producing a
 **content-hash cache reuse** across spawns (Anthropic caching matches on the content-prefix
-hash, org+model scoped — not conversation-scoped, no explicit key required). The bet is
-asymmetric and cheap: worst case is one extra angle-less spawn (one extra write); best case
-turns N writes into 1 write + N reads. Default false (opt-in) because the win is
-unmeasurable from inside the harness and the byte-identity of the harness-built prefix is
-outside this contract's control.
+hash, org+model scoped — not conversation-scoped, no explicit key required). Priming is
+mandatory rather than a knob precisely because its default (one-reviewer) form is essentially
+free: worst case is a small serialization latency (if a harness turns out not to reuse the
+prefix across spawns), best case turns N cache-writes into 1 write + N reads on every
+fan-out. The unmeasurability from inside the harness is a reason to prefer the zero-extra-cost
+one-reviewer form, not a reason to make the win opt-in.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
