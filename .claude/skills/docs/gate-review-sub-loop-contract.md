@@ -147,6 +147,78 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   `context-build/validation-and-risks.md`) and synthesize the outputs into the review
   handoff artifacts
 
+### Phase 1.5 — Cache primer (optional; `gates.primeSharedPrefix`)
+
+<!-- rule: GATE-EXEC-PRIME -->
+`GATE-EXEC-PRIME`: When `gates.primeSharedPrefix` is true (default false), the gate pass
+MUST, after Phase 1 renders the byte-identical `<gate>-<headSha>.briefing-prefix.txt` and
+BEFORE the Phase 2 parallel fan-out, run exactly ONE **primer pass**: spawn a single
+scoped `review` agent seeded with that briefing prefix **verbatim and ONLY** — the same
+invariant block every reviewer receives, with **no angle suffix** — instructed to run the
+mandatory `verify-fresh-review-context.mjs` startup check, confirm the context, and return
+immediately **without reviewing** (it produces no findings artifact). Its sole purpose is
+to establish the shared-prefix prompt-cache once, so the subsequent parallel fan-out batch
+**cache-READS** the invariant prefix instead of each reviewer writing it (1-write-N-reads).
+
+**The primer MUST be the `review`-agent request envelope, not a bespoke `context-reader`.**
+Byte-identical *artifact* bytes are necessary but NOT sufficient: the cache key is the whole
+**request prefix through the breakpoint** — model, tools + tool ordering, system/project/
+agent instructions, message/content-block boundaries, thinking/tool-choice settings, the
+materialized context bytes, and the breakpoint position + TTL. A primer spawned as a
+different agent (different system prompt, tool set, or model) writes a DIFFERENT cache that
+the `review` reviewers never read. So the primer is literally a fan-out reviewer minus the
+angle suffix — same agent, same envelope — or it is useless. Because it is angle-less it is
+NOT a review round and **produces no findings artifact, so fan-in ignores it.** If it runs
+the invariant block's `verify-fresh-review-context.mjs` check, it uses the reserved
+`<gate>-prime` scope and records the SAME prefix hash as the reviewers — so it passes
+`verify-briefing-prefixes.mjs` **by construction** (a same-hash sentinel is never a
+mismatch), never a spurious failure. (`verify-briefing-prefixes.mjs` does not today special-
+case `<gate>-prime`; because the primer's hash matches the reviewers', no exclusion is
+required for correctness. Teaching that verifier to treat `-prime` as a non-angle in its
+per-gate accounting is an optional follow-up, not a precondition.)
+
+**Pragmatic alternative (no dedicated primer spawn):** instead of an angle-less primer, let
+ONE real reviewer act as the primer — dispatch it first, then release the remaining
+reviewers once the shared-prefix write has landed (see the barrier note in step 3). This
+trades a small amount of initial parallelism (one reviewer runs slightly ahead) for one
+fewer spawn, and guarantees the primer envelope equals the reviewer envelope by
+construction. Either form satisfies this rule; the dedicated-primer form is cleaner to
+reason about, the one-reviewer form is cheaper.
+
+**Ordered execution:**
+
+1. **Compile the immutable prefix** — Phase 1's `briefing-prefix.txt` (already
+   byte-identical + hash-recorded).
+2. **Send ONE angle-less primer** over that exact serialized prefix.
+3. **Barrier: await the shared-prefix write landing** before releasing ANY reviewer — the
+   write must precede the parallel reads. The write lands once the primer's request prefix
+   has been processed; **awaiting the primer's completion is the safe default** (a harness
+   exposes completion, not token-level streaming). The one-reviewer-as-primer form above
+   may instead release the rest once the lead reviewer's response has *started*, since the
+   prefix write has landed by then — the two forms differ only in WHEN "the write has
+   landed" is observed, never in the write-before-reads ordering itself.
+4. **Release the fan-out over the SAME model and the SAME byte-identical prefix**, so each
+   reviewer READS the cache the primer wrote instead of racing to write its own. A
+   differing model or prefix defeats reuse and is the same failure the byte-identity rule
+   already guards against.
+
+Rationale (why the primer, not just the shared prefix): a parallel fan-out with no primer
+launches every reviewer before any has written the cache — a **cold-cache race** where all
+N pay a cache write and none reads. The barrier collapses that to 1 write + N reads.
+
+**No verification pass — dev-loops runs only on agent harnesses (pi, Claude Code).** There
+is no raw-API path here: the orchestrator spawns primer and reviewers via the harness's
+agent/subagent mechanism and never sees a request's `usage`, cannot set a
+`prompt_cache_key`, and cannot place an explicit cache breakpoint — the harness owns
+caching. So the primer cannot be verified from inside and there is nothing to pin; it
+relies entirely on the barrier + byte-identical prefix + same model producing a
+**content-hash cache reuse** across spawns (Anthropic caching matches on the content-prefix
+hash, org+model scoped — not conversation-scoped, no explicit key required). The bet is
+asymmetric and cheap: worst case is one extra angle-less spawn (one extra write); best case
+turns N writes into 1 write + N reads. Default false (opt-in) because the win is
+unmeasurable from inside the harness and the byte-identity of the harness-built prefix is
+outside this contract's control.
+
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
 Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../../agents/review.md)), spawned once per resolved angle via the plain Agent tool. Reviewers are **independent and seeded with the identical neutral context bundle verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the loaded context of, the main agent or a sibling reviewer. Parallelism is capped at `gates.maxFanoutReviewers` (default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
