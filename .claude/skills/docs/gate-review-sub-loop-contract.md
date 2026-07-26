@@ -160,13 +160,26 @@ immediately **without reviewing** (it produces no findings artifact). Its sole p
 to establish the shared-prefix prompt-cache once, so the subsequent parallel fan-out batch
 **cache-READS** the invariant prefix instead of each reviewer writing it (1-write-N-reads).
 
-The primer's request bytes for the invariant block MUST be byte-identical to every
-reviewer's — it is literally a fan-out reviewer minus the angle suffix — or the cache it
-writes is not the cache the reviewers read. Because the primer is angle-less, it is NOT a
-review round, records no per-angle disposition, and its `--scope` is the reserved
-`<gate>-prime` sentinel (excluded from fan-in and from the `verify-briefing-prefixes.mjs`
-angle accounting; it still records the same prefix hash, so a divergent primer prefix fails
-closed like any reviewer).
+**The primer MUST be the `review`-agent request envelope, not a bespoke `context-reader`.**
+Byte-identical *artifact* bytes are necessary but NOT sufficient: the cache key is the whole
+**request prefix through the breakpoint** — model, tools + tool ordering, system/project/
+agent instructions, message/content-block boundaries, thinking/tool-choice settings, the
+materialized context bytes, and the breakpoint position + TTL. A primer spawned as a
+different agent (different system prompt, tool set, or model) writes a DIFFERENT cache that
+the `review` reviewers never read. So the primer is literally a fan-out reviewer minus the
+angle suffix — same agent, same envelope — or it is useless. Because it is angle-less it is
+NOT a review round, records no per-angle disposition, and its `--scope` is the reserved
+`<gate>-prime` sentinel (excluded from fan-in and from `verify-briefing-prefixes.mjs` angle
+accounting; it still records the same prefix hash, so a divergent primer prefix fails closed
+like any reviewer).
+
+**Pragmatic alternative (no dedicated primer spawn):** instead of an angle-less primer, let
+ONE real reviewer act as the primer — dispatch it first, and release the remaining reviewers
+once its response has *started* (the shared prefix is written by then). This trades a small
+amount of initial parallelism (one reviewer runs slightly ahead) for one fewer spawn, and
+guarantees the primer envelope equals the reviewer envelope by construction. Either form
+satisfies this rule; the dedicated-primer form is cleaner to reason about, the
+one-reviewer form is cheaper.
 
 **Ordered execution:**
 
