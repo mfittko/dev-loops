@@ -257,10 +257,10 @@ export function renderHandoffEnvelopeSection(envelope) {
     : [{ key: "target", label: "Target", valueHtml: `<span class="handoff-empty-value">missing</span>` }];
   const currentStateEntries = [
     { key: "currentGate", label: humanizeKey("currentGate"), valueHtml: renderInlineValue(envelope.currentGate, "currentGate") },
-    { key: "currentHeadSha", label: humanizeKey("currentHeadSha"), valueHtml: renderInlineValue(envelope.currentHeadSha, "currentHeadSha") },
-    { key: "ciStatus", label: humanizeKey("ciStatus"), valueHtml: renderInlineValue(envelope.ciStatus, "ciStatus") },
-    { key: "unresolvedThreadCount", label: humanizeKey("unresolvedThreadCount"), valueHtml: renderInlineValue(envelope.unresolvedThreadCount, "unresolvedThreadCount") },
-    { key: "copilotRoundCount", label: humanizeKey("copilotRoundCount"), valueHtml: renderInlineValue(envelope.copilotRoundCount, "copilotRoundCount") },
+    { key: "currentHeadSha", label: humanizeKey("currentHeadSha"), valueHtml: renderInlineValue(envelope.gateState?.currentHeadSha, "currentHeadSha") },
+    { key: "ciStatus", label: humanizeKey("ciStatus"), valueHtml: renderInlineValue(envelope.gateState?.ciStatus, "ciStatus") },
+    { key: "unresolvedThreadCount", label: humanizeKey("unresolvedThreadCount"), valueHtml: renderInlineValue(envelope.gateState?.unresolvedThreadCount, "unresolvedThreadCount") },
+    { key: "copilotRoundCount", label: humanizeKey("copilotRoundCount"), valueHtml: renderInlineValue(envelope.gateState?.copilotRoundCount, "copilotRoundCount") },
     { key: "maxCopilotRounds", label: humanizeKey("maxCopilotRounds"), valueHtml: renderInlineValue(envelope.maxCopilotRounds, "maxCopilotRounds") },
     { key: "executionMode", label: humanizeKey("executionMode"), valueHtml: renderInlineValue(envelope.executionMode, "executionMode") },
   ];

@@ -32,14 +32,16 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
       currentGate: "draft",
-      currentHeadSha: "abc123def",
-      ciStatus: "success",
-      unresolvedThreadCount: 0,
-      copilotRoundCount: 2,
       maxCopilotRounds: 5,
       executionMode: "bounded_handoff",
+      gateState: {
+        derivedAt: "2026-01-01T00:00:00.000Z",
+        currentHeadSha: "abc123def",
+        ciStatus: "success",
+        unresolvedThreadCount: 0,
+        copilotRoundCount: 2,
+      },
     };
     const html = renderHandoffEnvelopeSection(envelope);
     assert.ok(html.includes("draft"), "should show current gate");

@@ -165,7 +165,7 @@ test("build-handoff-envelope builds envelope from resolver output", async () => 
 
     const envelope = JSON.parse(result.stdout.trim());
     assert.equal(envelope.handoffVersion, 1);
-    assert.ok(typeof envelope.derivedAt === "string", "should have derivedAt");
+    assert.ok(typeof envelope.gateState.derivedAt === "string", "should have derivedAt");
     assert.equal(envelope.target.kind, "issue");
     assert.equal(envelope.target.issue, 42);
     assert.equal(envelope.target.repo, "owner/test-repo");
@@ -196,10 +196,10 @@ test("build-handoff-envelope accepts gate state via --gate-state", async () => {
     assert.equal(result.code, 0, `expected exit 0, got stderr: ${result.stderr}`);
 
     const envelope = JSON.parse(result.stdout.trim());
-    assert.equal(envelope.currentHeadSha, "deadbeef");
-    assert.equal(envelope.ciStatus, "success");
-    assert.equal(envelope.unresolvedThreadCount, 3);
-    assert.equal(envelope.copilotRoundCount, 2);
+    assert.equal(envelope.gateState.currentHeadSha, "deadbeef");
+    assert.equal(envelope.gateState.ciStatus, "success");
+    assert.equal(envelope.gateState.unresolvedThreadCount, 3);
+    assert.equal(envelope.gateState.copilotRoundCount, 2);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
