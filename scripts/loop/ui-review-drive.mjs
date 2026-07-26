@@ -348,7 +348,7 @@ export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
   };
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, launchBrowser = launchWebkit } = {}) {
   const options = parseUiReviewDriveCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
@@ -386,7 +386,29 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // and stamped onto the emitted row manifest so teardown drops exactly those.
   const driveSession = randomUUID();
 
-  const browser = await launchWebkit();
+  let browser;
+  try {
+    browser = await launchBrowser();
+  } catch (err) {
+    // An unavailable runner (Playwright or the WebKit binary absent) is a
+    // setup gap, not a crash: keep the documented stdout envelope so the stage
+    // stays threadable, same as the missing-recipe path above.
+    const result = {
+      ok: false,
+      stopped: true,
+      stopReason: err?.message ?? String(err),
+      steps: [],
+      captures: [],
+      failures: [{ kind: "drive-runner-unavailable", severity: "must-fix", message: err?.message ?? String(err) }],
+      caps: {},
+      appUrl: options.appUrl ?? null,
+      driveSession: null,
+      rowManifest: [],
+      logs: [],
+    };
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+    return;
+  }
   try {
     const context = await browser.newContext({ extraHTTPHeaders: { [DRIVE_SESSION_HEADER]: driveSession } });
     const page = await context.newPage();

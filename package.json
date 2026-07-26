@@ -64,10 +64,14 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
-    "@playwright/test": ">=1.60.0"
+    "@playwright/test": "^1.60.0",
+    "@axe-core/playwright": "^4.10.0"
   },
   "peerDependenciesMeta": {
     "@playwright/test": {
+      "optional": true
+    },
+    "@axe-core/playwright": {
       "optional": true
     }
   },

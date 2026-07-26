@@ -164,7 +164,7 @@ test("CLI help leads with dev-loop as the primary workflow entry", async () => {
 });
 
 
-test("loop category exposes the five ui-review stage subcommands (issue #1362)", async () => {
+test("loop category exposes every running-app stage subcommand (five ui-review stages + visual-grill capture)", async () => {
   const helpStdout = createBufferStream();
   const categoryStdout = createBufferStream();
 
@@ -191,10 +191,21 @@ test("loop category exposes the five ui-review stage subcommands (issue #1362)",
     "ui-review-diagnose",
     "ui-review-report",
     "ui-review-teardown",
+    // The visual-grill capture is the sixth running-app stage: it ships in the
+    // same tree and is routed the same way, so it belongs to the same contract.
+    "visual-grill-capture",
   ];
   for (const sub of uiReviewSubcommands) {
     assert.match(topLevelHelp, new RegExp(`\\b${sub}\\b`), `top-level help should list ${sub}`);
     assert.match(categoryHelp, new RegExp(`\\b${sub}\\b`), `loop --help should list ${sub}`);
+    // A route registered without a matching description renders as a bare name,
+    // which reads as a rendering glitch rather than a missing entry — so require
+    // the listing line to carry description text, not just the subcommand.
+    assert.match(
+      categoryHelp,
+      new RegExp(`^\\s*${sub}\\s+\\S.*$`, "m"),
+      `loop --help should give ${sub} a one-line description`,
+    );
 
     const helpRun = spawnSync("node", ["./cli/index.mjs", "loop", sub, "--help"], {
       cwd: repoRoot,

@@ -424,11 +424,56 @@ test('captureNamedUiState emits snapshot.json as JSON null when the accessibilit
 // trace or an opaque launch error. Imported through the harness re-export, which
 // also proves the shipped adapter module stays reachable from the suite.
 test('launchWebkit reports a missing @playwright/test package with install instructions', async () => {
+  const absent = Object.assign(new Error("Cannot find package '@playwright/test'"), { code: 'ERR_MODULE_NOT_FOUND' });
   await assert.rejects(
-    () => launchWebkit({}, { importPlaywright: () => Promise.reject(new Error('ERR_MODULE_NOT_FOUND')) }),
+    () => launchWebkit({}, { importPlaywright: () => Promise.reject(absent) }),
     (err) => {
       assert.equal(err.message, PLAYWRIGHT_MISSING_MESSAGE);
       assert.match(err.message, /npm install --save-dev @playwright\/test/);
+      assert.equal(err.cause, absent, 'the original resolution error is preserved as cause');
+      return true;
+    },
+  );
+});
+
+test('launchWebkit does not mislabel an installed-but-broken @playwright/test as missing', async () => {
+  // A throw during module evaluation (corrupt install, bad native binding) is
+  // not a resolution failure — telling the user to install what they already
+  // have would hide the real cause.
+  const broken = new SyntaxError('Unexpected token in @playwright/test');
+  await assert.rejects(
+    () => launchWebkit({}, { importPlaywright: () => Promise.reject(broken) }),
+    (err) => {
+      assert.equal(err, broken);
+      return true;
+    },
+  );
+});
+
+test('launchWebkit reports a resolvable module with no webkit export instead of an opaque TypeError', async () => {
+  await assert.rejects(
+    () => launchWebkit({}, { importPlaywright: () => Promise.resolve({}) }),
+    (err) => {
+      assert.equal(err.message, PLAYWRIGHT_MISSING_MESSAGE);
+      assert.doesNotMatch(err.message, /undefined/i);
+      return true;
+    },
+  );
+});
+
+test('launchWebkit leaves the missing-host-dependencies error intact', async () => {
+  // Playwright's host-deps failure also contains the words "playwright install"
+  // (it instructs `npx playwright install-deps`). Rewriting it to "install
+  // webkit" would give a Linux/container consumer the wrong remedy and discard
+  // the list of missing libraries.
+  const hostDeps = new Error(
+    'browserType.launch: Host system is missing dependencies to run browsers. Please install them with the following command:\n  sudo npx playwright install-deps',
+  );
+  await assert.rejects(
+    () => launchWebkit({}, { importPlaywright: () => Promise.resolve({ webkit: { launch: () => Promise.reject(hostDeps) } }) }),
+    (err) => {
+      assert.equal(err, hostDeps, 'the host-deps error is rethrown unmasked');
+      assert.match(err.message, /install-deps/);
       return true;
     },
   );
@@ -445,6 +490,7 @@ test('launchWebkit reports a missing WebKit binary and names webkit specifically
     (err) => {
       assert.equal(err.message, WEBKIT_MISSING_MESSAGE);
       assert.match(err.message, /playwright install webkit/);
+      assert.match(err.cause?.message ?? '', /Executable doesn't exist/, 'the original launch error is preserved as cause');
       return true;
     },
   );

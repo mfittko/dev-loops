@@ -476,6 +476,42 @@ test("runCli: no uiReview.login recipe still emits the stable envelope shape (dr
   assert.deepEqual(r.rowManifest, []);
 });
 
+test("runCli: an unavailable browser runner fails closed inside the documented envelope, not as a throw", async () => {
+  // Playwright is an optional peer, so "runner absent" is a setup gap a consumer
+  // hits routinely. It must stay threadable as stage output rather than escaping
+  // to stderr — the same property the missing-recipe path above guarantees.
+  const dir = mkdtempSync(path.join(tmpdir(), "drive-nolauncher-"));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(
+    path.join(dir, ".devloops.json"),
+    JSON.stringify({
+      version: 1,
+      uiReview: {
+        login: { loginUrl: "http://127.0.0.1:4000/login", submitSelector: "#s", successSelector: "#ok" },
+        run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz" },
+      },
+    }),
+  );
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const launchBrowser = () => Promise.reject(new Error("UI review needs Playwright (an optional peer dependency)"));
+
+  await runCli(
+    ["--repo-root", dir, "--app-url", "http://127.0.0.1:4000", "--output-dir", path.join(dir, "out")],
+    { stdout, stderr, launchBrowser },
+  );
+  process.exitCode = 0;
+
+  const r = JSON.parse(out);
+  assert.equal(r.ok, false);
+  assert.equal(r.stopped, true);
+  assert.match(r.stopReason, /needs Playwright/);
+  assert.equal(r.failures[0].kind, "drive-runner-unavailable");
+  assert.equal(r.driveSession, null);
+  assert.deepEqual(r.rowManifest, []);
+});
+
 test("driveUiReview: collates a swallowed error response from the injected listener + log tail", async () => {
   const r = await driveUiReview(
     { appUrl: "http://app", login: {}, flows: [{ name: "f", steps: [{ name: "save", action: "click" }] }], serverLogExceptionPattern: DEFAULT_SERVER_LOG_EXCEPTION_PATTERN },

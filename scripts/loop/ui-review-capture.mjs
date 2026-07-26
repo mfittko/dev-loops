@@ -32,19 +32,37 @@ export const PLAYWRIGHT_MISSING_MESSAGE =
 export const WEBKIT_MISSING_MESSAGE =
   "UI review needs the Playwright WebKit browser: run `npx playwright install webkit`";
 
+// Only a genuine resolution failure means "not installed". An installed but
+// broken package (bad native binding, a throw during module evaluation) must
+// keep its own error: telling someone to install what they already have hides
+// the real cause.
+const MODULE_ABSENT_CODES = new Set(["ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED"]);
+
 export async function launchWebkit({ headless = true } = {}, { importPlaywright = () => import("@playwright/test") } = {}) {
-  let webkit;
+  let playwright;
   try {
-    ({ webkit } = await importPlaywright());
-  } catch {
+    playwright = await importPlaywright();
+  } catch (err) {
+    if (!MODULE_ABSENT_CODES.has(err?.code)) throw err;
+    throw new Error(PLAYWRIGHT_MISSING_MESSAGE, { cause: err });
+  }
+  const webkit = playwright?.webkit;
+  // A resolvable module with no `webkit` export is version skew or a partial
+  // install; say so rather than letting `undefined.launch` surface as an opaque
+  // "cannot read properties of undefined".
+  if (typeof webkit?.launch !== "function") {
     throw new Error(PLAYWRIGHT_MISSING_MESSAGE);
   }
   try {
     return await webkit.launch({ headless });
   } catch (err) {
-    const detail = err?.message ?? String(err);
-    if (/Executable doesn't exist|playwright install/i.test(detail)) {
-      throw new Error(WEBKIT_MISSING_MESSAGE);
+    // Match ONLY the missing-binary error. Playwright's missing-host-libraries
+    // failure also contains the words "playwright install" (it instructs `npx
+    // playwright install-deps`), and rewriting that one to "install webkit"
+    // would hand a Linux/container consumer the wrong remedy and discard the
+    // list of missing libraries — so it is left to propagate unchanged.
+    if (/Executable doesn't exist/i.test(err?.message ?? String(err))) {
+      throw new Error(WEBKIT_MISSING_MESSAGE, { cause: err });
     }
     throw err;
   }

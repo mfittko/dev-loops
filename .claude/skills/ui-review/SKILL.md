@@ -25,9 +25,13 @@ The two browser-driving stages (`ui-review-drive`, and the `visual-grill-capture
 stage the loop-grill uses) launch headless WebKit through Playwright, which is an
 **optional** peer dependency: a consumer who never runs a UI review carries none
 of its weight. Where one is run, install it once —
-`npm install --save-dev @playwright/test`, then `npx playwright install webkit`.
-Both stages fail closed with those instructions when either the package or the
-browser binary is missing, so a setup gap never reads as a finding against the PR.
+`npm install --save-dev @playwright/test @axe-core/playwright`, then
+`npx playwright install webkit`. Both stages fail closed with those instructions
+when either the package or the browser binary is missing, so a setup gap never
+reads as a finding against the PR. `@axe-core/playwright` is optional in the same
+way and drives only the computed-a11y artifact: without it every `axe.json` is a
+deterministic JSON `null`, so a11y findings lose their grounding while the rest of
+the review still works.
 
 The route's handoff envelope carries its stop rules and acceptance
 self-validation (defined in `handoff-envelope.mjs`): no product-code writes,
