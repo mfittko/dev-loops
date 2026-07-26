@@ -210,16 +210,9 @@ const GatesConfig = z.strictObject({
   // parallel. When the resolved angle set exceeds this cap, the overflow runs
   // in sequential batches and the degradation is recorded in the gate evidence.
   maxFanoutReviewers: z.number().int().min(1).max(64).default(8),
-  // #1462 GATE-EXEC-PRIME: run a cache-primer pass over the byte-identical briefing
-  // prefix BEFORE the parallel fan-out, so the shared prefix is written once and the
-  // N parallel reviewers cache-READ it (1-write-N-reads) instead of racing to write
-  // it (the cold-cache race). dev-loops runs only on agent harnesses (pi, Claude Code)
-  // that own caching, so there is no raw-API path to verify the write or pin a
-  // prompt_cache_key — the primer relies on the barrier + byte-identical prefix + same
-  // model producing a content-hash cache reuse across spawns. Unverifiable from inside;
-  // asymmetric cheap bet (worst case one extra spawn). Default false (opt-in).
-  // See skills/docs/gate-review-sub-loop-contract.md GATE-EXEC-PRIME.
-  primeSharedPrefix: z.boolean().default(false),
+  // #1462 GATE-EXEC-PRIME is MANDATORY (not a flag): every gate fan-out primes the
+  // byte-identical briefing prefix before the reviewers read it — see
+  // skills/docs/gate-review-sub-loop-contract.md.
   // Post the consolidated gate fan-out findings as a visible, marker-tagged PR
   // comment so they are auditable and Copilot/humans are aware of them. Default
   // true (opt-out). The disposition ledger is written regardless; this flag only
@@ -597,7 +590,6 @@ const FileGatesConfig = z.strictObject({
   requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason).").optional(),
   requireFanoutProvenance: z.boolean().describe("Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch).").optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).describe("Cap on parallel gate fan-out reviewers; overflow runs in sequential batches.").optional(),
-  primeSharedPrefix: z.boolean().describe("Run a cache-primer pass over the byte-identical briefing prefix before the parallel fan-out (GATE-EXEC-PRIME) so the shared prefix is written once and reviewers cache-read it (1-write-N-reads) instead of the cold-cache race. Default false; best-effort under the agent harnesses dev-loops runs on (no raw-API path to verify the write or pin a key).").optional(),
   postFindingsComments: z.boolean().describe("Post consolidated gate findings as a marker-tagged PR comment (default true).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
@@ -1244,6 +1236,20 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
     data = { ...data, strategy: "tracker-first" };
   }
 
+  // Removed `gates.primeSharedPrefix` (#1462): GATE-EXEC-PRIME cache priming is
+  // now mandatory, not a knob. The schema is strictObject, so a stale key would
+  // otherwise drop the WHOLE gates layer as invalid. Strip it before validation
+  // with a deprecation warning — old configs keep loading; priming happens
+  // unconditionally regardless of the removed value.
+  if (data?.gates && Object.prototype.hasOwnProperty.call(data.gates, "primeSharedPrefix")) {
+    warnings.push(
+      `gates.primeSharedPrefix is removed (#1462): cache priming is now mandatory, not configurable. ` +
+      `Remove it from ${path.basename(filePath)}; the key is ignored.`
+    );
+    const { primeSharedPrefix: _removed, ...gatesRest } = data.gates;
+    data = { ...data, gates: gatesRest };
+  }
+
   // Validate the file's structure before merging. Pre-existing behavior
   // (unrelated to the #1404 angle-entry redesign): a schema violation ANYWHERE
   // in this layer's file drops the WHOLE layer (errors is populated, `merged`
@@ -1696,12 +1702,6 @@ export function resolveRequireFanoutProvenance(config) {
  */
 export function resolveRejectForeignAngles(config) {
   return config?.gates?.rejectForeignAngles !== false;
-}
-
-// #1462 GATE-EXEC-PRIME: whether to run a cache-primer pass over the byte-identical
-// briefing prefix before the parallel fan-out. Default false (opt-in).
-export function resolvePrimeSharedPrefix(config) {
-  return config?.gates?.primeSharedPrefix === true;
 }
 
 /**

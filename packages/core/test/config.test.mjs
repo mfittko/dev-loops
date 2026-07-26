@@ -24,7 +24,6 @@ import {
   resolveGateAngles,
   resolveGateAngleContract,
   resolveRejectForeignAngles,
-  resolvePrimeSharedPrefix,
   resolveGateAnglesDynamic,
   resolveAnglePool,
   resolveWorkflowConfig,
@@ -1411,6 +1410,21 @@ describe("tracker config (#1408)", () => {
       assert.deepEqual(result.errors, []);
       assert.equal(result.config.strategy, "tracker-first");
       assert.ok(result.warnings.some((w) => /strategy: "github-first" is a deprecated alias/.test(w)));
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("gates.primeSharedPrefix (removed #1462) is stripped with a warning, not a hard fail", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-prime-removed-"));
+    try {
+      await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  primeSharedPrefix: false\n  maxFanoutReviewers: 4\n");
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(result.errors, [], "stale key must not drop the gates layer");
+      assert.equal(result.config.gates.maxFanoutReviewers, 4, "rest of the gates layer still loads");
+      assert.equal("primeSharedPrefix" in result.config.gates, false, "removed key does not survive into resolved config");
+      assert.ok(result.warnings.some((w) => /gates\.primeSharedPrefix is removed/.test(w)));
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -3837,21 +3851,6 @@ describe("gates.requireFanoutProvenance", () => {
 
   test("floor constant is 2 (smallest count that is not a single agent)", () => {
     assert.equal(FANOUT_PROVENANCE_MIN_REVIEWERS, 2);
-  });
-});
-
-describe("gates.primeSharedPrefix (#1462 GATE-EXEC-PRIME)", () => {
-  test("defaults to false (opt-in) when absent", () => {
-    assert.equal(resolvePrimeSharedPrefix({}), false);
-    assert.equal(resolvePrimeSharedPrefix({ gates: {} }), false);
-    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
-    assert.equal(parsed.success, true);
-    assert.equal(parsed.data.gates.primeSharedPrefix, false);
-    assert.equal(resolvePrimeSharedPrefix(parsed.data), false);
-  });
-  test("true only when explicitly enabled", () => {
-    assert.equal(resolvePrimeSharedPrefix({ gates: { primeSharedPrefix: true } }), true);
-    assert.equal(resolvePrimeSharedPrefix({ gates: { primeSharedPrefix: false } }), false);
   });
 });
 
