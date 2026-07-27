@@ -49,6 +49,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
+import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { EMPTY_NEXT_UP_MESSAGE } from "@dev-loops/core/loop/queue-board-ordering";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import {
@@ -376,7 +377,7 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
   }
   const nextUpColumn = columnNames[LOGICAL_COLUMN.NEXT_UP];
   const listed = await listQueueItems(
-    { repo: args.repo, project: args.project, column: nextUpColumn },
+    { repo: args.repo, project: args.project, projectTitle: args.projectTitle, column: nextUpColumn },
     { env, runChild },
   );
   const items = listed.items ?? [];
@@ -444,7 +445,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
   }
   const inProgressColumn = columnNames[LOGICAL_COLUMN.IN_PROGRESS];
   const listed = await listQueueItems(
-    { repo: args.repo, project: args.project, column: inProgressColumn },
+    { repo: args.repo, project: args.project, projectTitle: args.projectTitle, column: inProgressColumn },
     { env, runChild },
   );
   const items = listed.items ?? [];
@@ -475,6 +476,10 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     stdout.write(USAGE);
     return;
   }
+
+  // Resolve the board from .devloops when --project is absent.
+  applyDevloopsBoard(args, cwd);
+
   try {
     const result = await main(args, { env, runChild, cwd });
     // Fail closed (zero/multiple) is a clean, expected outcome — distinct exit code 3,
