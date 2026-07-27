@@ -11,12 +11,12 @@
 // the same :root tokens, body gradient, and typography. It intentionally defines
 // a <style> block and a <body> tag so build-site.mjs can inject the shared nav
 // (NAV_CSS references --heading/--kicker/--accent-soft, all declared here).
-import { STATE, TRANSITIONS } from '../../packages/core/src/loop/copilot-loop-state.mjs';
-import { REVIEWER_STATE, REVIEWER_TRANSITIONS } from '../../packages/core/src/loop/reviewer-loop-state.mjs';
-import { GRILL_STATE, GRILL_TRANSITIONS } from '../../packages/core/src/loop/refinement-grill-state.mjs';
-import { OUTER_STATE, OUTER_TRANSITIONS } from '../../packages/core/src/loop/conductor-routing.mjs';
-import { PUBLIC_DEV_LOOP_GATE_CONTRACT } from '../../packages/core/src/loop/public-dev-loop-routing-contract.mjs';
-import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from '../../packages/core/src/loop/pr-lifecycle.mjs';
+import { STATE, TRANSITIONS } from '@dev-loops/core/loop/copilot-loop-state';
+import { REVIEWER_STATE, REVIEWER_TRANSITIONS } from '@dev-loops/core/loop/reviewer-loop-state';
+import { GRILL_STATE, GRILL_TRANSITIONS } from '@dev-loops/core/loop/refinement-grill-state';
+import { OUTER_STATE, OUTER_TRANSITIONS } from '@dev-loops/core/loop/conductor-routing';
+import { PUBLIC_DEV_LOOP_GATE_CONTRACT } from '@dev-loops/core/loop/public-dev-loop-routing-contract';
+import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from '@dev-loops/core/loop/pr-lifecycle';
 
 // Classify a state/gate id by name into one of four visual classes. Colors are
 // drawn from the site's own dark palette (accent violet, kicker blue,

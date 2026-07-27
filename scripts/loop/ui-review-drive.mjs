@@ -26,12 +26,11 @@ import { statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { webkit } from "@playwright/test";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
 import { driveUiReview, isErrorResponseStatus, PAGE_ERROR_STACK_MAX_CHARS, DRIVE_SESSION_HEADER } from "@dev-loops/core/loop/ui-review-drive";
-import { captureNamedUiState } from "../../test/playwright/harness/webkit-smoke-harness.mjs";
+import { captureNamedUiState, launchWebkit, toStopReason } from "./ui-review-capture.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -349,7 +348,7 @@ export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
   };
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, launchBrowser = launchWebkit } = {}) {
   const options = parseUiReviewDriveCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
@@ -387,7 +386,34 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // and stamped onto the emitted row manifest so teardown drops exactly those.
   const driveSession = randomUUID();
 
-  const browser = await webkit.launch({ headless: true });
+  let browser;
+  try {
+    browser = await launchBrowser();
+  } catch (err) {
+    // An unavailable runner (Playwright or the WebKit binary absent) is a gap in
+    // THIS machine's setup, not a defect in the PR — so it stops the walk with a
+    // stated reason and deliberately carries NO `failures` entry. Stage 3 turns
+    // every failure into a posted finding and never drops one, so emitting one
+    // here would put a must-fix on someone's PR for a local missing install.
+    // The EMPTY `failures` is what makes this contribute nothing downstream —
+    // `stopped` alone is not that signal, since the missing-recipe stop above is
+    // also `stopped: true` and its must-fix is only surfaced by threading it on.
+    const result = {
+      ok: false,
+      stopped: true,
+      stopReason: toStopReason(err),
+      steps: [],
+      captures: [],
+      failures: [],
+      caps: {},
+      appUrl: options.appUrl ?? null,
+      driveSession: null,
+      rowManifest: [],
+      logs: [],
+    };
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+    return;
+  }
   try {
     const context = await browser.newContext({ extraHTTPHeaders: { [DRIVE_SESSION_HEADER]: driveSession } });
     const page = await context.newPage();

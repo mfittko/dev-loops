@@ -25,7 +25,11 @@ It is not a general E2E framework and it does not make browser validation mandat
 ## Reusable baseline
 
 The reusable baseline lives in:
-- `test/playwright/harness/webkit-smoke-harness.mjs` (this module)
+- `test/playwright/harness/webkit-smoke-harness.mjs` (this module) — owns the
+  fixture-server seams and re-exports the capture surface
+- `scripts/loop/ui-review-capture.mjs` — owns `captureNamedUiState` and
+  `launchWebkit`. It sits in the shipped tree because the ui-review stages import
+  it at runtime, and a shipped entrypoint must not import from `test/`
 - the single `playwright.config.mjs` — one Playwright project per slice (deck,
   article, viewer), generated from the registries, each with its own
   `testMatch` and distinct `outputDir`; run one via `--project=<sliceId>`
@@ -39,7 +43,7 @@ registries, so no config edit (and no per-slice config factory) is needed.
 
 The harness exposes two main runtime seams:
 - `startFixtureServer(...)` / `stopFixtureServer(...)` — start and stop a bounded local fixture-backed HTTP server for the UI surface under test
-- `captureNamedUiState(...)` — write deterministic named-state artifacts for reviewer consumption
+- `captureNamedUiState(...)` — write deterministic named-state artifacts for reviewer consumption (implemented in `scripts/loop/ui-review-capture.mjs`, re-exported here)
 
 ## Adoption path
 

@@ -7,10 +7,14 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import {
   buildNamedUiStateArtifactPaths,
   captureNamedUiState,
+  launchWebkit,
   normalizeUiStateSegment,
   normalizeViewportSegment,
   normalizeInteractionSegment,
+  PLAYWRIGHT_MISSING_MESSAGE,
+  WEBKIT_MISSING_MESSAGE,
 } from '../playwright/harness/webkit-smoke-harness.mjs';
+import { STOP_REASON_MAX_CHARS, toStopReason } from '../../scripts/loop/ui-review-capture.mjs';
 
 test('normalizeUiStateSegment collapses UI state names into stable path segments', () => {
   assert.equal(normalizeUiStateSegment(' Current PR / Dashboard '), 'current-pr-dashboard');
@@ -414,4 +418,189 @@ test('captureNamedUiState emits snapshot.json as JSON null when the accessibilit
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// Playwright is an optional peer dependency, so both ways it can be missing must
+// surface a stated install instruction rather than a module-resolution stack
+// trace or an opaque launch error. Imported through the harness re-export, which
+// also proves the shipped adapter module stays reachable from the suite.
+// Pin the message's CONTENT against literals. `assert.equal(err.message,
+// PLAYWRIGHT_MISSING_MESSAGE)` alone is self-referential — it compares the
+// constant to itself, so deleting half the remedy from the constant keeps every
+// test green.
+test('PLAYWRIGHT_MISSING_MESSAGE names both remedies and survives stopReason truncation', () => {
+  assert.match(PLAYWRIGHT_MISSING_MESSAGE, /npm install --save-dev @playwright\/test/);
+  assert.match(PLAYWRIGHT_MISSING_MESSAGE, /npx playwright install webkit/);
+  // Stop reasons are capped, so an overlong message would lose its tail — which
+  // is where the commands are.
+  assert.ok(PLAYWRIGHT_MISSING_MESSAGE.length <= STOP_REASON_MAX_CHARS, 'must survive the stop-reason cap');
+  assert.ok(WEBKIT_MISSING_MESSAGE.length <= STOP_REASON_MAX_CHARS, 'must survive the stop-reason cap');
+});
+
+test('toStopReason collapses a multi-line error instead of keeping only its first line', () => {
+  // Playwright's missing-host-libraries error puts the remedy on a later line;
+  // first-line-only would report the problem and drop the fix.
+  const hostDeps = new Error(
+    'browserType.launch: Host system is missing dependencies to run browsers. Please install them with the following command:\n  sudo npx playwright install-deps',
+  );
+  const reason = toStopReason(hostDeps);
+  assert.ok(!reason.includes('\n'), 'stop reasons are one line');
+  assert.match(reason, /Host system is missing dependencies/);
+  assert.match(reason, /sudo npx playwright install-deps/, 'the remedy survives the collapse');
+});
+
+test('toStopReason bounds a pathological error and does not re-embed the broad playwright remedy', () => {
+  assert.equal(toStopReason(new Error('x'.repeat(5000))).length, STOP_REASON_MAX_CHARS);
+  // WEBKIT_MISSING_MESSAGE deliberately narrows to `install webkit`; appending a
+  // cause that says `npx playwright install` would undo that narrowing.
+  const wrapped = new Error(WEBKIT_MISSING_MESSAGE, {
+    cause: new Error("Executable doesn't exist at /x/pw_run.sh\nPlease run: npx playwright install"),
+  });
+  const reason = toStopReason(wrapped);
+  assert.equal(reason, WEBKIT_MISSING_MESSAGE);
+  assert.doesNotMatch(reason, /playwright install$/);
+});
+
+test('toStopReason appends the cause for the missing-package wrapper — the path a consumer actually hits', () => {
+  // This is the composed string the drive envelope really shows when Playwright
+  // is absent, and it was previously asserted nowhere.
+  const reason = toStopReason(
+    new Error(PLAYWRIGHT_MISSING_MESSAGE, { cause: new Error("Cannot find package '@playwright/test' imported from /x/y.mjs") }),
+  );
+  assert.match(reason, /npm install --save-dev @playwright\/test/);
+  assert.match(reason, /npx playwright install webkit/);
+  assert.match(reason, /Cannot find package/, 'the underlying cause is kept, not discarded');
+});
+
+test('toStopReason keeps remedy lines but drops page-derived call-log noise', () => {
+  // The collapse exists for remedies on later lines; it must not become a
+  // channel for selectors and element markup from the app under test.
+  const reason = toStopReason(new Error([
+    'locator.click: Timeout exceeded',
+    'Call log:',
+    '  - waiting for locator("#submit")',
+    '  - <input value="hunter2" name="password"/> resolved to visible',
+  ].join('\n')));
+  assert.match(reason, /Timeout exceeded/);
+  assert.doesNotMatch(reason, /hunter2/);
+  assert.doesNotMatch(reason, /Call log/);
+});
+
+test('toStopReason is total for a thrown non-Error', () => {
+  // It runs inside handlers that owe the caller a structured envelope, so it
+  // must never be the thing that throws.
+  assert.equal(toStopReason({ message: 42 }), '42');
+  assert.equal(toStopReason('plain string'), 'plain string');
+  assert.equal(toStopReason(undefined), 'undefined');
+});
+
+test('launchWebkit does not mislabel a transitive resolution failure inside an installed Playwright', async () => {
+  // The realistic corrupt-install shape. Node names the UNRESOLVED specifier
+  // first and the IMPORTER second — and the importer path contains
+  // "@playwright/test", so a substring test would wrongly report the package as
+  // missing and tell the consumer to install what they already have.
+  const transitive = Object.assign(
+    new Error("Cannot find package 'playwright-core' imported from /app/node_modules/@playwright/test/index.mjs"),
+    { code: 'ERR_MODULE_NOT_FOUND' },
+  );
+  await assert.rejects(
+    () => launchWebkit({ importPlaywright: () => Promise.reject(transitive) }),
+    (err) => {
+      assert.equal(err, transitive, 'the real cause is rethrown, not replaced');
+      return true;
+    },
+  );
+});
+
+test('launchWebkit reports a missing @playwright/test package with install instructions', async () => {
+  // The two codes a dynamic import of a bare specifier can actually produce:
+  // absent, and present-but-with-no-"."-export (verified against Node).
+  for (const code of ['ERR_MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']) {
+    const absent = Object.assign(new Error("Cannot find package '@playwright/test'"), { code });
+    await assert.rejects(
+      () => launchWebkit({ importPlaywright: () => Promise.reject(absent) }),
+      (err) => {
+        assert.equal(err.message, PLAYWRIGHT_MISSING_MESSAGE, `code ${code} should report the package as missing`);
+        assert.equal(err.cause, absent, 'the original resolution error is preserved as cause');
+        return true;
+      },
+    );
+  }
+});
+
+test('launchWebkit does not mislabel an installed-but-broken @playwright/test as missing', async () => {
+  // A throw during module evaluation (corrupt install, bad native binding) is
+  // not a resolution failure — telling the user to install what they already
+  // have would hide the real cause.
+  const broken = new SyntaxError('Unexpected token in @playwright/test');
+  await assert.rejects(
+    () => launchWebkit({ importPlaywright: () => Promise.reject(broken) }),
+    (err) => {
+      assert.equal(err, broken);
+      return true;
+    },
+  );
+});
+
+test('launchWebkit reports a resolvable module with no webkit export instead of an opaque TypeError', async () => {
+  await assert.rejects(
+    () => launchWebkit({ importPlaywright: () => Promise.resolve({}) }),
+    (err) => {
+      assert.equal(err.message, PLAYWRIGHT_MISSING_MESSAGE);
+      assert.doesNotMatch(err.message, /undefined/i);
+      return true;
+    },
+  );
+});
+
+test('launchWebkit leaves the missing-host-dependencies error intact', async () => {
+  // Playwright's host-deps failure also contains the words "playwright install"
+  // (it instructs `npx playwright install-deps`). Rewriting it to "install
+  // webkit" would give a Linux/container consumer the wrong remedy and discard
+  // the list of missing libraries.
+  const hostDeps = new Error(
+    'browserType.launch: Host system is missing dependencies to run browsers. Please install them with the following command:\n  sudo npx playwright install-deps',
+  );
+  await assert.rejects(
+    () => launchWebkit({ importPlaywright: () => Promise.resolve({ webkit: { launch: () => Promise.reject(hostDeps) } }) }),
+    (err) => {
+      assert.equal(err, hostDeps, 'the host-deps error is rethrown unmasked');
+      assert.match(err.message, /install-deps/);
+      return true;
+    },
+  );
+});
+
+test('launchWebkit reports a missing WebKit binary and names webkit specifically', async () => {
+  // Playwright's own message says `npx playwright install`, which downloads every
+  // browser; the wrapper narrows it to the one browser the stages launch.
+  const importPlaywright = () => Promise.resolve({
+    webkit: { launch: () => Promise.reject(new Error("browserType.launch: Executable doesn't exist at /x/webkit-1/pw_run.sh")) },
+  });
+  await assert.rejects(
+    () => launchWebkit({ importPlaywright }),
+    (err) => {
+      assert.equal(err.message, WEBKIT_MISSING_MESSAGE);
+      assert.match(err.message, /playwright install webkit/);
+      assert.match(err.cause?.message ?? '', /Executable doesn't exist/, 'the original launch error is preserved as cause');
+      return true;
+    },
+  );
+});
+
+test('launchWebkit rethrows an unrelated launch failure unmasked', async () => {
+  const importPlaywright = () => Promise.resolve({
+    webkit: { launch: () => Promise.reject(new Error('connection refused by sandbox')) },
+  });
+  await assert.rejects(() => launchWebkit({ importPlaywright }), /connection refused by sandbox/);
+});
+
+test('launchWebkit returns the browser and always launches headless', async () => {
+  const launched = [];
+  const importPlaywright = () => Promise.resolve({
+    webkit: { launch: (opts) => { launched.push(opts); return Promise.resolve({ id: 'browser' }); } },
+  });
+  assert.deepEqual(await launchWebkit({ importPlaywright }), { id: 'browser' });
+  // Strict stub: an unexpected extra launch call would fail this.
+  assert.deepEqual(launched, [{ headless: true }]);
 });

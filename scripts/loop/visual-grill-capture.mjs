@@ -18,11 +18,11 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { rm } from "node:fs/promises";
-import { webkit } from "@playwright/test";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
 import { authenticate, dismissInterstitials, makeRunStep } from "./ui-review-drive.mjs";
+import { launchWebkit, toStopReason } from "./ui-review-capture.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -254,7 +254,7 @@ async function removeAllCaptures(outputDir) {
 
 export async function captureDescriptorScreen(
   { repoRoot, appUrl, outputDir, descriptor },
-  { loadConfig = loadDevLoopConfig, launchBrowser = () => webkit.launch({ headless: true }) } = {},
+  { loadConfig = loadDevLoopConfig, launchBrowser = launchWebkit } = {},
 ) {
   let browser;
   // The most recent capture bundle written to disk; hoisted so the failure catch
@@ -330,7 +330,7 @@ export async function captureDescriptorScreen(
     // subtree — a step that threw mid-write (after screenshot.png, before returning)
     // leaves a partial bundle `last` doesn't reference.
     await removeAllCaptures(outputDir);
-    return { ok: false, screenshotPath: null, statePath: null, stopReason: (err?.message ?? String(err)).split("\n")[0].slice(0, 300) };
+    return { ok: false, screenshotPath: null, statePath: null, stopReason: toStopReason(err) };
   } finally {
     // Best-effort teardown: a close() error must not mask the returned envelope.
     try {
@@ -355,7 +355,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   } catch (err) {
     // Truncate consistently with the other fail-closed envelopes so a pathological
     // parse error can't bloat stdout/stderr or make jq parsing brittle.
-    const result = { ok: false, screenshotPath: null, statePath: null, stopReason: (err?.message ?? String(err)).split("\n")[0].slice(0, 300) };
+    const result = { ok: false, screenshotPath: null, statePath: null, stopReason: toStopReason(err) };
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
     return;
   }

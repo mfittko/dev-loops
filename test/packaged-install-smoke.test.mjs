@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,11 +99,32 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
     // on raw `node scripts/*.mjs` — and assert exit 0 + `@dev-loops/core`
     // resolves (no ERR_MODULE_NOT_FOUND).
     const devLoopsBin = path.join(installDir, "node_modules/dev-loops/cli/index.mjs");
+
+    // Playwright is an OPTIONAL peer, so a consumer install must not pull it in.
+    // Asserted rather than assumed: if it were ever made non-optional (or moved
+    // to dependencies) the stage --help runs below would still pass, and the
+    // dynamic-import regression guard they provide would quietly stop guarding.
+    for (const peer of ["@playwright/test", "@axe-core/playwright"]) {
+      assert.ok(
+        !existsSync(path.join(installDir, "node_modules", peer)),
+        `${peer} must not be installed by a consumer — it is an optional peer`,
+      );
+    }
+
     for (const args of [
       ["loop", "pre-flight-gate", "--help"],
       ["loop", "ensure-worktree", "--help"],
       ["issue", "edit", "--help"],
       ["issue", "create", "--help"],
+      // Every ui-review stage plus the visual-grill capture, not a sampled
+      // pair: each --help resolves that entrypoint's full static import graph
+      // from the installed tarball, so a module left unshipped fails here.
+      ["loop", "ui-review-provision", "--help"],
+      ["loop", "ui-review-drive", "--help"],
+      ["loop", "ui-review-diagnose", "--help"],
+      ["loop", "ui-review-report", "--help"],
+      ["loop", "ui-review-teardown", "--help"],
+      ["loop", "visual-grill-capture", "--help"],
     ]) {
       // execFileSync throws on a non-zero exit, so reaching here already means
       // the command succeeded; additionally assert it printed real help (a

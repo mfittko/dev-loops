@@ -23,6 +23,7 @@ import {
   runCli,
   authenticate,
 } from "../../scripts/loop/ui-review-drive.mjs";
+import { PLAYWRIGHT_MISSING_MESSAGE, WEBKIT_MISSING_MESSAGE } from "../../scripts/loop/ui-review-capture.mjs";
 
 // #1456 fix 1: a cookie-consent interstitial can overlay the login form and
 // swallow the submit click, so authenticate() must dismiss declared interstitials
@@ -474,6 +475,102 @@ test("runCli: no uiReview.login recipe still emits the stable envelope shape (dr
   // so a downstream consumer sees a stable shape regardless of failure mode.
   assert.equal(r.driveSession, null);
   assert.deepEqual(r.rowManifest, []);
+});
+
+test("runCli: an unavailable browser runner fails closed inside the documented envelope, not as a throw", async () => {
+  // Playwright is an optional peer, so "runner absent" is a setup gap a consumer
+  // hits routinely. It must stay threadable as stage output rather than escaping
+  // to stderr — the same property the missing-recipe path above guarantees.
+  const dir = mkdtempSync(path.join(tmpdir(), "drive-nolauncher-"));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(
+    path.join(dir, ".devloops.json"),
+    JSON.stringify({
+      version: 1,
+      uiReview: {
+        login: { loginUrl: "http://127.0.0.1:4000/login", submitSelector: "#s", successSelector: "#ok" },
+        run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz" },
+      },
+    }),
+  );
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  // Reject with the REAL exported constant, not a hand-written stand-in: the
+  // documented promise is that a consumer sees the install commands in
+  // stopReason, and a stubbed message would assert nothing about that.
+  const launchBrowser = () => Promise.reject(new Error(PLAYWRIGHT_MISSING_MESSAGE));
+
+  await runCli(
+    ["--repo-root", dir, "--app-url", "http://127.0.0.1:4000", "--output-dir", path.join(dir, "out")],
+    { stdout, stderr, launchBrowser },
+  );
+  const exitCode = process.exitCode;
+  process.exitCode = 0;
+
+  const r = JSON.parse(out);
+  assert.equal(r.ok, false);
+  assert.equal(r.stopped, true);
+  assert.notEqual(exitCode, 0, "a fail-closed stage must exit non-zero");
+  // Both halves of the remedy survive into the envelope the operator reads.
+  assert.match(r.stopReason, /npm install --save-dev @playwright\/test/);
+  assert.match(r.stopReason, /npx playwright install webkit/);
+  // A local setup gap must NOT become a finding: Stage 3 turns every failure
+  // into a posted PR finding and never drops one.
+  assert.deepEqual(r.failures, []);
+  // The full documented envelope shape, not a sampled subset.
+  assert.deepEqual(r.steps, []);
+  assert.deepEqual(r.captures, []);
+  assert.deepEqual(r.logs, []);
+  assert.equal(r.appUrl, "http://127.0.0.1:4000");
+  assert.equal(r.driveSession, null);
+  assert.deepEqual(r.rowManifest, []);
+  assert.deepEqual(r.caps, {});
+});
+
+// The test above injects launchBrowser, so it never exercises the DEFAULT that
+// wires the guarded dynamic load into the stage. Deleting that default kept the
+// whole suite green — the stage would then crash on its first real invocation.
+// @playwright/test is a devDependency so it always resolves here; pointing
+// PLAYWRIGHT_BROWSERS_PATH at an empty dir makes the launch fail on the missing
+// binary instead, exercising the real default, the real dynamic import and the
+// missing-binary classifier in one pass.
+test("runCli: the default launchBrowser really wires launchWebkit into the stage", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "drive-defaultlauncher-"));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(
+    path.join(dir, ".devloops.json"),
+    JSON.stringify({
+      version: 1,
+      uiReview: {
+        login: { loginUrl: "http://127.0.0.1:4000/login", submitSelector: "#s", successSelector: "#ok" },
+        run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz" },
+      },
+    }),
+  );
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+
+  const previous = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dir, "no-browsers");
+  try {
+    // launchBrowser deliberately OMITTED — that is the point of this test.
+    await runCli(
+      ["--repo-root", dir, "--app-url", "http://127.0.0.1:4000", "--output-dir", path.join(dir, "out")],
+      { stdout, stderr },
+    );
+  } finally {
+    if (previous === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+    else process.env.PLAYWRIGHT_BROWSERS_PATH = previous;
+    process.exitCode = 0;
+  }
+
+  const r = JSON.parse(out);
+  assert.equal(r.ok, false);
+  assert.equal(r.stopped, true);
+  assert.equal(r.stopReason, WEBKIT_MISSING_MESSAGE);
+  assert.deepEqual(r.failures, []);
 });
 
 test("driveUiReview: collates a swallowed error response from the injected listener + log tail", async () => {

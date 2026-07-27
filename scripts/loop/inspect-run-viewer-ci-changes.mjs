@@ -11,6 +11,9 @@ export const INSPECT_RUN_VIEWER_RELEVANT_EXACT_PATHS = Object.freeze([
   "scripts/loop/_inspect-run-viewer-adapter.mjs",
   "scripts/loop/inspect-run-viewer.mjs",
   "scripts/loop/inspect-run-viewer-ci-changes.mjs",
+  // The viewer smoke's artifact writing lives here; the harness below is now a
+  // re-export shim over it, so listing only the shim would miss real changes.
+  "scripts/loop/ui-review-capture.mjs",
   "test/playwright/harness/webkit-smoke-harness.mjs",
   "test/playwright/inspect-run-viewer.spec.mjs",
 ]);
