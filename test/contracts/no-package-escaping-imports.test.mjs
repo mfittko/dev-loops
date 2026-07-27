@@ -27,40 +27,25 @@ async function* walk(dirUrl) {
 }
 
 test("packages/*/src relative imports never resolve outside their package root", async () => {
-  const offenders = [];
   const packagesRoot = new URL("../../packages/", import.meta.url);
+  const packageDirs = (await readdir(packagesRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
 
-  for (const entry of await readdir(packagesRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const packageRootPath = fileURLToPath(new URL(`${entry.name}/`, packagesRoot));
-    const srcUrl = new URL(`${entry.name}/src/`, packagesRoot);
-    // Probe the dir separately so the ENOENT tolerance covers only "this package
-    // has no src/". Wrapping the walk itself would also swallow a dangling
-    // symlink or a concurrent delete, silently truncating the scan and still
-    // passing green — the fail-open shape the root-package scan below avoids.
-    try {
-      await stat(srcUrl);
-    } catch (err) {
-      if (err.code === "ENOENT") continue;
-      throw err;
-    }
-    for await (const fileUrl of walk(srcUrl)) {
-      const relativePath = path.relative(process.cwd(), fileURLToPath(fileUrl));
-      if (!/\.(c|m)?(js|ts)x?$/.test(relativePath)) continue;
+  // Same scanner as the root-package check below: a package root is just another
+  // "shipped set", so `findEscapingImports` answers both questions and there is
+  // one implementation to keep correct rather than two that must be edited in
+  // lockstep.
+  const offenders = (
+    await Promise.all(
+      // Walk each package's src/, but allow anything inside that package root —
+      // a package ships standalone, so leaving its ROOT is the defect.
+      packageDirs.map((dir) =>
+        findEscapingImports({ repoRootUrl: packagesRoot, shippedDirs: [`${dir}/src`], allowDirs: [dir] }),
+      ),
+    )
+  ).flat();
 
-      const contents = await readFile(fileUrl, "utf8");
-      for (const match of contents.matchAll(RELATIVE_SPECIFIER_RE)) {
-        const specifier = match[1];
-        const resolved = fileURLToPath(new URL(specifier, fileUrl));
-        if (path.relative(packageRootPath, resolved).startsWith("..")) {
-          offenders.push(`${relativePath} -> ${specifier}`);
-        }
-      }
-    }
-  }
-
-  // Sorted for the same reason the scans below are: a real failure's diff must
-  // reproduce across filesystems, not vary with readdir order.
   assert.deepEqual(offenders.sort(), []);
 });
 
@@ -109,15 +94,18 @@ export async function resolveShippedDirs(files, repoRootUrl) {
  *
  * Exported shape is `<file> -> <specifier>` strings.
  */
-export async function findEscapingImports({ repoRootUrl, shippedDirs }) {
+export async function findEscapingImports({ repoRootUrl, shippedDirs, allowDirs = shippedDirs }) {
   const repoRootPath = fileURLToPath(repoRootUrl);
   // "files" entries are always "/"-separated; path.relative yields "\" on win32.
   // Normalizing to "/" keeps both the membership test and the emitted offender
   // strings platform-invariant (the sort order depends on the separator too).
   const toPosix = (value) => value.split(path.sep).join("/");
+  // `shippedDirs` is what gets WALKED; `allowDirs` is where a resolved import may
+  // legally land. They are the same set for the root package, and differ for a
+  // workspace package, whose src/ is scanned but whose whole root is fair game.
   const isShipped = (resolvedPath) => {
     const relative = toPosix(path.relative(repoRootPath, resolvedPath));
-    return shippedDirs.some((dir) => {
+    return allowDirs.some((dir) => {
       const posixDir = toPosix(dir);
       return relative === posixDir || relative.startsWith(`${posixDir}/`);
     });

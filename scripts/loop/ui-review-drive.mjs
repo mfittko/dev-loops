@@ -395,7 +395,9 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     // stated reason and deliberately carries NO `failures` entry. Stage 3 turns
     // every failure into a posted finding and never drops one, so emitting one
     // here would put a must-fix on someone's PR for a local missing install.
-    // `stopped: true` is the signal not to thread this into diagnose/report.
+    // The EMPTY `failures` is what makes this contribute nothing downstream —
+    // `stopped` alone is not that signal, since the missing-recipe stop above is
+    // also `stopped: true` and its must-fix is only surfaced by threading it on.
     const result = {
       ok: false,
       stopped: true,

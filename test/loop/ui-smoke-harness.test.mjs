@@ -504,7 +504,7 @@ test('launchWebkit does not mislabel a transitive resolution failure inside an i
     { code: 'ERR_MODULE_NOT_FOUND' },
   );
   await assert.rejects(
-    () => launchWebkit({}, { importPlaywright: () => Promise.reject(transitive) }),
+    () => launchWebkit({ importPlaywright: () => Promise.reject(transitive) }),
     (err) => {
       assert.equal(err, transitive, 'the real cause is rethrown, not replaced');
       return true;
@@ -513,11 +513,12 @@ test('launchWebkit does not mislabel a transitive resolution failure inside an i
 });
 
 test('launchWebkit reports a missing @playwright/test package with install instructions', async () => {
-  // Every code that means "not resolvable", not just the common one.
-  for (const code of ['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']) {
+  // The two codes a dynamic import of a bare specifier can actually produce:
+  // absent, and present-but-with-no-"."-export (verified against Node).
+  for (const code of ['ERR_MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']) {
     const absent = Object.assign(new Error("Cannot find package '@playwright/test'"), { code });
     await assert.rejects(
-      () => launchWebkit({}, { importPlaywright: () => Promise.reject(absent) }),
+      () => launchWebkit({ importPlaywright: () => Promise.reject(absent) }),
       (err) => {
         assert.equal(err.message, PLAYWRIGHT_MISSING_MESSAGE, `code ${code} should report the package as missing`);
         assert.equal(err.cause, absent, 'the original resolution error is preserved as cause');
@@ -533,7 +534,7 @@ test('launchWebkit does not mislabel an installed-but-broken @playwright/test as
   // have would hide the real cause.
   const broken = new SyntaxError('Unexpected token in @playwright/test');
   await assert.rejects(
-    () => launchWebkit({}, { importPlaywright: () => Promise.reject(broken) }),
+    () => launchWebkit({ importPlaywright: () => Promise.reject(broken) }),
     (err) => {
       assert.equal(err, broken);
       return true;
@@ -543,7 +544,7 @@ test('launchWebkit does not mislabel an installed-but-broken @playwright/test as
 
 test('launchWebkit reports a resolvable module with no webkit export instead of an opaque TypeError', async () => {
   await assert.rejects(
-    () => launchWebkit({}, { importPlaywright: () => Promise.resolve({}) }),
+    () => launchWebkit({ importPlaywright: () => Promise.resolve({}) }),
     (err) => {
       assert.equal(err.message, PLAYWRIGHT_MISSING_MESSAGE);
       assert.doesNotMatch(err.message, /undefined/i);
@@ -561,7 +562,7 @@ test('launchWebkit leaves the missing-host-dependencies error intact', async () 
     'browserType.launch: Host system is missing dependencies to run browsers. Please install them with the following command:\n  sudo npx playwright install-deps',
   );
   await assert.rejects(
-    () => launchWebkit({}, { importPlaywright: () => Promise.resolve({ webkit: { launch: () => Promise.reject(hostDeps) } }) }),
+    () => launchWebkit({ importPlaywright: () => Promise.resolve({ webkit: { launch: () => Promise.reject(hostDeps) } }) }),
     (err) => {
       assert.equal(err, hostDeps, 'the host-deps error is rethrown unmasked');
       assert.match(err.message, /install-deps/);
@@ -577,7 +578,7 @@ test('launchWebkit reports a missing WebKit binary and names webkit specifically
     webkit: { launch: () => Promise.reject(new Error("browserType.launch: Executable doesn't exist at /x/webkit-1/pw_run.sh")) },
   });
   await assert.rejects(
-    () => launchWebkit({}, { importPlaywright }),
+    () => launchWebkit({ importPlaywright }),
     (err) => {
       assert.equal(err.message, WEBKIT_MISSING_MESSAGE);
       assert.match(err.message, /playwright install webkit/);
@@ -591,15 +592,15 @@ test('launchWebkit rethrows an unrelated launch failure unmasked', async () => {
   const importPlaywright = () => Promise.resolve({
     webkit: { launch: () => Promise.reject(new Error('connection refused by sandbox')) },
   });
-  await assert.rejects(() => launchWebkit({}, { importPlaywright }), /connection refused by sandbox/);
+  await assert.rejects(() => launchWebkit({ importPlaywright }), /connection refused by sandbox/);
 });
 
-test('launchWebkit returns the browser and honors headless', async () => {
+test('launchWebkit returns the browser and always launches headless', async () => {
   const launched = [];
   const importPlaywright = () => Promise.resolve({
     webkit: { launch: (opts) => { launched.push(opts); return Promise.resolve({ id: 'browser' }); } },
   });
-  assert.deepEqual(await launchWebkit({}, { importPlaywright }), { id: 'browser' });
-  assert.deepEqual(await launchWebkit({ headless: false }, { importPlaywright }), { id: 'browser' });
-  assert.deepEqual(launched, [{ headless: true }, { headless: false }]);
+  assert.deepEqual(await launchWebkit({ importPlaywright }), { id: 'browser' });
+  // Strict stub: an unexpected extra launch call would fail this.
+  assert.deepEqual(launched, [{ headless: true }]);
 });

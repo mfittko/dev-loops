@@ -65,7 +65,12 @@ export function toStopReason(err) {
 // broken package (bad native binding, a throw during module evaluation) must
 // keep its own error: telling someone to install what they already have hides
 // the real cause.
-const MODULE_ABSENT_CODES = new Set(["ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED"]);
+// Both are reachable from a dynamic import of a bare specifier: the package is
+// absent (ERR_MODULE_NOT_FOUND), or present with an exports map that has no "."
+// entry (ERR_PACKAGE_PATH_NOT_EXPORTED — verified against Node). The CJS
+// MODULE_NOT_FOUND is deliberately absent: it only arises from a require() deeper
+// in a package that DID resolve, which is a transitive failure this must rethrow.
+const MODULE_ABSENT_CODES = new Set(["ERR_MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED"]);
 
 // Node names the UNRESOLVED specifier first: "Cannot find package 'X' imported
 // from <importer>". Anchor on that specifier — a bare substring test also
@@ -83,7 +88,10 @@ function isPlaywrightItselfAbsent(err) {
   return typeof err.message === "string" && PLAYWRIGHT_UNRESOLVED_RE.test(err.message);
 }
 
-export async function launchWebkit({ headless = true } = {}, { importPlaywright = () => import("@playwright/test") } = {}) {
+// No headless option: every caller launches headless, and a knob for a value
+// that never varies is one more thing to keep tested. Add it when a headed
+// caller exists.
+export async function launchWebkit({ importPlaywright = () => import("@playwright/test") } = {}) {
   let playwright;
   try {
     playwright = await importPlaywright();
@@ -99,7 +107,7 @@ export async function launchWebkit({ headless = true } = {}, { importPlaywright 
     throw new Error(PLAYWRIGHT_MISSING_MESSAGE);
   }
   try {
-    return await webkit.launch({ headless });
+    return await webkit.launch({ headless: true });
   } catch (err) {
     // Match ONLY the missing-binary error. Playwright's missing-host-libraries
     // failure also contains the words "playwright install" (it instructs `npx
