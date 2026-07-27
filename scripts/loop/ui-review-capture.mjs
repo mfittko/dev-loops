@@ -100,9 +100,12 @@ export async function launchWebkit({ importPlaywright = () => import("@playwrigh
     throw new Error(PLAYWRIGHT_MISSING_MESSAGE, { cause: err });
   }
   const webkit = playwright?.webkit;
-  // A resolvable module with no `webkit` export is version skew or a partial
-  // install; say so rather than letting `undefined.launch` surface as an opaque
-  // "cannot read properties of undefined".
+  // A resolvable module with no usable `webkit` export means version skew or a
+  // partial install. It deliberately reuses the install message rather than
+  // introducing a third: reinstalling is the remedy either way, and the point
+  // here is to hand over something actionable instead of letting
+  // `undefined.launch` surface as an opaque "cannot read properties of
+  // undefined".
   if (typeof webkit?.launch !== "function") {
     throw new Error(PLAYWRIGHT_MISSING_MESSAGE);
   }
