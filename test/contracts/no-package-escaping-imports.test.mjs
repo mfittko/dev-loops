@@ -145,10 +145,14 @@ export async function findEscapingImports({ repoRootUrl, shippedDirs, allowDirs 
 }
 
 // ponytail: relative specifiers only. Bare-specifier escapes (a shipped script
-// importing a devDependency) are the sibling defect class, but a regex over
-// source text cannot tell an import statement from the same words inside a
-// string or a minified vendor bundle — catching them needs real parsing, so
-// they are tracked separately rather than bolted on here.
+// importing an undeclared package) are the sibling defect class, and the
+// difference is what the answer has to be good for. A regex is adequate for a
+// CLOSED membership question — "does this file import one of these two names?",
+// which STATIC_SPECIFIER_RE below answers — because a miss is bounded and a
+// false hit is inspectable. It is not adequate for the EXHAUSTIVE question "is
+// every bare specifier here a declared dependency?", where a false hit on the
+// same words inside a string or a minified vendor bundle makes the check
+// unusable. That one needs real parsing, so it is tracked separately.
 async function rootPackageOffenders() {
   const repoRootUrl = new URL("../../", import.meta.url);
   const pkg = JSON.parse(await readFile(new URL("package.json", repoRootUrl), "utf8"));
