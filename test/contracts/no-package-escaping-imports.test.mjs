@@ -178,7 +178,18 @@ test("root package relative imports never resolve outside the shipped files set"
 // opted in. The packed-install smoke is the end-to-end proof, but it self-skips
 // on registry trouble — so pin the invariant hermetically too. A closed set of
 // two names needs no resolver: a static specifier is enough to flag.
-const OPTIONAL_PEERS = ["@playwright/test", "@axe-core/playwright"];
+// Derived from the manifest, not hardcoded: a third optional peer added later
+// is then guarded by this same check, which is the property the escaping-import
+// contract above is built on.
+async function readRootPackage() {
+  return JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+}
+
+function optionalPeersOf(pkg) {
+  return Object.entries(pkg.peerDependenciesMeta ?? {})
+    .filter(([, meta]) => meta?.optional === true)
+    .map(([name]) => name);
+}
 
 // STATIC import/re-export statements only, anchored at line start —
 // `await import("...")` is exactly the allowed form here, so it must not match.
@@ -196,7 +207,9 @@ const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[^'"]*?\bfrom\s*)?|export\s*[
 test("shipped files never statically import an optional peer dependency", async () => {
   const repoRootUrl = new URL("../../", import.meta.url);
   const repoRootPath = fileURLToPath(repoRootUrl);
-  const pkg = JSON.parse(await readFile(new URL("package.json", repoRootUrl), "utf8"));
+  const pkg = await readRootPackage();
+  const optionalPeers = optionalPeersOf(pkg);
+  assert.ok(optionalPeers.length > 0, "expected at least one optional peer to guard");
   const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
 
   const offenders = [];
@@ -217,7 +230,7 @@ test("shipped files never statically import an optional peer dependency", async 
       for (const match of contents.matchAll(STATIC_SPECIFIER_RE)) {
         const specifier = match[1];
         const pkgName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
-        if (OPTIONAL_PEERS.includes(pkgName)) {
+        if (optionalPeers.includes(pkgName)) {
           offenders.push(`${path.relative(repoRootPath, filePath).split(path.sep).join("/")} -> ${specifier}`);
         }
       }
@@ -227,13 +240,18 @@ test("shipped files never statically import an optional peer dependency", async 
   assert.deepEqual(offenders.sort(), []);
 });
 
-// The static-import guard above is hardcoded to these two names, so it stays
-// green even if the declarations vanish. Pin the declarations themselves too —
-// otherwise the only check that they are OPTIONAL peers (and not runtime
-// dependencies) is the packed-install smoke, which self-skips on registry trouble.
+// The guard above derives its names from the manifest, so it would go quiet if
+// the declarations vanished. Pin the declarations themselves too — otherwise the
+// only check that these are OPTIONAL peers (and not runtime dependencies) is the
+// packed-install smoke, which self-skips on registry trouble.
 test("the optional peers are declared as optional peerDependencies, not runtime dependencies", async () => {
-  const pkg = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
-  for (const peer of OPTIONAL_PEERS) {
+  const pkg = await readRootPackage();
+  const peers = optionalPeersOf(pkg);
+  // The browser runners this repo's stages load dynamically must stay in the set.
+  for (const required of ["@playwright/test", "@axe-core/playwright"]) {
+    assert.ok(peers.includes(required), `${required} must be declared an optional peer`);
+  }
+  for (const peer of peers) {
     assert.ok(pkg.peerDependencies?.[peer], `${peer} must be declared in peerDependencies`);
     assert.equal(pkg.peerDependenciesMeta?.[peer]?.optional, true, `${peer} must be marked optional`);
     assert.ok(!pkg.dependencies?.[peer], `${peer} must not be a runtime dependency`);
