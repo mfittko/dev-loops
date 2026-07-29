@@ -9,6 +9,8 @@ import {
   parseConsolidateFaninCliArgs,
 } from "../../scripts/loop/consolidate-fanin.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
+import { normalizeStructuredFindings } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 
 async function withFindingsDir(files, fn) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-"));
@@ -110,14 +112,23 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
   );
 });
 
-test("consolidateGateFanin writes --out as the flat findings array", async () => {
+test("consolidateGateFanin writes --out as the nested findingsJson shape", async () => {
   await withFindingsDir(
-    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    {
+      "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] },
+      "dry.json": { angle: "dry", verdict: "clean", findings: [] },
+    },
     async (dir) => {
       const outPath = path.join(dir, "out", "findings.json");
       const result = await consolidateGateFanin({ findingsDir: dir, out: outPath });
       const written = JSON.parse(await readFile(outPath, "utf8"));
-      assert.deepEqual(written, result.findings);
+      assert.deepEqual(written, result.findingsJson);
+      // Clean angles are preserved with an empty findings array, not dropped.
+      assert.deepEqual(
+        result.findingsJson.find((a) => a.angle === "dry"),
+        { angle: "dry", verdict: "clean", findings: [] },
+      );
+      assert.equal(result.findingsJson.find((a) => a.angle === "scope").findings.length, 1);
     },
   );
 });
@@ -224,4 +235,85 @@ test("consolidateGateFanin fails closed on an unknown severity", async () => {
       await assert.rejects(() => consolidateGateFanin({ findingsDir: dir }), /unknown severity "urgent"/);
     },
   );
+});
+
+// End-to-end acceptance: the emitted findingsJson must survive the REAL
+// upsert-checkpoint-verdict parsing (normalizeStructuredFindings) and the
+// REAL mandatory-angle coverage check (checkFanoutAngleCoverage) — including
+// the two shapes that previously failed: an all-clean fan-out and a clean
+// mandatory angle contributing zero flat findings.
+test("e2e: all-clean fan-out with pr-checklist-matrix upsert passes upsert-verdict parsing + coverage", async () => {
+  await withFindingsDir(
+    {
+      "scope.json": { angle: "scope", verdict: "clean", findings: [] },
+      "dry.json": { angle: "dry", verdict: "clean", findings: [] },
+    },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, prChecklistMatrix: "clean" });
+      const normalized = normalizeStructuredFindings(result.findingsJson);
+      assert.ok(Array.isArray(normalized), "nested shape must normalize (not be rejected as unrenderable)");
+      const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(result.findingsJson, {
+        mandatoryAngles: ["pr-checklist-matrix"],
+        pool: ["scope", "dry", "pr-checklist-matrix"],
+      });
+      assert.deepEqual(missingMandatory, []);
+      assert.deepEqual(foreignAngles, []);
+      assert.equal(result.overallVerdict, "clean");
+    },
+  );
+});
+
+test("e2e: clean mandatory angle survives alongside findings-bearing angles", async () => {
+  await withFindingsDir(
+    {
+      "pr-description.json": { angle: "pr-description", verdict: "clean", findings: [] },
+      "coverage.json": {
+        angle: "coverage",
+        verdict: "findings_present",
+        findings: [{ severity: "worth-fixing-now", summary: "gap" }],
+      },
+    },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      const normalized = normalizeStructuredFindings(result.findingsJson);
+      assert.ok(Array.isArray(normalized));
+      const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(result.findingsJson, {
+        mandatoryAngles: ["pr-description"],
+        pool: ["pr-description", "coverage"],
+      });
+      assert.deepEqual(missingMandatory, []);
+      assert.deepEqual(foreignAngles, []);
+    },
+  );
+});
+
+test("--gate applies the worktree's configured blocking severities to the overall verdict", async () => {
+  const cwdDir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-cwd-"));
+  const prevCwd = process.cwd();
+  try {
+    await writeFile(
+      path.join(cwdDir, ".devloops"),
+      "version: 1\ngates:\n  draft:\n    blockCleanOnFindingSeverities:\n      - must-fix\n      - worth-fixing-now\n",
+      "utf8",
+    );
+    await withFindingsDir(
+      {
+        "scope.json": {
+          angle: "scope",
+          verdict: "findings_present",
+          findings: [{ severity: "worth-fixing-now", summary: "w" }],
+        },
+      },
+      async (dir) => {
+        process.chdir(cwdDir);
+        const gated = await consolidateGateFanin({ findingsDir: dir, gate: "draft_gate" });
+        assert.equal(gated.overallVerdict, "findings_present");
+        const ungated = await consolidateGateFanin({ findingsDir: dir });
+        assert.equal(ungated.overallVerdict, "clean");
+      },
+    );
+  } finally {
+    process.chdir(prevCwd);
+    await rm(cwdDir, { recursive: true, force: true });
+  }
 });

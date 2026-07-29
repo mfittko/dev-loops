@@ -129,14 +129,23 @@ function fetchLatestPublishedVersion(packageName, { timeoutMs = REGISTRY_TIMEOUT
       settled = true;
       resolve(value);
     };
-    const req = https.get(`https://registry.npmjs.org/${packageName}/latest`, { timeout: timeoutMs }, (res) => {
+    // The abbreviated packument's dist-tags, not /latest: a prerelease line
+    // (dist-tag `rc`) can be ahead of `latest`, and an rc install behind the
+    // rc tag must still warn. The freshest published version is the MAX
+    // across all dist-tags.
+    const req = https.get(`https://registry.npmjs.org/${packageName}`, {
+      timeout: timeoutMs,
+      headers: { accept: "application/vnd.npm.install-v1+json" },
+    }, (res) => {
       if (res.statusCode !== 200) { res.resume(); settle(null); return; }
       let body = "";
       res.on("data", (chunk) => { body += chunk; });
       res.on("end", () => {
         try {
           const parsed = JSON.parse(body);
-          settle(typeof parsed.version === "string" ? parsed.version : null);
+          const tagVersions = Object.values(parsed?.["dist-tags"] ?? {}).filter((v) => typeof v === "string");
+          if (tagVersions.length === 0) { settle(null); return; }
+          settle(tagVersions.reduce((max, v) => (compareSemver(v, max) > 0 ? v : max)));
         } catch {
           settle(null);
         }

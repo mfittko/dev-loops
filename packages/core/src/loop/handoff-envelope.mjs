@@ -21,7 +21,7 @@ import {
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
-import { resolveGateAngleContract, resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
+import { resolveGateAngleContract, resolveGateAngles, resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -360,17 +360,21 @@ function deriveGateConfig(settings, subGate) {
   // gates.<gate>.angles by hand: resolveGateConfig folds the unified
   // angle-entry shape (mandatory/enabled per-entry, D3) into excludeAngles/
   // blockCleanOnFindingSeverities/requireCi, the envelope contract's
-  // long-standing shape. `angles` specifically comes from
-  // resolveGateAngleContract's `pool` — the SAME resolved angle pool (mandatory-
-  // merged, exclude-filtered, and additive-pool-expanded when
-  // gates.<gate>.dynamic.additive is on) that upsert-checkpoint-verdict.mjs's
-  // checkFanoutAngleCoverage validates fan-out results against — so the
-  // envelope's advertised angle vocabulary can never drift from what a
-  // fan-out verdict is actually enforced against.
+  // long-standing shape. `angles` is the RUN-set (the configured angles the
+  // orchestrator is told to dispatch) with every validator-MANDATORY angle
+  // merged in — never resolveGateAngleContract's `pool`, which is the
+  // enforcement CEILING and deliberately widens to the whole lens catalog
+  // under gates.<gate>.dynamic.additive (advertising that as the run-set
+  // would tell the orchestrator to dispatch 20+ angles). The parity contract
+  // (test/contracts/envelope-validator-angle-parity.test.mjs) pins both
+  // invariants: everything advertised is within the validator pool, and
+  // every mandatory angle is advertised.
   const resolved = resolveGateConfig(settings, gateKey);
-  const { pool } = resolveGateAngleContract(settings, gateKey);
+  const { mandatoryAngles, pool } = resolveGateAngleContract(settings, gateKey);
+  const runSet = resolveGateAngles(settings, gateKey) ?? pool ?? [];
+  const angles = [...new Set([...runSet, ...mandatoryAngles])];
   return {
-    angles: pool ?? [],
+    angles,
     excludeAngles: resolved.excludeAngles.length > 0 ? resolved.excludeAngles : undefined,
     blockCleanOnFindingSeverities: resolved.blockCleanOnFindingSeverities,
     requireCi: resolved.requireCi,

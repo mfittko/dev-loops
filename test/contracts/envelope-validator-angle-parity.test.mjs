@@ -22,8 +22,11 @@ import { deriveGateConfig } from "@dev-loops/core/loop/handoff-envelope";
 //
 // This test loads THIS repo's own merged config (.devloops at the worktree
 // root, merged with the shipped extension defaults) through BOTH consumer
-// code paths and asserts they resolve to the identical angle vocabulary per
-// gate, so a future change that reintroduces divergence fails here.
+// code paths and pins the two load-bearing invariants per gate: everything
+// the envelope advertises is within the validator pool (no foreign angles),
+// and every validator-mandatory angle is advertised. Set-equality with the
+// pool is deliberately NOT asserted: the pool is the enforcement ceiling and
+// widens under dynamic.additive, while the envelope advertises the run-set.
 // ---------------------------------------------------------------------------
 
 const GATE_KEYS = ["draft", "preApproval"];
@@ -49,7 +52,7 @@ function mandatorySetFromRawConfig(rawAngles) {
   return set;
 }
 
-test("envelope gateConfig.angles set-equals the fan-out validator's resolveGateAngleContract pool, per configured gate", async () => {
+test("envelope gateConfig.angles stays within the validator pool and carries every mandatory angle, per configured gate", async () => {
   const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
 
   for (const gateKey of GATE_KEYS) {
@@ -65,11 +68,17 @@ test("envelope gateConfig.angles set-equals the fan-out validator's resolveGateA
     const envelopeGateConfig = deriveGateConfig(config, subGate);
     assert.ok(envelopeGateConfig, `${gateKey}: expected deriveGateConfig to produce a gateConfig for this repo`);
 
-    assert.deepEqual(
-      new Set(envelopeGateConfig.angles),
-      new Set(validatorPool),
-      `${gateKey}: envelope gateConfig.angles must set-equal resolveGateAngleContract's pool (the SAME angle vocabulary the fan-out verdict validator enforces)`,
-    );
+    // Subset, not set-equality: the pool is the enforcement CEILING (it
+    // deliberately widens to the whole lens catalog under dynamic.additive),
+    // while the envelope advertises the RUN-set. The two invariants that
+    // matter: nothing advertised is foreign to the validator, and (below)
+    // every validator-mandatory angle is advertised.
+    for (const angle of envelopeGateConfig.angles) {
+      assert.ok(
+        validatorPool.includes(angle),
+        `${gateKey}: envelope-advertised angle "${angle}" must be within the validator pool (no foreign angles)`,
+      );
+    }
 
     // Mandatory-set side: independently re-derived from the raw merged config
     // (not via either resolver under test) must set-equal the validator's
@@ -90,4 +99,25 @@ test("envelope gateConfig.angles set-equals the fan-out validator's resolveGateA
       );
     }
   }
+});
+
+test("dynamic.additive must not over-broaden the envelope's advertised run-set to the whole lens catalog", async () => {
+  const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  const synthetic = {
+    ...config,
+    gates: {
+      ...config.gates,
+      draft: { angles: ["dry"], dynamic: { additive: true } },
+    },
+  };
+  const envelopeGateConfig = deriveGateConfig(synthetic, "draft");
+  const { mandatoryAngles, pool } = resolveGateAngleContract(synthetic, "draft");
+  // The pool legitimately widens under additive; the ADVERTISED run-set must
+  // stay the configured angles plus mandatory merges — never the widened pool.
+  assert.ok(pool.length > 5, "precondition: additive widened the validator pool to the catalog");
+  assert.deepEqual(
+    new Set(envelopeGateConfig.angles),
+    new Set(["dry", ...mandatoryAngles]),
+    "advertised run-set must be configured angles + mandatory, not the additive-widened pool",
+  );
 });
