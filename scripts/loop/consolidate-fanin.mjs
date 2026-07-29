@@ -18,10 +18,11 @@
  *     findings: [{ severity, summary, file?, line?, disposition? }]
  *   }
  *
- * An angle reporting verdict "blocked" (or any malformed artifact) is not a
- * recognized consolidateFanin() input verdict; it is correctly folded into an
- * overall "blocked" gate verdict by consolidateFanin()'s own malformed-input
- * handling — no special-casing needed here.
+ * An angle reporting verdict "blocked" (or any malformed artifact) makes the
+ * whole fan-in FAIL CLOSED (exit 1, naming the offending angles): a blocked
+ * consolidation has no publishable findings shape, and emitting one would
+ * present an all-clean structure that silently discards real findings. Fix or
+ * re-run the offending reviewer, then re-consolidate.
  */
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -53,14 +54,15 @@ Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount" }],
     "findingsJson": [{ "angle", "verdict", "findings": [...] }], "findings": [...], "ledger": [...],
     "severityCounts": { "must-fix", "worth-fixing-now", "defer" },
-    "overallVerdict": "clean"|"findings_present"|"blocked" }
+    "overallVerdict": "clean"|"findings_present" }
   "findingsJson" is the nested per-angle shape (one section per source artifact, including clean
   angles with an empty findings array) — pass --out's file straight to
   upsert-checkpoint-verdict.mjs's --findings-json.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error, missing/empty --findings-dir, unparseable artifact, or schema violation
+  1  Argument error, missing/empty --findings-dir, unparseable artifact, schema
+     violation, or blocked fan-in (a malformed or blocked per-angle artifact)
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -134,9 +136,10 @@ export function parseConsolidateFaninCliArgs(argv) {
 // non-empty angle, a non-empty verdict, and (when findings is present as an
 // array) only recognized severities. Everything else — verdict enum value,
 // findings/clean-vs-findings_present consistency, missing summary — is left
-// to consolidateFanin()'s own malformed-input handling (folded into a soft
-// overall "blocked" verdict rather than a hard CLI failure), so this stays a
-// thin floor rather than a second copy of consolidateFanin()'s validation.
+// to consolidateFanin()'s own malformed-input handling; a consolidation it
+// marks blocked then FAILS CLOSED below (exit 1) rather than emitting any
+// findings shape, so this stays a thin floor rather than a second copy of
+// consolidateFanin()'s validation.
 function validateArtifactShape(raw, sourceLabel) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(`${sourceLabel}: artifact must be a JSON object`);
