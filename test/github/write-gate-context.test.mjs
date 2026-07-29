@@ -391,6 +391,13 @@ test("parseWriteGateContextCliArgs reports missing required args", () => {
   assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b"]), /Missing required/);
 });
 
+test("parseWriteGateContextCliArgs rejects a whitespace-only --prefix-file (fails closed, no silent self-render fallback)", () => {
+  assert.throws(() => parseWriteGateContextCliArgs([
+    "--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234",
+    "--prefix-file", "   ",
+  ]), /--prefix-file must not be empty/);
+});
+
 // ---------------------------------------------------------------------------
 // Artifact shape
 // ---------------------------------------------------------------------------

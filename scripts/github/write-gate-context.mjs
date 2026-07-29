@@ -335,7 +335,11 @@ export function parseWriteGateContextCliArgs(argv) {
       continue;
     }
     if (token.name === "prefix-file") {
-      options.prefixFile = requireTokenValue(token, parseError).trim();
+      const trimmed = requireTokenValue(token, parseError).trim();
+      if (trimmed.length === 0) {
+        throw parseError("--prefix-file must not be empty/whitespace-only");
+      }
+      options.prefixFile = trimmed;
       continue;
     }
     if (token.name === "tmp-root") {
@@ -949,7 +953,10 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file", resolver: object }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object }>}
+ *   prefixMode is never "file" here — this programmatic entrypoint never threads a
+ *   `prefixFile` into its internal writeGateContext() call, so it always self-renders.
+ *   "file" mode is CLI-only (main()'s `--prefix-file` flag).
  *
  * The artifact additionally carries a deterministic, neutral `adjacentCode`
  * bundle (#895) when changed files are present: 1-hop import in/out-edges of the

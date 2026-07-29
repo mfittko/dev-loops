@@ -128,6 +128,38 @@ test("parseWriteGateFindingsLogCliArgs rejects missing required args", () => {
   }, /Missing required/);
 });
 
+test("parseWriteGateFindingsLogCliArgs accepts --findings-file", () => {
+  const result = parseWriteGateFindingsLogCliArgs([
+    "--repo", "owner/repo",
+    "--pr", "42",
+    "--gate", "draft_gate",
+    "--head-sha", "abc1234567890abcdef000000000000000000000",
+    "--verdict", "clean",
+    "--findings-file", "/tmp/findings.json",
+  ]);
+  assert.equal(result.findingsFile, "/tmp/findings.json");
+  assert.equal(result.findings, undefined);
+});
+
+test("parseWriteGateFindingsLogCliArgs rejects --findings and --findings-file together", () => {
+  assert.throws(() => {
+    parseWriteGateFindingsLogCliArgs([
+      "--repo", "a/b", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc1234500000000000000000000000000000000", "--verdict", "clean",
+      "--findings", "[]", "--findings-file", "/tmp/findings.json",
+    ]);
+  }, /mutually exclusive/);
+});
+
+test("parseWriteGateFindingsLogCliArgs rejects when neither --findings nor --findings-file is given", () => {
+  assert.throws(() => {
+    parseWriteGateFindingsLogCliArgs([
+      "--repo", "a/b", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc1234500000000000000000000000000000000", "--verdict", "clean",
+    ]);
+  }, /pass --findings <json> or --findings-file <path>/);
+});
+
 test("writeGateFindingsLog writes valid JSON log", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-test-"));
   try {

@@ -105,7 +105,8 @@ function comparePrereleaseIdentifiers(a, b) {
 }
 
 // -1/0/1 per SemVer 2.0.0 precedence rules (build metadata ignored).
-function compareSemver(a, b) {
+// Exported for direct unit testing (prerelease ordering, malformed input).
+export function compareSemver(a, b) {
   const va = splitVersion(a);
   const vb = splitVersion(b);
   const coreDiff = compareCoreVersions(va.core, vb.core);
@@ -116,7 +117,20 @@ function compareSemver(a, b) {
   return comparePrereleaseIdentifiers(va.prerelease, vb.prerelease);
 }
 
+// Shape/length gate a registry-controlled dist-tag value must pass before it
+// can reach compareSemver's max-reduction or doctor's stdout: a plain
+// `x.y.z` numeric core (splitVersion already strips any prerelease/build
+// suffix off the core check). Rejects control characters, empty/absurdly long
+// strings, and non-numeric cores — the class of value that otherwise coerces
+// to 0.0.0 in compareCoreVersions (`Number("x") || 0`) or gets echoed verbatim
+// into doctor's output.
+function isPlausibleDistTagVersion(v) {
+  if (typeof v !== "string" || v.length === 0 || v.length > 64) return false;
+  return /^\d+\.\d+\.\d+$/.test(splitVersion(v).core);
+}
+
 const REGISTRY_TIMEOUT_MS = 2000;
+const REGISTRY_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 // ponytail: bare `https.get` (no `fetch`/dependency) keeps `doctor` zero-dep;
 // resolves null (never rejects) on any failure so a flaky/offline registry
@@ -124,9 +138,11 @@ const REGISTRY_TIMEOUT_MS = 2000;
 function fetchLatestPublishedVersion(packageName, { timeoutMs = REGISTRY_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
     let settled = false;
+    let deadline;
     const settle = (value) => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadline);
       resolve(value);
     };
     // The abbreviated packument's dist-tags, not /latest: a prerelease line
@@ -139,11 +155,23 @@ function fetchLatestPublishedVersion(packageName, { timeoutMs = REGISTRY_TIMEOUT
     }, (res) => {
       if (res.statusCode !== 200) { res.resume(); settle(null); return; }
       let body = "";
-      res.on("data", (chunk) => { body += chunk; });
+      let bodyBytes = 0;
+      res.on("data", (chunk) => {
+        bodyBytes += chunk.length;
+        // Response-size cap: `timeout` above is a socket INACTIVITY timeout, so
+        // an endpoint that keeps trickling bytes would otherwise let `body`
+        // grow unbounded. Abort and degrade rather than accumulate forever.
+        if (bodyBytes > REGISTRY_MAX_RESPONSE_BYTES) {
+          req.destroy();
+          settle(null);
+          return;
+        }
+        body += chunk;
+      });
       res.on("end", () => {
         try {
           const parsed = JSON.parse(body);
-          const tagVersions = Object.values(parsed?.["dist-tags"] ?? {}).filter((v) => typeof v === "string");
+          const tagVersions = Object.values(parsed?.["dist-tags"] ?? {}).filter(isPlausibleDistTagVersion);
           if (tagVersions.length === 0) { settle(null); return; }
           settle(tagVersions.reduce((max, v) => (compareSemver(v, max) > 0 ? v : max)));
         } catch {
@@ -153,6 +181,11 @@ function fetchLatestPublishedVersion(packageName, { timeoutMs = REGISTRY_TIMEOUT
     });
     req.on("timeout", () => { req.destroy(); settle(null); });
     req.on("error", () => settle(null));
+    // Wall-clock deadline: `timeout` above only fires on socket INACTIVITY, so
+    // a slow-drip response that keeps resetting it would otherwise hang this
+    // promise (and `doctor`) indefinitely. This is a hard ceiling regardless
+    // of activity.
+    deadline = setTimeout(() => { req.destroy(); settle(null); }, timeoutMs);
   });
 }
 
@@ -172,6 +205,14 @@ async function buildStaleInstallChecks({
   };
 
   const skip = (detail) => [infoCheck, { id: "install-freshness", label: "Install freshness", ok: true, detail }];
+
+  // ponytail: hermeticity escape hatch for tests — skip the real registry
+  // probe entirely rather than relying on every caller to inject a stub
+  // fetcher. Set by test/cli-deps-less-checkout-preflight.test.mjs so the
+  // verify suite never makes a live network call.
+  if (process.env.DEVLOOPS_SKIP_REGISTRY_CHECK) {
+    return skip("latest-version check skipped (DEVLOOPS_SKIP_REGISTRY_CHECK set).");
+  }
 
   if (!currentVersion) return skip("latest-version check skipped (running version unknown).");
 

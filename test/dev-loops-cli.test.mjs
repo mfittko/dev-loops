@@ -8,7 +8,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { createCliRuntime, runCli } from "../cli/index.mjs";
+import { compareSemver, createCliRuntime, runCli } from "../cli/index.mjs";
 import { SETUP_GUIDANCE } from "../lib/dev-loops-core.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -504,6 +504,31 @@ node "$(dirname "$0")/gh-impl.mjs" "$@"
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+// compareSemver: direct unit coverage of the SemVer 2.0.0 precedence rules
+// `doctor`'s freshness check depends on (build metadata ignored, prerelease <
+// release, numeric prerelease-identifier ordering).
+test("compareSemver: a stable release outranks any prerelease of the same core", () => {
+  assert.equal(compareSemver("1.0.0-rc.3", "1.0.0") < 0, true);
+  assert.equal(compareSemver("1.0.0", "1.0.0-rc.3") > 0, true);
+});
+
+test("compareSemver: numeric prerelease identifiers order numerically, not lexically (rc.3 < rc.10)", () => {
+  assert.equal(compareSemver("1.0.0-rc.3", "1.0.0-rc.10") < 0, true);
+  assert.equal(compareSemver("1.0.0-rc.10", "1.0.0-rc.3") > 0, true);
+});
+
+test("compareSemver: equal versions (including build metadata, which is ignored) compare equal", () => {
+  assert.equal(compareSemver("1.2.3", "1.2.3"), 0);
+  assert.equal(compareSemver("1.2.3+build1", "1.2.3+build2"), 0);
+  assert.equal(compareSemver("1.0.0-rc.3", "1.0.0-rc.3"), 0);
+});
+
+test("compareSemver: malformed input degrades to a 0.0.0-shaped core rather than throwing", () => {
+  assert.doesNotThrow(() => compareSemver("bogus", "alsobogus"));
+  assert.equal(compareSemver("bogus", "alsobogus"), 0);
+  assert.equal(compareSemver("1.2.3", "bogus") > 0, true);
 });
 
 // `doctor` self-diagnoses a stale install (#1481): a dangling scripts/

@@ -17,14 +17,20 @@
  *     verdict: "clean" | "findings_present" | "blocked",
  *     findings: [{ severity, summary, file?, line?, disposition? }]
  *   }
+ * `disposition` on an input finding is IGNORED — consolidateFanin() always
+ * DERIVES it from severity (accepted-for-fix for a blocking severity,
+ * deferred otherwise). It is accepted on the input shape only so a reviewer's
+ * own artifact schema round-trips without a separate strip step.
  *
  * An angle reporting verdict "blocked" (or any malformed artifact) makes the
  * whole fan-in FAIL CLOSED (exit 1, naming the offending angles): a blocked
  * consolidation has no publishable findings shape, and emitting one would
  * present an all-clean structure that silently discards real findings. Fix or
- * re-run the offending reviewer, then re-consolidate.
+ * re-run the offending reviewer, then re-consolidate. Two artifacts naming the
+ * SAME angle also fails closed (ambiguous fan-out) — see "duplicate angle
+ * name" below.
  */
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
@@ -33,23 +39,31 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--pr-checklist-matrix <clean|json>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--pr-checklist-matrix <clean|json>] [--repo-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
 Required:
   --findings-dir <dir>          Directory containing one *.json per-angle findings
-                                 artifact: { angle, verdict, findings: [{ severity, summary, file?, line?, disposition? }] }
+                                 artifact: { angle, verdict, findings: [{ severity, summary, file?, line?, disposition? }] }.
+                                 An input finding's "disposition" (if present) is IGNORED — the
+                                 output disposition is always DERIVED from severity (see below).
+                                 Two artifacts naming the SAME angle fail closed (ambiguous fan-out).
 Optional:
   --gate <draft_gate|pre_approval_gate>   Echoed onto the result as "gate"; also loads this
                                  worktree's config and applies gates.<gate>.blockCleanOnFindingSeverities
-                                 to the overall verdict (default when omitted: ["must-fix"])
+                                 to the overall verdict (default when omitted: ["must-fix"]). When given,
+                                 a config that could not be fully loaded/validated FAILS CLOSED (exit 1)
+                                 rather than silently falling back to the shipped default severities.
   --out <path>                  Write the nested per-angle "findingsJson" shape (below) to this
                                  path as JSON — the exact input upsert-checkpoint-verdict.mjs's
                                  --findings-json accepts
   --pr-checklist-matrix <clean|json>      When no pr-checklist-matrix angle artifact was found,
                                  upsert one: "clean" for { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
                                  or a JSON artifact object ({ angle?, verdict, findings }) for a custom one
+  --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
+                                 --gate is given (default: process.cwd()) — makes the overall verdict
+                                 deterministic regardless of the CLI's invocation directory
 Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount" }],
     "findingsJson": [{ "angle", "verdict", "findings": [...] }], "findings": [...], "ledger": [...],
@@ -57,12 +71,15 @@ Output (stdout, JSON):
     "overallVerdict": "clean"|"findings_present" }
   "findingsJson" is the nested per-angle shape (one section per source artifact, including clean
   angles with an empty findings array) — pass --out's file straight to
-  upsert-checkpoint-verdict.mjs's --findings-json.
+  upsert-checkpoint-verdict.mjs's --findings-json. Every output finding's "disposition" is DERIVED
+  from severity (accepted-for-fix for a blocking severity, deferred otherwise) — an input
+  finding's own "disposition" is never honored.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error, missing/empty --findings-dir, unparseable artifact, schema
-     violation, or blocked fan-in (a malformed or blocked per-angle artifact)
+     violation, duplicate angle name across artifacts, blocked fan-in (a malformed or
+     blocked per-angle artifact), or (with --gate) an unloadable/invalid worktree config
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -77,6 +94,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     gate: undefined,
     out: undefined,
     prChecklistMatrix: undefined,
+    repoRoot: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -86,6 +104,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       gate: { type: "string" },
       out: { type: "string" },
       "pr-checklist-matrix": { type: "string" },
+      "repo-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -121,6 +140,10 @@ export function parseConsolidateFaninCliArgs(argv) {
     }
     if (token.name === "pr-checklist-matrix") {
       options.prChecklistMatrix = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "repo-root") {
+      options.repoRoot = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -187,15 +210,45 @@ export async function consolidateGateFanin(options) {
   } catch (err) {
     throw new Error(`--findings-dir "${dir}" could not be read: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const files = entries
-    .filter((e) => e.isFile() && e.name.endsWith(".json"))
-    .map((e) => e.name)
-    .sort();
+  // A per-angle artifact SYMLINKED into --findings-dir (a reviewer writing via
+  // a symlink) must resolve like a regular file, not vanish silently: readdir
+  // reports a symlink as isSymbolicLink(), never isFile(), so a bare isFile()
+  // filter drops it with no warning — the exact fail-open this tool exists to
+  // prevent, reached through a different input path than the blocked-verdict
+  // guard below. stat() (which follows symlinks) each *.json dirent instead;
+  // fail closed, naming the entry, on anything that isn't a regular file or a
+  // symlink resolving to one (a dangling symlink, a directory, a fifo, ...).
+  const jsonEntries = entries.filter((e) => e.name.endsWith(".json"));
+  const files = [];
+  for (const e of jsonEntries) {
+    const entryPath = path.join(dir, e.name);
+    if (e.isFile()) {
+      files.push(e.name);
+      continue;
+    }
+    if (e.isSymbolicLink()) {
+      let resolved;
+      try {
+        resolved = await stat(entryPath);
+      } catch (err) {
+        throw new Error(`--findings-dir "${dir}" contains a *.json entry "${e.name}" that could not be resolved (dangling symlink?): ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (resolved.isFile()) {
+        files.push(e.name);
+        continue;
+      }
+      throw new Error(`--findings-dir "${dir}" contains a *.json entry "${e.name}" whose symlink target is not a regular file`);
+    }
+    const kind = e.isDirectory() ? "a directory" : e.isFIFO?.() ? "a fifo" : "not a regular file";
+    throw new Error(`--findings-dir "${dir}" contains a *.json entry "${e.name}" that is ${kind}, not a regular file or a symlink to one`);
+  }
+  files.sort();
   if (files.length === 0) {
     throw new Error(`--findings-dir "${dir}" contains no *.json findings artifacts`);
   }
 
   const rawArtifacts = [];
+  const angleSourceFiles = new Map(); // angle -> file paths that declared it
   for (const name of files) {
     const filePath = path.join(dir, name);
     let text;
@@ -211,7 +264,23 @@ export async function consolidateGateFanin(options) {
       throw new Error(`Findings artifact "${filePath}" is not valid JSON`);
     }
     validateArtifactShape(parsed, `"${filePath}"`);
+    const angle = parsed.angle.trim();
+    if (!angleSourceFiles.has(angle)) angleSourceFiles.set(angle, []);
+    angleSourceFiles.get(angle).push(filePath);
     rawArtifacts.push(parsed);
+  }
+
+  // Duplicate angle name across two artifact files is an ambiguous fan-out
+  // (which one is authoritative?) — without this guard, findingsJson would
+  // duplicate that angle's findings into EVERY matching section while the
+  // flat findings/ledger shape counts them once, silently inflating counts.
+  // Fail closed instead, naming every offending angle + its source files.
+  const duplicateAngles = [...angleSourceFiles.entries()].filter(([, paths]) => paths.length > 1);
+  if (duplicateAngles.length > 0) {
+    const detail = duplicateAngles
+      .map(([angle, paths]) => `"${angle}" declared in ${paths.join(", ")}`)
+      .join("; ");
+    throw new Error(`--findings-dir "${dir}" has duplicate angle name(s) across multiple artifact files (ambiguous fan-out): ${detail}`);
   }
 
   if (options.prChecklistMatrix !== undefined) {
@@ -233,9 +302,21 @@ export async function consolidateGateFanin(options) {
   // severities when --gate is supplied, so the overall verdict honors e.g. a
   // repo that also blocks clean on worth-fixing-now. Without --gate, keep
   // consolidateFanin's own ["must-fix"] default (no config side effects).
+  // --repo-root anchors this explicitly (default process.cwd()) so the overall
+  // verdict is deterministic regardless of the CLI's invocation directory.
   let blockCleanOnFindingSeverities;
   if (options.gate !== undefined) {
-    const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+    const repoRoot = options.repoRoot ?? process.cwd();
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    // loadDevLoopConfig never throws: on a parse/validation failure it still
+    // returns `config` merged from the shipped defaults, silently REPLACING
+    // this worktree's real gates.<gate>.blockCleanOnFindingSeverities with
+    // ["must-fix"]. Since --gate was given specifically to honor that
+    // config, a failed load must fail closed here rather than silently
+    // emitting a verdict computed from the wrong severities.
+    if (Array.isArray(errors) && errors.length > 0) {
+      throw new Error(`--gate ${options.gate} was given but this worktree's config (--repo-root ${JSON.stringify(repoRoot)}) could not be fully loaded/validated: ${JSON.stringify(errors)}`);
+    }
     const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
     blockCleanOnFindingSeverities = resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities;
   }
@@ -265,7 +346,21 @@ export async function consolidateGateFanin(options) {
   if (consolidated.verdict === "blocked") {
     const detail = Array.isArray(consolidated.malformed) && consolidated.malformed.length > 0
       ? consolidated.malformed
-          .map(({ index, reason }) => `${rawArtifacts[index]?.angle ?? `artifact[${index}]`}: ${reason}`)
+          .map(({ index, reason }) => {
+            const artifact = rawArtifacts[index];
+            const angle = artifact?.angle ?? `artifact[${index}]`;
+            // A "blocked" verdict is a LEGAL artifact shape (a reviewer's
+            // documented signal that its review is contaminated/incomplete),
+            // not a schema violation. gate-fanin's validateAngleResult only
+            // knows the enum clean|findings_present, so it reports this case
+            // as "invalid verdict" — steering an operator toward "fixing" it
+            // by rewriting blocked -> clean instead of re-running the
+            // reviewer. Detect it here and say what actually happened.
+            if (artifact && typeof artifact === "object" && artifact.verdict === "blocked") {
+              return `${angle}: reported verdict "blocked" — re-run that reviewer, then re-consolidate`;
+            }
+            return `${angle}: ${reason}`;
+          })
           .join("; ")
       : "one or more per-angle artifacts report a blocked verdict";
     throw new Error(`fan-in is blocked — refusing to emit a consolidated findings shape (${detail})`);

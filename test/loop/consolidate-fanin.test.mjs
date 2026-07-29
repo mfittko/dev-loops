@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -228,6 +228,116 @@ test("consolidateGateFanin fails closed on a missing verdict", async () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Symlinked artifacts (must-fix regression: silently dropped before)
+// ---------------------------------------------------------------------------
+
+test("consolidateGateFanin includes a symlinked *.json artifact (not silently dropped)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-symlink-"));
+  const targetDir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-symlink-target-"));
+  try {
+    const targetPath = path.join(targetDir, "correctness-real.json");
+    await writeFile(
+      targetPath,
+      JSON.stringify({ angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "auth bypass" }] }),
+      "utf8",
+    );
+    await symlink(targetPath, path.join(dir, "correctness.json"));
+    await writeFile(path.join(dir, "clean.json"), JSON.stringify({ angle: "clean-angle", verdict: "clean", findings: [] }), "utf8");
+
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    assert.equal(result.overallVerdict, "findings_present");
+    assert.equal(result.severityCounts["must-fix"], 1);
+    assert.ok(result.angles.some((a) => a.angle === "correctness"), "symlinked angle must be present, not dropped");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(targetDir, { recursive: true, force: true });
+  }
+});
+
+test("consolidateGateFanin fails closed on a dangling symlink *.json entry", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-dangling-symlink-"));
+  try {
+    await symlink(path.join(dir, "does-not-exist-target.json"), path.join(dir, "dangling.json"));
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir: dir }),
+      /dangling\.json.*could not be resolved/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Duplicate angle names (must-fix regression: findings duplicated per file)
+// ---------------------------------------------------------------------------
+
+test("consolidateGateFanin fails closed on duplicate angle names across artifact files", async () => {
+  await withFindingsDir(
+    {
+      "security.json": { angle: "security", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "a" }] },
+      "security-round2.json": { angle: "security", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "b" }] },
+    },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir }),
+        /duplicate angle name.*"security"/,
+      );
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// --repo-root determinism + fail-closed config loading
+// ---------------------------------------------------------------------------
+
+test("--repo-root anchors config resolution regardless of process.cwd()", async () => {
+  const configDir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-reporoot-"));
+  const neutralCwd = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-neutral-cwd-"));
+  const prevCwd = process.cwd();
+  try {
+    await writeFile(
+      path.join(configDir, ".devloops"),
+      "version: 1\ngates:\n  draft:\n    blockCleanOnFindingSeverities:\n      - must-fix\n      - worth-fixing-now\n",
+      "utf8",
+    );
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: "w" }] } },
+      async (dir) => {
+        process.chdir(neutralCwd);
+        const overridden = await consolidateGateFanin({ findingsDir: dir, gate: "draft_gate", repoRoot: configDir });
+        assert.equal(overridden.overallVerdict, "findings_present", "--repo-root's config must be honored, not process.cwd()'s");
+        const usingCwd = await consolidateGateFanin({ findingsDir: dir, gate: "draft_gate" });
+        assert.equal(usingCwd.overallVerdict, "clean", "omitting --repo-root falls back to process.cwd() (no .devloops there)");
+      },
+    );
+  } finally {
+    process.chdir(prevCwd);
+    await rm(configDir, { recursive: true, force: true });
+    await rm(neutralCwd, { recursive: true, force: true });
+  }
+});
+
+test("--gate fails closed when this worktree's config could not be loaded/validated", async () => {
+  const configDir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-badconfig-"));
+  try {
+    // Malformed YAML (unterminated flow mapping) makes loadDevLoopConfig
+    // report a non-empty `errors` and fall back to the shipped defaults.
+    await writeFile(path.join(configDir, ".devloops"), "gates: [this is not valid yaml\n", "utf8");
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, gate: "draft_gate", repoRoot: configDir }),
+          /could not be fully loaded\/validated/,
+        );
+      },
+    );
+  } finally {
+    await rm(configDir, { recursive: true, force: true });
+  }
+});
+
 test("consolidateGateFanin fails closed on an unknown severity", async () => {
   await withFindingsDir(
     { "bad.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "urgent", summary: "x" }] } },
@@ -322,15 +432,24 @@ test("--gate applies the worktree's configured blocking severities to the overal
 // emit an all-clean findingsJson that silently discards real findings. Pair a
 // findings-bearing artifact with each blocked/malformed variant.
 test("blocked fan-in refuses to emit findingsJson/--out (fail closed), never an all-clean shape", async () => {
+  // Each variant's detail message must be distinguishable: a "blocked"-verdict
+  // artifact is a LEGAL reviewer signal (re-run the reviewer), never a schema
+  // violation (fix the artifact) — see the input-validation regression below.
   const variants = {
-    "blocked-verdict": { angle: "scope", verdict: "blocked", findings: [] },
+    "blocked-verdict": {
+      artifact: { angle: "scope", verdict: "blocked", findings: [] },
+      detailPattern: /scope: reported verdict "blocked" — re-run that reviewer, then re-consolidate/,
+    },
     "padded-severity": {
-      angle: "scope",
-      verdict: "findings_present",
-      findings: [{ severity: " must-fix ", summary: "padded" }],
+      artifact: {
+        angle: "scope",
+        verdict: "findings_present",
+        findings: [{ severity: " must-fix ", summary: "padded" }],
+      },
+      detailPattern: /scope: angle 'scope' has a finding with invalid severity/,
     },
   };
-  for (const [name, badArtifact] of Object.entries(variants)) {
+  for (const [name, { artifact: badArtifact, detailPattern }] of Object.entries(variants)) {
     await withFindingsDir(
       {
         "correctness.json": {
@@ -347,8 +466,28 @@ test("blocked fan-in refuses to emit findingsJson/--out (fail closed), never an 
           /fan-in is blocked/,
           `variant ${name} must fail closed`,
         );
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, out: outPath }),
+          detailPattern,
+          `variant ${name} must render its own distinct detail message`,
+        );
         await assert.rejects(() => readFile(outPath, "utf8"), undefined, `variant ${name} must not write --out`);
       },
     );
   }
+});
+
+// Regression: a "blocked"-verdict artifact's message must be distinct from a
+// genuinely schema-malformed artifact's, so an operator is steered toward
+// re-running the reviewer rather than "fixing" a legal blocked signal.
+test("blocked fan-in message distinguishes a reviewer-reported blocked verdict from a schema-malformed artifact", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "blocked", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir }),
+        /scope: reported verdict "blocked" — re-run that reviewer, then re-consolidate/,
+      );
+    },
+  );
 });

@@ -388,11 +388,13 @@ sanctioned fan-in CLI — `dev-loops gate consolidate-fanin --findings-dir <dir>
 (`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure
 `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` — never manual
 concatenation and never an inline interpreter over the artifacts. One
-invocation reads the per-angle artifacts directory and emits the consolidated
-findings array (the `--findings-json` input shape), the
-`write-gate-findings-log.mjs` ledger shape (via `--findings-file`), the
-severity counts, and the overall verdict, upserting the mandatory
-`pr-checklist-matrix` entry when asked (`--pr-checklist-matrix clean`). It
+invocation reads the per-angle artifacts directory and emits `findingsJson`
+(written to `--out <path>`) — the nested per-angle shape
+`upsert-checkpoint-verdict.mjs --findings-json` accepts directly, clean angles
+included — plus the flat `write-gate-findings-log.mjs` ledger shape (feed it
+via `--findings-file`), the severity counts, and the overall verdict,
+upserting the mandatory `pr-checklist-matrix` entry when asked
+(`--pr-checklist-matrix clean`). It
 collates the per-angle artifacts, gates `clean` on
 `blockCleanOnFindingSeverities`, and FAILS CLOSED (exit 1, naming the
 offending angles) when any per-angle artifact is malformed, missing, or

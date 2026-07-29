@@ -119,6 +119,11 @@ function surfaceFiles(repoRoot) {
     ...walkByExt(path.join(repoRoot, ".claude"), [".md"], []),
     path.join(repoRoot, "scripts/loop/resolve-dev-loop-startup.mjs"),
     path.join(repoRoot, "scripts/loop/build-handoff-envelope.mjs"),
+    // cli/index.mjs's QUEUE_ROUTES/SUBCOMMAND_ROUTES tables are the largest
+    // single set of scripts/...mjs references in the package — a mistyped or
+    // unshipped route is exactly the dangling-reference symptom this contract
+    // guards against, and nothing else validates those route targets.
+    path.join(repoRoot, "cli/index.mjs"),
     ...walkByExt(path.join(repoRoot, "packages/core/src"), [".mjs"], []),
   ];
 }
@@ -170,17 +175,16 @@ function resolveReference(repoRoot, ref, surfaceFile) {
   return null;
 }
 
-test("every scripts/...mjs reference in the shipped instruction surfaces is in the packed npm file set", () => {
-  const packedFiles = expandPackedFileSet(REPO_ROOT);
-  assert.ok(packedFiles.size > 100, `packed file set looks too small (${packedFiles.size}) — expansion likely broken`);
-
-  const references = collectReferences(REPO_ROOT).filter(({ ref }) => !ILLUSTRATIVE_ALLOWLIST.has(ref));
-  assert.ok(references.length > 0, "expected at least one scripts/...mjs reference across the scanned surfaces");
-
+// Pure: given a repo root, a `{ ref, surfaceFile }` reference list, and a
+// packed-file Set, returns the human-readable failure strings for any
+// reference that doesn't resolve to a real, packed script. Factored out so a
+// synthetic reference/packed-set pair (below) can drive it directly, proving
+// the contract actually flags what it claims to.
+function computeDanglingReferenceFailures(repoRoot, references, packedFiles) {
   const failures = [];
   for (const { ref, surfaceFile } of references) {
-    const relSurface = path.relative(REPO_ROOT, surfaceFile);
-    const resolved = resolveReference(REPO_ROOT, ref, surfaceFile);
+    const relSurface = path.relative(repoRoot, surfaceFile);
+    const resolved = resolveReference(repoRoot, ref, surfaceFile);
     if (!resolved) {
       failures.push(`${relSurface} cites \`${ref}\` — no such script exists on disk`);
       continue;
@@ -189,6 +193,46 @@ test("every scripts/...mjs reference in the shipped instruction surfaces is in t
       failures.push(`${relSurface} cites \`${ref}\` -> \`${resolved}\`, which exists on disk but is NOT in the packed npm file set`);
     }
   }
+  return failures;
+}
+
+test("every scripts/...mjs reference in the shipped instruction surfaces is in the packed npm file set", () => {
+  const packedFiles = expandPackedFileSet(REPO_ROOT);
+  assert.ok(packedFiles.size > 100, `packed file set looks too small (${packedFiles.size}) — expansion likely broken`);
+
+  const references = collectReferences(REPO_ROOT).filter(({ ref }) => !ILLUSTRATIVE_ALLOWLIST.has(ref));
+  assert.ok(references.length > 0, "expected at least one scripts/...mjs reference across the scanned surfaces");
+
+  const failures = computeDanglingReferenceFailures(REPO_ROOT, references, packedFiles);
 
   assert.deepEqual(failures, [], `dangling/unshipped scripts/...mjs references:\n${failures.join("\n")}`);
+});
+
+// Negative self-test: proves the contract can actually FAIL, not just pass
+// vacuously. A reference to a script that exists nowhere on disk must be
+// flagged as dangling, and a reference to a script that exists on disk but
+// is missing from the packed set must be flagged as unshipped.
+test("computeDanglingReferenceFailures flags a dangling reference and an unshipped-but-on-disk reference", () => {
+  const surfaceFile = path.join(REPO_ROOT, "skills/dev-loop/SKILL.md");
+  const packedFiles = expandPackedFileSet(REPO_ROOT);
+
+  const danglingFailures = computeDanglingReferenceFailures(
+    REPO_ROOT,
+    [{ ref: "scripts/does-not-exist-synthetic-1481.mjs", surfaceFile }],
+    packedFiles,
+  );
+  assert.equal(danglingFailures.length, 1);
+  assert.match(danglingFailures[0], /no such script exists on disk/);
+
+  const realScript = "scripts/loop/consolidate-fanin.mjs";
+  assert.ok(packedFiles.has(realScript), "fixture assumes this real script is normally packed");
+  const packedFilesMissingOne = new Set(packedFiles);
+  packedFilesMissingOne.delete(realScript);
+  const unshippedFailures = computeDanglingReferenceFailures(
+    REPO_ROOT,
+    [{ ref: realScript, surfaceFile }],
+    packedFilesMissingOne,
+  );
+  assert.equal(unshippedFailures.length, 1);
+  assert.match(unshippedFailures[0], /NOT in the packed npm file set/);
 });

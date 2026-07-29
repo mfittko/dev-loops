@@ -67,6 +67,36 @@ test("parsePostGateFindingsCliArgs rejects missing required args", () => {
   }, /Missing required/);
 });
 
+test("parsePostGateFindingsCliArgs accepts --findings-file", () => {
+  const result = parsePostGateFindingsCliArgs([
+    "--repo", "owner/repo",
+    "--pr", "42",
+    "--gate", "draft_gate",
+    "--head-sha", "abc1234567890abcdef",
+    "--findings-file", "/tmp/findings.json",
+  ]);
+  assert.equal(result.findingsFile, "/tmp/findings.json");
+  assert.equal(result.findings, undefined);
+});
+
+test("parsePostGateFindingsCliArgs rejects --findings and --findings-file together", () => {
+  assert.throws(() => {
+    parsePostGateFindingsCliArgs([
+      "--repo", "a/b", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc12345", "--findings", "[]", "--findings-file", "/tmp/findings.json",
+    ]);
+  }, /mutually exclusive/);
+});
+
+test("parsePostGateFindingsCliArgs rejects when neither --findings nor --findings-file is given", () => {
+  assert.throws(() => {
+    parsePostGateFindingsCliArgs([
+      "--repo", "a/b", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc12345",
+    ]);
+  }, /pass --findings <json> or --findings-file <path>/);
+});
+
 test("parsePostGateFindingsCliArgs rejects repo with dot segment", () => {
   assert.throws(() => {
     parsePostGateFindingsCliArgs([
