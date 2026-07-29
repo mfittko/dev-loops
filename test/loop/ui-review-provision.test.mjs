@@ -16,7 +16,9 @@ import { execFileSync } from "node:child_process";
 // test does, so test and implementation agree by construction.
 function primaryCheckoutRoot() {
   const listOutput = execFileSync("git", ["worktree", "list"], { encoding: "utf8" });
-  return parseMainWorktreePath(listOutput);
+  const root = parseMainWorktreePath(listOutput);
+  assert.ok(root, "could not parse the primary checkout from `git worktree list` output");
+  return root;
 }
 
 // #1456 fix 2 (+ review hardening): the loop's own worktree namespace lives INSIDE
