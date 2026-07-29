@@ -27,7 +27,23 @@ name: Gate evidence
 # thread. Closed by also re-firing on pull_request_review (submitted) and
 # pull_request_review_comment (created) — the two events through which a NEW
 # unresolved thread appears, which is the stale-green direction that matters
-# here. (GitHub Actions has no `pull_request_review_thread` workflow trigger —
+# here.
+#
+# The stale-PENDING direction was the remaining gap: gate verdicts are posted
+# as ISSUE COMMENTS (upsert-checkpoint-verdict.mjs), so a clean current-head
+# pre_approval_gate verdict never re-fired this workflow and the required
+# status stayed at whatever the pre-verdict run computed — an unmergeable PR
+# with satisfied evidence. Closed by the issue_comment trigger below, guarded
+# to PR comments whose body carries the gate-comment marker ("### Gate
+# review:"), so ordinary discussion comments (the noise this trigger was
+# originally omitted to avoid) never start a run. issue_comment events carry
+# no pull_request payload object, so the Resolve-PR-facts step below fetches
+# number/draft/head SHA once and every later step reads those outputs.
+#
+# `gh run rerun` is NOT a recovery path for a stale status: it replays the
+# original event payload (an older head / pre-verdict comment set), so the
+# fresh evaluation still misses the current state. Post (or edit) the gate
+# verdict comment instead — that re-fires this workflow with fresh context. (GitHub Actions has no `pull_request_review_thread` workflow trigger —
 # thread resolve/unresolve is a webhook but not an `on:` event — so it is not
 # used; the two events above cover a newly-appearing unresolved thread. Narrow
 # residual: a bare "Unresolve conversation" UI action on an already-resolved
@@ -59,6 +75,8 @@ on:
     types: [submitted]
   pull_request_review_comment:
     types: [created]
+  issue_comment:
+    types: [created, edited]
 
 permissions:
   contents: read
@@ -68,20 +86,51 @@ permissions:
 
 jobs:
   gate-evidence-runner:
-    if: github.event.pull_request.draft == false
+    # pull_request/review events: skip drafts via the payload. issue_comment:
+    # only PR comments carrying the gate-comment marker start a run (draft is
+    # resolved by the Resolve-PR-facts step, since the payload has no PR object).
+    if: >-
+      (github.event_name != 'issue_comment' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '### Gate review:'))
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve PR facts (number, draft, head SHA)
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            num="${{ github.event.issue.number }}"
+            gh api "repos/${{ github.repository }}/pulls/${num}" > pr.json
+            {
+              echo "number=${num}"
+              echo "draft=$(jq -r '.draft' pr.json)"
+              echo "head_sha=$(jq -r '.head.sha' pr.json)"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "number=${{ github.event.pull_request.number }}"
+              echo "draft=${{ github.event.pull_request.draft }}"
+              echo "head_sha=${{ github.event.pull_request.head.sha }}"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check out repository
+        if: steps.pr.outputs.draft == 'false'
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
+        if: steps.pr.outputs.draft == 'false'
         uses: actions/setup-node@v5
         with:
           node-version: 24
 
       - name: Install workspace dependencies
+        if: steps.pr.outputs.draft == 'false'
         run: npm ci
 
       # --skip-fanout-ledger-check: the fan-out findings-log ledger is a
@@ -100,13 +149,14 @@ jobs:
       # Actions-log visibility a plain (uncaptured) run would have had.
       - name: Verify draft_gate / pre_approval_gate evidence
         id: gate_check
+        if: steps.pr.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
-            --pr "${{ github.event.pull_request.number }}" \
+            --pr "${{ steps.pr.outputs.number }}" \
             --skip-fanout-ledger-check \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json
@@ -126,7 +176,7 @@ jobs:
       # earlier checkout/npm-ci failure that skipped the detector step
       # entirely) fails CLOSED to `failure`, never "no status".
       - name: Report gate-evidence status on the PR head SHA
-        if: always()
+        if: always() && steps.pr.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -141,7 +191,7 @@ jobs:
             not_established) state="pending" ;;
             *) state="failure" ;;
           esac
-          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.head_sha }}" \
             -f "state=${state}" \
             -f "context=gate-evidence" \
             -f "target_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
