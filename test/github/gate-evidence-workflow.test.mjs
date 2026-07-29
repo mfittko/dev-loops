@@ -22,8 +22,10 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.deepEqual(triggers.pull_request.types, ["opened", "synchronize", "reopened", "ready_for_review"]);
   assert.deepEqual(triggers.pull_request_review.types, ["submitted"]);
   assert.deepEqual(triggers.pull_request_review_comment.types, ["created"]);
-  // #1464: verdicts are issue comments; created covers a fresh verdict and
-  // edited covers the idempotent same-head upsert path.
+  // #1464: verdicts are issue comments; created covers a fresh verdict post.
+  // edited is the lost-run recovery: editing an existing verdict comment
+  // re-fires the check (the idempotent same-head upsert is a suppressed noop
+  // that performs no edit, so it is NOT what edited covers).
   assert.deepEqual(triggers.issue_comment.types, ["created", "edited"]);
 
   // Guard against a recurrence of the invalid `pull_request_review_thread` trigger
@@ -61,7 +63,8 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
     job.if.replace(/\s+/gu, " ").trim(),
     "(github.event_name != 'issue_comment' && github.event.pull_request.draft == false) || " +
       "(github.event_name == 'issue_comment' && github.event.issue.pull_request && " +
-      "contains(github.event.comment.body, '### Gate review:'))",
+      "startsWith(github.event.comment.body, '### Gate review:') && " +
+      "contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'), github.event.comment.author_association))",
   );
   assert.equal(workflow.permissions.statuses, "write");
 });
