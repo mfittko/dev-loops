@@ -32,8 +32,9 @@ First, bootstrap the board (one-time):
 dev-loops queue ensure --repo <owner/name>
 ```
 
-The wrapper emits the project number and URL. Use the project number in subsequent
-helper invocations.
+The wrapper emits the project number and URL. Record the board in `.devloops`
+(`tracker.board` number or title) so subsequent helper invocations resolve it
+automatically; `--project` remains available as an explicit override.
 
 ## How to use the helpers
 

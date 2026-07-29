@@ -770,7 +770,10 @@ describe("board resolution from .devloops without --project (#1459)", () => {
     await withTempCwd(null, async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [] } });
       const { code, err } = await cliNoProject(child, cwd);
-      assert.notEqual(code, 0);
+      // Exit 1 (usage/config error) specifically — exit 3 is the clean
+      // fail-closed idle code (empty Next Up), and a misconfigured board must
+      // never present as an idle queue.
+      assert.equal(code, 1);
       const parsed = JSON.parse(err);
       assert.equal(parsed.ok, false);
       assert.equal(parsed.code, "INVALID_PROJECT");

@@ -36,8 +36,11 @@ position and Status field values.
 <!-- rule: QUEUE-BOARD-DEVLOOPS-RESOLUTION -->
 Every operator-facing `scripts/projects/*` queue command **MUST** resolve the board from
 `.devloops` (`tracker.board` / `queue.board`, number or title) when `--project` is omitted;
-an explicit `--project` overrides. Enforced by
-`test/contracts/queue-board-resolution-contract.test.mjs`.
+an explicit `--project` overrides. The structural halves (the `applyDevloopsBoard` call and
+`projectTitle` delegation forwarding) are enforced by
+`test/contracts/queue-board-resolution-contract.test.mjs` (exempt: the board bootstrap
+`ensure-queue-board.mjs`, which carries its own inline fallback); the omitted-flag and
+override behaviors are covered by the per-script behavioral tests.
 
 ### Owner and project
 
@@ -414,8 +417,10 @@ repo root. The queue tooling does not consult the shipped defaults
 (`packages/core/src/config/extension-defaults.yaml`) or the repo-local
 `.pi/dev-loop/defaults.*` override layer for them — both deliberately omit these keys.
 
-Project number and URL are discoverable at runtime via the GraphQL API — no explicit config
-entry is required.
+Project number and URL are discoverable at runtime via the GraphQL API; per
+`QUEUE-BOARD-DEVLOOPS-RESOLUTION`, commands resolve the board from the `.devloops` entry
+when `--project` is omitted, so the config entry is how a repo opts into automatic
+resolution.
 
 ## Required GraphQL operations
 
