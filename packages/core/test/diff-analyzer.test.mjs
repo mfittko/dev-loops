@@ -60,6 +60,22 @@ test("classifyFile: unknown for unrecognized", () => {
   assert.equal(classifyFile("assets/logo.png"), "unknown");
 });
 
+test("classifyFile: docs for .markdown files", () => {
+  assert.equal(classifyFile("docs/guide.markdown"), "docs");
+  assert.equal(classifyFile("CHANGELOG.markdown"), "docs");
+});
+
+test("classifyFile: config for allowlisted extensionless dotfiles", () => {
+  assert.equal(classifyFile(".devloops"), "config");
+  assert.equal(classifyFile(".nvmrc"), "config");
+  assert.equal(classifyFile(".ruby-version"), "config");
+  assert.equal(classifyFile("packages/core/.nvmrc"), "config");
+});
+
+test("classifyFile: unrecognized extensionless dotfile stays unknown (no content sniffing)", () => {
+  assert.equal(classifyFile(".env"), "unknown");
+});
+
 // ---------------------------------------------------------------------------
 // analyzeT0
 // ---------------------------------------------------------------------------
@@ -393,4 +409,37 @@ test("analyzeDiff: pure single-surface diffs keep exclusive semantics (no over-u
     analyzeDiff({ nameStatusOutput: "M\tdocs/guide.md" }).t1.changeCategories,
     ["DOCS_ONLY"],
   );
+});
+
+test("analyzeDiff: .markdown-only diff → DOCS_ONLY", () => {
+  const result = analyzeDiff({ nameStatusOutput: "M\tdocs/guide.markdown" });
+  assert.equal(result.t0.allDocs, true);
+  assert.deepEqual(result.t1.changeCategories, ["DOCS_ONLY"]);
+});
+
+test("analyzeDiff: .devloops-only diff → CONFIG_ONLY", () => {
+  const result = analyzeDiff({ nameStatusOutput: "M\t.devloops" });
+  assert.deepEqual(result.t1.changeCategories, ["CONFIG_ONLY"]);
+});
+
+test("analyzeDiff → resolveDynamicAngles: .devloops + .markdown repro classifies docs+config, no fallback (#1450)", () => {
+  const result = analyzeDiff({
+    nameStatusOutput: "M\t.devloops\nA\tfoo.markdown",
+    diffOutput:
+      "--- a/.devloops\n+++ b/.devloops\n@@ -1,1 +1,1 @@\n-old\n+new\n" +
+      "--- /dev/null\n+++ b/foo.markdown\n@@ -0,0 +1,1 @@\n+# hi\n",
+  });
+  assert.equal(result.ambiguous, false);
+  assert.ok(result.t1.changeCategories.includes("DOCS_ONLY"));
+  assert.ok(result.t1.changeCategories.includes("CONFIG_ONLY"));
+
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: result.t1.changeCategories,
+    ambiguous: result.ambiguous,
+  });
+  assert.equal(dyn.fallbackToAll, false);
+  assert.ok(dyn.recommendedAngles.includes("link-check"), "docs file must pull link-check");
+  assert.ok(dyn.recommendedAngles.includes("config-drift"), "config file must pull config-drift");
+  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length);
 });

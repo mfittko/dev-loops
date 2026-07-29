@@ -13,6 +13,10 @@
 // T0: File-level analysis
 // ---------------------------------------------------------------------------
 
+// Extensionless dotfile configs: static allowlist, no content sniffing. Matched
+// against the basename only (e.g. `foo/.nvmrc`), never a prefix/suffix guess.
+const DOTFILE_CONFIG_BASENAMES = new Set([".devloops", ".nvmrc", ".ruby-version"]);
+
 /**
  * @typedef {object} T0Result
  * @property {string[]} files — flat file paths
@@ -106,6 +110,9 @@ export function classifyFile(filePath) {
   ) {
     return "config";
   }
+  if (DOTFILE_CONFIG_BASENAMES.has(fp.split("/").pop())) {
+    return "config";
+  }
   if (fp.includes(".test.") || fp.startsWith("test/")) {
     return "test";
   }
@@ -115,7 +122,10 @@ export function classifyFile(filePath) {
   ) {
     return "code";
   }
-  if (fp.startsWith("docs/") || fp.endsWith(".md") || fp === "README.md") {
+  if (
+    fp.startsWith("docs/") || fp.endsWith(".md") || fp.endsWith(".markdown") ||
+    fp === "README.md"
+  ) {
     return "docs";
   }
   return "unknown";
