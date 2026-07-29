@@ -252,6 +252,22 @@ export async function consolidateGateFanin(options) {
     if (!findingsByAngle.has(f.angle)) findingsByAngle.set(f.angle, []);
     findingsByAngle.get(f.angle).push(f);
   }
+  // Fail closed on a blocked consolidation BEFORE deriving the nested shape:
+  // consolidateFanin() returns blocked with an EMPTY findings array whenever
+  // any artifact is malformed or itself blocked, so deriving per-angle
+  // verdicts from that array would emit an all-clean findingsJson that
+  // upsert-checkpoint-verdict accepts verbatim — silently discarding real
+  // findings. A blocked fan-in has no publishable consolidated shape; the
+  // caller must fix/re-run the offending reviewer first.
+  if (consolidated.verdict === "blocked") {
+    const detail = Array.isArray(consolidated.malformed) && consolidated.malformed.length > 0
+      ? consolidated.malformed
+          .map(({ index, reason }) => `${rawArtifacts[index]?.angle ?? `artifact[${index}]`}: ${reason}`)
+          .join("; ")
+      : "one or more per-angle artifacts report a blocked verdict";
+    throw new Error(`fan-in is blocked — refusing to emit a consolidated findings shape (${detail})`);
+  }
+
   const findingsJson = rawArtifacts.map((a) => {
     const angle = a.angle.trim();
     const angleFindings = findingsByAngle.get(angle) ?? [];

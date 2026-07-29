@@ -317,3 +317,38 @@ test("--gate applies the worktree's configured blocking severities to the overal
     await rm(cwdDir, { recursive: true, force: true });
   }
 });
+
+// Regression (r2 must-fix): a blocked consolidation must FAIL CLOSED, never
+// emit an all-clean findingsJson that silently discards real findings. Pair a
+// findings-bearing artifact with each blocked/malformed variant.
+test("blocked fan-in refuses to emit findingsJson/--out (fail closed), never an all-clean shape", async () => {
+  const variants = {
+    "blocked-verdict": { angle: "scope", verdict: "blocked", findings: [] },
+    "padded-severity": {
+      angle: "scope",
+      verdict: "findings_present",
+      findings: [{ severity: " must-fix ", summary: "padded" }],
+    },
+  };
+  for (const [name, badArtifact] of Object.entries(variants)) {
+    await withFindingsDir(
+      {
+        "correctness.json": {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "auth bypass" }],
+        },
+        "bad.json": badArtifact,
+      },
+      async (dir) => {
+        const outPath = path.join(dir, "out", "findings.json");
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, out: outPath }),
+          /fan-in is blocked/,
+          `variant ${name} must fail closed`,
+        );
+        await assert.rejects(() => readFile(outPath, "utf8"), undefined, `variant ${name} must not write --out`);
+      },
+    );
+  }
+});
