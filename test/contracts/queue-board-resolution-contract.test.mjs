@@ -26,7 +26,9 @@ const projectsRoot = path.join(repoRoot, "scripts", "projects");
 // Helper modules and board bootstrap, not operator-facing queue commands.
 const EXCLUDED = new Set([
   "_resolve-project.mjs", // the helper itself
-  "ensure-queue-board.mjs", // creates the board; cannot resolve one that has no items yet
+  // Bootstraps the board (it may not exist yet) and carries its own partial
+  // inline .devloops fallback rather than applyDevloopsBoard.
+  "ensure-queue-board.mjs",
 ]);
 
 async function projectScripts() {

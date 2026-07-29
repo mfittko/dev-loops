@@ -35,12 +35,14 @@ position and Status field values.
 
 <!-- rule: QUEUE-BOARD-DEVLOOPS-RESOLUTION -->
 Every operator-facing `scripts/projects/*` queue command **MUST** resolve the board from
-`.devloops` (`tracker.board` / `queue.board`, number or title) when `--project` is omitted;
-an explicit `--project` overrides. The structural halves (the `applyDevloopsBoard` call and
-`projectTitle` delegation forwarding) are enforced by
-`test/contracts/queue-board-resolution-contract.test.mjs` (exempt: the board bootstrap
-`ensure-queue-board.mjs`, which carries its own inline fallback); the omitted-flag and
-override behaviors are covered by the per-script behavioral tests.
+`.devloops` (`tracker.board` first, falling back to the deprecated `queue.board`; number or
+title) when `--project` is omitted; an explicit `--project` overrides. The structural halves
+(the `applyDevloopsBoard` call and `projectTitle` delegation forwarding) are enforced by
+`test/contracts/queue-board-resolution-contract.test.mjs`, which inspects commands that read
+`--project`/`args.project` and exempts the `_resolve-project.mjs` helper itself and the board
+bootstrap `ensure-queue-board.mjs`. Omitted-flag and override behaviors are covered
+behaviorally where suites exist (`resolve-active-board-item`, `list-queue-items`); the
+remaining siblings are covered structurally only.
 
 ### Owner and project
 
@@ -278,14 +280,17 @@ When a queue board is configured, the queue driver may optionally write bounded 
 Board integration is active only when `.devloops` at repo root identifies a board:
 
 ```yaml
-queue:
+tracker:
   board:
     number: 5          # direct project number
     # OR title: "Dev Loop Queue"
+queue:
   nonSuccessStatus: Backlog # optional fallback column for non-success outcomes
 ```
 
-If `queue.board` is not set (neither `number` nor `title`), no board transitions are attempted and queue behavior is unchanged.
+`tracker.board` is the preferred key; the deprecated `queue.board` (same shape) is still
+honored as a fallback. If neither is set (no `number`, no `title`), no board transitions
+are attempted and queue behavior is unchanged.
 
 ### Result shape
 
@@ -362,7 +367,7 @@ The normative `Next Up` rule above currently assumes the **default** `Next Up` d
 ### Example
 
 ```yaml
-queue:
+tracker:
   board:
     number: 5
 ```
@@ -394,7 +399,7 @@ queue:
 
 ### Board title key
 
-The `queue.board.title` key is the primary opt-in signal for Projects-based queue ordering (`queue.board.number` is also available — see Project number key below):
+The board `title` key (under `tracker.board`, or the deprecated `queue.board`) is the primary opt-in signal for Projects-based queue ordering (`number` is also available — see Project number key below):
 
 | Value | Meaning |
 |---|---|
@@ -412,8 +417,8 @@ discovery. When both `number` and `title` are set under `queue.board`, `number` 
 
 ### Settings source
 
-Queue board settings (`queue.board.title` / `queue.board.number`) are read only from `.devloops` at the
-repo root. The queue tooling does not consult the shipped defaults
+Queue board settings (`tracker.board` first, then the deprecated `queue.board`; `title` /
+`number`) are read only from `.devloops` at the repo root. The queue tooling does not consult the shipped defaults
 (`packages/core/src/config/extension-defaults.yaml`) or the repo-local
 `.pi/dev-loop/defaults.*` override layer for them — both deliberately omit these keys.
 

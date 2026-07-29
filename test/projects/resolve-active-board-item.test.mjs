@@ -104,21 +104,35 @@ function boardRunChild({
 
 const runArgs = (child) => main({ repo: "o/r", project: "7" }, { runChild: child, cwd: ISOLATED_CWD });
 
-function captureCli(child, extraArgs = []) {
+function runCliCaptured(argv, child, cwd = ISOLATED_CWD) {
   let out = "";
   let err = "";
   const prev = process.exitCode;
   process.exitCode = undefined;
-  return runCli(["--repo", "o/r", "--project", "7", ...extraArgs], {
+  return runCli(argv, {
     stdout: { write: (s) => { out += s; } },
     stderr: { write: (s) => { err += s; } },
     runChild: child,
-    cwd: ISOLATED_CWD,
+    cwd,
   }).then(() => {
     const code = process.exitCode;
     process.exitCode = prev;
     return { code, out, err };
   });
+}
+
+function captureCli(child, extraArgs = []) {
+  return runCliCaptured(["--repo", "o/r", "--project", "7", ...extraArgs], child);
+}
+
+async function withTempCwd(contents, fn) {
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-tmpcwd-"));
+  try {
+    if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
+    return await fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 describe("resolve-active-board-item collapseToTarget (#988)", () => {
@@ -614,15 +628,6 @@ describe("resolve-active-board-item CLI exit codes", () => {
 });
 
 describe("resolve-active-board-item resolves the configured next_up column (#1098)", () => {
-  async function withTempCwd(contents, fn) {
-    const dir = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-statuscol-"));
-    try {
-      if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
-      return await fn(dir);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
 
   it("pickup queries the overridden statusColumns.next_up column (\"Todo\"), not the literal", async () => {
     await withTempCwd('queue:\n  board:\n    number: 7\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
@@ -664,15 +669,6 @@ describe("resolve-active-board-item resolves the configured next_up column (#109
 });
 
 describe("resolve-active-board-item resolves the configured in_progress column (#1143)", () => {
-  async function withTempCwd(contents, fn) {
-    const dir = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-statuscol-inprogress-"));
-    try {
-      if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
-      return await fn(dir);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
 
   it("pickup queries the overridden statusColumns.in_progress column (\"Doing\"), not the literal", async () => {
     await withTempCwd('queue:\n  board:\n    number: 7\n  statusColumns:\n    in_progress: "Doing"\n', async (cwd) => {
@@ -712,37 +708,12 @@ describe("resolve-active-board-item resolves the configured in_progress column (
 });
 
 describe("board resolution from .devloops without --project (#1459)", () => {
-  async function withTempCwd(contents, fn) {
-    const dir = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-devloops-"));
-    try {
-      if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
-      return await fn(dir);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
 
-  function cliNoProject(child, cwd) {
-    let out = "";
-    let err = "";
-    const prev = process.exitCode;
-    process.exitCode = undefined;
-    return runCli(["--repo", "o/r"], {
-      stdout: { write: (s) => { out += s; } },
-      stderr: { write: (s) => { err += s; } },
-      runChild: child,
-      cwd,
-    }).then(() => {
-      const code = process.exitCode;
-      process.exitCode = prev;
-      return { code, out, err };
-    });
-  }
 
   it("title-configured board resolves the in-progress item with no --project", async () => {
     await withTempCwd('queue:\n  board:\n    title: "Board"\n', async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [{ issueNumber: 42, title: "Doing" }] } });
-      const { code, out } = await cliNoProject(child, cwd);
+      const { code, out } = await runCliCaptured(["--repo", "o/r"], child, cwd);
       assert.equal(code, 0);
       assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 42 }, source: "in-progress" });
     });
@@ -751,7 +722,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
   it("title-configured board resolves the Next Up head with no --project (delegation forwards projectTitle)", async () => {
     await withTempCwd('queue:\n  board:\n    title: "Board"\n', async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [], "Next Up": [{ issueNumber: 9, title: "Head" }] } });
-      const { code, out } = await cliNoProject(child, cwd);
+      const { code, out } = await runCliCaptured(["--repo", "o/r"], child, cwd);
       assert.equal(code, 0);
       assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 9 }, source: "next-up" });
     });
@@ -760,7 +731,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
   it("tracker.board title-configured board (preferred key) resolves with no --project", async () => {
     await withTempCwd('tracker:\n  board:\n    title: "Board"\n', async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [{ issueNumber: 11, title: "Doing" }] } });
-      const { code, out } = await cliNoProject(child, cwd);
+      const { code, out } = await runCliCaptured(["--repo", "o/r"], child, cwd);
       assert.equal(code, 0);
       assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 11 }, source: "in-progress" });
     });
@@ -769,7 +740,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
   it("number-configured board resolves with no --project", async () => {
     await withTempCwd("queue:\n  board:\n    number: 7\n", async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [{ issueNumber: 5, title: "Doing" }] } });
-      const { code, out } = await cliNoProject(child, cwd);
+      const { code, out } = await runCliCaptured(["--repo", "o/r"], child, cwd);
       assert.equal(code, 0);
       assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 5 }, source: "in-progress" });
     });
@@ -778,7 +749,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
   it("no .devloops board and no --project still fails closed with INVALID_PROJECT", async () => {
     await withTempCwd(null, async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [] } });
-      const { code, err } = await cliNoProject(child, cwd);
+      const { code, err } = await runCliCaptured(["--repo", "o/r"], child, cwd);
       // Exit 1 (usage/config error) specifically — exit 3 is the clean
       // fail-closed idle code (empty Next Up), and a misconfigured board must
       // never present as an idle queue.

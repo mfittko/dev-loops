@@ -96,11 +96,12 @@ ${JQ_OUTPUT_USAGE}
 
 Exit codes (default / unfiltered output):
   0 — a single continue target resolved (in-progress or "${NEXT_UP_COLUMN}" head)
-  1 — usage or argument error
+  1 — usage or config error, including no board resolvable from --project or
+      .devloops (INVALID_PROJECT)
   2 — GitHub API error / invalid --jq filter
   3 — fail closed (pass an explicit issue/PR): multiple in-progress items, an
-      empty "${NEXT_UP_COLUMN}" column, or the board/project could not be
-      resolved (project, status field, or the column not found)
+      empty "${NEXT_UP_COLUMN}" column, or the configured board/project was
+      not found on GitHub (project, status field, or the column not found)
 
 With --jq/--silent the result is filtered to a value/predicate, so the exit code
 follows the shared jq-output contract (0 = truthy/ok, 1 = falsy/non-ok, 2 =
