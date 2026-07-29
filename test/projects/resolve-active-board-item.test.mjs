@@ -710,3 +710,70 @@ describe("resolve-active-board-item resolves the configured in_progress column (
     });
   });
 });
+
+describe("board resolution from .devloops without --project (#1459)", () => {
+  async function withTempCwd(contents, fn) {
+    const dir = mkdtempSync(nodePath.join(tmpdir(), "resolve-active-devloops-"));
+    try {
+      if (contents !== null) writeFileSync(nodePath.join(dir, ".devloops"), contents, "utf-8");
+      return await fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  function cliNoProject(child, cwd) {
+    let out = "";
+    let err = "";
+    const prev = process.exitCode;
+    process.exitCode = undefined;
+    return runCli(["--repo", "o/r"], {
+      stdout: { write: (s) => { out += s; } },
+      stderr: { write: (s) => { err += s; } },
+      runChild: child,
+      cwd,
+    }).then(() => {
+      const code = process.exitCode;
+      process.exitCode = prev;
+      return { code, out, err };
+    });
+  }
+
+  it("title-configured board resolves the in-progress item with no --project", async () => {
+    await withTempCwd('queue:\n  board:\n    title: "Board"\n', async (cwd) => {
+      const child = boardRunChild({ columns: { "In Progress": [{ issueNumber: 42, title: "Doing" }] } });
+      const { code, out } = await cliNoProject(child, cwd);
+      assert.equal(code, 0);
+      assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 42 }, source: "in-progress" });
+    });
+  });
+
+  it("title-configured board resolves the Next Up head with no --project (delegation forwards projectTitle)", async () => {
+    await withTempCwd('queue:\n  board:\n    title: "Board"\n', async (cwd) => {
+      const child = boardRunChild({ columns: { "In Progress": [], "Next Up": [{ issueNumber: 9, title: "Head" }] } });
+      const { code, out } = await cliNoProject(child, cwd);
+      assert.equal(code, 0);
+      assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 9 }, source: "next-up" });
+    });
+  });
+
+  it("number-configured board resolves with no --project", async () => {
+    await withTempCwd("queue:\n  board:\n    number: 7\n", async (cwd) => {
+      const child = boardRunChild({ columns: { "In Progress": [{ issueNumber: 5, title: "Doing" }] } });
+      const { code, out } = await cliNoProject(child, cwd);
+      assert.equal(code, 0);
+      assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 5 }, source: "in-progress" });
+    });
+  });
+
+  it("no .devloops board and no --project still fails closed with INVALID_PROJECT", async () => {
+    await withTempCwd(null, async (cwd) => {
+      const child = boardRunChild({ columns: { "In Progress": [] } });
+      const { code, err } = await cliNoProject(child, cwd);
+      assert.notEqual(code, 0);
+      const parsed = JSON.parse(err);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.code, "INVALID_PROJECT");
+    });
+  });
+});

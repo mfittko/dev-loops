@@ -69,7 +69,7 @@ const NEXT_UP_COLUMN = "Next Up";
 // operators see one string regardless of which layer detects it (#1091).
 const EMPTY_QUEUE_REASON = EMPTY_NEXT_UP_MESSAGE;
 
-const USAGE = `Usage: dev-loops queue resolve-active --repo <owner/name> --project <number|id>
+const USAGE = `Usage: dev-loops queue resolve-active --repo <owner/name> [--project <number|id>]
 
 Resolve the board's single continue target for bare \`/loop-continue\`:
 continues the one "${IN_PROGRESS_COLUMN}" item; if there is none, picks the HEAD
@@ -79,7 +79,9 @@ from Backlog.
 
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
-  --project <number|id>   Required. Project number (integer) or node ID.
+  --project <number|id>   Project number (integer) or node ID. When omitted,
+                          resolved from .devloops queue.board.number /
+                          queue.board.title.
   --help, -h              Show this help.
 
 Output (stdout):
