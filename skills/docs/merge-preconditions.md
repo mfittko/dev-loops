@@ -74,9 +74,9 @@ practice:
   unresolved thread re-evaluates the check instead of leaving a SHA-pinned
   green stale on the thread axis, and posting a gate verdict itself
   re-evaluates the check instead of leaving a stale pre-verdict
-  `pending`/`failure` blocking a satisfied PR (`created` for a PR's first
-  verdict; `edited` for every later verdict, since the upsert edits its
-  existing marker comment). Evaluation always runs the DEFAULT BRANCH's
+  `pending`/`failure` blocking a satisfied PR (`created` for each verdict on a
+  new head — the upsert creates a fresh comment per head; `edited` for a
+  same-head verdict update or a manual recovery edit). Evaluation always runs the DEFAULT BRANCH's
   detector (trusted code; the resolved PR head SHA is only the status target).
   Recovery for a lost/failed run when the verdict comment already exists: edit
   that comment by its id (`scripts/github/edit-comment.mjs --comment-id <id>`)

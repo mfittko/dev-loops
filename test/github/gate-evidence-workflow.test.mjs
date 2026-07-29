@@ -22,11 +22,12 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.deepEqual(triggers.pull_request.types, ["opened", "synchronize", "reopened", "ready_for_review"]);
   assert.deepEqual(triggers.pull_request_review.types, ["submitted"]);
   assert.deepEqual(triggers.pull_request_review_comment.types, ["created"]);
-  // #1464: verdicts are issue comments; created covers the FIRST verdict on a
-  // PR. edited is the PRIMARY path for every later verdict — the upsert EDITS
-  // its existing marker comment on each new head / changed verdict — plus the
-  // manual lost-run recovery (edit the comment to re-fire). Only an identical
-  // same-head rerun noops with no event. BOTH types are load-bearing.
+  // #1464: verdicts are issue comments. created fires for each verdict on a
+  // NEW head (the upsert creates a fresh comment per head); edited fires for a
+  // same-head verdict UPDATE (the upsert edits the existing comment when the
+  // verdict/summary changes) and for the manual lost-run recovery (edit the
+  // comment by id to re-fire). An identical same-head rerun noops with no
+  // event. BOTH types are load-bearing.
   assert.deepEqual(triggers.issue_comment.types, ["created", "edited"]);
 
   // Guard against a recurrence of the invalid `pull_request_review_thread` trigger
