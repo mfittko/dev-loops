@@ -397,9 +397,11 @@ upserting the mandatory `pr-checklist-matrix` entry when asked
 (`--pr-checklist-matrix clean`). It
 collates the per-angle artifacts, gates `clean` on
 `blockCleanOnFindingSeverities`, and FAILS CLOSED (exit 1, naming the
-offending angles) when any per-angle artifact is malformed, missing, or
-itself blocked — a blocked fan-in never yields a publishable findings shape;
-fix or re-run the offending reviewer first:
+offending angles) when any per-angle artifact is malformed or itself blocked
+— a blocked fan-in never yields a publishable findings shape; fix or re-run
+the offending reviewer first. (An angle whose artifact was never written is
+invisible to the CLI — mandatory-angle coverage is enforced downstream by
+`upsert-checkpoint-verdict.mjs`.) It:
 
 - collate findings from all review angles
 - classify each finding: `must-fix`, `worth-fixing-now`, `defer`

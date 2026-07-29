@@ -143,7 +143,11 @@ export function parseConsolidateFaninCliArgs(argv) {
       continue;
     }
     if (token.name === "repo-root") {
-      options.repoRoot = requireTokenValue(token, parseError).trim();
+      const repoRoot = requireTokenValue(token, parseError).trim();
+      if (repoRoot.length === 0) {
+        throw parseError("--repo-root requires a non-empty path");
+      }
+      options.repoRoot = repoRoot;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -307,6 +311,13 @@ export async function consolidateGateFanin(options) {
   let blockCleanOnFindingSeverities;
   if (options.gate !== undefined) {
     const repoRoot = options.repoRoot ?? process.cwd();
+    // A nonexistent/non-directory root would make loadDevLoopConfig silently
+    // fall back to shipped defaults — the exact clean-ward fail-open
+    // --repo-root exists to remove. Fail closed instead.
+    const rootStat = await stat(repoRoot).catch(() => null);
+    if (!rootStat?.isDirectory()) {
+      throw new Error(`--repo-root ${JSON.stringify(repoRoot)} is not an existing directory`);
+    }
     const { config, errors } = await loadDevLoopConfig({ repoRoot });
     // loadDevLoopConfig never throws: on a parse/validation failure it still
     // returns `config` merged from the shipped defaults, silently REPLACING

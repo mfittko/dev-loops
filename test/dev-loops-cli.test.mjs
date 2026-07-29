@@ -8,7 +8,8 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { compareSemver, createCliRuntime, runCli } from "../cli/index.mjs";
+import { compareSemver, createCliRuntime, fetchLatestPublishedVersion, isPlausibleDistTagVersion, runCli } from "../cli/index.mjs";
+import { EventEmitter } from "node:events";
 import { SETUP_GUIDANCE } from "../lib/dev-loops-core.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -586,4 +587,84 @@ test("doctor degrades gracefully (no crash, no warning) when the registry is unr
   const out = doctorStdout.read();
   assert.match(out, /✅ Install freshness/);
   assert.match(out, /latest-version check skipped \(registry unreachable\)/);
+});
+
+// ---------------------------------------------------------------------------
+// fetchLatestPublishedVersion: drive the status/size-cap/dist-tag paths via
+// the injectable getImpl seam (no network). The fake mimics https.get's
+// (url, opts, cb) shape: cb receives a response emitter; the returned request
+// emitter records destroy().
+// ---------------------------------------------------------------------------
+
+function fakeGet(handler) {
+  return (url, opts, cb) => {
+    const req = new EventEmitter();
+    req.destroy = () => { req.destroyed = true; };
+    const res = new EventEmitter();
+    res.resume = () => {};
+    queueMicrotask(() => handler({ req, res, cb }));
+    return req;
+  };
+}
+
+test("fetchLatestPublishedVersion: max across dist-tags wins, implausible tag values filtered", async () => {
+  const body = JSON.stringify({
+    "dist-tags": {
+      latest: "0.9.0",
+      rc: "1.0.0-rc.3",
+      weird: "not-a-version",
+      huge: `1.0.${"9".repeat(80)}`,
+      empty: "",
+    },
+  });
+  const version = await fetchLatestPublishedVersion("dev-loops", {
+    getImpl: fakeGet(({ res, cb }) => {
+      res.statusCode = 200;
+      cb(res);
+      res.emit("data", body);
+      res.emit("end");
+    }),
+  });
+  assert.equal(version, "1.0.0-rc.3");
+});
+
+test("fetchLatestPublishedVersion: non-200 resolves null", async () => {
+  const version = await fetchLatestPublishedVersion("dev-loops", {
+    getImpl: fakeGet(({ res, cb }) => {
+      res.statusCode = 404;
+      cb(res);
+    }),
+  });
+  assert.equal(version, null);
+});
+
+test("fetchLatestPublishedVersion: response-size cap aborts and resolves null", async () => {
+  const version = await fetchLatestPublishedVersion("dev-loops", {
+    getImpl: fakeGet(({ res, cb }) => {
+      res.statusCode = 200;
+      cb(res);
+      const chunk = "x".repeat(1024 * 1024);
+      res.emit("data", chunk);
+      res.emit("data", chunk);
+      res.emit("data", chunk); // > 2MB cap
+    }),
+  });
+  assert.equal(version, null);
+});
+
+test("fetchLatestPublishedVersion: wall-clock deadline settles null on a silent request", async () => {
+  const version = await fetchLatestPublishedVersion("dev-loops", {
+    timeoutMs: 20,
+    getImpl: fakeGet(() => { /* never calls back — deadline must fire */ }),
+  });
+  assert.equal(version, null);
+});
+
+test("isPlausibleDistTagVersion: accepts x.y.z (with prerelease), rejects junk", () => {
+  assert.equal(isPlausibleDistTagVersion("1.0.0"), true);
+  assert.equal(isPlausibleDistTagVersion("1.0.0-rc.3"), true);
+  assert.equal(isPlausibleDistTagVersion(""), false);
+  assert.equal(isPlausibleDistTagVersion("latest"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0"), false);
+  assert.equal(isPlausibleDistTagVersion(`1.0.0-${"a".repeat(80)}`), false);
 });

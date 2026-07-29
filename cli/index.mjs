@@ -124,7 +124,7 @@ export function compareSemver(a, b) {
 // strings, and non-numeric cores — the class of value that otherwise coerces
 // to 0.0.0 in compareCoreVersions (`Number("x") || 0`) or gets echoed verbatim
 // into doctor's output.
-function isPlausibleDistTagVersion(v) {
+export function isPlausibleDistTagVersion(v) {
   if (typeof v !== "string" || v.length === 0 || v.length > 64) return false;
   return /^\d+\.\d+\.\d+$/.test(splitVersion(v).core);
 }
@@ -135,7 +135,9 @@ const REGISTRY_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 // ponytail: bare `https.get` (no `fetch`/dependency) keeps `doctor` zero-dep;
 // resolves null (never rejects) on any failure so a flaky/offline registry
 // degrades the freshness check instead of ever crashing `doctor`.
-function fetchLatestPublishedVersion(packageName, { timeoutMs = REGISTRY_TIMEOUT_MS } = {}) {
+// `getImpl` is an injectable https.get seam so tests can drive the
+// status/size-cap/deadline/dist-tag paths without network.
+export function fetchLatestPublishedVersion(packageName, { timeoutMs = REGISTRY_TIMEOUT_MS, getImpl = https.get } = {}) {
   return new Promise((resolve) => {
     let settled = false;
     let deadline;
@@ -149,7 +151,7 @@ function fetchLatestPublishedVersion(packageName, { timeoutMs = REGISTRY_TIMEOUT
     // (dist-tag `rc`) can be ahead of `latest`, and an rc install behind the
     // rc tag must still warn. The freshest published version is the MAX
     // across all dist-tags.
-    const req = https.get(`https://registry.npmjs.org/${packageName}`, {
+    const req = getImpl(`https://registry.npmjs.org/${packageName}`, {
       timeout: timeoutMs,
       headers: { accept: "application/vnd.npm.install-v1+json" },
     }, (res) => {

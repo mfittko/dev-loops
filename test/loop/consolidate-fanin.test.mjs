@@ -491,3 +491,19 @@ test("blocked fan-in message distinguishes a reviewer-reported blocked verdict f
     },
   );
 });
+
+test("--repo-root fails closed on a nonexistent directory and an empty value", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, gate: "draft_gate", repoRoot: path.join(dir, "no-such-root") }),
+        /not an existing directory/,
+      );
+    },
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--repo-root", "   "]),
+    /non-empty path/,
+  );
+});
