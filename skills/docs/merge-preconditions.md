@@ -68,9 +68,17 @@ practice:
 - **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
   GitHub's own token for every non-draft PR, re-firing on push, ready-for-review,
-  a submitted review, and a standalone review comment — so a newly-opened
-  unresolved thread re-evaluates the check instead of leaving a SHA-pinned green
-  stale on the thread axis. (There is no `pull_request_review_thread` Actions
+  a submitted review, a standalone review comment, and a created/edited PR issue
+  comment carrying the gate-comment marker (`### Gate review:`) — so a
+  newly-opened unresolved thread re-evaluates the check instead of leaving a
+  SHA-pinned green stale on the thread axis, and posting a gate verdict itself
+  re-evaluates the check instead of leaving a stale pre-verdict
+  `pending`/`failure` blocking a satisfied PR. Evaluation always runs the
+  DEFAULT BRANCH's detector (trusted code; the resolved PR head SHA is only the
+  status target). Recovery for a lost/failed run when the verdict comment
+  already exists: edit that comment (`scripts/github/edit-comment.mjs`) — the
+  `edited` event re-fires the check. `gh run rerun` is NOT a recovery path (it
+  replays the stale original event payload). (There is no `pull_request_review_thread` Actions
   trigger, so thread resolve/unresolve is not itself a re-fire event; a
   newly-appearing unresolved thread arrives via a submitted review or a review
   comment, both of which do re-fire. One narrow residual remains: a bare

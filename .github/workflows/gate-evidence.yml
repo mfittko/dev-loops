@@ -13,13 +13,16 @@ name: Gate evidence
 # since a draft PR is never mergeable anyway. The first non-draft run (at
 # latest, ready_for_review) always posts a real status once merge is possible.
 #
-# One inherent limitation of a head-run check (accepted by design, not a
-# bypass): head-provenance — the workflow and the scripts it runs come from the
-# PR's own head, so a PR could edit this file or the detector to forge a green
-# check on itself. This is the "self-reported / not un-forgeable" caveat in
-# skills/docs/gate-review-sub-loop-contract.md; the un-forgeable provenance bridge
-# (harness attestation) is #1358's explicit non-goal. Merge is maintainer-
-# gated, so forging requires the merger to self-modify.
+# Evaluation provenance: the checkout below is pinned to the DEFAULT BRANCH,
+# so the detector code that computes the verdict is always the trusted base
+# tree — never the PR head. This matters because every trigger type here runs
+# in the base-repo context with `statuses: write`: a head-tree checkout would
+# let a fork PR swap the detector (or a package lifecycle script under npm ci)
+# and forge a green required check on itself with no maintainer involvement.
+# The resolved PR head SHA is used ONLY as the status TARGET, never as the
+# code source. (For issue_comment events GitHub additionally reads the
+# workflow DEFINITION itself from the default branch, so changes to this
+# trigger arm only after merge.)
 #
 # Trigger staleness (the thread/comment axis) was a real gap: the verdict
 # depends on PR comment history + thread resolution, and pull_request events
@@ -43,9 +46,11 @@ name: Gate evidence
 # `gh run rerun` is NOT a recovery path for a stale status: it replays the
 # original event payload (an older head / pre-verdict comment set), so the
 # fresh evaluation still misses the current state. Post (or edit) the gate
-# verdict comment instead — that re-fires this workflow with fresh context. (GitHub Actions has no `pull_request_review_thread` workflow trigger —
+# verdict comment instead — that re-fires this workflow with fresh context.
+#
+# (GitHub Actions has no `pull_request_review_thread` workflow trigger —
 # thread resolve/unresolve is a webhook but not an `on:` event — so it is not
-# used; the two events above cover a newly-appearing unresolved thread. Narrow
+# used; the review events above cover a newly-appearing unresolved thread. Narrow
 # residual: a bare "Unresolve conversation" UI action on an already-resolved
 # thread with no accompanying review/comment fires only that non-triggerable
 # event and is not re-caught until the next push/review/comment — bounded by the
@@ -55,15 +60,15 @@ name: Gate evidence
 # when the PR head is a fork, and both carry the same `pull_request` object
 # (number, draft, head.sha, ...) that this workflow already reads.
 #
-# Head-SHA mismatch on those three event types: unlike `pull_request` (whose
-# implicit job check-run GitHub auto-associates with the PR's head commit),
-# `github.sha` for pull_request_review/_thread/_comment events is the BASE
-# branch's latest commit, not the PR head. An implicit check-run from those
-# triggers would land on the wrong commit and never refresh the required
-# check on the head — the exact staleness this workflow exists to close. So
-# the job posts an EXPLICIT commit status to `pull_request.head.sha` (always
-# the right commit, on every trigger type) instead of relying on the
-# job's own auto-attached check-run. To avoid two different reporters (the
+# Head-SHA mismatch on the non-pull_request event types: unlike `pull_request`
+# (whose implicit job check-run GitHub auto-associates with the PR's head
+# commit), `github.sha` for review/comment events is not the PR head (base
+# branch for review events, default branch for issue_comment). An implicit
+# check-run from those triggers would land on the wrong commit and never
+# refresh the required check on the head — the exact staleness this workflow
+# exists to close. So the job posts an EXPLICIT commit status to the RESOLVED
+# PR head SHA (steps.pr.outputs.head_sha — always the right commit, on every
+# trigger type) instead of relying on the job's own auto-attached check-run. To avoid two different reporters (the
 # job's own check-run + this explicit status) both claiming the required
 # `gate-evidence` context — which GitHub's docs warn is ambiguous — the job
 # itself is named something else; the explicit status below is the ONLY
@@ -106,6 +111,11 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
+      # The one API call here is retried once; if it still fails, the run
+      # fails with NO status posted — without a resolved head SHA there is
+      # nothing to target. That window exists only on issue_comment runs and
+      # leaves the prior status standing (identical to the pre-issue_comment
+      # behavior); the next verdict post/edit re-fires a fresh evaluation.
       - name: Resolve PR facts (number, draft, head SHA)
         id: pr
         env:
@@ -113,7 +123,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
             num="${{ github.event.issue.number }}"
-            gh api "repos/${{ github.repository }}/pulls/${num}" > pr.json
+            gh api "repos/${{ github.repository }}/pulls/${num}" > pr.json \
+              || { sleep 5; gh api "repos/${{ github.repository }}/pulls/${num}" > pr.json; }
             {
               echo "number=${num}"
               echo "draft=$(jq -r '.draft' pr.json)"
@@ -127,18 +138,22 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-      # Checkout is pinned to the RESOLVED PR HEAD on every trigger type. The
-      # default checkout ref varies by event (merge ref for pull_request, BASE
-      # branch for review/comment events, default branch for issue_comment), so
-      # without the pin the detector's provenance — which tree's scripts run —
-      # silently depended on which event fired. Head provenance everywhere
-      # matches the documented head-run model above.
+      # Checkout is pinned to the DEFAULT BRANCH on every trigger type: the
+      # detector needs only the GitHub API and the PR number, never the PR's
+      # tree, and every trigger here runs base-context with statuses:write —
+      # a head checkout would execute untrusted fork code (npm ci lifecycle
+      # scripts, the detector itself) in a privileged run and make the
+      # required check forgeable. The default ref also removes the
+      # per-event-type provenance variance (merge ref vs base vs default).
+      # persist-credentials off: nothing after checkout needs git-embedded
+      # credentials; the detector uses GH_TOKEN from env.
       - name: Check out repository
         if: steps.pr.outputs.draft == 'false'
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ steps.pr.outputs.head_sha }}
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
 
       - name: Set up Node.js
         if: steps.pr.outputs.draft == 'false'
@@ -192,8 +207,13 @@ jobs:
       # check exists to catch. A missing/unparseable evidenceState (e.g. an
       # earlier checkout/npm-ci failure that skipped the detector step
       # entirely) fails CLOSED to `failure`, never "no status".
+      # !cancelled() (not always()): a run superseded via cancel-in-progress
+      # has no evidenceState and must NOT post — always() would fire on
+      # cancellation and race the newer run with a spurious `failure`. A
+      # merely-failed detector step still posts (fail-closed) because
+      # !cancelled() is true on step failure.
       - name: Report gate-evidence status on the PR head SHA
-        if: always() && steps.pr.outputs.draft == 'false'
+        if: ${{ !cancelled() && steps.pr.outputs.draft == 'false' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

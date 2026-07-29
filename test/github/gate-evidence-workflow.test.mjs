@@ -48,13 +48,21 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.ok(!("concurrency" in workflow), "concurrency must not be declared at workflow level");
   assert.ok(job.concurrency, "job-level concurrency group required");
   assert.equal(job.concurrency["cancel-in-progress"], true);
+  assert.equal(
+    job.concurrency.group,
+    "gate-evidence-${{ github.event.pull_request.number || github.event.issue.number }}",
+  );
   // pull_request/review events skip drafts via the payload; issue_comment runs
   // start only for PR comments carrying the gate-comment marker (draft state is
   // resolved in-job, since issue_comment payloads have no pull_request object).
-  assert.match(job.if, /github\.event\.pull_request\.draft == false/);
-  assert.match(job.if, /github\.event_name == 'issue_comment'/);
-  assert.match(job.if, /github\.event\.issue\.pull_request/);
-  assert.match(job.if, /### Gate review:/);
+  // Exact-composition pin: substring checks alone would let a boolean rewrite
+  // (e.g. an || that opens the guard) slip through.
+  assert.equal(
+    job.if.replace(/\s+/gu, " ").trim(),
+    "(github.event_name != 'issue_comment' && github.event.pull_request.draft == false) || " +
+      "(github.event_name == 'issue_comment' && github.event.issue.pull_request && " +
+      "contains(github.event.comment.body, '### Gate review:'))",
+  );
   assert.equal(workflow.permissions.statuses, "write");
 });
 
@@ -75,14 +83,34 @@ test("gate-evidence posts an explicit status to the resolved PR head SHA, not th
   const factsStep = steps.find((step) => step.id === "pr");
   assert.ok(factsStep, "expected a Resolve-PR-facts step with id 'pr'");
   assert.match(factsStep.run, /issue_comment/);
+  assert.match(factsStep.run, /number=/);
   assert.match(factsStep.run, /head_sha=/);
   assert.match(factsStep.run, /draft=/);
 
+  // Evaluation code must be TRUSTED: checkout pinned to the default branch
+  // (never the PR head — a head checkout in these base-context statuses:write
+  // runs would let a fork PR forge the required check), with no persisted
+  // git credentials.
+  const checkoutStep = steps.find((step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout"));
+  assert.ok(checkoutStep, "expected a checkout step");
+  assert.equal(checkoutStep.with.ref, "${{ github.event.repository.default_branch }}");
+  assert.equal(checkoutStep.with["persist-credentials"], false);
+
+  // The detector must consume the RESOLVED number, not a payload field that
+  // is absent on issue_comment events.
+  const detectorStep = steps.find((step) => step.id === "gate_check");
+  assert.ok(detectorStep, "expected the detector step");
+  assert.match(detectorStep.run, /--pr "\$\{\{ steps\.pr\.outputs\.number \}\}"/);
+
   const statusStep = steps.find((step) => typeof step.run === "string" && step.run.includes("gh api --method POST"));
   assert.ok(statusStep, "expected a step posting an explicit commit status");
-  // always(): a failed detector must still fail-closed post a status; the
-  // draft guard keeps the draft no-op on every trigger type.
-  assert.equal(statusStep.if, "always() && steps.pr.outputs.draft == 'false'");
+  // !cancelled() (not always()): a failed detector still fail-closed posts,
+  // but a run superseded via cancel-in-progress must NOT race the newer run
+  // with a spurious failure; the draft guard keeps the draft no-op.
+  assert.equal(
+    statusStep.if.replace(/\s+/gu, " ").trim(),
+    "${{ !cancelled() && steps.pr.outputs.draft == 'false' }}",
+  );
   assert.match(statusStep.run, /statuses\/\$\{\{ steps\.pr\.outputs\.head_sha \}\}/);
   assert.match(statusStep.run, /context=gate-evidence/);
 
