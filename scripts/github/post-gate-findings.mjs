@@ -211,7 +211,11 @@ export function parsePostGateFindingsCliArgs(argv) {
       continue;
     }
     if (token.name === "findings-file") {
-      options.findingsFile = requireTokenValue(token, parseError).trim();
+      const findingsFile = requireTokenValue(token, parseError).trim();
+      if (findingsFile.length === 0) {
+        throw parseError("--findings-file requires a non-empty path");
+      }
+      options.findingsFile = findingsFile;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;

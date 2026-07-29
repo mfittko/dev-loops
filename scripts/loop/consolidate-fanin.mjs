@@ -135,7 +135,11 @@ export function parseConsolidateFaninCliArgs(argv) {
       continue;
     }
     if (token.name === "out") {
-      options.out = requireTokenValue(token, parseError).trim();
+      const out = requireTokenValue(token, parseError).trim();
+      if (out.length === 0) {
+        throw parseError("--out requires a non-empty path");
+      }
+      options.out = out;
       continue;
     }
     if (token.name === "pr-checklist-matrix") {

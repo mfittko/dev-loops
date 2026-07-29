@@ -507,3 +507,10 @@ test("--repo-root fails closed on a nonexistent directory and an empty value", a
     /non-empty path/,
   );
 });
+
+test("--out rejects a whitespace-only value at parse time", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "   "]),
+    /non-empty path/,
+  );
+});
