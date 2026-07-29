@@ -33,6 +33,12 @@ position and Status field values.
 
 ## Board identification
 
+<!-- rule: QUEUE-BOARD-DEVLOOPS-RESOLUTION -->
+Every operator-facing `scripts/projects/*` queue command **MUST** resolve the board from
+`.devloops` (`tracker.board` / `queue.board`, number or title) when `--project` is omitted;
+an explicit `--project` overrides. Enforced by
+`test/contracts/queue-board-resolution-contract.test.mjs`.
+
 ### Owner and project
 
 A board is identified by its owning entity (user or organization) and project title.
