@@ -68,9 +68,17 @@ practice:
 - **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
   GitHub's own token for every non-draft PR, re-firing on push, ready-for-review,
-  a submitted review, and a standalone review comment — so a newly-opened
-  unresolved thread re-evaluates the check instead of leaving a SHA-pinned green
-  stale on the thread axis. (There is no `pull_request_review_thread` Actions
+  a submitted review, a standalone review comment, and a created/edited PR issue
+  comment carrying the gate-comment marker (`### Gate review:`) — so a
+  newly-opened unresolved thread re-evaluates the check instead of leaving a
+  SHA-pinned green stale on the thread axis, and posting a gate verdict itself
+  re-evaluates the check instead of leaving a stale pre-verdict
+  `pending`/`failure` blocking a satisfied PR. Evaluation always runs the
+  DEFAULT BRANCH's detector (trusted code; the resolved PR head SHA is only the
+  status target). Recovery for a lost/failed run when the verdict comment
+  already exists: edit that comment (`scripts/github/edit-comment.mjs`) — the
+  `edited` event re-fires the check. `gh run rerun` is NOT a recovery path (it
+  replays the stale original event payload). (There is no `pull_request_review_thread` Actions
   trigger, so thread resolve/unresolve is not itself a re-fire event; a
   newly-appearing unresolved thread arrives via a submitted review or a review
   comment, both of which do re-fire. One narrow residual remains: a bare
@@ -78,10 +86,10 @@ practice:
   accompanying review or comment, fires only that non-triggerable event and so
   does not re-fire the check — bounded by the maintainer-gated merge, and
   re-caught on the next push, review, or comment.) The `gate-evidence`
-  context itself is always an explicit commit status posted to the PR's actual
-  head SHA (not the triggering job's own check-run, which for the
-  review/thread/comment event types would land on the base branch's latest
-  commit instead of the PR head). This is what closes the ready/merge bypass —
+  context itself is always an explicit commit status posted to the resolved PR
+  head SHA (not the triggering job's own check-run, which for the non-
+  `pull_request` event types would land on the wrong commit — the base branch's
+  latest for review events, the default branch's for issue_comment). This is what closes the ready/merge bypass —
   a direct GitHub API call (MCP/REST, web UI, a raw `gh` invocation outside the
   hook) skips the client-side path entirely but still cannot merge without a
   green `gate-evidence` check **once branch protection on `main` requires it**.

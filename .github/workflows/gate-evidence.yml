@@ -54,11 +54,12 @@ name: Gate evidence
 # residual: a bare "Unresolve conversation" UI action on an already-resolved
 # thread with no accompanying review/comment fires only that non-triggerable
 # event and is not re-caught until the next push/review/comment — bounded by the
-# maintainer-gated merge.) Both
-# are triggered by base-repo actions and run in the base-repo context, so they
-# get this workflow's declared permissions (including `statuses: write`) even
-# when the PR head is a fork, and both carry the same `pull_request` object
-# (number, draft, head.sha, ...) that this workflow already reads.
+# maintainer-gated merge.) All the added
+# events are triggered by base-repo actions and run in the base-repo context,
+# so they get this workflow's declared permissions (including `statuses:
+# write`) even when the PR head is a fork; the two review events carry the
+# `pull_request` payload object directly, while issue_comment does not — hence
+# the Resolve-PR-facts step.
 #
 # Head-SHA mismatch on the non-pull_request event types: unlike `pull_request`
 # (whose implicit job check-run GitHub auto-associates with the PR's head
