@@ -50,6 +50,7 @@ export function isTrivialDocumentationOnlyPath(filePath) {
   // case/whitespace-sensitive, so classifying the raw input could disagree.
   if (normalized.startsWith("docs/")) return classifyFile(normalized) === "docs";
   return normalized.endsWith(".md")
+    || normalized.endsWith(".markdown")
     || normalized.endsWith(".mdx")
     || normalized.endsWith(".txt")
     || normalized.endsWith(".rst")

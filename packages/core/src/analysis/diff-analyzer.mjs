@@ -23,7 +23,7 @@ const DOTFILE_CONFIG_BASENAMES = new Set([".devloops", ".nvmrc", ".ruby-version"
  * @property {string[]} extensions — unique file extensions (lowercase, with dot)
  * @property {string[]} directories — unique top-level path segments
  * @property {boolean} renameOnly — true when all entries are renames (no adds/deletes/modifies)
- * @property {boolean} allDocs — true when all files are under docs/ or are .md
+ * @property {boolean} allDocs — true when all files are under docs/ or have a docs extension (.md/.markdown)
  */
 
 /**
@@ -252,7 +252,7 @@ export function diffHasSecuritySeam(diffOutput) {
  *
  * Detects:
  * - COMMENT_ONLY: only comment lines changed
- * - DOCS_ONLY: only .md files changed (from extensions)
+ * - DOCS_ONLY: only docs-extension files changed (.md/.markdown, from extensions)
  * - CONFIG_ONLY: only config files changed
  * - TEST_ONLY: only test files changed
  * - RENAME_ONLY: all renames, no content changes
