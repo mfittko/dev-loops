@@ -39,6 +39,7 @@ test("parsePostGateFindingsCliArgs parses all required args", () => {
     gate: "draft_gate",
     headSha: "abc1234567890abcdef",
     findings: "[]",
+    findingsFile: undefined,
   });
 });
 
@@ -120,6 +121,71 @@ test("parseFindings rejects missing angle", () => {
 
 test("parseFindings rejects missing summary", () => {
   assert.throws(() => parseFindings(JSON.stringify([{ severity: "must-fix", angle: "scope" }])), /summary/);
+});
+
+test("parseFindings derives a deferred disposition for a defer-severity finding with no explicit disposition", () => {
+  const findings = parseFindings(JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit" }]));
+  assert.equal(findings[0].disposition, "deferred");
+});
+
+test("parseFindings keeps an explicit disposition on a defer-severity finding", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "defer", angle: "naming", summary: "Style nit", disposition: "disputed" },
+  ]));
+  assert.equal(findings[0].disposition, "disputed");
+});
+
+// ---------------------------------------------------------------------------
+// --findings-file (mutually exclusive with --findings, identical validation)
+// ---------------------------------------------------------------------------
+
+test("postGateFindings accepts findings from --findings-file", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-file-"));
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-repo-"));
+  try {
+    const findingsFile = path.join(tmpDir, "findings.json");
+    await writeFile(findingsFile, FINDINGS_JSON, "utf8");
+    const { env, ghPath } = await writeGhStub(tmpDir, [
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
+        stdout: "[[]]\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/42/comments", "-f"],
+        assertArgContains: ["dev-loops:gate-findings"],
+        stdout: JSON.stringify({ id: 303, html_url: "https://github.com/owner/repo/pull/42#issuecomment-303" }) + "\n",
+      },
+    ]);
+    const result = await postGateFindings(
+      { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234", findingsFile },
+      { env, ghCommand: ghPath, repoRoot },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.findingsCount, 3);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("postGateFindings rejects both --findings and --findings-file", async () => {
+  await assert.rejects(
+    () => postGateFindings({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234", findings: "[]", findingsFile: "/tmp/x.json" }),
+    /mutually exclusive/,
+  );
+});
+
+test("postGateFindings rejects a missing --findings-file", async () => {
+  await assert.rejects(
+    () => postGateFindings({
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findingsFile: "/nonexistent/post-gate-findings-file-does-not-exist.json",
+    }),
+    /Cannot read --findings-file/,
+  );
 });
 
 // ---------------------------------------------------------------------------

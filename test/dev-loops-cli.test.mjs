@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -503,4 +504,61 @@ node "$(dirname "$0")/gh-impl.mjs" "$@"
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+// `doctor` self-diagnoses a stale install (#1481): a dangling scripts/
+// reference or an unexplained tooling failure is often really an old
+// global/local `dev-loops` shadowing a newer checkout. These exercise the
+// injected `fetchLatestVersion` seam so the registry call never actually
+// leaves the process in tests.
+const runningVersion = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")).version;
+
+test("doctor warns when the running install is behind the latest published version", async () => {
+  const doctorStdout = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["doctor"],
+    runtime: createRuntime(),
+    stdout: doctorStdout.stream,
+    stderr: createBufferStream().stream,
+    fetchLatestVersion: async () => "9999.0.0",
+  });
+
+  assert.equal(exitCode, 0);
+  const out = doctorStdout.read();
+  assert.match(out, new RegExp(`Running dev-loops@${runningVersion.replace(/[.+]/g, "\\$&")} from `));
+  assert.match(out, /⚠️ Install freshness/);
+  assert.match(out, /latest published is 9999\.0\.0/);
+  assert.match(out, /npx dev-loops@latest/);
+});
+
+test("doctor does not warn when the running install matches the latest published version", async () => {
+  const doctorStdout = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["doctor"],
+    runtime: createRuntime(),
+    stdout: doctorStdout.stream,
+    stderr: createBufferStream().stream,
+    fetchLatestVersion: async () => runningVersion,
+  });
+
+  assert.equal(exitCode, 0);
+  const out = doctorStdout.read();
+  assert.match(out, /✅ Install freshness/);
+  assert.match(out, /Running the latest published version/);
+});
+
+test("doctor degrades gracefully (no crash, no warning) when the registry is unreachable", async () => {
+  const doctorStdout = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["doctor"],
+    runtime: createRuntime(),
+    stdout: doctorStdout.stream,
+    stderr: createBufferStream().stream,
+    fetchLatestVersion: async () => { throw new Error("ETIMEDOUT"); },
+  });
+
+  assert.equal(exitCode, 0);
+  const out = doctorStdout.read();
+  assert.match(out, /✅ Install freshness/);
+  assert.match(out, /latest-version check skipped \(registry unreachable\)/);
 });

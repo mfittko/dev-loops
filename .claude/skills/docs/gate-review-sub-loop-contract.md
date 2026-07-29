@@ -286,7 +286,11 @@ hash and compare those bytes exactly as before, oblivious to which mode produced
 
 **Enforcement.** Each reviewer passes `--prefix-hash <sha256>` (or `--prefix-file <path>`,
 hashed by the tool) to `verify-fresh-review-context.mjs`, which persists the hash on the
-reviewer's per-scope sentinel. Before Phase 3 consolidation, the fan-in MUST run
+reviewer's per-scope sentinel. An orchestrator that briefs reviewers with its OWN
+composed prefix records it with `write-gate-context.mjs --prefix-file <path>` — the
+record file then carries those exact bytes (`prefixMode: "file"`) instead of the
+tool's self-rendered prefix, so the fan-in verification below agrees with the actual
+briefing without any hand-edited record files. Before Phase 3 consolidation, the fan-in MUST run
 `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>`, which fails closed (exit 1)
 when sentinels for the same round record two or more DISTINCT prefix hashes, or when any
 sentinel for the round records no prefix hash at all — a missing hash means the
@@ -379,12 +383,19 @@ Before consolidating, run `scripts/github/verify-briefing-prefixes.mjs --head-sh
 missing prefix hashes across this round's reviewer sentinels) MUST stop the pass rather
 than proceed to consolidation.
 
-Merge the parallel reviewer findings into one consolidated fix plan using the
-pure `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` (not manual
-concatenation). It collates the per-angle artifacts, gates `clean` on
-`blockCleanOnFindingSeverities`, returns `blocked` when any per-angle artifact is
-malformed/missing, and `toFindingsLogShape` maps the result into the
-`write-gate-findings-log.mjs` `--findings` shape:
+Merge the parallel reviewer findings into one consolidated fix plan with the
+sanctioned fan-in CLI — `dev-loops gate consolidate-fanin --findings-dir <dir>`
+(`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure
+`consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` — never manual
+concatenation and never an inline interpreter over the artifacts. One
+invocation reads the per-angle artifacts directory and emits the consolidated
+findings array (the `--findings-json` input shape), the
+`write-gate-findings-log.mjs` ledger shape (via `--findings-file`), the
+severity counts, and the overall verdict, upserting the mandatory
+`pr-checklist-matrix` entry when asked (`--pr-checklist-matrix clean`). It
+collates the per-angle artifacts, gates `clean` on
+`blockCleanOnFindingSeverities`, and returns `blocked` when any per-angle
+artifact is malformed/missing:
 
 - collate findings from all review angles
 - classify each finding: `must-fix`, `worth-fixing-now`, `defer`
@@ -532,8 +543,14 @@ node scripts/github/write-gate-findings-log.mjs \
   --gate <draft_gate|pre_approval_gate> \
   --head-sha <sha> \
   --verdict <clean|findings_present|blocked> \
-  --findings '[{"severity":"must-fix","angle":"scope","summary":"...","disposition":"accepted-for-fix"}]'
+  --findings-file <path>   # or inline: --findings '[{"severity":"must-fix","angle":"scope","summary":"...","disposition":"accepted-for-fix"}]'
 ```
+
+`--findings-file` reads the same JSON array from a file (identical validation) —
+use it for any non-trivial ledger so the array never rides a shell string;
+`post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
+`ledger` output is exactly this shape. A finding with severity `defer` and no
+`disposition` gets `deferred` derived automatically by both tools.
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
 Each log entry records the full disposition: severity, angle, summary, affected files, and

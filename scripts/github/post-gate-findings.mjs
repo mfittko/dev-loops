@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
@@ -6,7 +7,7 @@ import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/c
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --findings <json>
+const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> (--findings <json> | --findings-file <path>)
 Post (or idempotently update) a visible, marker-tagged PR issue comment that lists the
 consolidated gate fan-out findings, grouped by severity. The comment is idempotent
 per gate: there is exactly one comment per gate, updated in place on each run
@@ -23,6 +24,8 @@ Required:
   --head-sha <sha>                 Current head SHA or hexadecimal prefix
   --findings <json>                JSON array of findings in the findings-log shape
                                    ([{severity, angle, summary, disposition?, files?}])
+  --findings-file <path>           Read the --findings JSON array from a file instead of an
+                                   inline argument (mutually exclusive with --findings; identical validation)
 Output (stdout, JSON):
   { "ok": true, "action": "created"|"updated"|"noop"|"skipped", ... }
 
@@ -69,28 +72,24 @@ function validateRepo(repo) {
   return repo;
 }
 
-export function parseFindings(raw) {
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw parseError("--findings must be valid JSON");
-  }
+// Validate + normalize a parsed --findings / --findings-file JSON array. Shared
+// by both flags so they carry identical validation.
+function validateFindingsArray(parsed, flagLabel) {
   if (!Array.isArray(parsed)) {
-    throw parseError("--findings must be a JSON array");
+    throw parseError(`${flagLabel} must be a JSON array`);
   }
   return parsed.map((f, i) => {
     if (!f || typeof f !== "object") {
-      throw parseError(`--findings[${i}] must be an object`);
+      throw parseError(`${flagLabel}[${i}] must be an object`);
     }
     if (!f.severity || !VALID_SEVERITIES.has(f.severity)) {
-      throw parseError(`--findings[${i}].severity must be one of: must-fix, worth-fixing-now, defer`);
+      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, defer`);
     }
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
-      throw parseError(`--findings[${i}].angle is required`);
+      throw parseError(`${flagLabel}[${i}].angle is required`);
     }
     if (!f.summary || typeof f.summary !== "string" || f.summary.trim().length === 0) {
-      throw parseError(`--findings[${i}].summary is required`);
+      throw parseError(`${flagLabel}[${i}].summary is required`);
     }
     const entry = {
       severity: f.severity,
@@ -99,12 +98,55 @@ export function parseFindings(raw) {
     };
     if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
       entry.disposition = f.disposition.trim();
+    } else if (f.severity === "defer") {
+      // Mirrors write-gate-findings-log.mjs / consolidate-fanin.mjs: a
+      // non-blocking defer finding with no explicit disposition defaults to
+      // "deferred" rather than rendering with no disposition suffix.
+      entry.disposition = "deferred";
     }
     if (Array.isArray(f.files)) {
       entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0).map(x => x.trim());
     }
     return entry;
   });
+}
+
+export function parseFindings(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw parseError("--findings must be valid JSON");
+  }
+  return validateFindingsArray(parsed, "--findings");
+}
+
+// Resolve the findings array from either --findings (inline JSON) or
+// --findings-file (a path to a file containing the same JSON array) —
+// mutually exclusive, identical validation either way.
+async function resolveFindings(options) {
+  if (options.findings !== undefined && options.findingsFile !== undefined) {
+    throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
+  }
+  if (options.findingsFile !== undefined) {
+    let raw;
+    try {
+      raw = await readFile(options.findingsFile, "utf8");
+    } catch (err) {
+      throw parseError(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw parseError(`--findings-file "${options.findingsFile}" must contain valid JSON`);
+    }
+    return validateFindingsArray(parsed, "--findings-file");
+  }
+  if (options.findings === undefined) {
+    throw parseError("Either --findings <json> or --findings-file <path> is required");
+  }
+  return parseFindings(options.findings);
 }
 
 export function parsePostGateFindingsCliArgs(argv) {
@@ -115,6 +157,7 @@ export function parsePostGateFindingsCliArgs(argv) {
     gate: undefined,
     headSha: undefined,
     findings: undefined,
+    findingsFile: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -125,6 +168,7 @@ export function parsePostGateFindingsCliArgs(argv) {
       gate: { type: "string" },
       "head-sha": { type: "string" },
       findings: { type: "string" },
+      "findings-file": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -166,13 +210,23 @@ export function parsePostGateFindingsCliArgs(argv) {
       options.findings = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "findings-file") {
+      options.findingsFile = requireTokenValue(token, parseError).trim();
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  const missing = ["repo", "pr", "gate", "headSha", "findings"]
+  const missing = ["repo", "pr", "gate", "headSha"]
     .filter(k => options[k] === undefined);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
+  }
+  if (options.findings === undefined && options.findingsFile === undefined) {
+    throw parseError("Missing required arguments: findings (pass --findings <json> or --findings-file <path>)");
+  }
+  if (options.findings !== undefined && options.findingsFile !== undefined) {
+    throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
   }
   return options;
 }
@@ -338,7 +392,7 @@ async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
 }
 
 export async function postGateFindings(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
-  const findings = parseFindings(options.findings);
+  const findings = await resolveFindings(options);
   // loadDevLoopConfig never throws: it returns { config, warnings, errors }.
   // A non-empty errors array means the config could not be loaded/validated, so
   // log it (stderr) and fall back to default behavior (config-unavailable →

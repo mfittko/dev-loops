@@ -21,7 +21,7 @@ import {
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
-import { resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
+import { resolveGateAngleContract, resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -356,14 +356,21 @@ function deriveGateConfig(settings, subGate) {
   const gateKey = subGate === "pre-approval" ? "preApproval" : subGate;
   if (!settings?.gates?.[gateKey]) return undefined;
 
-  // Route through the canonical resolver rather than re-parsing
-  // gates.<gate>.angles by hand: resolveGateConfig already folds the unified
-  // angle-entry shape (mandatory/enabled per-entry, D3) into this same
-  // exclude-filtered angles + separate excludeAngles list the envelope
-  // contract has always shipped.
+  // Route through the canonical resolvers rather than re-parsing
+  // gates.<gate>.angles by hand: resolveGateConfig folds the unified
+  // angle-entry shape (mandatory/enabled per-entry, D3) into excludeAngles/
+  // blockCleanOnFindingSeverities/requireCi, the envelope contract's
+  // long-standing shape. `angles` specifically comes from
+  // resolveGateAngleContract's `pool` — the SAME resolved angle pool (mandatory-
+  // merged, exclude-filtered, and additive-pool-expanded when
+  // gates.<gate>.dynamic.additive is on) that upsert-checkpoint-verdict.mjs's
+  // checkFanoutAngleCoverage validates fan-out results against — so the
+  // envelope's advertised angle vocabulary can never drift from what a
+  // fan-out verdict is actually enforced against.
   const resolved = resolveGateConfig(settings, gateKey);
+  const { pool } = resolveGateAngleContract(settings, gateKey);
   return {
-    angles: resolved.angles ?? [],
+    angles: pool ?? [],
     excludeAngles: resolved.excludeAngles.length > 0 ? resolved.excludeAngles : undefined,
     blockCleanOnFindingSeverities: resolved.blockCleanOnFindingSeverities,
     requireCi: resolved.requireCi,

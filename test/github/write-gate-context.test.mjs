@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -2000,6 +2001,175 @@ test("writeGateContext failure-ordering: a prefix-write failure leaves NO JSON a
       repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
     assert.equal(artifact, null, "no partial gate-context JSON may exist when the prefix write failed");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// --prefix-file — record an orchestrator-supplied prefix VERBATIM instead of
+// self-rendering (an orchestrator that briefs reviewers with its OWN prefix
+// can otherwise never match verify-briefing-prefixes.mjs's on-disk record).
+// ---------------------------------------------------------------------------
+
+test("writeGateContext: omitted --prefix-file renders the same bytes as before (snapshot of the default self-rendered path)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefixfile-baseline-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "80", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890def",
+      "--angles", '["scope"]',
+      "--pr-body", "Fixed input parsing.",
+      "--acceptance-criteria", "#1481",
+    ]);
+    const result = await writeGateContext(options, { repoRoot });
+    assert.equal(result.prefixMode, "inline");
+    assert.equal(result.artifact.prefixMode, "inline");
+
+    const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    // Fixed-input snapshot: the rendered prefix for this exact CLI input is
+    // pinned byte-for-byte so a future accidental change to the render path
+    // (untouched by --prefix-file) is caught here.
+    const expected = [
+      "# Gate Review Briefing — invariant prefix (GATE-EXEC-BRIEFING-PREFIX)",
+      "",
+      "repo: owner/repo",
+      "pr: #80",
+      "gate: draft_gate",
+      `head: abc1234567890def`,
+      `worktree: ${path.resolve(repoRoot)}`,
+      "prefixMode: inline",
+      "",
+      "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-angle> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt`. Refuse to proceed on contamination or a missing artifact.",
+      "",
+      "## PR body",
+      "",
+      "Fixed input parsing.",
+      "",
+      "## Diff at reviewed head (abc1234567890def)",
+      "",
+      "(no diff text captured for this bundle)",
+      "",
+      "## Changed files + adjacent-code summary",
+      "",
+      "Changed files (0):",
+      "Adjacent files (0): (no adjacent-code bundle for this briefing)",
+    ].join("\n") + "\n";
+    assert.equal(onDisk, expected);
+    assert.equal(createHash("sha256").update(onDisk, "utf8").digest("hex"), result.prefixHash);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: --prefix-file records the exact bytes of the supplied file (not re-rendered), prefixMode:file, prefixHash is sha256 of those bytes", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefixfile-"));
+  try {
+    // Deliberately NOT a well-formed rendered prefix (no trailing newline, odd
+    // whitespace) — proves the bytes are recorded verbatim, not re-rendered or
+    // normalized.
+    const orchestratorPrefix = "# Orchestrator's own briefing\r\nNo trailing newline, no normalization.";
+    const prefixFile = path.join(repoRoot, "orchestrator-prefix.txt");
+    await writeFile(prefixFile, orchestratorPrefix, "utf8");
+    const manuallyComputedHash = createHash("sha256").update(orchestratorPrefix, "utf8").digest("hex");
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "81", "--gate", "draft_gate",
+      "--head-sha", "def4567890abc123",
+      "--angles", '["scope"]',
+      "--prefix-file", prefixFile,
+    ]);
+    const result = await writeGateContext(options, { repoRoot });
+
+    assert.equal(result.prefixMode, "file");
+    assert.equal(result.artifact.prefixMode, "file");
+    assert.equal(result.prefixHash, manuallyComputedHash);
+
+    const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath));
+    assert.equal(onDisk.toString("utf8"), orchestratorPrefix, "record file holds the EXACT bytes of --prefix-file, no rendering/normalization");
+    assert.equal(createHash("sha256").update(onDisk).digest("hex"), manuallyComputedHash);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: --prefix-file fails closed (throws) on a missing file", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefixfile-missing-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "82", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+      "--prefix-file", path.join(repoRoot, "does-not-exist.txt"),
+    ]);
+    await assert.rejects(() => writeGateContext(options, { repoRoot }), /--prefix-file.*unreadable/);
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 82, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(artifact, null, "no artifact written when --prefix-file fails closed");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: --prefix-file fails closed (throws) on an empty file", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefixfile-empty-"));
+  try {
+    const prefixFile = path.join(repoRoot, "empty-prefix.txt");
+    await writeFile(prefixFile, "", "utf8");
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "83", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+      "--prefix-file", prefixFile,
+    ]);
+    await assert.rejects(() => writeGateContext(options, { repoRoot }), /--prefix-file.*empty/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("dogfood: an orchestrator-supplied --prefix-file record verifies clean via verify-fresh-review-context.mjs + verify-briefing-prefixes.mjs (the actual bug this fixes)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await mkdir(path.join(repoRoot, "tmp"), { recursive: true });
+    // Simulate an orchestrator that already rendered ITS OWN prefix (distinct
+    // bytes from this module's self-render) and briefed reviewers with it.
+    const orchestratorPrefixPath = path.join(repoRoot, "tmp", "orchestrator-prefix.txt");
+    const orchestratorPrefixText = "# Orchestrator briefing\n\nThe orchestrator's own prefix bytes.\n";
+    await writeFile(orchestratorPrefixPath, orchestratorPrefixText, "utf8");
+
+    await main([
+      "--repo", "owner/repo", "--pr", "90", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["scope"]',
+      "--base", baseSha,
+      "--prefix-file", orchestratorPrefixPath,
+    ], { repoRoot });
+
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha }, { repoRoot });
+    assert.ok(artifact, "artifact written");
+    assert.equal(artifact.prefixMode, "file");
+
+    const recordedPrefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha });
+    const recordedBytes = await readFile(path.resolve(repoRoot, recordedPrefixPath), "utf8");
+    assert.equal(recordedBytes, orchestratorPrefixText, "on-disk record matches the orchestrator's own prefix VERBATIM");
+
+    const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha });
+
+    // Reviewers hash the SAME orchestrator prefix they were actually briefed
+    // with (not this module's self-rendered one).
+    const r1 = spawnSync("node", [contextGuardPath, "--scope", "scope-a", "--context-path", contextPath, "--prefix-file", orchestratorPrefixPath], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(r1.status, 0, r1.stderr);
+    const r2 = spawnSync("node", [contextGuardPath, "--scope", "scope-b", "--context-path", contextPath, "--prefix-file", orchestratorPrefixPath], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(r2.status, 0, r2.stderr);
+
+    const fanin = spawnSync("node", [briefingCheckerPath, "--head-sha", headSha], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(fanin.status, 0, fanin.stderr);
+    const finalResult = JSON.parse(fanin.stdout.trim());
+    assert.equal(finalResult.verified, true, JSON.stringify(finalResult));
+    assert.equal(finalResult.reviewerCount, 2);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
