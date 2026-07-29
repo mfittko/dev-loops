@@ -84,14 +84,6 @@ permissions:
   issues: read
   statuses: write
 
-# One evaluation per PR at a time; a superseded in-flight run is cancelled —
-# the newer run reflects newer comment/thread state and posts the status.
-# Matters since issue_comment [created, edited] raises the run rate (every
-# verdict post and idempotent same-head upsert edit fires one).
-concurrency:
-  group: gate-evidence-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
-
 jobs:
   gate-evidence-runner:
     # pull_request/review events: skip drafts via the payload. issue_comment:
@@ -102,6 +94,16 @@ jobs:
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
        contains(github.event.comment.body, '### Gate review:'))
+    # One evaluation per PR at a time; a superseded in-flight run is cancelled —
+    # the newer run reflects newer comment/thread state and posts the status.
+    # JOB-level deliberately: a workflow-level group is joined by every run
+    # BEFORE the job `if` is evaluated, so a marker-skipped ordinary-comment
+    # run would cancel a live eligible evaluation and then post nothing —
+    # re-creating the stale-status deadlock this workflow exists to close. A
+    # job-level group is only joined by jobs that actually start.
+    concurrency:
+      group: gate-evidence-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       - name: Resolve PR facts (number, draft, head SHA)

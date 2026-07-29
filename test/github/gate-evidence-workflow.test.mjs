@@ -42,6 +42,12 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.ok(fallback.includes("### Gate review:"), "fallback poster must emit the marker heading the workflow guard matches");
 
   const job = workflow.jobs["gate-evidence-runner"];
+  // Concurrency must live at JOB level: a workflow-level group is joined
+  // before the job `if` runs, letting a marker-skipped ordinary-comment run
+  // cancel a live evaluation and post nothing (stale-status deadlock).
+  assert.ok(!("concurrency" in workflow), "concurrency must not be declared at workflow level");
+  assert.ok(job.concurrency, "job-level concurrency group required");
+  assert.equal(job.concurrency["cancel-in-progress"], true);
   // pull_request/review events skip drafts via the payload; issue_comment runs
   // start only for PR comments carrying the gate-comment marker (draft state is
   // resolved in-job, since issue_comment payloads have no pull_request object).
