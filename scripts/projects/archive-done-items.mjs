@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
-import { resolveSettings, parseProjectRef, findProject } from "./_resolve-project.mjs";
+import { resolveSettings, parseProjectRef, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
@@ -17,7 +17,8 @@ Options:
   --project <number|id|board-uri>     Project number, node ID, or board URI
                                       (e.g. https://github.com/users/me/projects/3).
                                       When omitted, resolved from .devloops
-                                      queue.board.number / queue.board.title.
+                                      tracker.board (or the deprecated
+                                      queue.board) number / title.
   --older-than <duration>             Closed-for threshold. Format: <n><unit> where unit is
                                       h (hours), d (days), or w (weeks). Default resolves
                                       from .devloops queue.archiveOlderThanDays, else 7d.
@@ -362,7 +363,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     : null;
   if (!projectRef && !projectTitle) {
     throw Object.assign(
-      new Error("--project is required (or configure queue.board.number / queue.board.title in .devloops)"),
+      new Error("--project is required (or set tracker.board — or the deprecated queue.board — number / title in .devloops)"),
       { code: "INVALID_PROJECT" },
     );
   }
@@ -444,11 +445,8 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
   // Resolve board + threshold defaults from .devloops when the flags are absent.
   // Precedence: explicit --project flag > queue.board.number/title.
   //             explicit --older-than flag > queue.archiveOlderThanDays > 7d.
+  applyDevloopsBoard(args, cwd);
   const settings = resolveSettings(cwd);
-  if (args.project === undefined && settings) {
-    if (settings.project) args.project = String(settings.project);
-    else if (settings.title) args.projectTitle = settings.title;
-  }
   if (args.olderThan === undefined && settings?.olderThanDays) {
     args.olderThanDefault = `${settings.olderThanDays}d`;
   }

@@ -8,7 +8,7 @@ The board provides durable, visible, shared state for queue ordering and item st
 
 - **Durable** — survives CI restarts, local machine wipes, and session boundaries
 - **Visible** — operators can inspect and reorder the queue from the GitHub UI
-- **Authoritative for membership + ordering when configured** — when a board is configured (`queue.board.number` or `queue.board.title`), `dev-loops queue run` reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` before running, so the board (not hand edits) drives **which** issues are worked and their order. Without a configured board, `dev-loops queue` falls back to the local queue file's entry order.
+- **Authoritative for membership + ordering when configured** — when a board is configured (`tracker.board`, or the deprecated `queue.board`; `number` or `title`), `dev-loops queue run` reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` before running, so the board (not hand edits) drives **which** issues are worked and their order. Without a configured board, `dev-loops queue` falls back to the local queue file's entry order.
 
 > Add work to the queue via the board (`dev-loops queue add ... --column "Next Up"`), not by hand-editing `.pi/dev-loop-queue.json`. With a populated board and an empty local queue, the runner reconciles the board's `Next Up` items in rather than reporting an empty queue. If a board is configured but `Next Up` is empty, the runner reports the canonical "queue empty — prioritize Backlog items into Next Up" (`reason: "next-up-empty"`) — distinct from the unconfigured-and-empty "Queue is empty".
 
@@ -107,9 +107,10 @@ is persisted.
 
 ### Configuring column names (opt-in)
 
-Both overrides live under the same opt-in `queue` section in `.devloops` that
-enables board sync (`queue.board.number` or `queue.board.title`). When the
-`queue` section is absent or disabled, status sync is a **no-op**: it makes **no
+Both overrides live under the opt-in `queue` section in `.devloops`; board sync
+itself is enabled by a configured board (`tracker.board`, or the deprecated
+`queue.board`; `number` or `title`). When no board is configured or sync is
+disabled, status sync is a **no-op**: it makes **no
 GitHub API calls and no board mutations**. (It may still read the local
 `.devloops` config in order to determine that sync is disabled.)
 
@@ -301,7 +302,9 @@ queue:
   reDispatchMaxRetries: 1
 ```
 
-The queue board URL and number are discoverable at runtime — no explicit config entry required.
+The queue board URL and number are discoverable at runtime; recording the board in `.devloops`
+(`tracker.board`) is what lets every queue command resolve it without `--project`
+(`QUEUE-BOARD-DEVLOOPS-RESOLUTION`).
 
 ## See also
 

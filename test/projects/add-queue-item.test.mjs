@@ -1066,7 +1066,7 @@ describe("add-queue-item", () => {
     it("main() fails closed with INVALID_PROJECT when neither --project nor projectTitle given", async () => {
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops", item: 10 }, { env: {}, runChild: mockRunChild([]) }),
-        (e) => e.code === "INVALID_PROJECT" && /queue\.board\.number/.test(e.message),
+        (e) => e.code === "INVALID_PROJECT" && /tracker\.board/.test(e.message),
       );
     });
 

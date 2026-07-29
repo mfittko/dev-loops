@@ -49,6 +49,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
+import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { EMPTY_NEXT_UP_MESSAGE } from "@dev-loops/core/loop/queue-board-ordering";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import {
@@ -68,7 +69,7 @@ const NEXT_UP_COLUMN = "Next Up";
 // operators see one string regardless of which layer detects it (#1091).
 const EMPTY_QUEUE_REASON = EMPTY_NEXT_UP_MESSAGE;
 
-const USAGE = `Usage: dev-loops queue resolve-active --repo <owner/name> --project <number|id>
+const USAGE = `Usage: dev-loops queue resolve-active --repo <owner/name> [--project <number|id>]
 
 Resolve the board's single continue target for bare \`/loop-continue\`:
 continues the one "${IN_PROGRESS_COLUMN}" item; if there is none, picks the HEAD
@@ -78,7 +79,9 @@ from Backlog.
 
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
-  --project <number|id>   Required. Project number (integer) or node ID.
+  --project <number|id>   Project number (integer) or node ID. When omitted,
+                          resolved from .devloops tracker.board (or the
+                          deprecated queue.board) number / title.
   --help, -h              Show this help.
 
 Output (stdout):
@@ -93,11 +96,12 @@ ${JQ_OUTPUT_USAGE}
 
 Exit codes (default / unfiltered output):
   0 — a single continue target resolved (in-progress or "${NEXT_UP_COLUMN}" head)
-  1 — usage or argument error
+  1 — usage or config error, including no board resolvable from --project or
+      .devloops (INVALID_PROJECT)
   2 — GitHub API error / invalid --jq filter
   3 — fail closed (pass an explicit issue/PR): multiple in-progress items, an
-      empty "${NEXT_UP_COLUMN}" column, or the board/project could not be
-      resolved (project, status field, or the column not found)
+      empty "${NEXT_UP_COLUMN}" column, or the configured board/project was
+      not found on GitHub (project, status field, or the column not found)
 
 With --jq/--silent the result is filtered to a value/predicate, so the exit code
 follows the shared jq-output contract (0 = truthy/ok, 1 = falsy/non-ok, 2 =
@@ -376,7 +380,7 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
   }
   const nextUpColumn = columnNames[LOGICAL_COLUMN.NEXT_UP];
   const listed = await listQueueItems(
-    { repo: args.repo, project: args.project, column: nextUpColumn },
+    { repo: args.repo, project: args.project, projectTitle: args.projectTitle, column: nextUpColumn },
     { env, runChild },
   );
   const items = listed.items ?? [];
@@ -444,7 +448,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
   }
   const inProgressColumn = columnNames[LOGICAL_COLUMN.IN_PROGRESS];
   const listed = await listQueueItems(
-    { repo: args.repo, project: args.project, column: inProgressColumn },
+    { repo: args.repo, project: args.project, projectTitle: args.projectTitle, column: inProgressColumn },
     { env, runChild },
   );
   const items = listed.items ?? [];
@@ -475,6 +479,10 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     stdout.write(USAGE);
     return;
   }
+
+  // Resolve the board from .devloops when --project is absent.
+  applyDevloopsBoard(args, cwd);
+
   try {
     const result = await main(args, { env, runChild, cwd });
     // Fail closed (zero/multiple) is a clean, expected outcome — distinct exit code 3,
