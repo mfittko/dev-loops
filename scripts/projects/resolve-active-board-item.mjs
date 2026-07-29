@@ -80,8 +80,8 @@ from Backlog.
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
   --project <number|id>   Project number (integer) or node ID. When omitted,
-                          resolved from .devloops queue.board.number /
-                          queue.board.title.
+                          resolved from .devloops tracker.board (or the
+                          deprecated queue.board) number / title.
   --help, -h              Show this help.
 
 Output (stdout):

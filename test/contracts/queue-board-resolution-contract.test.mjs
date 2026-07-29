@@ -52,9 +52,15 @@ test("every queue command accepting --project resolves the board via applyDevloo
 test("delegations into list-queue-items forward projectTitle alongside project", async () => {
   const offenders = [];
   for (const { name, source } of await projectScripts()) {
-    for (const [line] of source.matchAll(/^.*project: args\.project.*$/gm)) {
-      if (!line.includes("projectTitle")) offenders.push(`${name}: ${line.trim()}`);
-    }
+    const lines = source.split("\n");
+    lines.forEach((line, i) => {
+      if (!/\bproject: args\.project\b/.test(line)) return;
+      // projectTitle may sit on the same line or within the next few lines of
+      // the same object literal — a single-line requirement would fail on
+      // harmless formatting changes.
+      const window = lines.slice(i, i + 4).join("\n");
+      if (!window.includes("projectTitle")) offenders.push(`${name}: ${line.trim()}`);
+    });
   }
 
   assert.deepEqual(

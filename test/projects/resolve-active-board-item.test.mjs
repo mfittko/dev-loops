@@ -757,6 +757,15 @@ describe("board resolution from .devloops without --project (#1459)", () => {
     });
   });
 
+  it("tracker.board title-configured board (preferred key) resolves with no --project", async () => {
+    await withTempCwd('tracker:\n  board:\n    title: "Board"\n', async (cwd) => {
+      const child = boardRunChild({ columns: { "In Progress": [{ issueNumber: 11, title: "Doing" }] } });
+      const { code, out } = await cliNoProject(child, cwd);
+      assert.equal(code, 0);
+      assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 11 }, source: "in-progress" });
+    });
+  });
+
   it("number-configured board resolves with no --project", async () => {
     await withTempCwd("queue:\n  board:\n    number: 7\n", async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [{ issueNumber: 5, title: "Doing" }] } });
