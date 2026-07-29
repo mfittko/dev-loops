@@ -22,10 +22,11 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.deepEqual(triggers.pull_request.types, ["opened", "synchronize", "reopened", "ready_for_review"]);
   assert.deepEqual(triggers.pull_request_review.types, ["submitted"]);
   assert.deepEqual(triggers.pull_request_review_comment.types, ["created"]);
-  // #1464: verdicts are issue comments; created covers a fresh verdict post.
-  // edited is the lost-run recovery: editing an existing verdict comment
-  // re-fires the check (the idempotent same-head upsert is a suppressed noop
-  // that performs no edit, so it is NOT what edited covers).
+  // #1464: verdicts are issue comments; created covers the FIRST verdict on a
+  // PR. edited is the PRIMARY path for every later verdict — the upsert EDITS
+  // its existing marker comment on each new head / changed verdict — plus the
+  // manual lost-run recovery (edit the comment to re-fire). Only an identical
+  // same-head rerun noops with no event. BOTH types are load-bearing.
   assert.deepEqual(triggers.issue_comment.types, ["created", "edited"]);
 
   // Guard against a recurrence of the invalid `pull_request_review_thread` trigger
@@ -35,13 +36,27 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
     assert.ok(VALID_WORKFLOW_EVENTS.has(event), `unknown/invalid workflow trigger: ${event}`);
   }
 
-  // The trigger's marker literal must match what BOTH verdict producers
-  // actually emit — a drifted heading would silently disarm the re-fire.
-  const upsert = await readRepo("scripts/github/upsert-checkpoint-verdict.mjs");
-  const fallback = await readRepo("skills/dev-loop/scripts/post-gate-verdict-fallback.mjs");
-  assert.match(content, /### Gate review:/);
-  assert.ok(upsert.includes("### Gate review:"), "upsert-checkpoint-verdict must emit the marker heading the workflow guard matches");
-  assert.ok(fallback.includes("### Gate review:"), "fallback poster must emit the marker heading the workflow guard matches");
+  // The guard is startsWith(body, marker), so pin the RENDERED bodies of both
+  // producers: each must BEGIN with the marker, or the re-fire silently
+  // disarms. Source-substring greps would miss a preamble line added ahead of
+  // the heading.
+  const { renderGateReviewCommentBody } = await import("../../scripts/github/upsert-checkpoint-verdict.mjs");
+  const { renderFallbackGateReviewCommentBody } = await import("../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs");
+  const sample = {
+    gate: "pre_approval_gate",
+    headSha: "0123456789abcdef0123456789abcdef01234567",
+    verdict: "clean",
+    findingsSummary: "sample",
+    nextAction: "sample",
+  };
+  assert.ok(
+    renderGateReviewCommentBody({ ...sample, blockCleanOnFindingSeverities: [] }).startsWith("### Gate review:"),
+    "upsert-checkpoint-verdict's rendered body must START with the marker the workflow guard matches",
+  );
+  assert.ok(
+    renderFallbackGateReviewCommentBody(sample).startsWith("### Gate review:"),
+    "fallback poster's rendered body must START with the marker the workflow guard matches",
+  );
 
   const job = workflow.jobs["gate-evidence-runner"];
   // Concurrency must live at JOB level: a workflow-level group is joined

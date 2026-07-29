@@ -15,14 +15,15 @@ name: Gate evidence
 #
 # Evaluation provenance: the checkout below is pinned to the DEFAULT BRANCH,
 # so the detector code that computes the verdict is always the trusted base
-# tree — never the PR head. This matters because every trigger type here runs
-# in the base-repo context with `statuses: write`: a head-tree checkout would
-# let a fork PR swap the detector (or a package lifecycle script under npm ci)
-# and forge a green required check on itself with no maintainer involvement.
-# The resolved PR head SHA is used ONLY as the status TARGET, never as the
-# code source. (For issue_comment events GitHub additionally reads the
-# workflow DEFINITION itself from the default branch, so changes to this
-# trigger arm only after merge.)
+# tree — never the PR head. This matters because the review/comment-class
+# triggers run in the base-repo context with `statuses: write` (fork
+# pull_request runs get a read-only token, but the comment-class runs do
+# not): a head-tree checkout would let a fork PR swap the detector (or a
+# package lifecycle script under npm ci) and forge a green required check on
+# itself with no maintainer involvement. The resolved PR head SHA is used
+# ONLY as the status TARGET, never as the code source. (For issue_comment
+# events GitHub additionally reads the workflow DEFINITION itself from the
+# default branch, so changes to this trigger arm only after merge.)
 #
 # Trigger staleness (the thread/comment axis) was a real gap: the verdict
 # depends on PR comment history + thread resolution, and pull_request events
@@ -142,12 +143,8 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-      # Checkout is pinned to the DEFAULT BRANCH on every trigger type: the
-      # detector needs only the GitHub API and the PR number, never the PR's
-      # tree, and every trigger here runs base-context with statuses:write —
-      # a head checkout would execute untrusted fork code (npm ci lifecycle
-      # scripts, the detector itself) in a privileged run and make the
-      # required check forgeable. The default ref also removes the
+      # Default-branch ref: trusted evaluation code — see "Evaluation
+      # provenance" in the header for the security rationale. Also removes the
       # per-event-type provenance variance (merge ref vs base vs default).
       # persist-credentials off: nothing after checkout needs git-embedded
       # credentials; the detector uses GH_TOKEN from env.
