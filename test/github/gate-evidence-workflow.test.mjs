@@ -33,6 +33,14 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
     assert.ok(VALID_WORKFLOW_EVENTS.has(event), `unknown/invalid workflow trigger: ${event}`);
   }
 
+  // The trigger's marker literal must match what BOTH verdict producers
+  // actually emit — a drifted heading would silently disarm the re-fire.
+  const upsert = await readRepo("scripts/github/upsert-checkpoint-verdict.mjs");
+  const fallback = await readRepo("skills/dev-loop/scripts/post-gate-verdict-fallback.mjs");
+  assert.match(content, /### Gate review:/);
+  assert.ok(upsert.includes("### Gate review:"), "upsert-checkpoint-verdict must emit the marker heading the workflow guard matches");
+  assert.ok(fallback.includes("### Gate review:"), "fallback poster must emit the marker heading the workflow guard matches");
+
   const job = workflow.jobs["gate-evidence-runner"];
   // pull_request/review events skip drafts via the payload; issue_comment runs
   // start only for PR comments carrying the gate-comment marker (draft state is

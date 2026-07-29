@@ -84,6 +84,14 @@ permissions:
   issues: read
   statuses: write
 
+# One evaluation per PR at a time; a superseded in-flight run is cancelled —
+# the newer run reflects newer comment/thread state and posts the status.
+# Matters since issue_comment [created, edited] raises the run rate (every
+# verdict post and idempotent same-head upsert edit fires one).
+concurrency:
+  group: gate-evidence-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
 jobs:
   gate-evidence-runner:
     # pull_request/review events: skip drafts via the payload. issue_comment:
@@ -117,11 +125,18 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+      # Checkout is pinned to the RESOLVED PR HEAD on every trigger type. The
+      # default checkout ref varies by event (merge ref for pull_request, BASE
+      # branch for review/comment events, default branch for issue_comment), so
+      # without the pin the detector's provenance — which tree's scripts run —
+      # silently depended on which event fired. Head provenance everywhere
+      # matches the documented head-run model above.
       - name: Check out repository
         if: steps.pr.outputs.draft == 'false'
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ steps.pr.outputs.head_sha }}
 
       - name: Set up Node.js
         if: steps.pr.outputs.draft == 'false'
