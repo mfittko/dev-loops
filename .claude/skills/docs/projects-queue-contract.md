@@ -379,15 +379,16 @@ Queue board configuration lives under `.devloops` at repo root. All keys are opt
 the queue path works without a board.
 
 ```yaml
-queue:
-  # Maximum parallel entries the queue may process concurrently.
-  maxParallel: 3
-
+tracker:
   board:
     # GitHub Projects V2 project number for direct lookup (overrides title-based discovery).
     number: 1
     # Board title for Projects V2 lookup (used when number is not set).
     title: "Dev Loop Queue"
+
+queue:
+  # Maximum parallel entries the queue may process concurrently.
+  maxParallel: 3
 
   # Maximum bug issues the queue driver may auto-file in one run.
   maxAutoFiledIssues: 10
@@ -403,17 +404,17 @@ The board `title` key (under `tracker.board`, or the deprecated `queue.board`) i
 
 | Value | Meaning |
 |---|---|
-| `queue.board` not set | Projects path not active; use positional ordering |
+| Neither `tracker.board` nor `queue.board` set | Projects path not active; use positional ordering |
 | `"Dev Loop Queue"` (recommended title) | Look up project by this title under the repo owner |
 | Any other string | Look up project by that exact title |
 
-If `queue.board.title` is set but the project does not exist, queue operations that depend on board
+If the board `title` is set but the project does not exist, queue operations that depend on board
 ordering fail closed — they do not treat the missing board as equivalent to "not opted in."
 
 ### Project number key
 
-The `queue.board.number` key provides direct project lookup by number, bypassing title-based
-discovery. When both `number` and `title` are set under `queue.board`, `number` takes precedence.
+The board `number` key provides direct project lookup by number, bypassing title-based
+discovery. When both `number` and `title` are set on the same board entry, `number` takes precedence.
 
 ### Settings source
 
