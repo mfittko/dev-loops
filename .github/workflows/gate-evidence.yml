@@ -13,13 +13,17 @@ name: Gate evidence
 # since a draft PR is never mergeable anyway. The first non-draft run (at
 # latest, ready_for_review) always posts a real status once merge is possible.
 #
-# One inherent limitation of a head-run check (accepted by design, not a
-# bypass): head-provenance — the workflow and the scripts it runs come from the
-# PR's own head, so a PR could edit this file or the detector to forge a green
-# check on itself. This is the "self-reported / not un-forgeable" caveat in
-# skills/docs/gate-review-sub-loop-contract.md; the un-forgeable provenance bridge
-# (harness attestation) is #1358's explicit non-goal. Merge is maintainer-
-# gated, so forging requires the merger to self-modify.
+# Evaluation provenance: the checkout below is pinned to the DEFAULT BRANCH,
+# so the detector code that computes the verdict is always the trusted base
+# tree — never the PR head. This matters because the review/comment-class
+# triggers run in the base-repo context with `statuses: write` (fork
+# pull_request runs get a read-only token, but the comment-class runs do
+# not): a head-tree checkout would let a fork PR swap the detector (or a
+# package lifecycle script under npm ci) and forge a green required check on
+# itself with no maintainer involvement. The resolved PR head SHA is used
+# ONLY as the status TARGET, never as the code source. (For issue_comment
+# events GitHub additionally reads the workflow DEFINITION itself from the
+# default branch, so changes to this trigger arm only after merge.)
 #
 # Trigger staleness (the thread/comment axis) was a real gap: the verdict
 # depends on PR comment history + thread resolution, and pull_request events
@@ -27,27 +31,48 @@ name: Gate evidence
 # thread. Closed by also re-firing on pull_request_review (submitted) and
 # pull_request_review_comment (created) — the two events through which a NEW
 # unresolved thread appears, which is the stale-green direction that matters
-# here. (GitHub Actions has no `pull_request_review_thread` workflow trigger —
+# here.
+#
+# The stale-PENDING direction was the remaining gap: gate verdicts are posted
+# as ISSUE COMMENTS (upsert-checkpoint-verdict.mjs), so a clean current-head
+# pre_approval_gate verdict never re-fired this workflow and the required
+# status stayed at whatever the pre-verdict run computed — an unmergeable PR
+# with satisfied evidence. Closed by the issue_comment trigger below, guarded
+# to PR comments that START with the gate-comment marker ("### Gate review:")
+# AND come from a trusted author (OWNER/MEMBER/COLLABORATOR — the verdict
+# posters run under operator auth), so ordinary discussion comments (the noise
+# this trigger was originally omitted to avoid) and untrusted marker-shaped
+# comments never start a run. issue_comment events carry
+# no pull_request payload object, so the Resolve-PR-facts step below fetches
+# number/draft/head SHA once and every later step reads those outputs.
+#
+# `gh run rerun` is NOT a recovery path for a stale status: it replays the
+# original event payload (an older head / pre-verdict comment set), so the
+# fresh evaluation still misses the current state. Post (or edit) the gate
+# verdict comment instead — that re-fires this workflow with fresh context.
+#
+# (GitHub Actions has no `pull_request_review_thread` workflow trigger —
 # thread resolve/unresolve is a webhook but not an `on:` event — so it is not
-# used; the two events above cover a newly-appearing unresolved thread. Narrow
+# used; the review events above cover a newly-appearing unresolved thread. Narrow
 # residual: a bare "Unresolve conversation" UI action on an already-resolved
 # thread with no accompanying review/comment fires only that non-triggerable
 # event and is not re-caught until the next push/review/comment — bounded by the
-# maintainer-gated merge.) Both
-# are triggered by base-repo actions and run in the base-repo context, so they
-# get this workflow's declared permissions (including `statuses: write`) even
-# when the PR head is a fork, and both carry the same `pull_request` object
-# (number, draft, head.sha, ...) that this workflow already reads.
+# maintainer-gated merge.) All the added
+# events are triggered by base-repo actions and run in the base-repo context,
+# so they get this workflow's declared permissions (including `statuses:
+# write`) even when the PR head is a fork; the two review events carry the
+# `pull_request` payload object directly, while issue_comment does not — hence
+# the Resolve-PR-facts step.
 #
-# Head-SHA mismatch on those three event types: unlike `pull_request` (whose
-# implicit job check-run GitHub auto-associates with the PR's head commit),
-# `github.sha` for pull_request_review/_thread/_comment events is the BASE
-# branch's latest commit, not the PR head. An implicit check-run from those
-# triggers would land on the wrong commit and never refresh the required
-# check on the head — the exact staleness this workflow exists to close. So
-# the job posts an EXPLICIT commit status to `pull_request.head.sha` (always
-# the right commit, on every trigger type) instead of relying on the
-# job's own auto-attached check-run. To avoid two different reporters (the
+# Head-SHA mismatch on the non-pull_request event types: unlike `pull_request`
+# (whose implicit job check-run GitHub auto-associates with the PR's head
+# commit), `github.sha` for review/comment events is not the PR head (base
+# branch for review events, default branch for issue_comment). An implicit
+# check-run from those triggers would land on the wrong commit and never
+# refresh the required check on the head — the exact staleness this workflow
+# exists to close. So the job posts an EXPLICIT commit status to the RESOLVED
+# PR head SHA (steps.pr.outputs.head_sha — always the right commit, on every
+# trigger type) instead of relying on the job's own auto-attached check-run. To avoid two different reporters (the
 # job's own check-run + this explicit status) both claiming the required
 # `gate-evidence` context — which GitHub's docs warn is ambiguous — the job
 # itself is named something else; the explicit status below is the ONLY
@@ -59,6 +84,8 @@ on:
     types: [submitted]
   pull_request_review_comment:
     types: [created]
+  issue_comment:
+    types: [created, edited]
 
 permissions:
   contents: read
@@ -68,20 +95,75 @@ permissions:
 
 jobs:
   gate-evidence-runner:
-    if: github.event.pull_request.draft == false
+    # pull_request/review events: skip drafts via the payload. issue_comment:
+    # only PR comments carrying the gate-comment marker start a run (draft is
+    # resolved by the Resolve-PR-facts step, since the payload has no PR object).
+    if: >-
+      (github.event_name != 'issue_comment' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '### Gate review:') &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    # One evaluation per PR at a time; a superseded in-flight run is cancelled —
+    # the newer run reflects newer comment/thread state and posts the status.
+    # JOB-level deliberately: a workflow-level group is joined by every run
+    # BEFORE the job `if` is evaluated, so a marker-skipped ordinary-comment
+    # run would cancel a live eligible evaluation and then post nothing —
+    # re-creating the stale-status deadlock this workflow exists to close. A
+    # job-level group is only joined by jobs that actually start.
+    concurrency:
+      group: gate-evidence-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
+      # The one API call here is retried once; if it still fails, the run
+      # fails with NO status posted — without a resolved head SHA there is
+      # nothing to target. That window exists only on issue_comment runs and
+      # leaves the prior status standing (identical to the pre-issue_comment
+      # behavior); the next verdict post/edit re-fires a fresh evaluation.
+      - name: Resolve PR facts (number, draft, head SHA)
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            num="${{ github.event.issue.number }}"
+            gh api "repos/${{ github.repository }}/pulls/${num}" > pr.json \
+              || { sleep 5; gh api "repos/${{ github.repository }}/pulls/${num}" > pr.json; }
+            {
+              echo "number=${num}"
+              echo "draft=$(jq -r '.draft' pr.json)"
+              echo "head_sha=$(jq -r '.head.sha' pr.json)"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "number=${{ github.event.pull_request.number }}"
+              echo "draft=${{ github.event.pull_request.draft }}"
+              echo "head_sha=${{ github.event.pull_request.head.sha }}"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      # Default-branch ref: trusted evaluation code — see "Evaluation
+      # provenance" in the header for the security rationale. Also removes the
+      # per-event-type provenance variance (merge ref vs base vs default).
+      # persist-credentials off: nothing after checkout needs git-embedded
+      # credentials; the detector uses GH_TOKEN from env.
       - name: Check out repository
+        if: steps.pr.outputs.draft == 'false'
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
 
       - name: Set up Node.js
+        if: steps.pr.outputs.draft == 'false'
         uses: actions/setup-node@v5
         with:
           node-version: 24
 
       - name: Install workspace dependencies
+        if: steps.pr.outputs.draft == 'false'
         run: npm ci
 
       # --skip-fanout-ledger-check: the fan-out findings-log ledger is a
@@ -100,13 +182,14 @@ jobs:
       # Actions-log visibility a plain (uncaptured) run would have had.
       - name: Verify draft_gate / pre_approval_gate evidence
         id: gate_check
+        if: steps.pr.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
-            --pr "${{ github.event.pull_request.number }}" \
+            --pr "${{ steps.pr.outputs.number }}" \
             --skip-fanout-ledger-check \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json
@@ -125,8 +208,13 @@ jobs:
       # check exists to catch. A missing/unparseable evidenceState (e.g. an
       # earlier checkout/npm-ci failure that skipped the detector step
       # entirely) fails CLOSED to `failure`, never "no status".
+      # !cancelled() (not always()): a run superseded via cancel-in-progress
+      # has no evidenceState and must NOT post — always() would fire on
+      # cancellation and race the newer run with a spurious `failure`. A
+      # merely-failed detector step still posts (fail-closed) because
+      # !cancelled() is true on step failure.
       - name: Report gate-evidence status on the PR head SHA
-        if: always()
+        if: ${{ !cancelled() && steps.pr.outputs.draft == 'false' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -141,7 +229,7 @@ jobs:
             not_established) state="pending" ;;
             *) state="failure" ;;
           esac
-          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.head_sha }}" \
             -f "state=${state}" \
             -f "context=gate-evidence" \
             -f "target_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
