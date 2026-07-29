@@ -7,14 +7,26 @@ import path from "node:path";
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe, DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN } from "@dev-loops/core/config";
 import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations, assertNotPrimary } from "../../scripts/loop/ui-review-provision.mjs";
+import { parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
 import { execFileSync } from "node:child_process";
+
+// The primary checkout, NOT the current worktree: `--show-toplevel` returns the
+// linked worktree's root when the suite runs from one (the mandated validation
+// flow), which broke these assertions. Resolve it the same way the code under
+// test does, so test and implementation agree by construction.
+function primaryCheckoutRoot() {
+  const listOutput = execFileSync("git", ["worktree", "list"], { encoding: "utf8" });
+  const root = parseMainWorktreePath(listOutput);
+  assert.ok(root, "could not parse the primary checkout from `git worktree list` output");
+  return root;
+}
 
 // #1456 fix 2 (+ review hardening): the loop's own worktree namespace lives INSIDE
 // the repo root, so the primary-checkout containment check used to reject it.
 // assertNotPrimary exempts it — but ONLY when it is a genuinely LISTED linked
 // worktree (not any directory that merely contains tmp/worktrees/ in its path).
 test("assertNotPrimary: exempts a genuinely-listed linked worktree under the loop namespace", () => {
-  const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  const repoRoot = primaryCheckoutRoot();
   const wt = path.join(repoRoot, "tmp", "worktrees", `test-1456-guard-${process.pid}`);
   execFileSync("git", ["worktree", "add", "--detach", wt], { cwd: repoRoot, stdio: "ignore" });
   try {
@@ -26,7 +38,7 @@ test("assertNotPrimary: exempts a genuinely-listed linked worktree under the loo
 });
 
 test("assertNotPrimary: a tmp/worktrees-looking path that is NOT a listed worktree is not force-exempted (fail closed)", () => {
-  const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  const repoRoot = primaryCheckoutRoot();
   // never created as a worktree: it merely LOOKS like the loop namespace. Because
   // it isn't a genuine listed worktree, the exemption does NOT fire, and the
   // containment check correctly rejects it as under the primary checkout — this
@@ -38,7 +50,7 @@ test("assertNotPrimary: a tmp/worktrees-looking path that is NOT a listed worktr
 });
 
 test("assertNotPrimary: still rejects the primary checkout root", () => {
-  const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  const repoRoot = primaryCheckoutRoot();
   const r = assertNotPrimary({ worktreePath: repoRoot, repoRoot });
   assert.equal(r.ok, false, "the primary checkout is still refused (fail closed)");
   assert.match(r.message, /primary checkout/);
