@@ -412,7 +412,13 @@ offending angles) when any per-angle artifact is malformed or itself blocked
 — a blocked fan-in never yields a publishable findings shape; fix or re-run
 the offending reviewer first. (An angle whose artifact was never written is
 invisible to the CLI — mandatory-angle coverage is enforced downstream by
-`upsert-checkpoint-verdict.mjs`.)
+`upsert-checkpoint-verdict.mjs`.) The render budget applies ONLY to the
+visible-comment shape (`--out`): a round too large to render even at minimum
+summary length still writes the ledger (`--ledger-out`) in FULL and exits 0 —
+`--out` is replaced with a single budget-marker section naming the omitted
+finding count and severity breakdown, and the result carries
+`commentBudgetExceeded: true`, so the disposition ledger is never lost to a
+render-budget overflow.
 
 Consolidation:
 

@@ -120,6 +120,34 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
   );
 });
 
+// Regression: the under-budget result shape is unchanged by the render-budget
+// split — same keys, same values, and critically NO "commentBudgetExceeded"
+// field at all (not even `false`) for a round that fits. Asserted against the
+// exact literal shape rather than a partial match, so an accidental shape
+// change on the unaffected path fails this test.
+test("consolidateGateFanin under-budget output is byte-identical to the pre-split shape (no commentBudgetExceeded field)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      assert.deepEqual(Object.keys(result), ["ok", "angles", "findingsJson", "findings", "severityCounts", "overallVerdict"]);
+      assert.equal("commentBudgetExceeded" in result, false);
+      assert.deepEqual(result, {
+        ok: true,
+        angles: [{ angle: "scope", verdict: "findings_present", findingCount: 1 }],
+        findingsJson: [{
+          angle: "scope",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "x", disposition: "accepted-for-fix" }],
+        }],
+        findings: [{ severity: "must-fix", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
+        severityCounts: { "must-fix": 1, "worth-fixing-now": 0, defer: 0 },
+        overallVerdict: "findings_present",
+      });
+    },
+  );
+});
+
 test("consolidateGateFanin writes --out as the nested findingsJson shape", async () => {
   await withFindingsDir(
     {
@@ -626,13 +654,21 @@ test("large fan-ins are budgeted so upsert-verdict's whole-block render bound ac
   });
 });
 
-test("a fan-in too large to render at minimum summary length fails closed", async () => {
+// Regression for the fan-in disposition ledger vs. gate-comment render budget
+// split: a round too large to render even at minimum summary length must
+// still write a COMPLETE --ledger-out and succeed (ok: true, no throw — the
+// CLI's exit code is derived from result.ok, so this also proves exit 0);
+// only --out (the visible-comment shape) is replaced with a budget-marker
+// section. Reverting the fix (throwing instead of returning) fails this test.
+test("a fan-in too large to render at minimum summary length still writes a complete ledger and exits 0, replacing --out with a budget marker", async () => {
+  const ANGLE_COUNT = 8;
+  const FINDINGS_PER_ANGLE = 30;
   const files = {};
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < ANGLE_COUNT; i++) {
     files[`angle${i}.json`] = {
       angle: `angle-${i}`,
       verdict: "findings_present",
-      findings: Array.from({ length: 30 }, (_, j) => ({
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
         severity: "worth-fixing-now",
         summary: `finding ${i}-${j} ${"y".repeat(200)}`,
         file: `src/f${i}.mjs`,
@@ -641,9 +677,36 @@ test("a fan-in too large to render at minimum summary length fails closed", asyn
     };
   }
   await withFindingsDir(files, async (dir) => {
-    await assert.rejects(
-      () => consolidateGateFanin({ findingsDir: dir }),
-      /over the gate-comment budget/,
-    );
+    const outPath = path.join(dir, "out", "findings.json");
+    const ledgerPath = path.join(dir, "out", "ledger.json");
+    const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
+
+    // Succeeds (no throw) with the fail-closed signal replaced by an
+    // explicit flag — this is what makes the CLI exit 0.
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+
+    // The ledger is COMPLETE: every finding from every angle, unaffected by
+    // the comment budget.
+    const totalFindings = ANGLE_COUNT * FINDINGS_PER_ANGLE;
+    assert.equal(result.findings.length, totalFindings);
+    const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    assert.deepEqual(writtenLedger, result.findings);
+    assert.equal(writtenLedger.length, totalFindings);
+
+    // --out is replaced with a single budget-marker section — never a
+    // silently-shrunk subset — that states the omitted count and severity
+    // breakdown so the renderer can surface it.
+    const writtenOut = JSON.parse(await readFile(outPath, "utf8"));
+    assert.deepEqual(writtenOut, result.findingsJson);
+    assert.equal(writtenOut.length, 1);
+    assert.equal(writtenOut[0].findings.length, 1);
+    const marker = writtenOut[0].findings[0].summary;
+    assert.match(marker, new RegExp(`${totalFindings} finding\\(s\\)`));
+    assert.match(marker, new RegExp(`${ANGLE_COUNT} angle\\(s\\)`));
+    assert.match(marker, new RegExp(`worth-fixing-now: ${totalFindings}`));
+    assert.match(marker, /must-fix: 0/);
+    assert.match(marker, /defer: 0/);
+    assert.match(marker, /see the disposition ledger/);
   });
 });
