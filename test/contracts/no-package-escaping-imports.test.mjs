@@ -295,7 +295,10 @@ function optionalPeersOf(pkg) {
 // and the convention is ASCII; if that changes, widen the CLASS (`u` flag with
 // `[\p{L}\p{N}_$*,{}\s]`), never the span back to `[^'"]*?`. A comment inside a
 // binding list (`import { a /* keep */ } from "yaml"`) is out of the class for
-// the same reason and equally absent here — same fix if it ever appears.
+// the same reason and equally absent here — same fix if it ever appears. The
+// `^`-anchor with `m` also means only the FIRST import on a physical line is
+// seen, so a compact `import{a}from"x";import{b}from"y";` under-reports; the
+// shipped tree has no such line outside the vendored bundle (itself skipped).
 const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[\w$*,{}\s]*?\bfrom\s*)?|export\s*[\w$*,{}\s]*?\bfrom\s*)["']([^"']+)["']/gm;
 
 test("shipped files never statically import an optional peer dependency", async () => {
@@ -320,7 +323,9 @@ test("shipped files never statically import an optional peer dependency", async 
       if (!/\.(c|m)?(js|ts)x?$/.test(filePath)) continue;
       if (filePath.includes(`${path.sep}node_modules${path.sep}`)) continue;
 
-      const contents = await readFile(fileUrl, "utf8");
+      // `^[ \t]*` cannot skip U+FEFF, so a BOM-saved file whose FIRST line is an
+      // import would be scanned as if that import were absent.
+      const contents = (await readFile(fileUrl, "utf8")).replace(/^\uFEFF/, "");
       for (const match of contents.matchAll(STATIC_SPECIFIER_RE)) {
         const specifier = match[1];
         const pkgName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
@@ -381,7 +386,9 @@ export async function findUndeclaredBareImports({ repoRootUrl, shippedDirs, decl
       // text is bundled source, not this package's resolution surface.
       if (VENDORED_PATH_RE.test(relative)) continue;
 
-      const contents = await readFile(fileUrl, "utf8");
+      // `^[ \t]*` cannot skip U+FEFF, so a BOM-saved file whose FIRST line is an
+      // import would be scanned as if that import were absent.
+      const contents = (await readFile(fileUrl, "utf8")).replace(/^\uFEFF/, "");
       for (const match of contents.matchAll(STATIC_SPECIFIER_RE)) {
         const specifier = match[1];
         // Relative and absolute specifiers are the other two guards' business;
@@ -440,6 +447,9 @@ test("findUndeclaredBareImports flags an undeclared bare import and passes the d
     );
     // A vendored bundle's inlined imports must not count against the manifest.
     await writeFile(path.join(fixture, "shipped", "vendor", "bundle.min.js"), 'import{a}from"bundled-dep";');
+    // A BOM-saved file whose FIRST line is the import: without the strip above,
+    // `^[ \t]*` cannot skip U+FEFF and this offender scans as if absent.
+    await writeFile(path.join(fixture, "shipped", "bom.mjs"), '\uFEFFimport { q } from "bom-undeclared";\n');
 
     const { offenders, declaredSeen } = await findUndeclaredBareImports({
       repoRootUrl,
@@ -448,6 +458,7 @@ test("findUndeclaredBareImports flags an undeclared bare import and passes the d
     });
 
     assert.deepEqual(offenders, [
+      "shipped/bom.mjs -> bom-undeclared",
       "shipped/entry.mjs -> @scope/also-undeclared",
       "shipped/entry.mjs -> not-declared",
     ]);
