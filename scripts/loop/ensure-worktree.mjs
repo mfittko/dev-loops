@@ -27,6 +27,7 @@ import { parseArgs } from "node:util";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
 import { resolveBaseBranch } from "@dev-loops/core/config";
 import { provisionWorktree } from "./provision-worktree.mjs";
+import { installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
 import { canonicalize } from "./_worktree-path.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -172,6 +173,21 @@ function parseWorktreeList(porcelain) {
   return entries;
 }
 
+// Installed at the primary checkout, never in the worktree we just created: the
+// guard exists to catch a commit that happens in the WRONG tree. Best-effort by
+// design — a repo whose hooks directory is unwritable (or managed by another
+// tool) must still get its worktree.
+function installGuard(gitCommand, root) {
+  try {
+    const gitDir = runGit(gitCommand, ["rev-parse", "--absolute-git-dir"], root).trim();
+    return installDefaultBranchGuard({ gitDir });
+  } catch (err) {
+    const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
+    process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${detail}\n`);
+    return { ok: false, error: detail };
+  }
+}
+
 export async function ensureWorktree(
   { repoRoot, issue, pr, branch, base },
   { gitCommand = "git", provision = provisionWorktree } = {},
@@ -201,7 +217,7 @@ export async function ensureWorktree(
     }
     // Reuse: still (re-)provision — provisioning is idempotent.
     const summary = await provision({ worktreePath: target, repoRoot: root });
-    return { ok: true, path: target, created: false, reused: true, provision: summary };
+    return { ok: true, path: target, created: false, reused: true, provision: summary, guard: installGuard(gitCommand, root) };
   }
 
   // Create. fetch is best-effort (offline reuse of a local base ref still works),
@@ -228,7 +244,7 @@ export async function ensureWorktree(
   }
 
   const summary = await provision({ worktreePath: target, repoRoot: root });
-  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary };
+  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary, guard: installGuard(gitCommand, root) };
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
