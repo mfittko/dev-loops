@@ -12,7 +12,7 @@
 // `.npmignore` (when `files` is present, npm packs exactly what it expands
 // to — there is no separate ignore-pattern layer to reproduce here). The
 // expansion was cross-validated once against a live `npm pack --dry-run`
-// (exact match, 358 files) during review; the test itself runs offline and
+// (exact match at the time of the check) during review; the test itself runs offline and
 // re-validating against a live pack is a manual spot-check, not a suite step.
 import assert from "node:assert/strict";
 import fs from "node:fs";

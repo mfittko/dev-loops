@@ -625,3 +625,25 @@ test("large fan-ins are budgeted so upsert-verdict's whole-block render bound ac
     assert.ok(typeof body === "string" && body.length > 0);
   });
 });
+
+test("a fan-in too large to render at minimum summary length fails closed", async () => {
+  const files = {};
+  for (let i = 0; i < 8; i++) {
+    files[`angle${i}.json`] = {
+      angle: `angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: 30 }, (_, j) => ({
+        severity: "worth-fixing-now",
+        summary: `finding ${i}-${j} ${"y".repeat(200)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  await withFindingsDir(files, async (dir) => {
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir: dir }),
+      /over the gate-comment budget/,
+    );
+  });
+});

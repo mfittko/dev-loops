@@ -83,8 +83,9 @@ Output (stdout, JSON):
   for a blocking severity, deferred otherwise) — an input finding's own "disposition" is never
   honored. A reviewer-provided "recommendation" is carried through to both shapes unchanged. A
   finding "summary" or "recommendation" longer than 2000 chars is truncated with a plain " …"
-  suffix (never a "[truncated N chars]" marker), so the emitted findingsJson can never trip
-  upsert-checkpoint-verdict.mjs's fail-closed posted-comment length guard.
+  suffix (never a "[truncated N chars]" marker), and the WHOLE emitted set is budgeted against
+  upsert-checkpoint-verdict.mjs's rendered-block bound (summaries shrunk evenly; a fan-in still
+  over budget at minimum summary length FAILS CLOSED with exit 1 rather than emitting).
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
@@ -133,6 +134,16 @@ function fitFindingsToRenderBudget(findingsJson) {
         f.summary = truncateFindingText(f.summary, cap);
       }
     }
+  }
+  // Floor reached and still over budget: the fan-in has too many findings to
+  // render in one gate comment no matter how short each summary gets. FAIL
+  // CLOSED here (the consumer would fail closed anyway, but later and with a
+  // less actionable message) rather than emit an over-budget block.
+  if (estimate() > RENDERED_BLOCK_BUDGET) {
+    const findingCount = findingsJson.reduce((sum, a) => sum + a.findings.length, 0);
+    throw new Error(
+      `fan-in renders over the gate-comment budget even at minimum summary length (${findingCount} findings across ${findingsJson.length} angles) — fix the highest-severity findings first and re-run the fan-out, or split the review`,
+    );
   }
 }
 
