@@ -186,6 +186,54 @@ describe("post-merge-board-sync", () => {
       });
       process.exitCode = prevExitCode;
     });
+
+    // Pins the --jq/--silent wiring itself (the matchJqOutputToken line): if it
+    // were dropped, both flags would become unknown-flag usage errors (exit 1)
+    // and every assertion below would fail. The docs' || true guidance rests on
+    // exactly these exit codes.
+    it("wires --jq: filtered value on stdout, exit 0", async () => {
+      const prevExitCode = process.exitCode;
+      await withBoardConfig(async (tempDir) => {
+        const stdout = collectingStream();
+        const stderr = collectingStream();
+        await runCli(
+          ["--repo", "mfittko/dev-loops", "--pr", "10", "--jq", ".skipped"],
+          { stdout, stderr, env: {}, cwd: tempDir, syncBoardStatus: recordingSyncBoardStatus([]) },
+        );
+        assert.equal(process.exitCode, 0);
+        assert.equal(stdout.text().trim(), "false");
+      });
+      process.exitCode = prevExitCode;
+    });
+
+    it("wires --silent: falsy --jq predicate maps to exit 1 with no stdout", async () => {
+      const prevExitCode = process.exitCode;
+      await withBoardConfig(async (tempDir) => {
+        const stdout = collectingStream();
+        const stderr = collectingStream();
+        await runCli(
+          ["--repo", "mfittko/dev-loops", "--pr", "10", "--jq", ".skipped == true", "--silent"],
+          { stdout, stderr, env: {}, cwd: tempDir, syncBoardStatus: recordingSyncBoardStatus([]) },
+        );
+        assert.equal(process.exitCode, 1);
+        assert.equal(stdout.text(), "");
+      });
+      process.exitCode = prevExitCode;
+    });
+
+    it("fails closed on an invalid --jq filter with exit 2", async () => {
+      const prevExitCode = process.exitCode;
+      await withBoardConfig(async (tempDir) => {
+        const stdout = collectingStream();
+        const stderr = collectingStream();
+        await runCli(
+          ["--repo", "mfittko/dev-loops", "--pr", "10", "--jq", "(("],
+          { stdout, stderr, env: {}, cwd: tempDir, syncBoardStatus: recordingSyncBoardStatus([]) },
+        );
+        assert.equal(process.exitCode, 2);
+      });
+      process.exitCode = prevExitCode;
+    });
   });
 
   describe("best-effort / exit-0 contract (a board failure must never fail the merge)", () => {

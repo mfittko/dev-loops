@@ -109,14 +109,14 @@ export async function resolveShippedDirs(files, repoRootUrl) {
 // Bare specifiers resolve through node_modules, not relative to the importing
 // file — `scripts/projects/move-queue-item.mjs` (no leading "./" or "../") is
 // Node looking for a package literally named "scripts", not this repo's
-// scripts/ directory. That was the exact defect in issue #1458:
-// queue-board-sync.mjs shipped a bare specifier into scripts/, which only
-// "worked" in the monorepo checkout (workspace hoisting happened to shadow it)
-// and threw ERR_MODULE_NOT_FOUND from a real install. RELATIVE_SPECIFIER_RE
-// above only matches `./`/`../` forms and cannot see this class, so a bare
-// specifier whose first path segment names one of this repo's own top-level
-// directories is flagged the same as a relative escape — it is never a real
-// npm dependency, always a forgotten "./".
+// scripts/ directory. Preventive sibling-class coverage for the crash shape
+// reported in issue #1458 (ERR_MODULE_NOT_FOUND under node_modules/scripts/…
+// from an installed layout): the specifier that actually shipped was a
+// relative escape, which RELATIVE_SPECIFIER_RE above already catches, but a
+// bare form producing the identical installed-layout crash would slip past a
+// relative-only match. So a bare specifier whose first path segment names one
+// of this repo's own top-level directories is flagged the same as a relative
+// escape — it is never a real npm dependency, always a forgotten "./".
 // Sourced from `git ls-tree` (committed state), not `readdir` (working-copy
 // state): a live directory listing picks up gitignored dirs (tmp/, dist/,
 // coverage/, ...) that exist on whichever machine happens to run the test, so
