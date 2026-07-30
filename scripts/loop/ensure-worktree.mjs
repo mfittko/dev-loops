@@ -177,20 +177,21 @@ function parseWorktreeList(porcelain) {
 // guard exists to catch a commit that happens in the WRONG tree. Best-effort by
 // design — a repo whose hooks directory is unwritable (or managed by another
 // tool) must still get its worktree.
-// A baked-in branch name is only useful if it names something real; git exits
-// non-zero for an unknown ref, which is exactly the signal we want.
-function branchOrRemoteRefExists(gitCommand, branch, cwd) {
+// Only the REMOTE-tracking ref counts. A local branch of the same name proves
+// nothing about the remote's default: a `master` repo carrying a stale local
+// `main` would otherwise bake in `main`, leaving the real default unguarded
+// while reporting success. Requiring `origin/<name>` makes that case fall to
+// inert, and a repo with no remote is inert too — correctly, since there is no
+// remote default to land on. `--verify` with the full path is what keeps a tag
+// named `main` from matching.
+function remoteDefaultRefExists(gitCommand, branch, cwd) {
   if (typeof branch !== "string" || branch.trim().length === 0) return false;
-  const name = branch.trim();
-  for (const ref of [`refs/heads/${name}`, `refs/remotes/origin/${name}`]) {
-    try {
-      runGit(gitCommand, ["show-ref", "--verify", "--quiet", ref], cwd);
-      return true;
-    } catch {
-      // try the next candidate
-    }
+  try {
+    runGit(gitCommand, ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch.trim()}`], cwd);
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 }
 
 function installGuard(gitCommand, root) {
@@ -204,7 +205,7 @@ function installGuard(gitCommand, root) {
     // does not exist — reporting success for a hook guarding nothing. Confirm
     // the name resolves to a real ref; if not, install inert and say so.
     const candidate = resolveBaseBranch(undefined, { cwd: root });
-    const defaultBranch = branchOrRemoteRefExists(gitCommand, candidate, root) ? candidate : null;
+    const defaultBranch = remoteDefaultRefExists(gitCommand, candidate, root) ? candidate : null;
     let hooksPathOverride = null;
     try {
       hooksPathOverride = runGit(gitCommand, ["config", "--get", "core.hooksPath"], root).trim() || null;
