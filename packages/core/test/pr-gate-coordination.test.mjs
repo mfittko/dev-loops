@@ -2742,7 +2742,7 @@ test("round_cap_reached with requireCi:false and crediblyGreen CI names config-n
 
 // #1371 re-verify: crediblyGreen is unconfirmed CI and stays blocked at the
 // round-cap-reached fallback exactly as it does at every other pre-approval
-// boundary in this file (lines ~1016/1219/1404/1655) — this branch must not
+// boundary in this file — this branch must not
 // be the one place a crediblyGreen head is granted gate entry.
 test("round_cap_reached with zero unresolved threads and credibly green CI stays blocked (#1371, #1472)", () => {
   const result = evaluatePrGateCoordination({
