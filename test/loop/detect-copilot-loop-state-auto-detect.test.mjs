@@ -590,6 +590,7 @@ test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fa
           // check, every other check (including CI test suites) is green.
           statusCheckRollup: [
             { status: "COMPLETED", conclusion: "FAILURE", name: "gate-evidence" },
+            { status: "COMPLETED", conclusion: "CANCELLED", name: "gate-evidence-runner" },
             { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
             { status: "COMPLETED", conclusion: "SUCCESS", name: "test-core" },
           ],
@@ -612,6 +613,11 @@ test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fa
         stdout: JSON.stringify({
           check_runs: [
             { status: "COMPLETED", conclusion: "FAILURE", name: "gate-evidence" },
+            // The workflow's own check run, cancelled by its job-level
+            // concurrency when a superseded run is replaced. A cancelled run is
+            // deliberately not green, so leaving it in the computation makes the
+            // whole head read "none" and the loop waits on CI forever.
+            { status: "COMPLETED", conclusion: "CANCELLED", name: "gate-evidence-runner" },
             { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
             { status: "COMPLETED", conclusion: "SUCCESS", name: "test-core" },
           ],

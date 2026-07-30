@@ -105,10 +105,22 @@ test("gate-evidence posts an explicit status to the resolved PR head SHA, not th
   // missing from that list silently re-creates the waiting_for_ci deadlock,
   // because a run this workflow cancels for concurrency is deliberately not
   // read as green.
-  for (const jobId of Object.keys(workflow.jobs)) {
+  for (const [jobId, job] of Object.entries(workflow.jobs)) {
     assert.ok(
       LOOP_DERIVED_CI_CHECK_NAMES.includes(jobId),
       `job id ${jobId} is not in LOOP_DERIVED_CI_CHECK_NAMES — add it, or the loop will gate itself on its own check run`,
+    );
+    // The check-run name equals the job id only while the job declares no
+    // `name:` and no matrix (a matrix appends its values to the name). Either
+    // one would keep the id assertion above green while the real check-run
+    // name goes unexcluded — the same deadlock, silently restored.
+    assert.ok(
+      !("name" in job),
+      `job ${jobId} declares name: — the check run would be named after it, not the job id, and the loop's exclusion would miss it`,
+    );
+    assert.ok(
+      !("strategy" in job),
+      `job ${jobId} declares strategy: — a matrix appends values to the check-run name, and the loop's exclusion would miss it`,
     );
   }
 
