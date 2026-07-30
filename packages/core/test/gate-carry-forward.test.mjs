@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-import {
-  CATEGORY_ANGLE_MAP } from "../src/analysis/change-classifier.mjs";
+import { CATEGORY_ANGLE_MAP } from "../src/analysis/change-classifier.mjs";
 import {
   RENAME_ONLY_ANGLES,
   angleReviewSurface,
@@ -105,7 +104,7 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
   });
 
   test("isDevLoopConfigSourcePath matches the config-source family and nothing else", () => {
-    for (const p of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json", "sub/.devloops", ".pi/dev-loop/settings.yaml", ".pi/dev-loop/defaults.json"]) {
+    for (const p of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json", "sub/.devloops", ".pi/dev-loop/settings.yaml", ".pi/dev-loop/defaults.json", ".pi\\dev-loop\\settings.yaml"]) {
       assert.equal(isDevLoopConfigSourcePath(p), true, p);
     }
     for (const p of ["package.json", "my.devloops", "docs/devloops.md", ".devloopsx", null]) {

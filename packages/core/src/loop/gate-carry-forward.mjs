@@ -159,7 +159,9 @@ export function angleReviewSurface(angle, { alwaysRerun } = {}) {
 const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)\.[^/]+)$/;
 export function isDevLoopConfigSourcePath(filePath) {
   if (typeof filePath !== "string") return false;
-  return DEV_LOOP_CONFIG_SOURCE_RE.test(filePath.trim());
+  // Normalize Windows separators like classifyFile does, so a
+  // ".pi\\dev-loop\\settings.yaml" delta is still detected on Windows.
+  return DEV_LOOP_CONFIG_SOURCE_RE.test(filePath.trim().replace(/\\/g, "/"));
 }
 
 export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict }) {
