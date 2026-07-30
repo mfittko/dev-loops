@@ -339,9 +339,11 @@ test("shipped files never statically import an optional peer dependency", async 
 // repo only because npm hoists `@dev-loops/core`'s own dependencies into the
 // install root — an implicit layout guarantee that does not hold under pnpm's
 // strict layout, Yarn PnP, `--install-strategy=nested`, or any version conflict
-// that forces nesting. Declared-or-builtin is the invariant; the check runs on
-// the same shipped set and the same static-import matcher as the peer guard
-// above, so a new offender cannot arrive through a form one of them misses.
+// that forces nesting. Declared-or-builtin is the invariant. It shares the
+// static-import matcher with the peer guard above, so the two cannot DRIFT into
+// disagreeing about what an import is — not that neither misses anything: a
+// shared matcher misses a form for both, and the accepted residuals are named
+// at the regex. The shipped set is the same, minus vendored paths.
 const VENDORED_PATH_RE = /(^|\/)vendor(\/|$)/;
 
 function packageNameOf(specifier) {
