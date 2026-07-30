@@ -291,7 +291,9 @@ function optionalPeersOf(pkg) {
 // accepting every real import form. `\w` is ASCII-only here, so a binding list
 // with a non-ASCII identifier would not match — none exists in the shipped set
 // and the convention is ASCII; if that changes, widen the CLASS (`u` flag with
-// `[\p{L}\p{N}_$*,{}\s]`), never the span back to `[^'"]*?`.
+// `[\p{L}\p{N}_$*,{}\s]`), never the span back to `[^'"]*?`. A comment inside a
+// binding list (`import { a /* keep */ } from "yaml"`) is out of the class for
+// the same reason and equally absent here — same fix if it ever appears.
 const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[\w$*,{}\s]*?\bfrom\s*)?|export\s*[\w$*,{}\s]*?\bfrom\s*)["']([^"']+)["']/gm;
 
 test("shipped files never statically import an optional peer dependency", async () => {
@@ -356,6 +358,11 @@ test("shipped files never statically import a package the root manifest does not
   const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
 
   const offenders = [];
+  // An empty offender list cannot distinguish "nothing undeclared" from "the
+  // scan stopped seeing imports" — the hazard this file documents for its
+  // sibling scanner, and a live one here since the matcher was narrowed. Count
+  // the declared bare imports the scan DID resolve and assert it saw some.
+  let declaredSeen = 0;
   for (const dir of shippedDirs) {
     const dirUrl = new URL(`${dir}/`, repoRootUrl);
     try {
@@ -382,13 +389,17 @@ test("shipped files never statically import a package the root manifest does not
         if (specifier.startsWith("node:")) continue;
         const pkgName = packageNameOf(specifier);
         if (isBuiltin(pkgName)) continue;
-        if (declared.has(pkgName)) continue;
+        if (declared.has(pkgName)) {
+          declaredSeen += 1;
+          continue;
+        }
         offenders.push(`${relative} -> ${specifier}`);
       }
     }
   }
 
   assert.deepEqual(offenders.sort(), []);
+  assert.ok(declaredSeen > 0, "scan resolved no declared bare import at all — the matcher or the walk is broken, not the tree");
 });
 
 // The guard above derives its names from the manifest, so it would go quiet if
