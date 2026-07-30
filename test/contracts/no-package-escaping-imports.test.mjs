@@ -74,10 +74,12 @@ export async function resolveShippedDirs(files, repoRootUrl) {
     // Normalize "./scripts" and "scripts//" to "scripts" so the entry compares
     // equal to a path.relative() result.
     const name = path.normalize(entry).replace(/[\\/]+$/, "");
-    // Stat even a trailing-slash entry: npm treats "scripts" and "scripts/" as
-    // the same declaration, but a trailing slash on an entry that is actually a
+    // Stat even a trailing-slash entry: npm resolves both spellings against the
+    // disk either way, but in THIS repo's manifest convention a trailing slash
+    // is the author saying "directory" — so an entry that is actually a
     // FILE on disk is an author error — surface it here as a clear failure
-    // rather than letting it walk() as a bogus dir later. An ENOENT trailing-
+    // rather than deferring to findEscapingImports' own dir-exists stat, which
+    // would fail later with a raw ENOTDIR and no pointer to the bad entry. An ENOENT trailing-
     // slash entry still passes through as an absent dir (unbuilt output, say) —
     // findEscapingImports already tolerates a shipped dir that isn't there yet.
     // stat inside the try, classification below it: the catch is strictly an
