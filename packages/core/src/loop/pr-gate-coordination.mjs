@@ -1614,13 +1614,25 @@ function evaluatePrGateCoordinationCore(input = {}) {
     const ciClause = ciStatus === "success" ? "green CI" : "CI not required by config";
     if (unresolvedThreadCount === 0 && ciConfirmedGreen) {
       if (preApprovalGate.currentHeadClean) {
-        // No inline title-marker check here (#1472 coverage defer, equivalent
-        // mutant): both boundaries this block can return (FINAL_APPROVAL_READY,
-        // PRE_APPROVAL_GATE_WINDOW) are in TITLE_MARKER_GUARDED_BOUNDARIES, so
-        // evaluatePrGateCoordination's outer post-pass already re-blocks a
-        // title-marker head on the way out — an inline check here is
-        // byte-identical dead code, unlike the pre-existing ROUND_CAP_CLEAN_FALLBACK
-        // branch this one mirrors, which predates that outer post-pass.
+        // Inline title-marker check, mirroring ROUND_CAP_CLEAN_FALLBACK: the
+        // outer post-pass guards FINAL_APPROVAL_READY and
+        // PRE_APPROVAL_GATE_WINDOW, but NOT the DRAFT_GATE_NEEDED boundary the
+        // sub-branch below can return — without this check a marker-titled
+        // head would route to reconcile_draft_gate instead of blocking.
+        const grantTitleMarkers = findBlockingTitleMarkers(prTitle);
+        if (grantTitleMarkers.length > 0) {
+          return buildTitleMarkerBlockedResult({
+            input,
+            currentHeadSha,
+            draftGateAlreadySatisfied: true,
+            draftGate,
+            preApprovalGate,
+            mergeStateStatus,
+            conflictFiles,
+            markers: grantTitleMarkers,
+            refinementArtifact,
+          });
+        }
         // Mirror ROUND_CAP_CLEAN_FALLBACK/#579: a clean current head with no clean
         // draft_gate evidence must reconcile the draft gate rather than jump to
         // final approval.

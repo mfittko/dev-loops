@@ -2793,6 +2793,34 @@ test("round_cap_reached with clean current-head pre_approval but no draft_gate e
   assert.match(result.reason, /no gate exemptions, #579/i);
 });
 
+// Same shape with a blocking title marker: DRAFT_GATE_NEEDED is NOT in
+// TITLE_MARKER_GUARDED_BOUNDARIES, so the outer post-pass cannot re-block this
+// sub-path — the grant block's inline check (mirroring ROUND_CAP_CLEAN_FALLBACK)
+// must. Fails without it: the WIP head routes to reconcile_draft_gate.
+test("round_cap_reached grant shape with a WIP title blocks on the title marker, not reconcile_draft_gate (#842, #1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    prTitle: "WIP: do not merge yet",
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "success",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 0,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: true, headSha: "29aa40b7", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.lifecycleState, "title_marker_blocked");
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.notEqual(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+});
+
 // #1472: applyUnsettledCopilotReviewEntryGuard (the core-side #1190 mirror of
 // the detector's formal-request guard) runs unconditionally after the
 // evaluator's own ROUND_CAP_REACHED grant, on the SAME input this evaluator
