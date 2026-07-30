@@ -660,11 +660,16 @@ export function normalizeStructuredFindings(input) {
 // nested findings carrying severity and an optional file:line reference. Newlines
 // are intentionally PRESERVED — this block is NOT run through collapseWhitespace /
 // summarizeCheckpointVerdictText. The whole block is bounded by
-// MAX_GATE_COMMENT_TEXT_LENGTH. The leading single-line digest is what the marker
-// parser captures for the `**Findings summary:**` field; the structured body is
-// nested below it and is deliberately written so no nested line matches a gate
-// field regex (no `verdict:` / `next action:` / `execution mode:` line starts).
-function renderStructuredFindings(angles) {
+// MAX_GATE_COMMENT_TEXT_LENGTH and THROWS above it (enforcePostedCommentLimit).
+// The leading single-line digest is what the marker parser captures for the
+// `**Findings summary:**` field; the structured body is nested below it and is
+// deliberately written so no nested line matches a gate field regex (no
+// `verdict:` / `next action:` / `execution mode:` line starts). Exported so
+// consolidate-fanin.mjs can measure whether a candidate findingsJson shape
+// actually renders (catching this throw) instead of approximating its
+// rendered size — the exact bound this function enforces, not an estimate of
+// it (see consolidate-fanin.mjs's fitsRenderBudget).
+export function renderStructuredFindings(angles) {
   const lines = [];
   for (const { angle, verdict, findings } of angles) {
     const angleLabel = sanitizeStructuredCodeSpan(angle);

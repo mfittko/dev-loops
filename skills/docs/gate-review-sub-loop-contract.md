@@ -412,18 +412,43 @@ offending angles) when any per-angle artifact is malformed or itself blocked
 — a blocked fan-in never yields a publishable findings shape; fix or re-run
 the offending reviewer first. (An angle whose artifact was never written is
 invisible to the CLI — mandatory-angle coverage is enforced downstream by
-`upsert-checkpoint-verdict.mjs`.) The render budget applies ONLY to the
-visible-comment shape (`--out`): a round too large to render even at minimum
-summary length still writes the ledger (`--ledger-out`) in FULL and exits 0 —
-each angle's findings in `--out` are replaced with ONE synthetic marker
-finding naming that angle's omitted count and severity breakdown, keeping the
-REAL angle set and each angle's REAL verdict intact (never collapsed into one
-foreign section, which would fail `upsert-checkpoint-verdict.mjs`'s
-mandatory-angle/pool validation). The result carries `commentBudgetExceeded:
-true`, so the disposition ledger is never lost to a render-budget overflow.
-The posted `**Findings summary:**` digest still counts these marker lines,
-not real findings, and undercounts on an over-budget round — the marker text
-and the ledger carry the true numbers.
+`upsert-checkpoint-verdict.mjs`.)
+
+The render budget applies ONLY to the visible-comment shape (`--out`) — never
+to the ledger (`--ledger-out`, always written in FULL, never budgeted). Fit is
+measured by actually rendering a candidate `--out` shape through
+`upsert-checkpoint-verdict.mjs`'s own render path and catching its
+length-exceeded throw, not an approximated size, so a shape this CLI accepts
+never later throws when `upsert-checkpoint-verdict.mjs` posts it. A round too
+large to render even at minimum summary length exits 0 with
+`commentBudgetExceeded: true` and degrades `--out` through three tiers,
+decided PER ANGLE (an angle whose own marker fits keeps the more detailed
+tier even when a neighboring angle does not):
+
+1. **verbose** — that angle's findings are replaced with ONE synthetic marker
+   finding naming its omitted count and severity breakdown.
+2. **bare** — that angle's marker shortens to a bare omitted-count line when
+   the verbose sentence alone does not fit.
+3. **withheld** — reached only when even ONE bare line per angle across the
+   WHOLE round still does not fit: `findingsJson` in the result is emitted
+   empty and `--out`, if given, is REMOVED from disk (deleted, not merely
+   skipped — a stale prior-round `--out` is never left for a caller to read
+   as this round's findings).
+
+Tiers 1-2 keep the REAL angle set and each angle's REAL verdict intact (never
+collapsed into one foreign section, which would fail
+`upsert-checkpoint-verdict.mjs`'s mandatory-angle/pool validation). In tier 3,
+whoever posts the verdict via the
+[Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract)
+MUST check for `--out`'s existence (or the consolidation result's
+`commentBudgetExceeded` flag) before passing `--findings-json <path>` — passing
+a path that was never written fails closed with ENOENT; fall back to that
+command's `--findings-summary` instead, naming the round size and pointing at
+the ledger (`--ledger-out`), which is always complete regardless of tier. In
+every tier, the posted `**Findings summary:**` digest is derived from
+`--out`'s (possibly marker-collapsed) angles, not the real findings, and
+undercounts on an over-budget round — the marker text and the ledger carry
+the true numbers.
 
 Consolidation:
 
