@@ -7,6 +7,7 @@ import test, { after, before } from "node:test";
 import { DEFAULT_TEST_PR_BODY, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
+  buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
   parseUpsertCheckpointVerdictCliArgs,
   renderGateReviewCommentBody,
@@ -202,6 +203,49 @@ function buildGateComment({
     updated_at: updatedAt,
   };
 }
+
+// #1472: buildCoordinationEvaluatorInput is the exact function
+// upsertCheckpointVerdict calls to assemble evaluatePrGateCoordination's
+// input — not a re-implementation. Mutation check: replacing
+// `coordinationContext.snapshot?.unresolvedThreadCount ?? null` with a
+// hardcoded `null` in that function fails this assertion, unlike a test that
+// reproduces the object literal independently.
+test("buildCoordinationEvaluatorInput threads unresolvedThreadCount from coordinationContext.snapshot (#1472)", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "round_cap_reached", sameHeadCleanConverged: false },
+    disposition: { loopDisposition: "blocked" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 2, unresolvedThreadCount: 0, copilotReviewRequestStatus: "none" },
+    gateEvidence: {
+      draftGate: { visible: true, headSha: "29aa40b7", verdict: "clean" },
+      draftGateMarker: { visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true },
+      preApprovalGate: { visible: false },
+      preApprovalGateMarker: { visible: false },
+    },
+    refinementArtifact: null,
+  };
+  const input = buildCoordinationEvaluatorInput({
+    coordinationContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(input.unresolvedThreadCount, 0);
+
+  const nonZeroContext = { ...coordinationContext, snapshot: { ...coordinationContext.snapshot, unresolvedThreadCount: 4 } };
+  const nonZeroInput = buildCoordinationEvaluatorInput({
+    coordinationContext: nonZeroContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(nonZeroInput.unresolvedThreadCount, 4);
+});
 
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
   assert.throws(
@@ -1021,7 +1065,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
         assertArgContains: [
           "body=### Gate review: `pre_approval_gate`",
           "**Findings summary:** no issues found",
-          "**Gate evidence note:** Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.",
+          "**Gate evidence note:** Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.",
         ],
         // The evidence note must render on its own labeled line — never spliced
         // with `;` into the findings summary (pre-fix render).
@@ -3368,7 +3412,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
   // `**Findings summary:**` line — exactly like the free-text path. The same PR
   // state as the free-text round-cap test drives coordination to emit the note.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-note-"));
-  const roundExhaustionNote = "Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.";
+  const roundExhaustionNote = "Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.";
   try {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(

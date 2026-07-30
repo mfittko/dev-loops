@@ -953,6 +953,50 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
   return { ...result, draftTransition: true };
 }
 
+// #1472: builds the exact input object passed to evaluatePrGateCoordination.
+// Exported (and used by upsertCheckpointVerdict below, not duplicated) so a
+// test can assert the real production wiring — e.g. that unresolvedThreadCount
+// is threaded from coordinationContext.snapshot rather than a test
+// re-implementing this object literal.
+export function buildCoordinationEvaluatorInput({
+  coordinationContext,
+  maxCopilotRounds,
+  draftGateConfig,
+  preApprovalGateConfig,
+  reviewMode,
+}) {
+  return {
+    repo: coordinationContext.repo,
+    pr: coordinationContext.pr,
+    currentHeadSha: coordinationContext.currentHeadSha,
+    prDraft: Boolean(coordinationContext.prData?.isDraft),
+    prClosed: String(coordinationContext.prData?.state || "").toUpperCase() === "CLOSED",
+    prMerged: String(coordinationContext.prData?.state || "").toUpperCase() === "MERGED",
+    lifecycleState: coordinationContext.interpretation.state,
+    loopDisposition: coordinationContext.disposition.loopDisposition,
+    ciStatus: coordinationContext.snapshot?.ciStatus ?? null,
+    copilotReviewRoundCount: coordinationContext.snapshot?.copilotReviewRoundCount ?? 0,
+    maxCopilotRounds,
+    // #1472: lets the evaluator's ROUND_CAP_REACHED handling independently
+    // confirm "zero unresolved threads" (the exhaustion note's own promise)
+    // rather than trusting a stale/compound lifecycleState label alone.
+    unresolvedThreadCount: coordinationContext.snapshot?.unresolvedThreadCount ?? null,
+    sameHeadCleanConverged: coordinationContext.interpretation.sameHeadCleanConverged,
+    // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
+    // sameHeadCleanConverged, so an outstanding request on the current head refuses
+    // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
+    copilotReviewRequestStatus: coordinationContext.snapshot?.copilotReviewRequestStatus ?? "none",
+    draftGateRequireCi: draftGateConfig.requireCi,
+    preApprovalRequireCi: preApprovalGateConfig.requireCi,
+    draftGate: coordinationContext.gateEvidence.draftGate,
+    draftGateMarker: coordinationContext.gateEvidence.draftGateMarker,
+    refinementArtifact: coordinationContext.refinementArtifact,
+    preApprovalGate: coordinationContext.gateEvidence.preApprovalGate,
+    preApprovalGateMarker: coordinationContext.gateEvidence.preApprovalGateMarker,
+    ...(reviewMode ? { reviewMode } : {}),
+  };
+}
+
 export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
@@ -995,32 +1039,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // Non-fatal: internal-only detection failure is best-effort.
     // Proceed with the default (external Copilot review) mode.
   }
-  const coordination = evaluatePrGateCoordination({
-    repo: coordinationContext.repo,
-    pr: coordinationContext.pr,
-    currentHeadSha: coordinationContext.currentHeadSha,
-    prDraft: Boolean(coordinationContext.prData?.isDraft),
-    prClosed: String(coordinationContext.prData?.state || "").toUpperCase() === "CLOSED",
-    prMerged: String(coordinationContext.prData?.state || "").toUpperCase() === "MERGED",
-    lifecycleState: coordinationContext.interpretation.state,
-    loopDisposition: coordinationContext.disposition.loopDisposition,
-    ciStatus: coordinationContext.snapshot?.ciStatus ?? null,
-    copilotReviewRoundCount: coordinationContext.snapshot?.copilotReviewRoundCount ?? 0,
+  const coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+    coordinationContext,
     maxCopilotRounds,
-    sameHeadCleanConverged: coordinationContext.interpretation.sameHeadCleanConverged,
-    // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
-    // sameHeadCleanConverged, so an outstanding request on the current head refuses
-    // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
-    copilotReviewRequestStatus: coordinationContext.snapshot?.copilotReviewRequestStatus ?? "none",
-    draftGateRequireCi: draftGateConfig.requireCi,
-    preApprovalRequireCi: preApprovalGateConfig.requireCi,
-    draftGate: coordinationContext.gateEvidence.draftGate,
-    draftGateMarker: coordinationContext.gateEvidence.draftGateMarker,
-    refinementArtifact: coordinationContext.refinementArtifact,
-    preApprovalGate: coordinationContext.gateEvidence.preApprovalGate,
-    preApprovalGateMarker: coordinationContext.gateEvidence.preApprovalGateMarker,
-    ...(reviewMode ? { reviewMode } : {}),
-  });
+    draftGateConfig,
+    preApprovalGateConfig,
+    reviewMode,
+  }));
   if (!options.gate) {
     if (coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE)) {
       options.gate = "draft_gate";
