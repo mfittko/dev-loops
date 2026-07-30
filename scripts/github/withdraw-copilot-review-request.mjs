@@ -27,7 +27,10 @@
 // operator action rather than an inference the loop makes about its own gate.
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
+// SUBMITTED_REVIEW_STATES is shared with the loop-state reader on purpose:
+// whitelisting (not `!== "PENDING"`) fails a missing, null, lowercase or
+// newly-invented state closed, and one copy cannot drift from the gate's.
+import { isCopilotLogin, SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 import { REVIEW_THREADS_QUERY } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -122,11 +125,6 @@ function parseCliArgs(argv) {
   }
   return args;
 }
-
-// A review counts as a real prior review only in a state GitHub uses for a
-// SUBMITTED one. Whitelisting (not `!== "PENDING"`) is what makes a missing,
-// null, lowercase, or newly-invented state fail closed.
-const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 
 async function ghJson(runChild, env, ghArgs) {
   const result = await runChild("gh", ghArgs, env);
