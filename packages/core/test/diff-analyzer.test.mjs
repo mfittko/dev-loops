@@ -67,9 +67,11 @@ test("classifyFile: docs for .markdown files", () => {
 
 test("classifyFile: config for allowlisted extensionless dotfiles", () => {
   assert.equal(classifyFile(".devloops"), "config");
-  assert.equal(classifyFile(".nvmrc"), "config");
-  assert.equal(classifyFile(".ruby-version"), "config");
-  assert.equal(classifyFile("packages/core/.nvmrc"), "config");
+  // Runtime-version dotfiles stay unknown (fail-closed): a .nvmrc bump must
+  // re-run ci-guard/determinism, not carry their stale clean verdicts.
+  assert.equal(classifyFile(".nvmrc"), "unknown");
+  assert.equal(classifyFile(".ruby-version"), "unknown");
+  assert.equal(classifyFile("packages/core/.nvmrc"), "unknown");
 });
 
 test("classifyFile: unrecognized extensionless dotfile stays unknown (no content sniffing)", () => {

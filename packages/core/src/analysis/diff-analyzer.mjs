@@ -14,8 +14,12 @@
 // ---------------------------------------------------------------------------
 
 // Extensionless dotfile configs: static allowlist, no content sniffing. Matched
-// against the basename only (e.g. `foo/.nvmrc`), never a prefix/suffix guess.
-const DOTFILE_CONFIG_BASENAMES = new Set([".devloops", ".nvmrc", ".ruby-version"]);
+// against the basename only, never a prefix/suffix guess. Deliberately just
+// .devloops (the reported consumer shape): runtime-version files like .nvmrc
+// were considered and REJECTED — classifying them config would let ci-guard/
+// determinism carry stale clean verdicts across a runtime bump; unknown
+// fails closed toward a full re-review, which is what a version bump needs.
+const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
 
 /**
  * @typedef {object} T0Result
