@@ -145,6 +145,14 @@ test("prerequisites snippet matches the runtime PLAYWRIGHT_MISSING_MESSAGE insta
     assert.ok(PLAYWRIGHT_MISSING_MESSAGE.includes(cmd), `runtime message must cite: ${cmd}`);
     assert.ok(doc.includes(cmd), `doc must cite: ${cmd}`);
   }
-  // Axe must NOT be part of the default pair in either surface.
+  // Axe must NOT be part of the default pair in either surface. The doc check
+  // pins the exact default line (anchored to end-of-line), so re-merging
+  // "@playwright/test @axe-core/playwright" into one command fails here — a
+  // bare substring check would pass on the pre-split combined command.
   assert.ok(!PLAYWRIGHT_MISSING_MESSAGE.includes("@axe-core/playwright"));
+  assert.match(
+    doc,
+    /^npm install --save-dev @playwright\/test$/m,
+    "the doc's default install line must be @playwright/test alone (axe is a separate opt-in)",
+  );
 });

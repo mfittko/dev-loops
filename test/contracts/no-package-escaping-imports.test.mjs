@@ -356,7 +356,7 @@ test("resolveShippedDirs classifies a files entry by what it is on disk, not by 
 
 // A trailing slash claims "this is a directory"; when the entry is actually a
 // file on disk, that claim is wrong and must fail loudly here rather than
-// surfacing later as a confusing walk() error.
+// surfacing later as a raw ENOTDIR from the dir-exists probe.
 test("resolveShippedDirs refuses a trailing-slash files entry that is a file on disk", async () => {
   const fixture = await mkdtemp(path.join(tmpdir(), "shipped-dirs-file-"));
   try {
