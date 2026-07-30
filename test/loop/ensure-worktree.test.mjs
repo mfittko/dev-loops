@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -11,10 +11,10 @@ import {
 } from "../../scripts/loop/ensure-worktree.mjs";
 
 // A real (tiny) git repo with one commit on `main`, so `git worktree add` works.
-function makeRepo({ devloops } = {}) {
+function makeRepo({ devloops, branch = "main" } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "wt-ensure-"));
   const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  git("init", "-q", "-b", "main");
+  git("init", "-q", "-b", branch);
   git("config", "user.email", "t@t.t");
   git("config", "user.name", "t");
   if (devloops) writeFileSync(path.join(root, ".devloops"), devloops);
@@ -338,6 +338,71 @@ test("ensure: invokes the provision core and never aborts on a provision warning
     assert.equal(res.ok, true);
     assert.equal(res.created, true);
     assert.equal(res.provision.summary.warnings, 1);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Default-branch guard wiring. These drive the real ensureWorktree end to end:
+// the guard module's own suite proves the hooks behave, but only these prove
+// ensure-worktree installs them into the right directory with the right branch.
+// ---------------------------------------------------------------------------
+
+test("ensure: installs the guard into the PRIMARY checkout, baking in the real default branch", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1452 });
+    assert.equal(res.ok, true);
+    assert.equal(res.guard.ok, true);
+    assert.equal(res.guard.defaultBranch, "main");
+
+    // The PRIMARY checkout's hook dir is the target — a worktree-local install
+    // would leave this path missing while still reporting success.
+    const hook = path.join(repo.root, ".git", "hooks", "pre-commit");
+    assert.ok(existsSync(hook), "guard installed in the primary checkout's hook dir");
+    const body = readFileSync(hook, "utf8");
+    assert.match(body, /dev-loops:default-branch-guard/);
+    assert.match(body, /^default="main"$/m);
+    assert.ok(statSync(hook).mode & 0o111, "hook is executable");
+
+    // And it actually fires: a commit on the default branch is refused.
+    assert.throws(
+      () => repo.git("commit", "-q", "--allow-empty", "-m", "on main"),
+      (err) => /refusing to commit on the default branch/.test(String(err.stderr)),
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: a repo whose default ref is not `main` never gets `main` baked in", async () => {
+  const repo = makeRepo({ branch: "master" });
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1452 });
+    assert.equal(res.ok, true);
+    // No refs/remotes/origin/main here, so the main-or-master guess must be
+    // rejected rather than protecting a branch this repo does not have.
+    const body = readFileSync(path.join(repo.root, ".git", "hooks", "pre-commit"), "utf8");
+    assert.doesNotMatch(body, /^default="main"$/m);
+    if (res.guard.defaultBranch !== null) assert.equal(res.guard.defaultBranch, "master");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: refuses to install when core.hooksPath points git elsewhere", async () => {
+  const repo = makeRepo();
+  try {
+    repo.git("config", "core.hooksPath", ".husky");
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1452 });
+    assert.equal(res.ok, true, "worktree still created — the guard is best-effort");
+    assert.equal(res.guard.ok, false);
+    assert.match(res.guard.reason, /core\.hooksPath/);
+    assert.ok(
+      !existsSync(path.join(repo.root, ".git", "hooks", "pre-commit")),
+      "no hook written where git would never read it",
+    );
   } finally {
     repo.cleanup();
   }

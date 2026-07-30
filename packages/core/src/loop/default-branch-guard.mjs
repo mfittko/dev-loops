@@ -26,6 +26,16 @@ const REFUSAL_BODY = (what, branchExpr) => `  echo "dev-loops: refusing to ${wha
   echo "  For a sanctioned release or reconcile: ${GUARD_OVERRIDE_ENV}=1 <command>" >&2`;
 
 /**
+ * Git's ref rules forbid spaces and control characters but permit `$`, backtick,
+ * quotes, `;`, `&`, `|` and parentheses — every one of which sh expands inside
+ * the double-quoted assignment below. A branch named `main$(id)` would execute
+ * on every commit, and `main$HOME` would expand to something that never matches
+ * the real branch, leaving the default silently unguarded. Only names matching
+ * this are baked in; anything else is refused at the install boundary.
+ */
+const SHELL_SAFE_BRANCH = /^[A-Za-z0-9._/-]+$/;
+
+/**
  * @param {"pre-commit"|"pre-push"} hookName
  * @param {string|null} defaultBranch resolved at INSTALL time. Baking it in
  *   beats re-deriving it in shell: `origin/HEAD` is often absent, and a
@@ -105,19 +115,43 @@ function readHookState(hookPath) {
  *   that can never fire, so that case refuses instead.
  */
 export function installDefaultBranchGuard({ gitDir, defaultBranch = null, hooksPathOverride = null }) {
+  const refuse = (reason, skipReason) => ({
+    ok: false,
+    installed: [],
+    refreshed: [],
+    skipped: GUARDED_HOOKS.map((hook) => ({ hook, reason: skipReason })),
+    reason,
+  });
+
   if (typeof hooksPathOverride === "string" && hooksPathOverride.trim().length > 0) {
-    return {
-      ok: false,
-      installed: [],
-      refreshed: [],
-      skipped: GUARDED_HOOKS.map((hook) => ({ hook, reason: `core.hooksPath is set to "${hooksPathOverride.trim()}", so hooks in $GIT_DIR/hooks would never run` })),
-      reason: `core.hooksPath is set to "${hooksPathOverride.trim()}" — install the guard there, or unset it, or use ${GUARD_OVERRIDE_ENV} discipline instead`,
-    };
+    const configured = hooksPathOverride.trim();
+    return refuse(
+      `core.hooksPath is set to "${configured}" — install the guard there, or unset it, or use ${GUARD_OVERRIDE_ENV} discipline instead`,
+      `core.hooksPath is set to "${configured}", so hooks in $GIT_DIR/hooks would never run`,
+    );
+  }
+
+  // A relative or empty gitDir resolves against the caller's cwd, which writes a
+  // stray hooks/ directory into the working tree and reports success for a guard
+  // git will never read.
+  if (typeof gitDir !== "string" || !path.isAbsolute(gitDir)) {
+    return refuse(
+      `gitDir must be an absolute path; got ${JSON.stringify(gitDir)}`,
+      "no absolute git directory to install into",
+    );
   }
 
   const resolvedDefault = typeof defaultBranch === "string" && defaultBranch.trim().length > 0
     ? defaultBranch.trim()
     : null;
+
+  if (resolvedDefault !== null && !SHELL_SAFE_BRANCH.test(resolvedDefault)) {
+    return refuse(
+      `default branch ${JSON.stringify(resolvedDefault)} contains characters the generated hook's shell would expand; refusing rather than installing a hook that could execute it or silently guard the wrong branch`,
+      "the resolved default branch name is not shell-safe",
+    );
+  }
+
   const hooksDir = path.join(gitDir, "hooks");
   fs.mkdirSync(hooksDir, { recursive: true });
 

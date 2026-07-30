@@ -271,3 +271,30 @@ test("an unresolvable default branch installs INERT hooks rather than guessing w
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("install: refuses a default branch the generated shell would expand", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    // Git accepts every one of these as a ref name, and sh expands each inside
+    // the double-quoted assignment — so the hook would either execute the
+    // payload or compare against a name that never matches the real default.
+    for (const hostile of ["main$(id)", "main$HOME", "release`echo x`", 'main";id;#']) {
+      const res = installDefaultBranchGuard({ gitDir, defaultBranch: hostile });
+      assert.equal(res.ok, false, `${hostile} must be refused`);
+      assert.match(res.reason, /shell would expand/);
+      assert.equal(fs.existsSync(path.join(gitDir, "hooks", "pre-commit")), false);
+    }
+    // Ordinary names with slashes, dots and dashes still install.
+    assert.equal(installDefaultBranchGuard({ gitDir, defaultBranch: "release/v1.0-rc" }).ok, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("install: refuses a relative or empty gitDir instead of writing hooks/ into the cwd", () => {
+  for (const bad of ["", "hooks/..", ".git", undefined, null, 42]) {
+    const res = installDefaultBranchGuard({ gitDir: bad, defaultBranch: "main" });
+    assert.equal(res.ok, false, `${JSON.stringify(bad)} must be refused`);
+    assert.match(res.reason, /absolute path/);
+  }
+});
