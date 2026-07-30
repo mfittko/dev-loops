@@ -247,7 +247,7 @@ describe("post-merge-board-sync", () => {
       assert.equal(result.reason, "board not configured");
     });
 
-    it("targets the issue when --issue is given, moving it to the configured Done column", async () => {
+    it("reaches the real board lookup for a configured board, then fails open on the gh error", async () => {
       await withBoardConfig(async (tempDir) => {
         const calls = [];
         const runChild = async (cmd, args, env) => {
@@ -268,7 +268,7 @@ describe("post-merge-board-sync", () => {
       });
     });
 
-    it("falls back to the PR number when --issue is omitted", async () => {
+    it("fails open on a gh error when --issue is omitted, same as with one", async () => {
       await withBoardConfig(async (tempDir) => {
         const result = await main(
           { repo: "mfittko/dev-loops", pr: 10 },

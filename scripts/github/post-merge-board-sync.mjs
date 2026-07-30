@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Deliberate duplication with `dev-loops queue sync-status`
-// (scripts/projects/sync-item-status.mjs): both are thin best-effort CLIs
-// over the same syncBoardStatus core with the same exit contract. The deltas
-// are what the merge hook needs hardwired: the target column resolves through
-// the logical Done mapping (statusColumns) instead of a caller-supplied
-// --to-column, and the move target defaults to the merged PR when no linked
-// issue is passed — so the post-merge step needs no per-repo arguments.
+// Overlaps `dev-loops queue sync-status` (scripts/projects/sync-item-status.mjs):
+// both are thin best-effort CLIs over the same syncBoardStatus core, with the
+// same exit contract. This one hardwires the two things the merge hook must
+// not get wrong: the target column resolves through the logical Done mapping
+// (statusColumns), so a renamed Done still converges, and the move target
+// falls back to the merged PR when no linked issue is passed. Those are a few
+// lines of behavior, not a separate contract — folding them into
+// `queue sync-status` as a logical-column flag is tracked separately.
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, parsePrNumber, requireTokenValue, runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";

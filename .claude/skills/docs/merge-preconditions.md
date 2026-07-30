@@ -205,7 +205,7 @@ human(s).
   (omit `--issue` when the merged PR is itself the queue item; the `|| true` masks the residual usage-error exits the
   same way the archive step's does). Resolves the board from `.devloops`
   (`tracker.board`/`queue.board`) relative to `cwd` — there is no `--repo-root` flag — using local `gh` auth, so it
-  must run from the main checkout, not the worktree the next step removes. Best-effort and NON-FATAL on a parsed
+  must run from the main checkout: the next step removes the worktree, leaving it with no cwd. Best-effort and NON-FATAL on a parsed
   invocation: a board that is not configured, an item not on the board, or any API failure logs a warning to stderr
   and exits 0 instead of failing the merge; a usage/argument error still exits 1 and an invalid `--jq` filter exits 2.
 - Remove merged worktree (canonical, `WORKTREE-CLEANUP`): `node scripts/loop/cleanup-worktree.mjs --repo-root <main> (--issue <n> | --pr <n>)`.
