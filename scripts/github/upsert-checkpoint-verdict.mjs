@@ -15,6 +15,7 @@ import { claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
+import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
@@ -900,7 +901,6 @@ async function verifyComment({ repo, commentId }, { env, ghCommand, runChild = d
 // runners cause at most a transient draft flicker (not a stuck draft) — only a hard
 // crash mid-transition can leave the PR drafted until a subsequent run.
 async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild = defaultRunChild }) {
-  const { convertPrToDraft, markPrReady } = await import("./reconcile-draft-gate.mjs");
   process.stderr.write(
     `[draft_gate] ${options.repo}#${options.pr} is ready but needs clean draft_gate evidence; ` +
     `temporarily converting to draft to post the verdict, then restoring ready.\n`,
