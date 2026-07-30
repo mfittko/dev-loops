@@ -1543,23 +1543,28 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // Round-cap reached, but the caller affirms the exhaustion note's own
-  // conditions already hold (#1472): rounds exhausted (guaranteed by this
-  // state) plus a current head with zero unresolved threads and green or
-  // credibly green CI. ROUND_CAP_REACHED is otherwise a compound "unresolved
-  // threads OR non-clean CI" hard stop (copilot-loop-state.mjs) with no
-  // dedicated boundary of its own, so without this branch the generic
-  // fallback below always names `report_blocked` — self-consistent on its
-  // own, but stale once the caller reports the head as clean: a caller that
-  // then recommends `run_pre_approval_gate` (mirroring the exhaustion note)
-  // would be naming an action `allowedNextActions` never grants, which
-  // upsert-checkpoint-verdict.mjs (validates against allowedNextActions)
-  // refuses outright — the exact deadlock #1472 reports. Any other
-  // combination (threads still unresolved, an unknown thread count, or CI not
-  // confirmed green/credibly-green) falls through unchanged to the generic
-  // default below, preserving today's blocked behavior exactly.
+  // Defensive gate-entry re-check for ROUND_CAP_REACHED (#1472): the compound
+  // "unresolved threads OR non-clean CI" hard stop that copilot-loop-state.mjs
+  // emits has no dedicated boundary of its own, so without this branch the
+  // generic fallback below always names `report_blocked`. This branch exists
+  // for a caller re-checking gate entry with signals fresher than the
+  // interpreter's snapshot (e.g. threads resolved between the interpreter run
+  // and this re-check) — it is NOT how a normal ROUND_CAP_REACHED classification
+  // is expected to look, because the interpreter uses the SAME strict-CI
+  // predicate below: whenever that predicate and zero unresolved threads both
+  // hold on the snapshot the interpreter itself observed, the interpreter emits
+  // ROUND_CAP_CLEAN_FALLBACK instead of ROUND_CAP_REACHED (see the
+  // equivalence test in pr-gate-coordination.test.mjs). So on facts unchanged
+  // since interpretation, this branch never fires; it only grants when the
+  // caller's re-check facts diverge from what the interpreter last saw. The
+  // predicate intentionally mirrors every other pre-approval CI boundary in
+  // this file (success, or CI not required) — `crediblyGreen` is unconfirmed
+  // CI and stays blocked here exactly as it does everywhere else (#1371). Any
+  // other combination (threads still unresolved, an unknown thread count, or
+  // CI not confirmed green) falls through unchanged to the generic default
+  // below, preserving today's blocked behavior exactly.
   if (effectiveLifecycleState === STATE.ROUND_CAP_REACHED && roundCapReached) {
-    const ciConfirmedGreen = ciStatus === "success" || ciStatus === "crediblyGreen" || !preApprovalRequireCi;
+    const ciConfirmedGreen = ciStatus === "success" || !preApprovalRequireCi;
     if (unresolvedThreadCount === 0 && ciConfirmedGreen) {
       if (preApprovalGate.currentHeadClean) {
         const titleMarkers = findBlockingTitleMarkers(prTitle);
