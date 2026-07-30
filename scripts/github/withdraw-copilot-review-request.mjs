@@ -9,9 +9,10 @@
 // loop re-evaluate on the evidence it already has. The path that then opens the
 // gate is same-head clean convergence: a Copilot review SUBMITTED on the current
 // head, zero unresolved and zero actionable threads, and strictly green CI
-// (`crediblyGreen` stays blocked). Those checks are unchanged and unrelaxed —
-// nothing here loosens a precondition, and a PR that could not reach the gate
-// before a withdrawal still cannot reach it after one.
+// (`crediblyGreen` stays blocked). Those checks are unchanged and unrelaxed:
+// the withdrawal removes a pending signal, it does not satisfy any of them. A
+// PR still short of that evidence stays blocked afterwards, and the one PR this
+// moves is the one whose evidence was already complete.
 //
 // It is NOT a general unsticker. At the round cap with clean threads and green
 // CI the loop already routes to `round_cap_clean_fallback` with the request
@@ -40,8 +41,10 @@ left the pre_approval_gate unable to post.
 
 Refuses unless ALL of these hold (each is what makes the withdrawal safe):
   - a Copilot review request is actually pending
-  - Copilot has already SUBMITTED a review on an earlier head (there is a real
-    prior review to fall back on — never used to skip a first review)
+  - Copilot has already SUBMITTED a review on this PR (a real prior review to
+    fall back on — never used to skip a first review). Note the gate itself
+    additionally requires that review to be on the CURRENT head, so withdrawing
+    on a head that has advanced past it will not open the gate.
   - no unresolved review threads remain
 
 Options:
