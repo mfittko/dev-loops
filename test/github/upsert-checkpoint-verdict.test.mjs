@@ -1065,7 +1065,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
         assertArgContains: [
           "body=### Gate review: `pre_approval_gate`",
           "**Findings summary:** no issues found",
-          "**Gate evidence note:** Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.",
+          "**Gate evidence note:** Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.",
         ],
         // The evidence note must render on its own labeled line — never spliced
         // with `;` into the findings summary (pre-fix render).
@@ -3288,7 +3288,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
   // `**Findings summary:**` line — exactly like the free-text path. The same PR
   // state as the free-text round-cap test drives coordination to emit the note.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-note-"));
-  const roundExhaustionNote = "Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.";
+  const roundExhaustionNote = "Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.";
   try {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(

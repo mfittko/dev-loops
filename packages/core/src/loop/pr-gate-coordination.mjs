@@ -266,13 +266,13 @@ function describeAcceptedCiState(ciStatus, preApprovalRequireCi) {
 }
 
 function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi }) {
-  // #1472 defer: when CI is not required by config, the grant does not rest on
-  // any CI verdict at all — do not claim "green or credibly green CI" for a
-  // head whose CI may be failing/pending/none. Callers that omit ciStatus /
-  // preApprovalRequireCi keep the original CI-confirmed wording unchanged.
-  const ciDescriptor = preApprovalRequireCi === false && ciStatus !== "success"
-    ? "CI not required by config"
-    : "green or credibly green CI";
+  // One rule serves both the reason string and this note: callers that pass
+  // ciStatus/preApprovalRequireCi get describeAcceptedCiState's descriptor
+  // (never a CI claim the head doesn't have). Callers that omit both keep the
+  // original CI-confirmed wording unchanged.
+  const ciDescriptor = ciStatus === undefined && preApprovalRequireCi === undefined
+    ? "green or credibly green CI"
+    : describeAcceptedCiState(ciStatus, preApprovalRequireCi);
   return `Copilot review rounds exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}); current head has zero unresolved threads and ${ciDescriptor}, so pre_approval_gate fallback is allowed without another Copilot re-request.`;
 }
 

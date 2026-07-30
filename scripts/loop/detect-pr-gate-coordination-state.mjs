@@ -24,9 +24,6 @@ import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.m
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-// #1472: re-exported so scripts/test callers that imported this predicate
-// from this module before it moved to packages/core keep working.
-export { isRoundCapReachedCleanGrant };
 const UNMERGED_GIT_STATUS_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 const USAGE = `Usage: detect-pr-gate-coordination-state.mjs --repo <owner/name> --pr <number>
 Determine which PR gate/transition is legal next for a pull request.
