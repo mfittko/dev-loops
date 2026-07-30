@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-import { CATEGORY_ANGLE_MAP } from "../src/analysis/change-classifier.mjs";
+import {
+  CATEGORY_ANGLE_MAP } from "../src/analysis/change-classifier.mjs";
 import {
   RENAME_ONLY_ANGLES,
   angleReviewSurface,
+  isDevLoopConfigSourcePath,
   resolveAngleCarryForward,
   resolveCarryForwardAngles,
   resolveConvergenceCarryForward,
@@ -60,7 +62,7 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
     assert.equal(decision.carryForward, true);
   });
 
-  test(".markdown-only delta carries a clean code angle like .md (post-convergence suppression parity)", () => {
+  test(".markdown-only delta carries a clean code angle like .md", () => {
     const decision = resolveAngleCarryForward({
       angle: "correctness",
       changedFiles: ["changes.markdown"],
@@ -69,22 +71,46 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
     assert.equal(decision.carryForward, true);
   });
 
-  test(".devloops-only delta carries clean non-config angles but re-runs config-surface ones (classifier reclassification pinned)", () => {
-    // Previously .devloops classified unknown → fail-closed re-run of every
-    // angle. Now it is config: coverage/link-check may carry a clean verdict,
-    // while config-drift (a config-surface angle) must still re-run.
-    const carried = resolveAngleCarryForward({
+  test(".devloops-only delta re-runs EVERY angle — it rewrites the reviewer pool/prompts (config-source override)", () => {
+    // classifyFile now calls .devloops "config", but a dev-loop config-source
+    // delta invalidates every prior verdict's provenance (the angle pool,
+    // mandatory floor, and reviewer prompts live there), so no angle may
+    // carry a clean verdict across it — not even one whose declared surface
+    // excludes config.
+    for (const angle of ["coverage", "link-check", "config-drift"]) {
+      const decision = resolveAngleCarryForward({
+        angle,
+        changedFiles: [".devloops"],
+        prevVerdict: "clean",
+      });
+      assert.equal(decision.carryForward, false, angle);
+      assert.match(decision.reason, /dev-loop config source/);
+    }
+    // Ordinary config (not a dev-loop config source) keeps surface semantics:
+    const ordinary = resolveAngleCarryForward({
       angle: "coverage",
-      changedFiles: [".devloops"],
+      changedFiles: ["package.json"],
       prevVerdict: "clean",
     });
-    assert.equal(carried.carryForward, true);
-    const rerun = resolveAngleCarryForward({
-      angle: "config-drift",
-      changedFiles: [".devloops"],
-      prevVerdict: "clean",
-    });
-    assert.equal(rerun.carryForward, false);
+    assert.equal(ordinary.carryForward, true);
+  });
+
+  test(".markdown-only post-convergence delta suppresses a fresh Copilot round like .md (resolveConvergenceCarryForward)", () => {
+    const md = resolveConvergenceCarryForward({ changedFiles: ["notes.md"] });
+    const markdown = resolveConvergenceCarryForward({ changedFiles: ["changes.markdown"] });
+    assert.equal(md.carryForward, true);
+    assert.equal(markdown.carryForward, true);
+    // .devloops stays a fresh-round trigger (config is in Copilot's surface):
+    assert.equal(resolveConvergenceCarryForward({ changedFiles: [".devloops"] }).carryForward, false);
+  });
+
+  test("isDevLoopConfigSourcePath matches the config-source family and nothing else", () => {
+    for (const p of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json", "sub/.devloops", ".pi/dev-loop/settings.yaml", ".pi/dev-loop/defaults.json"]) {
+      assert.equal(isDevLoopConfigSourcePath(p), true, p);
+    }
+    for (const p of ["package.json", "my.devloops", "docs/devloops.md", ".devloopsx", null]) {
+      assert.equal(isDevLoopConfigSourcePath(p), false, String(p));
+    }
   });
 
   test("code delta + code angle -> false", () => {

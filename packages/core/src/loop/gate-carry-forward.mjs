@@ -149,6 +149,19 @@ export function angleReviewSurface(angle, { alwaysRerun } = {}) {
  *   is carry-forward-eligible.
  * @returns {{ carryForward: boolean, reason: string }}
  */
+
+// A path whose change rewrites the dev-loop review system itself — the angle
+// pool, mandatory floor, and reviewer personas/prompts — rather than a
+// reviewed surface. A clean verdict produced under the OLD config cannot
+// carry across such a delta, and a converged Copilot round cannot be treated
+// as still-converged either. classifyFile correctly reports these as
+// "config"; this predicate is the carry-forward-specific override.
+const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)\.[^/]+)$/;
+export function isDevLoopConfigSourcePath(filePath) {
+  if (typeof filePath !== "string") return false;
+  return DEV_LOOP_CONFIG_SOURCE_RE.test(filePath.trim());
+}
+
 export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict }) {
   if (prevVerdict !== "clean") {
     return { carryForward: false, reason: `prior verdict is ${JSON.stringify(prevVerdict ?? null)}, not "clean"` };
@@ -164,6 +177,9 @@ export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, pr
     return { carryForward: false, reason: "delta is empty or unavailable (fail-closed)" };
   }
   for (const file of changedFiles) {
+    if (isDevLoopConfigSourcePath(file)) {
+      return { carryForward: false, reason: `delta rewrites the dev-loop config source (reviewer pool/prompts): ${file}` };
+    }
     const kind = classifyFile(file);
     if (kind === "unknown") {
       return { carryForward: false, reason: `delta contains an unclassifiable file (fail-closed): ${file}` };
