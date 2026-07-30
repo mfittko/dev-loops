@@ -230,15 +230,17 @@ export async function findEscapingImports({ repoRootUrl, shippedDirs, allowDirs 
   return offenders.sort();
 }
 
-// ponytail: relative specifiers only. Bare-specifier escapes (a shipped script
-// importing an undeclared package) are the sibling defect class, and the
-// difference is what the answer has to be good for. A regex is adequate for a
-// CLOSED membership question — "does this file import one of these two names?",
-// which STATIC_SPECIFIER_RE below answers — because a miss is bounded and a
-// false hit is inspectable. It is not adequate for the EXHAUSTIVE question "is
-// every bare specifier here a declared dependency?", where a false hit on the
-// same words inside a string or a minified vendor bundle makes the check
-// unusable. That one needs real parsing, so it is tracked separately.
+// ponytail: relative specifiers only. Bare-specifier escapes are the sibling
+// defect class, answered below by `findUndeclaredBareImports`. The objection
+// that used to stand here — that the EXHAUSTIVE question ("is every bare
+// specifier a declared dependency?") needs real parsing, because a false hit on
+// the same words inside a string or a minified bundle makes the check unusable
+// — was aimed at a PERMISSIVE matcher. Both failure modes it named are closed
+// structurally rather than by parsing: the keyword→`from` span accepts only
+// binding-list characters, so prose can no longer bridge into a quoted string,
+// and vendored bundles are skipped by path. What remains is a bounded
+// false-NEGATIVE (a binding list containing a comment), which leaves the check
+// usable — the direction a guard can afford to be wrong in.
 async function rootPackageOffenders() {
   const repoRootUrl = new URL("../../", import.meta.url);
   const pkg = JSON.parse(await readFile(new URL("package.json", repoRootUrl), "utf8"));
@@ -346,23 +348,22 @@ function packageNameOf(specifier) {
   return specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
 }
 
-test("shipped files never statically import a package the root manifest does not declare", async () => {
-  const repoRootUrl = new URL("../../", import.meta.url);
+/**
+ * Pure detector: every static BARE specifier in the shipped tree that names
+ * neither a declared dependency/peerDependency nor a Node builtin. Pure and
+ * exported for the same reason `findEscapingImports` is — an assert-empty test
+ * over the real tree cannot tell "nothing undeclared" from "the walk found
+ * nothing", so the positive control below drives it against a synthetic tree.
+ *
+ * Returns sorted `<file> -> <specifier>` strings, plus the count of declared
+ * bare imports it did resolve, so callers can assert the scan was not inert.
+ */
+export async function findUndeclaredBareImports({ repoRootUrl, shippedDirs, declared }) {
   const repoRootPath = fileURLToPath(repoRootUrl);
-  const pkg = await readRootPackage();
-  const declared = new Set([
-    ...Object.keys(pkg.dependencies ?? {}),
-    ...Object.keys(pkg.peerDependencies ?? {}),
-  ]);
-  assert.ok(declared.size > 0, "expected the root manifest to declare at least one dependency");
-  const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
-
+  const declaredSet = declared instanceof Set ? declared : new Set(declared);
   const offenders = [];
-  // An empty offender list cannot distinguish "nothing undeclared" from "the
-  // scan stopped seeing imports" — the hazard this file documents for its
-  // sibling scanner, and a live one here since the matcher was narrowed. Count
-  // the declared bare imports the scan DID resolve and assert it saw some.
   let declaredSeen = 0;
+
   for (const dir of shippedDirs) {
     const dirUrl = new URL(`${dir}/`, repoRootUrl);
     try {
@@ -389,7 +390,7 @@ test("shipped files never statically import a package the root manifest does not
         if (specifier.startsWith("node:")) continue;
         const pkgName = packageNameOf(specifier);
         if (isBuiltin(pkgName)) continue;
-        if (declared.has(pkgName)) {
+        if (declaredSet.has(pkgName)) {
           declaredSeen += 1;
           continue;
         }
@@ -398,8 +399,62 @@ test("shipped files never statically import a package the root manifest does not
     }
   }
 
-  assert.deepEqual(offenders.sort(), []);
+  return { offenders: offenders.sort(), declaredSeen };
+}
+
+test("shipped files never statically import a package the root manifest does not declare", async () => {
+  const repoRootUrl = new URL("../../", import.meta.url);
+  const pkg = await readRootPackage();
+  const declared = new Set([
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.peerDependencies ?? {}),
+  ]);
+  assert.ok(declared.size > 0, "expected the root manifest to declare at least one dependency");
+  const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
+
+  const { offenders, declaredSeen } = await findUndeclaredBareImports({ repoRootUrl, shippedDirs, declared });
+
+  assert.deepEqual(offenders, []);
+  // An empty offender list cannot distinguish "nothing undeclared" from "the
+  // scan stopped seeing imports" — the hazard this file documents for its
+  // sibling scanner, and a live one since the matcher was narrowed.
   assert.ok(declaredSeen > 0, "scan resolved no declared bare import at all — the matcher or the walk is broken, not the tree");
+});
+
+test("findUndeclaredBareImports flags an undeclared bare import and passes the declared ones", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "undeclared-bare-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "shipped", "vendor"), { recursive: true });
+    await writeFile(
+      path.join(fixture, "shipped", "entry.mjs"),
+      [
+        'import { parse } from "yaml";',                    // legal: declared
+        'import { z } from "zod";',                         // legal: declared
+        'import { readFile } from "node:fs/promises";',     // legal: node: builtin
+        'import path from "path";',                         // legal: bare builtin
+        'import { x } from "./local.mjs";',                 // legal: relative, other guard
+        'import { rogue } from "not-declared";',            // OFFENDER
+        'import {\n  a,\n  b,\n} from "@scope/also-undeclared";', // OFFENDER, multi-line
+      ].join("\n"),
+    );
+    // A vendored bundle's inlined imports must not count against the manifest.
+    await writeFile(path.join(fixture, "shipped", "vendor", "bundle.min.js"), 'import{a}from"bundled-dep";');
+
+    const { offenders, declaredSeen } = await findUndeclaredBareImports({
+      repoRootUrl,
+      shippedDirs: ["shipped"],
+      declared: new Set(["yaml", "zod"]),
+    });
+
+    assert.deepEqual(offenders, [
+      "shipped/entry.mjs -> @scope/also-undeclared",
+      "shipped/entry.mjs -> not-declared",
+    ]);
+    assert.equal(declaredSeen, 2);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
 });
 
 // The guard above derives its names from the manifest, so it would go quiet if
