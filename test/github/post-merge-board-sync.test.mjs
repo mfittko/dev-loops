@@ -104,6 +104,14 @@ describe("post-merge-board-sync", () => {
       assert.equal(args.issue, undefined);
       assert.equal(args.pr, 10);
     });
+
+    it("treats a bare --issue with no value at all as omitted, same as --issue \"\"", () => {
+      // The shell result of `--issue <linked-issue>` when the substitution is
+      // dropped entirely rather than quoted-empty.
+      const args = parseCliArgs(["--repo", "mfittko/dev-loops", "--pr", "10", "--issue"]);
+      assert.equal(args.issue, undefined);
+      assert.equal(args.pr, 10);
+    });
   });
 
   describe("success path (board move actually happens)", () => {

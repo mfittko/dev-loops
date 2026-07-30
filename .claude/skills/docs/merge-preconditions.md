@@ -201,8 +201,9 @@ human(s).
 ## Post-merge
 
 - Sync the merged item's board Status to Done (issue #1458), run BEFORE worktree removal below:
-  `node scripts/github/post-merge-board-sync.mjs --repo <owner/name> --pr <number> --issue <linked-issue>`
-  (omit `--issue` when the merged PR is itself the queue item). Resolves the board from `.devloops`
+  `node scripts/github/post-merge-board-sync.mjs --repo <owner/name> --pr <number> --issue <linked-issue> || true`
+  (omit `--issue` when the merged PR is itself the queue item; the `|| true` masks the residual usage-error exits the
+  same way the archive step's does). Resolves the board from `.devloops`
   (`tracker.board`/`queue.board`) relative to `cwd` — there is no `--repo-root` flag — using local `gh` auth, so it
   must run from the main checkout, not the worktree the next step removes. Best-effort and NON-FATAL on a parsed
   invocation: a board that is not configured, an item not on the board, or any API failure logs a warning to stderr

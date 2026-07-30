@@ -43,7 +43,8 @@ Output (stdout):
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
-  0 — always on a parsed command (best-effort sync; skips/failures are reported in JSON + a stderr warning)
+  0 — always on a parsed command without --silent (best-effort sync; skips/failures are
+      reported in JSON + a stderr warning; --silent maps a falsy --jq predicate to exit 1)
   1 — usage or argument error
   2 — invalid --jq filter
 `.trim();
@@ -81,12 +82,13 @@ function parseCliArgs(argv) {
         args.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
         break;
       case "issue":
-        // An empty value (e.g. `--issue ""` from an unfilled `<linked-issue>`
-        // template substitution) is the documented "PR is the queue item"
-        // case, not a usage error — leave args.issue unset so it falls back
-        // to --pr below, instead of failing the whole post-merge hook.
-        if (token.value !== "") {
-          args.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
+        // A missing or empty value (`--issue` alone, or `--issue ""` from an
+        // unfilled `<linked-issue>` template substitution) is the documented
+        // "PR is the queue item" case, not a usage error — leave args.issue
+        // unset so it falls back to --pr below, instead of failing the whole
+        // post-merge hook.
+        if (token.value) {
+          args.issue = parseIssueNumber(token.value, parseError);
         }
         break;
       default: {
@@ -115,14 +117,10 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd(), sy
   const repo = `${owner}/${name}`;
   // Resolve Done through the same statusColumns mapping board-sync/archive use
   // (#1098) so a board that renamed Done still converges correctly.
-  const { columnNames, error: configError } = loadStateColumnMap(cwd);
-  if (configError) {
-    // syncBoardStatus owns the fail-open contract for board/API errors; a
-    // config read/parse error happens before board lookup, so it is the one
-    // failure mode syncBoardStatus cannot see — surface it the same
-    // best-effort way here instead.
-    return { ok: true, skipped: true, reason: `config read/parse error: ${configError}` };
-  }
+  // On a config read/parse error columnNames falls back to the defaults and
+  // syncBoardStatus surfaces the same error as its own best-effort skip, so
+  // no separate guard is needed here.
+  const { columnNames } = loadStateColumnMap(cwd);
   const doneColumn = columnNames[LOGICAL_COLUMN.DONE];
   const target = args.issue ?? args.pr;
   return syncBoardStatus(repo, cwd, target, doneColumn, env, { runChild: child });
