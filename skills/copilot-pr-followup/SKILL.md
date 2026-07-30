@@ -434,23 +434,18 @@ node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state skipped --rea
 
 Do not report completion or advance to the next PR queue item until `.pi/dev-loop-retrospective-checkpoint.json` is updated to `complete` or `skipped`.
 
-### Post-merge board archive (best-effort)
+### Post-merge board sync (best-effort)
 
-After the retrospective checkpoint write, run the post-merge board archive as a standard step of the post-merge hook (see [Merge Preconditions](../docs/merge-preconditions.md) "Post-merge"):
+After the retrospective checkpoint write, run the post-merge board sync and archive as standard steps of the post-merge hook (see [Merge Preconditions](../docs/merge-preconditions.md) "Post-merge"):
 
 ```sh
+node <resolved-skill-scripts>/github/post-merge-board-sync.mjs --repo <owner/name> --pr <number> --issue <linked-issue> || true
 node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name> || true
 ```
 
-Board and threshold resolve from `.devloops` (`queue.board.number`/`queue.board.title`, `queue.archiveOlderThanDays`, default 7d), using local `gh` auth — no CI, cron, or PAT. This step is best-effort and NON-FATAL: ignore any failure and never let it block the merge or the retrospective.
+`post-merge-board-sync.mjs` (issue #1458) moves the merged item's board Status to the configured Done column right after merge — omit `--issue` when the merged PR is itself the queue item (issue-less / PR-is-the-queue-item case). It must run from the main checkout, before the worktree-removal step below — it resolves `.devloops` relative to `cwd` and has no `--repo-root` flag, so running it afterwards would leave it with no cwd at all. Board and threshold resolve from `.devloops` (`tracker.board`/`queue.board`, `queue.archiveOlderThanDays`, default 7d), using local `gh` auth — no CI, cron, or PAT. Both steps are best-effort and NON-FATAL, but their exit contracts differ: `post-merge-board-sync.mjs` exits 0 on any parsed invocation, including every board/API failure (a skip/failure logs a warning to stderr instead) — only a usage/argument error (exit 1), an invalid `--jq` filter (exit 2), or a falsy `--silent` predicate is non-zero, which the `|| true` above guards against. `archive-done-items.mjs` exits non-zero on a usage/argument error (1), a GitHub API error or invalid `--jq` filter (2), or a project-not-found (3) — its own `|| true` is load-bearing, not redundant, and masks those failures deliberately so a failed archive run never blocks the merge. Neither step blocks the merge or the retrospective.
 
-The deterministic mechanism that converges merged→Done is `dev-loops queue reconcile` — idempotent, run best-effort at loop startup — so the merge lands on the "Done" column without a remembered manual step. The manual sync below is now an optional fallback (e.g. to converge immediately without waiting for the next startup reconcile):
-
-```sh
-node <resolved-skill-scripts>/projects/sync-item-status.mjs --repo <owner/name> --item <linked-issue> --to-column "Done"
-```
-
-Same best-effort/NON-FATAL contract as the archive step: local `gh` auth (no CI/PAT), exits 0 when the board is not configured / the item is not on the board / the API fails, and never blocks the merge or the retrospective.
+`dev-loops queue reconcile` (idempotent, run best-effort at loop startup) is the fallback convergence path when the sync above is ever skipped or missed — it re-derives every item's column from live GitHub state, so a merge that could not run this hook still lands on Done at the next startup.
 
 ## Validation policy
 
