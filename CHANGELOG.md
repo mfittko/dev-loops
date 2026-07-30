@@ -8,6 +8,84 @@ All notable changes to this project will be documented in this file.
 
 - `ensure-worktree` now best-effort installs `pre-commit`/`pre-push` hooks into the primary checkout's shared common git directory, refusing a commit or push (including via an explicit refspec) that would land on a guarded branch — the repo's own default, and, when it differs, an explicit `--base`. Override for a sanctioned release or reconcile with `DEVLOOPS_ALLOW_MAIN=1`. The install is fail-soft and has documented no-op paths (an existing `core.hooksPath`, a foreign pre-existing hook, or an unresolvable default) — see [Default-branch guard](skills/docs/worktree-guidance.md#default-branch-guard).
 
+## 1.0.0-rc.4 - 2026-07-30
+
+Consumer-soak fixes for rc.3. The theme is deadlocks: several gate paths could
+reach a state where the loop was correct, the PR was mergeable, and nothing
+moved. Most of these were found by running the loop against its own queue.
+
+### Fixed — gate deadlocks
+
+- **The gate-evidence check never went green after a verdict comment (#1483).**
+  A gate verdict posted as an issue comment did not re-fire the workflow, so the
+  required status stayed stale and the PR sat merge-blocked behind a gate that
+  had actually passed. It now re-fires on gate-verdict comments.
+- **The loop counted the gate-evidence workflow's own check run as PR CI (#1498).**
+  A PR could sit at `ciStatus: none` forever while its real checks were green,
+  because the loop's derived check was watching itself. Its own check names are
+  excluded from the CI status it derives.
+- **A circular import between `upsert-checkpoint-verdict` and reconcile
+  deadlocked draft-gate verdict posting (#1491).** The gate could not record the
+  verdict it had just produced.
+- **`round_cap_reached` refused the pre-approval fallback its own note offered
+  (#1490).** The state told the operator a fallback was available and then
+  rejected it. Adds a universal `nextAction`-consistency contract so a state
+  cannot advertise an action it will not accept.
+- **A stranded Copilot review request had no exit (#1501).** Withdrawing the
+  request is now an explicit operator escape hatch, rather than loosening the
+  gate to get past it.
+
+### Fixed — packaging and consumer installs
+
+- **`zod` and `yaml` were used by shipped code but never declared (#1500).** A
+  consumer install could resolve them only by accident of hoisting. Both are
+  declared, and a contract test now fails the build when shipped code imports a
+  bare specifier the root manifest does not declare.
+- **The ui-review browser-driving stages could not run from a consumer install
+  (#1460).** Interstitial dismissal on the login page and the worktree guard's
+  handling of the loop's own namespace are fixed too (#1456).
+- **`axe` install is an explicit opt-in (#1489)** rather than an implicit
+  dependency of a ui-review run.
+- **A worktree's `@dev-loops/core` link is covered by a resolver-level
+  regression test (#1432)** — the link silently resolving to the primary
+  checkout is what made an earlier worktree bug invisible.
+
+### Added — gate review
+
+- **Cache primer for the review fan-out, `GATE-EXEC-PRIME` (#1462).** The
+  handoff envelope's stable prefix is byte-identical across rounds for the same
+  target and gate, with the volatile gate state isolated into a trailing block,
+  so a fresh reviewer spawn stays cache-warm. The primer is mandatory — the
+  opt-in flag is gone.
+- **One scoped reviewer per fresh angle is enforced in fan-out provenance
+  (#1431).** Two freshly-reviewed angles may no longer share a reviewer
+  identity; a sanctioned single-reviewer run must declare
+  `inline_single_agent` with a reason.
+- **Consumer-run friction fixes (#1484):** a fan-in CLI, prefix-file record,
+  `--findings-file` flags, angle parity, a tarball contract, and a stale-install
+  doctor.
+- **The single-contributor ownership gate is scoped to code-changing strategies
+  (#1444)**, so a docs-only change no longer trips it.
+
+### Changed
+
+- **`.markdown` classifies as docs, and extensionless dotfile configs as config
+  (#1488)** — subtractive angle pruning now works for config-only and docs-only
+  PRs instead of falling back to a full fan-out.
+- **The queue board resolves from `.devloops` (#1479)**, and a post-merge board
+  sync runs best-effort after a merge (#1492).
+- **`.devloops` carries per-layer angle deltas only (#1428)**, rather than
+  restating the inherited angle list.
+- **`edit-issue --state` opens and closes issues, and `create-issue` fails
+  closed on an empty body (#1422).**
+
+### Docs
+
+- Evolution/history article and deck for dev-loops (#1440), a refreshed public
+  intro after the pre-1.0 config changes (#1430), the ADR decision-record
+  practice embedded into the workflow (#1436), and ADR 0041 recording the
+  deslop + designer-review gate-loop decision (#1439).
+
 ## 1.0.0-rc.3 - 2026-07-19
 
 ### Changed (breaking — `.devloops` config shape, #1404)
