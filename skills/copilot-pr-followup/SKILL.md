@@ -232,6 +232,7 @@ When unresolved feedback exists, use a narrow follow-up loop:
 6. if files changed, run `node <resolved-skill-scripts>/loop/pre-commit-branch-guard.mjs --expected-branch <headRefName>` immediately before every `git add && git commit` sequence as a required fail-closed guard
    - source `<headRefName>` from authoritative PR state (`headRefName`), not from a local branch guess
    - if the guard exits non-zero (`branch_mismatch`), stop and realign to the expected branch before staging or committing
+   - this guard reads the CURRENT branch, which is itself cwd-relative; `WORKTREE-DEFAULT-USE` in [worktree-guidance.md](../docs/worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) additionally mandates addressing the tree explicitly (`git -C <absolute-worktree-path> …`) for the `add`/`commit`/`push` themselves
 7. if files changed, push the resolving commit before any thread reply claims the fix is present
 8. <!-- rule: COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER --> `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER`: When a comment or thread is actually addressed, the agent MUST reply on GitHub with a short resolution note that references the resolving commit SHA or commit URL when applicable, using the deterministic helpers below rather than ad hoc thread mutations:
    - for one thread, must use the deterministic helper `reply-resolve-review-thread.mjs` from the resolved skill scripts directory

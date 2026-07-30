@@ -10,12 +10,18 @@ import {
   parseEnsureWorktreeCliArgs,
 } from "../../scripts/loop/ensure-worktree.mjs";
 
+// Scrubbed at the PROCESS level, not just the test's own git() helper: the
+// module under test (ensureWorktree's installGuard) spawns its own git
+// subprocesses with no env override, inheriting process.env — so a
+// host-global core.hooksPath/commit.gpgsign=true reaches the SUBJECT, not
+// just this file's assertions, and flips guard installation itself.
+process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_SYSTEM = "/dev/null";
+
 // Scrubbed, not inherited: an ambient DEVLOOPS_ALLOW_MAIN (the guard's own
 // documented release/reconcile override) would make the guard-refusal
-// assertions below pass for the wrong reason, and a host-global
-// core.hooksPath/commit.gpgsign=true would break commits here for reasons
-// unrelated to the guard under test.
-const REPO_GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+// assertions below pass for the wrong reason.
+const REPO_GIT_ENV = { ...process.env };
 delete REPO_GIT_ENV.DEVLOOPS_ALLOW_MAIN;
 
 // A real (tiny) git repo with one commit on `main`, so `git worktree add` works.
@@ -150,6 +156,11 @@ test("ensure: reuse is idempotent (second call reuses, no error)", async () => {
     assert.equal(second.created, false);
     assert.equal(second.reused, true);
     assert.equal(second.path, first.path);
+    // `guard` is documented as always present on BOTH the create and reuse
+    // paths — deleting installGuard's call on the reuse branch would leave
+    // this whole suite green while breaking that contract.
+    assert.equal(second.guard.ok, true);
+    assert.deepEqual(second.guard.refreshed, ["pre-commit", "pre-push"]);
   } finally {
     repo.cleanup();
   }
@@ -363,7 +374,7 @@ test("ensure: installs the guard into the PRIMARY checkout, baking in the real d
     const res = await ensureWorktree({ repoRoot: repo.root, issue: 1452 });
     assert.equal(res.ok, true);
     assert.equal(res.guard.ok, true);
-    assert.equal(res.guard.defaultBranch, "main");
+    assert.deepEqual(res.guard.defaultBranches, ["main"]);
 
     // The PRIMARY checkout's hook dir is the target — a worktree-local install
     // would leave this path missing while still reporting success.
@@ -371,7 +382,7 @@ test("ensure: installs the guard into the PRIMARY checkout, baking in the real d
     assert.ok(existsSync(hook), "guard installed in the primary checkout's hook dir");
     const body = readFileSync(hook, "utf8");
     assert.match(body, /dev-loops:default-branch-guard/);
-    assert.match(body, /^default="main"$/m);
+    assert.match(body, /^defaults="main"$/m);
     assert.ok(statSync(hook).mode & 0o111, "hook is executable");
 
     // And it actually fires: a commit on the default branch is refused.
@@ -384,16 +395,72 @@ test("ensure: installs the guard into the PRIMARY checkout, baking in the real d
   }
 });
 
-test("ensure: a repo whose default ref is not `main` never gets `main` baked in", async () => {
+test("ensure: a repo whose default ref is not `main` gets `master` baked in, unconditionally, and enforces it", async () => {
   const repo = makeRepo({ branch: "master" });
   try {
     const res = await ensureWorktree({ repoRoot: repo.root, issue: 1452 });
     assert.equal(res.ok, true);
     // No refs/remotes/origin/main here, so the main-or-master guess must be
-    // rejected rather than protecting a branch this repo does not have.
+    // rejected rather than protecting a branch this repo does not have —
+    // asserted unconditionally, not "if it resolved": a hedge here would stay
+    // green even if resolution silently degraded to inert on every non-main repo.
+    assert.deepEqual(res.guard.defaultBranches, ["master"]);
     const body = readFileSync(path.join(repo.root, ".git", "hooks", "pre-commit"), "utf8");
-    assert.doesNotMatch(body, /^default="main"$/m);
-    if (res.guard.defaultBranch !== null) assert.equal(res.guard.defaultBranch, "master");
+    assert.doesNotMatch(body, /^defaults="main"$/m);
+    assert.match(body, /^defaults="master"$/m);
+    assert.throws(
+      () => repo.git("commit", "-q", "--allow-empty", "-m", "on master"),
+      (err) => /refusing to commit on the default branch/.test(String(err.stderr)),
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// The guard is a REPO-WIDE shared resource (one hook directory), not
+// per-invocation state — so it must protect the repo's real default AND an
+// explicit --base (an operator's flag, or the resolver-injected
+// workflow.baseBranch) at once, and a later call on a DIFFERENT explicit
+// --base must never strip protection from the real default that an earlier
+// call already established.
+test("ensure: an explicit --base guards ALONGSIDE the real default, never instead of it", async () => {
+  const repo = makeRepo();
+  try {
+    repo.git("branch", "release/1.0");
+    repo.git("fetch", "-q", "origin");
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 42, base: "origin/release/1.0" });
+    assert.equal(res.ok, true);
+    assert.deepEqual([...res.guard.defaultBranches].sort(), ["main", "release/1.0"]);
+
+    assert.throws(
+      () => repo.git("commit", "-q", "--allow-empty", "-m", "on main"),
+      (err) => /refusing to commit on the default branch/.test(String(err.stderr)),
+      "the real default must still be refused",
+    );
+    repo.git("checkout", "-q", "release/1.0");
+    assert.throws(
+      () => repo.git("commit", "-q", "--allow-empty", "-m", "on release/1.0"),
+      (err) => /refusing to commit on the default branch/.test(String(err.stderr)),
+      "the explicit base must be refused too",
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: a later call with a DIFFERENT explicit --base never un-guards the real default", async () => {
+  const repo = makeRepo();
+  try {
+    repo.git("branch", "spike/a");
+    repo.git("branch", "spike/b");
+    repo.git("fetch", "-q", "origin");
+    await ensureWorktree({ repoRoot: repo.root, issue: 1, base: "origin/spike/a" });
+    const second = await ensureWorktree({ repoRoot: repo.root, issue: 2, base: "origin/spike/b" });
+    assert.ok(second.guard.defaultBranches.includes("main"), "the real default survives across differing --base calls");
+    assert.throws(
+      () => repo.git("commit", "-q", "--allow-empty", "-m", "on main"),
+      (err) => /refusing to commit on the default branch/.test(String(err.stderr)),
+    );
   } finally {
     repo.cleanup();
   }

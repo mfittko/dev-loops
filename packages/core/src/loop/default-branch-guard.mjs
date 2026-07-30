@@ -36,35 +36,61 @@ const REFUSAL_BODY = (what, branchExpr) => `  echo "dev-loops: refusing to ${wha
 const SHELL_SAFE_BRANCH = /^[A-Za-z0-9._/-]+$/;
 
 /**
- * @param {"pre-commit"|"pre-push"} hookName
- * @param {string|null} defaultBranch resolved at INSTALL time. Baking it in
- *   beats re-deriving it in shell: `origin/HEAD` is often absent, and a
- *   main-or-master guess picks a stale local `main` in a `master` repo, which
- *   would guard the wrong branch and leave the real default open.
- * @throws {Error} when defaultBranch is non-empty and not shell-safe — this
- *   function is the actual trust boundary (it is what interpolates the name
- *   into shell), not just its installDefaultBranchGuard caller, so it must
- *   refuse on its own rather than rely on every caller re-checking first.
+ * Normalize a `defaultBranches` argument (a single branch name, an array of
+ * them, or nothing) to a deduped array of trimmed, non-empty strings. More
+ * than one branch is guarded when a caller's own default (git's advertised
+ * `<remote>/HEAD`) and its resolved working base genuinely differ — e.g. a
+ * `.devloops` `workflow.baseBranch` of `develop` in a repo whose real default
+ * is still `main`: a stray commit on EITHER must be refused.
  */
-export function renderGuardHook(hookName, defaultBranch = null) {
-  const resolvedDefault = typeof defaultBranch === "string" && defaultBranch.trim().length > 0
-    ? defaultBranch.trim()
-    : "";
-  if (resolvedDefault && !SHELL_SAFE_BRANCH.test(resolvedDefault)) {
+function normalizeBranchList(branches) {
+  const list = branches == null ? [] : Array.isArray(branches) ? branches : [branches];
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    if (typeof raw !== "string") continue;
+    const trimmed = raw.trim();
+    if (trimmed.length === 0 || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * @param {"pre-commit"|"pre-push"} hookName
+ * @param {string|string[]|null} defaultBranches resolved at INSTALL time.
+ *   Baking them in beats re-deriving in shell: `origin/HEAD` is often absent,
+ *   and a main-or-master guess picks a stale local `main` in a `master` repo,
+ *   which would guard the wrong branch and leave the real default open.
+ * @throws {Error} when hookName is not a guarded hook, or any branch is
+ *   non-empty and not shell-safe. `hookName` and every branch name are
+ *   interpolated straight into the generated script, so THIS function — not
+ *   just its installDefaultBranchGuard caller — is the trust boundary and
+ *   must refuse on its own rather than rely on every caller re-checking first.
+ */
+export function renderGuardHook(hookName, defaultBranches = null) {
+  if (!GUARDED_HOOKS.includes(hookName)) {
+    throw new Error(`renderGuardHook: unknown hook ${JSON.stringify(hookName)}; expected one of ${GUARDED_HOOKS.join(", ")}`);
+  }
+  const branches = normalizeBranchList(defaultBranches);
+  const unsafe = branches.find((branch) => !SHELL_SAFE_BRANCH.test(branch));
+  if (unsafe) {
     throw new Error(
-      `default branch ${JSON.stringify(resolvedDefault)} contains characters the generated hook's shell would expand; refusing to render a hook that could execute it`,
+      `default branch ${JSON.stringify(unsafe)} contains characters the generated hook's shell would expand; refusing to render a hook that could execute it`,
     );
   }
+  const defaults = branches.join(" ");
   const header = `#!/bin/sh
 # ${GUARD_MARKER}
-# Refuses a ${hookName} that would land on the default branch. Installed in the
-# common hook directory, so linked worktrees run it too — their branch is not
-# the default, which is what lets their work through.
+# Refuses a ${hookName} that would land on a guarded default branch. Installed
+# in the common hook directory, so linked worktrees run it too — their branch
+# is not one of the guarded ones, which is what lets their work through.
 if [ "\${${GUARD_OVERRIDE_ENV}}" = "1" ]; then
   exit 0
 fi
-default="${resolvedDefault}"
-if [ -z "$default" ]; then
+defaults="${defaults}"
+if [ -z "$defaults" ]; then
   # Not resolvable at install time; fail OPEN rather than guess a branch and
   # protect the wrong one. The install reports this so it is not silent.
   exit 0
@@ -73,11 +99,16 @@ fi
 
   if (hookName === "pre-commit") {
     return `${header}
-branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
-if [ "$branch" = "$default" ]; then
-${REFUSAL_BODY("commit on the default branch", "branch")}
-  exit 1
-fi
+# Full ref, not --short: git DISAMBIGUATES a --short symbolic-ref to
+# "heads/main" when a tag also named "main" exists, so comparing the short
+# form against a bare branch name would never match and let the commit land.
+branch=$(git symbolic-ref --quiet HEAD 2>/dev/null) || exit 0
+for default in $defaults; do
+  if [ "$branch" = "refs/heads/$default" ]; then
+${REFUSAL_BODY("commit on the default branch", "default")}
+    exit 1
+  fi
+done
 exit 0
 `;
   }
@@ -88,16 +119,18 @@ exit 0
   // exact shape that moved a remote default in testing.
   return `${header}
 blocked=0
+blocked_default=""
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ -n "$remote_ref" ] || continue
-  case "$remote_ref" in
-    "refs/heads/$default")
+  for default in $defaults; do
+    if [ "$remote_ref" = "refs/heads/$default" ]; then
       blocked=1
-      ;;
-  esac
+      blocked_default="$default"
+    fi
+  done
 done
 if [ "$blocked" = "1" ]; then
-${REFUSAL_BODY("push to the default branch", "default")}
+${REFUSAL_BODY("push to the default branch", "blocked_default")}
   exit 1
 fi
 exit 0
@@ -118,12 +151,12 @@ function readHookState(hookPath) {
  * found and reported as `skipped`, because silently replacing someone's hook is
  * a worse failure than not installing ours.
  *
- * @param {{ gitDir: string, defaultBranch?: string|null, hooksPathOverride?: string|null }} target
+ * @param {{ gitDir: string, defaultBranches?: string|string[]|null, hooksPathOverride?: string|null }} target
  *   `hooksPathOverride` is the repo's `core.hooksPath` when set. Installing into
  *   `$GIT_DIR/hooks` while git reads elsewhere would report success for a guard
  *   that can never fire, so that case refuses instead.
  */
-export function installDefaultBranchGuard({ gitDir, defaultBranch = null, hooksPathOverride = null }) {
+export function installDefaultBranchGuard({ gitDir, defaultBranches = null, hooksPathOverride = null }) {
   const refuse = (reason, skipReason) => ({
     ok: false,
     installed: [],
@@ -150,13 +183,24 @@ export function installDefaultBranchGuard({ gitDir, defaultBranch = null, hooksP
     );
   }
 
-  const resolvedDefault = typeof defaultBranch === "string" && defaultBranch.trim().length > 0
-    ? defaultBranch.trim()
-    : null;
-
-  if (resolvedDefault !== null && !SHELL_SAFE_BRANCH.test(resolvedDefault)) {
+  // Absoluteness alone does not make it a GIT dir: a caller slip (the worktree
+  // root instead of its .git) would otherwise pass, then mkdirSync a stray
+  // hooks/ tree there and report success for a guard git will never read.
+  // Every real git dir — bare, a main checkout, or a linked worktree's own
+  // gitdir — has a HEAD file; that is the cheapest reliable probe.
+  if (!fs.existsSync(path.join(gitDir, "HEAD"))) {
     return refuse(
-      `default branch ${JSON.stringify(resolvedDefault)} contains characters the generated hook's shell would expand; refusing rather than installing a hook that could execute it or silently guard the wrong branch`,
+      `gitDir ${JSON.stringify(gitDir)} does not look like a git directory (no HEAD file)`,
+      "gitDir does not look like a git directory",
+    );
+  }
+
+  const branches = normalizeBranchList(defaultBranches);
+  const unsafeBranch = branches.find((branch) => !SHELL_SAFE_BRANCH.test(branch));
+
+  if (unsafeBranch) {
+    return refuse(
+      `default branch ${JSON.stringify(unsafeBranch)} contains characters the generated hook's shell would expand; refusing rather than installing a hook that could execute it or silently guard the wrong branch`,
       "the resolved default branch name is not shell-safe",
     );
   }
@@ -183,7 +227,7 @@ export function installDefaultBranchGuard({ gitDir, defaultBranch = null, hooksP
     // rename is atomic, so any reader sees either the old hook or the new one,
     // never a partial one.
     const tmpPath = path.join(hooksDir, `.${hook}.tmp-${process.pid}-${Date.now()}`);
-    fs.writeFileSync(tmpPath, renderGuardHook(hook, resolvedDefault), { mode: 0o755 });
+    fs.writeFileSync(tmpPath, renderGuardHook(hook, branches), { mode: 0o755 });
     fs.chmodSync(tmpPath, 0o755); // mode above is umask-limited; force it
     fs.renameSync(tmpPath, hookPath);
     (absent ? installed : refreshed).push(hook);
@@ -194,7 +238,7 @@ export function installDefaultBranchGuard({ gitDir, defaultBranch = null, hooksP
     installed,
     refreshed,
     skipped,
-    defaultBranch: resolvedDefault,
-    ...(resolvedDefault ? {} : { reason: "default branch could not be resolved at install time; the hooks are inert rather than guessing which branch to protect" }),
+    defaultBranches: branches,
+    ...(branches.length === 0 ? { reason: "default branch could not be resolved at install time; the hooks are inert rather than guessing which branch to protect" } : {}),
   };
 }

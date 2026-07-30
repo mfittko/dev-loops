@@ -29,7 +29,7 @@ import { parseArgs } from "node:util";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
 import { resolveBaseBranch } from "@dev-loops/core/config";
 import { provisionWorktree } from "./provision-worktree.mjs";
-import { installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
+import { GUARDED_HOOKS, installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
 import { canonicalize } from "./_worktree-path.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -57,9 +57,10 @@ Output (stdout, JSON):
                      // a NEW branch, or the existing local branch when re-attached
     "provision": { "actions": [...], "summary": {...} },
     "guard": { "ok": bool, "installed": [...], "refreshed": [...], "skipped": [...],
-               "defaultBranch"?, "reason"? }   // default-branch guard install
-               // result (best-effort; see installDefaultBranchGuard) — always
-               // present, on both the create and reuse paths }
+               "defaultBranches"?: [...], "reason"? }   // default-branch guard
+               // install result (best-effort; see installDefaultBranchGuard) —
+               // always present, on both the create and reuse paths. Guards the
+               // repo's own default AND, when it differs, an explicit --base. }
 
 ${JQ_OUTPUT_USAGE}`.trim();
 
@@ -206,7 +207,60 @@ function remoteDefaultRefExists(gitCommand, remote, branch, cwd) {
   }
 }
 
-function installGuard(gitCommand, root, effectiveBase) {
+// Git's OWN advertised default for `remote` — `<remote>/HEAD`, set by every
+// real `git clone` (and, empirically, by a plain `git fetch` against a remote
+// that itself has one). Deliberately does NOT fall back to guessing
+// main-before-master the way resolveBaseBranch's auto-detect does: that guess
+// is what let a stale remote `main` out-rank a repo whose real default is
+// `master` while still reporting `guard.ok: true` — going inert (the caller
+// baking in nothing from this source) is the safe failure here, not a guess.
+function remoteAdvertisedDefaultBranch(gitCommand, remote, cwd) {
+  try {
+    const ref = runGit(gitCommand, ["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`], cwd).trim();
+    const prefix = `${remote}/`;
+    return ref.startsWith(prefix) ? ref.slice(prefix.length) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The pre-commit/pre-push hooks live in the ONE common hook directory shared
+ * by the primary checkout and every linked worktree — so unlike everything
+ * else ensureWorktree does, this is not per-invocation state. Baking in only
+ * the per-call `effectiveBase` (an explicit --base, or the resolver's
+ * auto-detected guess) would let one `--base origin/develop` call for a
+ * stacked worktree REWRITE an already-installed `default="main"` guard to
+ * `default="develop"`, after which a commit on the repo's real default
+ * silently succeeds while `guard.ok` still reads true.
+ *
+ * So this always guards the repo's OWN default — resolved fresh from git's
+ * advertised `<remote>/HEAD` on every call, never from a guess — and
+ * ADDITIONALLY guards an EXPLICIT `--base` (an operator's flag, or the
+ * .devloops workflow.baseBranch the resolver injects as one) when it differs.
+ * An auto-detected base that was never given explicitly is never trusted for
+ * this: trusting it here would bake in the exact same wrong guess it can
+ * itself be. Because the repo default is re-derived identically every time,
+ * a later call with a different (or no) explicit base can never strip its
+ * protection — only ever add or drop the SECOND, explicit-base slot.
+ */
+function guardedBranches(gitCommand, root, explicitBase) {
+  const remote = explicitBase ? remoteFromBase(explicitBase) : "origin";
+  const repoDefaultCandidate = remoteAdvertisedDefaultBranch(gitCommand, remote, root);
+  const repoDefault = repoDefaultCandidate && remoteDefaultRefExists(gitCommand, remote, repoDefaultCandidate, root)
+    ? repoDefaultCandidate
+    : null;
+
+  let explicitCandidate = null;
+  if (explicitBase) {
+    const branch = branchFromBase(explicitBase);
+    explicitCandidate = remoteDefaultRefExists(gitCommand, remote, branch, root) ? branch : null;
+  }
+
+  return [...new Set([repoDefault, explicitCandidate].filter(Boolean))];
+}
+
+function installGuard(gitCommand, root, explicitBase) {
   try {
     // The COMMON git dir, not the per-worktree one: `--absolute-git-dir` in a
     // linked worktree resolves to `.git/worktrees/<name>`, a hooks directory git
@@ -215,32 +269,27 @@ function installGuard(gitCommand, root, effectiveBase) {
     // checkout and every linked worktree, which is what the hook install must
     // target since hooks are resolved from the common directory.
     const gitDir = runGit(gitCommand, ["rev-parse", "--path-format=absolute", "--git-common-dir"], root).trim();
-    // Resolve the default at install time and bake it into the hook: deriving
-    // it in shell picks a stale local `main` in a `master` repo, guarding the
-    // wrong branch while the real default stays open.
-    // Reuse the SAME base ensureWorktree already resolved (effectiveBase — the
-    // auto-detected default, an explicit --base, or the caller-injected
-    // .devloops workflow.baseBranch) instead of re-deriving a bare "main"/
-    // "master" guess: re-deriving would guard `main` in a repo based on
-    // `develop`, leaving the real base wide open. Confirm the name resolves to
-    // a real ref on its own remote; if not, install inert and say so.
-    const remote = remoteFromBase(effectiveBase);
-    const candidate = branchFromBase(effectiveBase);
-    const defaultBranch = remoteDefaultRefExists(gitCommand, remote, candidate, root) ? candidate : null;
+    const defaultBranches = guardedBranches(gitCommand, root, explicitBase);
     let hooksPathOverride = null;
     try {
       hooksPathOverride = runGit(gitCommand, ["config", "--get", "core.hooksPath"], root).trim() || null;
     } catch {
       hooksPathOverride = null; // unset — `git config --get` exits 1, which is the normal case
     }
-    return installDefaultBranchGuard({ gitDir, defaultBranch, hooksPathOverride });
+    return installDefaultBranchGuard({ gitDir, defaultBranches, hooksPathOverride });
   } catch (err) {
     const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
     process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${detail}\n`);
-    // Same shape as the success path (installDefaultBranchGuard's return, and
-    // its own refuse()) so a consumer reading `guard.reason`/`guard.installed`
-    // does not need a second shape for the "installer itself blew up" case.
-    return { ok: false, installed: [], refreshed: [], skipped: [], reason: detail };
+    // Same shape as installDefaultBranchGuard's own refuse(): one skipped
+    // entry per guarded hook, not an empty list that reads as "nothing is
+    // unguarded" when in fact neither hook could be installed.
+    return {
+      ok: false,
+      installed: [],
+      refreshed: [],
+      skipped: GUARDED_HOOKS.map((hook) => ({ hook, reason: detail })),
+      reason: detail,
+    };
   }
 }
 
@@ -273,7 +322,7 @@ export async function ensureWorktree(
     }
     // Reuse: still (re-)provision — provisioning is idempotent.
     const summary = await provision({ worktreePath: target, repoRoot: root });
-    return { ok: true, path: target, created: false, reused: true, provision: summary, guard: installGuard(gitCommand, root, effectiveBase) };
+    return { ok: true, path: target, created: false, reused: true, provision: summary, guard: installGuard(gitCommand, root, base) };
   }
 
   // Create. fetch is best-effort (offline reuse of a local base ref still works),
@@ -300,7 +349,7 @@ export async function ensureWorktree(
   }
 
   const summary = await provision({ worktreePath: target, repoRoot: root });
-  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary, guard: installGuard(gitCommand, root, effectiveBase) };
+  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary, guard: installGuard(gitCommand, root, base) };
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
