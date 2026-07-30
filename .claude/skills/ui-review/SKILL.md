@@ -34,6 +34,7 @@ nothing downstream and a local setup gap cannot be charged to the PR. Other
 stopped results are not alike — the missing-recipe stop carries a `must-fix` that
 is only surfaced by threading it onward, so read `failures`, not `stopped`, when
 deciding what to report.
+
 `@axe-core/playwright` is a separate opt-in
 (`npm install --save-dev @axe-core/playwright`) that drives only the
 computed-a11y artifact: without it every `axe.json` is a deterministic JSON

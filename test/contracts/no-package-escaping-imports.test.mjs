@@ -80,17 +80,24 @@ export async function resolveShippedDirs(files, repoRootUrl) {
     // rather than letting it walk() as a bogus dir later. An ENOENT trailing-
     // slash entry still passes through as an absent dir (unbuilt output, say) —
     // findEscapingImports already tolerates a shipped dir that isn't there yet.
+    // stat inside the try, classification below it: the catch is strictly an
+    // errno filter for stat, so the deliberate author-error throw can never be
+    // coupled to (or later swallowed by) a widened errno filter.
+    let stats = null;
     try {
-      const stats = await stat(new URL(name, repoRootUrl));
-      if (stats.isDirectory()) {
-        dirs.add(name);
-      } else if (entry.endsWith("/")) {
-        throw new Error(`package.json "files" entry ${JSON.stringify(entry)} has a trailing slash but is a file on disk, not a directory`);
-      } // a plain (non-slash) entry that is a file ships a single file, not a dir to scan
+      stats = await stat(new URL(name, repoRootUrl));
     } catch (err) {
       if (err.code !== "ENOENT") throw err;
-      if (entry.endsWith("/")) dirs.add(name); // absent dir: trust the declared trailing slash
     }
+    if (stats === null) {
+      if (entry.endsWith("/")) dirs.add(name); // absent dir: trust the declared trailing slash
+      continue;
+    }
+    if (stats.isDirectory()) {
+      dirs.add(name);
+    } else if (entry.endsWith("/")) {
+      throw new Error(`package.json "files" entry ${JSON.stringify(entry)} has a trailing slash but is a file on disk, not a directory — drop the slash to ship it as a file, or point the entry at the intended directory`);
+    } // a plain (non-slash) entry that is a file ships a single file, not a dir to scan
   }
   return [...dirs];
 }
