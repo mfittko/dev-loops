@@ -288,7 +288,10 @@ function optionalPeersOf(pkg) {
 // prose, pairing an `export` line with a quoted string far below it: a thrown
 // template literal reading `…version from "${spec}"` registered as a specifier
 // that way. Excluding parens, slashes and backticks ends that pairing while
-// accepting every real import form.
+// accepting every real import form. `\w` is ASCII-only here, so a binding list
+// with a non-ASCII identifier would not match — none exists in the shipped set
+// and the convention is ASCII; if that changes, widen the CLASS (`u` flag with
+// `[\p{L}\p{N}_$*,{}\s]`), never the span back to `[^'"]*?`.
 const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[\w$*,{}\s]*?\bfrom\s*)?|export\s*[\w$*,{}\s]*?\bfrom\s*)["']([^"']+)["']/gm;
 
 test("shipped files never statically import an optional peer dependency", async () => {
