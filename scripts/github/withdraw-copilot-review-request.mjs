@@ -140,10 +140,14 @@ async function ghJson(runChild, env, ghArgs) {
   }
 }
 
-async function collectState(args, { env, runChild }) {
+async function fetchCopilotRequested(args, { env, runChild }) {
   const requested = await ghJson(runChild, env, ["api", `repos/${args.repo}/pulls/${args.pr}/requested_reviewers`]);
   const users = Array.isArray(requested?.users) ? requested.users : [];
-  const copilotRequested = users.some((user) => isCopilotLogin(user?.login));
+  return users.some((user) => isCopilotLogin(user?.login));
+}
+
+async function collectState(args, { env, runChild }) {
+  const copilotRequested = await fetchCopilotRequested(args, { env, runChild });
 
   const pr = await ghJson(runChild, env, [
     "pr", "view", String(args.pr), "--repo", args.repo, "--json", "reviews,headRefOid",
@@ -214,8 +218,9 @@ async function main(args, { env = process.env, runChild = defaultRunChild } = {}
   }
   // Post-verify, mirroring the request path: an escape hatch whose whole job is
   // unsticking a deadlock must never report a withdrawal it did not perform.
-  const after = await collectState(args, { env, runChild });
-  if (after.copilotRequested) {
+  // Only the request flag matters here — re-reading reviews and threads would
+  // be two more API calls to answer a question neither can change.
+  if (await fetchCopilotRequested(args, { env, runChild })) {
     throw new Error("Copilot review request is still pending after gh pr edit --remove-reviewer; nothing was withdrawn.");
   }
   return {
