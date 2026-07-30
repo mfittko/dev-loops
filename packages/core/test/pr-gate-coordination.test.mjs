@@ -2711,6 +2711,35 @@ test("round_cap_reached with requireCi:false and failing CI grants run_pre_appro
   assert.match(result.gateEvidenceNote, /CI not required by config/i);
 });
 
+// crediblyGreen enters this branch only via requireCi:false (the strict-green
+// grant rejects it as a basis, #1371) — so BOTH reason and note must name the
+// actual basis, never "credibly green CI". Pins the ciDescriptor override:
+// without it the note delegates to describeAcceptedCiState and disagrees.
+test("round_cap_reached with requireCi:false and crediblyGreen CI names config-not-required as the basis in reason AND note (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "crediblyGreen",
+    preApprovalRequireCi: false,
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 0,
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.match(result.reason, /CI not required by config/i);
+  assert.doesNotMatch(result.reason, /credibly green/i);
+  assert.match(result.gateEvidenceNote, /CI not required by config/i);
+  assert.doesNotMatch(result.gateEvidenceNote, /credibly green/i);
+});
+
 // #1371 re-verify: crediblyGreen is unconfirmed CI and stays blocked at the
 // round-cap-reached fallback exactly as it does at every other pre-approval
 // boundary in this file (lines ~1016/1219/1404/1655) — this branch must not

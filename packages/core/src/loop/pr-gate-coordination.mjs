@@ -265,15 +265,13 @@ function describeAcceptedCiState(ciStatus, preApprovalRequireCi) {
   return "CI not required by config";
 }
 
-function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi }) {
-  // One rule serves both the reason string and this note: callers that pass
-  // ciStatus/preApprovalRequireCi get describeAcceptedCiState's descriptor
-  // (never a CI claim the head doesn't have). Callers that omit both keep the
-  // original CI-confirmed wording unchanged.
-  const ciDescriptor = ciStatus === undefined && preApprovalRequireCi === undefined
-    ? "green or credibly green CI"
-    : describeAcceptedCiState(ciStatus, preApprovalRequireCi);
-  return `Copilot review rounds exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}); current head has zero unresolved threads and ${ciDescriptor}, so pre_approval_gate fallback is allowed without another Copilot re-request.`;
+function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi, ciDescriptor }) {
+  // One rule serves both the reason string and this note. A branch whose CI
+  // acceptance differs from describeAcceptedCiState (the strict-green grant
+  // rejects crediblyGreen as a basis) passes its own descriptor explicitly so
+  // reason and note can never disagree.
+  const descriptor = ciDescriptor ?? describeAcceptedCiState(ciStatus, preApprovalRequireCi);
+  return `Copilot review rounds exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}); current head has zero unresolved threads and ${descriptor}, so pre_approval_gate fallback is allowed without another Copilot re-request.`;
 }
 
 /**
@@ -1702,7 +1700,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
-        gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi }),
+        gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciDescriptor: ciClause }),
         copilotReviewRoundCount,
       });
     }
