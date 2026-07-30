@@ -657,21 +657,29 @@ test("large fan-ins are budgeted so upsert-verdict's whole-block render bound ac
 // Regression for the fan-in disposition ledger vs. gate-comment render budget
 // split: a round too large to render even at minimum summary length must
 // still write a COMPLETE --ledger-out and succeed (ok: true, no throw — the
-// CLI's exit code is derived from result.ok, so this also proves exit 0);
-// only --out (the visible-comment shape) is replaced with a budget-marker
-// section. Reverting the fix (throwing instead of returning) fails this test.
-test("a fan-in too large to render at minimum summary length still writes a complete ledger and exits 0, replacing --out with a budget marker", async () => {
-  const ANGLE_COUNT = 8;
+// CLI's exit code is derived from result.ok, so this also proves exit 0); each
+// angle's findings in --out are replaced with one budget-marker finding, but
+// the REAL angle set and each angle's REAL verdict survive — a mandatory
+// angle (e.g. draft_gate's "pr-description") must still be present and no
+// foreign angle name is introduced, or upsert-checkpoint-verdict.mjs's
+// fanout_fanin mandatory-angle/pool validation rejects the whole verdict
+// (the exact failure this split exists to remove). Proven against the REAL
+// normalizeStructuredFindings/checkFanoutAngleCoverage functions
+// upsert-checkpoint-verdict.mjs itself calls, not a re-implementation.
+// Reverting the fix (throwing, or collapsing to one foreign section) fails
+// this test.
+test("a fan-in too large to render at minimum summary length still writes a complete ledger and exits 0, preserving the real angle set/verdicts in --out", async () => {
   const FINDINGS_PER_ANGLE = 30;
-  const files = {};
-  for (let i = 0; i < ANGLE_COUNT; i++) {
+  const angleNames = ["scope", "coverage", "correctness", "ci-guard", "contract-surface", "link-check", "config-drift", "gate-evidence"];
+  const files = { "pr-description.json": { angle: "pr-description", verdict: "clean", findings: [] } };
+  for (const [i, angle] of angleNames.entries()) {
     files[`angle${i}.json`] = {
-      angle: `angle-${i}`,
+      angle,
       verdict: "findings_present",
       findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
         severity: "worth-fixing-now",
-        summary: `finding ${i}-${j} ${"y".repeat(200)}`,
-        file: `src/f${i}.mjs`,
+        summary: `finding ${angle}-${j} ${"y".repeat(200)}`,
+        file: `src/f${angle}.mjs`,
         line: j + 1,
       })),
     };
@@ -687,26 +695,81 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     assert.equal(result.commentBudgetExceeded, true);
 
     // The ledger is COMPLETE: every finding from every angle, unaffected by
-    // the comment budget.
-    const totalFindings = ANGLE_COUNT * FINDINGS_PER_ANGLE;
+    // the comment budget. "severityCounts" is likewise always the true,
+    // unbudgeted totals (the field a caller passes to
+    // upsert-checkpoint-verdict.mjs's --findings-severity-counts).
+    const totalFindings = angleNames.length * FINDINGS_PER_ANGLE;
     assert.equal(result.findings.length, totalFindings);
+    assert.deepEqual(result.severityCounts, { "must-fix": 0, "worth-fixing-now": totalFindings, defer: 0 });
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
     assert.deepEqual(writtenLedger, result.findings);
     assert.equal(writtenLedger.length, totalFindings);
 
-    // --out is replaced with a single budget-marker section — never a
-    // silently-shrunk subset — that states the omitted count and severity
-    // breakdown so the renderer can surface it.
+    // --out keeps the REAL angle set (mandatory "pr-description" included,
+    // no foreign angle) and each angle's REAL verdict — only the findings
+    // are collapsed to one budget-marker finding per angle.
     const writtenOut = JSON.parse(await readFile(outPath, "utf8"));
     assert.deepEqual(writtenOut, result.findingsJson);
-    assert.equal(writtenOut.length, 1);
-    assert.equal(writtenOut[0].findings.length, 1);
-    const marker = writtenOut[0].findings[0].summary;
-    assert.match(marker, new RegExp(`${totalFindings} finding\\(s\\)`));
-    assert.match(marker, new RegExp(`${ANGLE_COUNT} angle\\(s\\)`));
-    assert.match(marker, new RegExp(`worth-fixing-now: ${totalFindings}`));
-    assert.match(marker, /must-fix: 0/);
-    assert.match(marker, /defer: 0/);
-    assert.match(marker, /see the disposition ledger/);
+    assert.equal(writtenOut.length, angleNames.length + 1);
+    const byAngle = new Map(writtenOut.map((a) => [a.angle, a]));
+    assert.ok(byAngle.has("pr-description"));
+    assert.deepEqual(byAngle.get("pr-description"), { angle: "pr-description", verdict: "clean", findings: [] });
+    for (const angle of angleNames) {
+      const section = byAngle.get(angle);
+      assert.ok(section, `expected angle "${angle}" to survive budget marking`);
+      assert.equal(section.verdict, "findings_present"); // real verdict, not collapsed
+      assert.equal(section.findings.length, 1);
+      const marker = section.findings[0].summary;
+      assert.match(marker, new RegExp(`${FINDINGS_PER_ANGLE} finding\\(s\\)`));
+      assert.match(marker, new RegExp(`worth-fixing-now: ${FINDINGS_PER_ANGLE}`));
+      assert.match(marker, /must-fix: 0/);
+      assert.match(marker, /defer: 0/);
+      assert.match(marker, /see the disposition ledger/);
+    }
+
+    // Run the REAL upsert-checkpoint-verdict.mjs validation functions (not a
+    // re-implementation): the marked shape must still normalize and cover a
+    // fanout_fanin gate's mandatory angles/pool with no foreign angle.
+    const normalized = normalizeStructuredFindings(result.findingsJson);
+    assert.ok(Array.isArray(normalized), "budget-marked findingsJson must still normalize");
+    const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(result.findingsJson, {
+      mandatoryAngles: ["pr-description"],
+      pool: [...angleNames, "pr-description"],
+    });
+    assert.deepEqual(missingMandatory, []);
+    assert.deepEqual(foreignAngles, []);
+  });
+});
+
+// Floor-degradation regression: even ONE budget-marker finding per angle can
+// still be over budget when there are enough angles. Rather than throw, the
+// marker text degrades further to a bare "N omitted — see ledger" line — the
+// angle set/verdicts are still preserved, only the marker text shrinks.
+test("a fan-in with enough angles that even the per-angle budget marker doesn't fit degrades to a bare omitted-count line instead of throwing", async () => {
+  const FINDINGS_PER_ANGLE = 40;
+  const files = {};
+  for (let i = 0; i < 40; i++) {
+    files[`angle${i}.json`] = {
+      angle: `angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "worth-fixing-now",
+        summary: `finding ${i}-${j} ${"z".repeat(200)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+    assert.equal(result.findingsJson.length, 40); // real angle set still preserved
+    for (const section of result.findingsJson) {
+      assert.equal(section.findings.length, 1);
+      assert.match(section.findings[0].summary, new RegExp(`^${FINDINGS_PER_ANGLE} omitted — see ledger$`));
+    }
+    // The ledger is still complete regardless of how far the marker degraded.
+    assert.equal(result.findings.length, 40 * FINDINGS_PER_ANGLE);
   });
 });
