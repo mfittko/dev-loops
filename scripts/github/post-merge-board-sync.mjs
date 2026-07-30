@@ -1,8 +1,14 @@
 #!/usr/bin/env node
+// Deliberate duplication with `dev-loops queue sync-status`
+// (scripts/projects/sync-item-status.mjs): both are thin CLIs over the same
+// syncBoardStatus core, but `queue sync-status` is a fail-closed repair tool
+// (exits 1/2 on board/API errors so an operator sees a broken sync), while
+// this hook must be fail-open best-effort — a board hiccup here must never
+// fail or block the merge step that invokes it.
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, parsePrNumber, requireTokenValue, runChild as _runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { syncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -75,7 +81,13 @@ function parseCliArgs(argv) {
         args.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
         break;
       case "issue":
-        args.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
+        // An empty value (e.g. `--issue ""` from an unfilled `<linked-issue>`
+        // template substitution) is the documented "PR is the queue item"
+        // case, not a usage error — leave args.issue unset so it falls back
+        // to --pr below, instead of failing the whole post-merge hook.
+        if (token.value !== "") {
+          args.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
+        }
         break;
       default: {
         if (matchJqOutputToken(token, args, (t) => requireTokenValue(t, parseError))) break;
@@ -86,13 +98,18 @@ function parseCliArgs(argv) {
   if (!args.help) {
     if (!args.repo) throw parseError("--repo is required");
     if (args.pr === undefined) throw parseError("--pr is required");
+    try {
+      parseRepoSlug(args.repo);
+    } catch (err) {
+      throw parseError(err instanceof Error ? err.message : String(err));
+    }
   }
   return args;
 }
 
 // ── Main logic ──────────────────────────────────────────────────────────
 
-async function main(args, { env = process.env, runChild, cwd = process.cwd() } = {}) {
+async function main(args, { env = process.env, runChild, cwd = process.cwd(), syncBoardStatus = realSyncBoardStatus } = {}) {
   const child = runChild ?? _runChild;
   const { owner, name } = parseRepoSlug(args.repo);
   const repo = `${owner}/${name}`;
@@ -113,7 +130,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
 
 // ── CLI entrypoint ──────────────────────────────────────────────────────
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd(), runChild } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd(), runChild, syncBoardStatus } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);
@@ -132,7 +149,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
 
   let result;
   try {
-    result = await main(args, { env, cwd, runChild });
+    result = await main(args, { env, cwd, runChild, syncBoardStatus });
   } catch (err) {
     // Defensive: even an unexpected failure stays best-effort/non-fatal so it
     // never blocks the merge step that invoked this as a post-merge hook.

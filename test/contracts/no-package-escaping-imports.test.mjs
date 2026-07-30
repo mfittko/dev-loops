@@ -6,6 +6,7 @@
 // depth-independent: each relative specifier is resolved against its importing
 // file and asserted to stay within that package's directory.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -31,7 +32,7 @@ test("packages/*/src relative imports never resolve outside their package root",
   const packageDirs = (await readdir(packagesRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name);
-  const bareEscapeDirNames = await repoTopLevelDirNames(new URL("../../", import.meta.url));
+  const bareEscapeDirNames = repoTopLevelDirNames(new URL("../../", import.meta.url));
 
   // Same scanner as the root-package check below: a package root is just another
   // "shipped set", so `findEscapingImports` answers both questions and there is
@@ -116,17 +117,43 @@ export async function resolveShippedDirs(files, repoRootUrl) {
 // specifier whose first path segment names one of this repo's own top-level
 // directories is flagged the same as a relative escape — it is never a real
 // npm dependency, always a forgotten "./".
-async function repoTopLevelDirNames(repoRootUrl) {
-  return (await readdir(repoRootUrl, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && entry.name !== "node_modules" && !entry.name.startsWith("."))
-    .map((entry) => entry.name);
+// Sourced from `git ls-tree` (committed state), not `readdir` (working-copy
+// state): a live directory listing picks up gitignored dirs (tmp/, dist/,
+// coverage/, ...) that exist on whichever machine happens to run the test, so
+// a fresh CI clone and a dev machine that has run the suite would enforce
+// different bare-specifier alternations. `git ls-tree -d --name-only HEAD`
+// (no -r) lists only the repo's immediate top-level tracked directories,
+// independent of what else is sitting in the working copy.
+function repoTopLevelDirNames(repoRootUrl) {
+  const repoRootPath = fileURLToPath(repoRootUrl);
+  const output = execFileSync("git", ["ls-tree", "-d", "--name-only", "HEAD"], {
+    cwd: repoRootPath,
+    encoding: "utf8",
+  });
+  return output
+    .split("\n")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0 && name !== "node_modules" && !name.startsWith("."));
 }
 
-// ponytail: dir names on disk in this repo are plain lowercase identifiers, so
-// no regex-metacharacter escaping is needed for the alternation below.
+// Pins that the derivation actually resolves to real top-level dirs, not an
+// empty or truncated set (a `git ls-tree` misconfiguration would otherwise
+// silently degrade every bare-specifier check above toward vacuous-green).
+test("repoTopLevelDirNames resolves the repo's git-tracked top-level directories", () => {
+  const names = repoTopLevelDirNames(new URL("../../", import.meta.url));
+  for (const expected of ["scripts", "packages", "test"]) {
+    assert.ok(names.includes(expected), `expected ${expected} in ${JSON.stringify(names)}`);
+  }
+});
+
+// Escaped regardless of the ponytail-documented convention that dir names on
+// disk are plain lowercase identifiers: that convention governs THIS repo's
+// tracked dirs, not every string this function could ever be called with (a
+// git-tracked dir containing a regex metacharacter would otherwise throw at
+// RegExp construction, or silently widen the match via an unescaped `.`).
 function bareLocalSpecifierRe(dirNames) {
   if (dirNames.length === 0) return null;
-  const alt = dirNames.join("|");
+  const alt = dirNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
   return new RegExp(`(?:from\\s*|import\\s*\\(\\s*|import\\s+)["']((?:${alt})\\/[^"']+)["']`, "g");
 }
 
@@ -211,7 +238,7 @@ async function rootPackageOffenders() {
   const repoRootUrl = new URL("../../", import.meta.url);
   const pkg = JSON.parse(await readFile(new URL("package.json", repoRootUrl), "utf8"));
   const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
-  const bareEscapeDirNames = await repoTopLevelDirNames(repoRootUrl);
+  const bareEscapeDirNames = repoTopLevelDirNames(repoRootUrl);
   return findEscapingImports({ repoRootUrl, shippedDirs, bareEscapeDirNames });
 }
 

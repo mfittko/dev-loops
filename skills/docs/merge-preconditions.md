@@ -200,12 +200,15 @@ human(s).
 
 ## Post-merge
 
+- Sync the merged item's board Status to Done (issue #1458), run BEFORE worktree removal below:
+  `node scripts/github/post-merge-board-sync.mjs --repo <owner/name> --pr <number> --issue <linked-issue>`
+  (omit `--issue` when the merged PR is itself the queue item). Resolves the board from `.devloops`
+  (`tracker.board`/`queue.board`) relative to `cwd` — there is no `--repo-root` flag — using local `gh` auth, so it
+  must run from the main checkout, not the worktree the next step removes. Best-effort and NON-FATAL on a parsed
+  invocation: a board that is not configured, an item not on the board, or any API failure logs a warning to stderr
+  and exits 0 instead of failing the merge; a usage/argument error still exits 1 and an invalid `--jq` filter exits 2.
 - Remove merged worktree (canonical, `WORKTREE-CLEANUP`): `node scripts/loop/cleanup-worktree.mjs --repo-root <main> (--issue <n> | --pr <n>)`.
   See [Worktree usage guidance](./worktree-guidance.md#post-merge-cleanup).
-- Sync the merged item's board Status to Done (issue #1458): `node scripts/github/post-merge-board-sync.mjs --repo <owner/name> --pr <number> --issue <linked-issue>`
-  (omit `--issue` when the merged PR is itself the queue item). Resolves the board from `.devloops`
-  (`tracker.board`/`queue.board`), using local `gh` auth. Best-effort and NON-FATAL: always exits 0 — a board that is
-  not configured, an item not on the board, or any API failure logs a warning to stderr instead of failing the merge.
 - Archive long-done queue items (operator-induced, NOT a cron): `node scripts/projects/archive-done-items.mjs --repo <owner/name> || true`.
   Runs as part of this post-merge hook. It applies the configured `queue.archiveOlderThanDays` (default `7d`) and archives
   board items whose issue/PR has been closed at least that long. Best-effort: run it as a standard post-merge step but ignore
