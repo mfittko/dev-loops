@@ -428,6 +428,40 @@ test("round-cap exhaustion opens the pre-approval gate window even without a cur
   assert.match(result.reason, /pre_approval_gate/i);
 });
 
+// #1472: this is the SAME reachable branch as the test above (READY_TO_REREQUEST_REVIEW
+// at the round cap, PRE_APPROVAL_GATE_WINDOW) — the only difference is
+// preApprovalRequireCi:false with a failing CI. Before this fix,
+// buildRoundExhaustionGateEvidenceNote's two pre-existing call sites omitted
+// ciStatus/preApprovalRequireCi, so both the gateEvidenceNote and the reason
+// string claimed "green or credibly green CI" / "green CI" for a head whose
+// CI is literally failing. Pins the honest wording on the production path
+// real callers actually take (not just the new, narrower ROUND_CAP_REACHED branch).
+test("round-cap exhaustion with requireCi:false and failing CI does not claim green CI (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    sameHeadCleanConverged: false,
+    ciStatus: "failure",
+    preApprovalRequireCi: false,
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.doesNotMatch(result.reason, /green CI/i);
+  assert.match(result.reason, /CI not required by config/i);
+  assert.doesNotMatch(result.gateEvidenceNote, /green CI/i);
+  assert.match(result.gateEvidenceNote, /CI not required by config/i);
+});
+
 // #1387: at ROUND_CAP_CLEAN_FALLBACK, a post-convergence significant change must
 // NOT force rerequest_copilot_review — the round cap makes that rerequest
 // impossible (request-copilot-review.mjs suppresses it), so the only allowed
@@ -524,6 +558,39 @@ test("round_cap_clean_fallback routes a post-cap clean head to pre_approval_gate
   assert.equal(result.draftGateAlreadySatisfied, true);
   assert.match(result.reason, /round limit is exhausted/i);
   assert.match(result.reason, /pre_approval_gate/i);
+});
+
+// #1472: same reachable branch as the test above (ROUND_CAP_CLEAN_FALLBACK,
+// PRE_APPROVAL_GATE_WINDOW) with preApprovalRequireCi:false and a failing CI.
+// buildRoundExhaustionGateEvidenceNote's call site here (and the sibling reason
+// string) omitted ciStatus/preApprovalRequireCi before this fix, so a failing
+// head still got told its CI was "green" in both the gateEvidenceNote and the
+// reason posted to the gate comment — the exact false claim this PR set out
+// to remove, but only fixed (pre-fix) on an interpreter-unreachable branch.
+test("round_cap_clean_fallback with requireCi:false and failing CI does not claim green CI (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 892,
+    currentHeadSha: "ef84bca2deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: false,
+    ciStatus: "failure",
+    preApprovalRequireCi: false,
+    copilotReviewRoundCount: 5,
+    maxCopilotRounds: 5,
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.doesNotMatch(result.reason, /green CI/i);
+  assert.match(result.reason, /CI not required by config/i);
+  assert.doesNotMatch(result.gateEvidenceNote, /green CI/i);
+  assert.match(result.gateEvidenceNote, /CI not required by config/i);
 });
 
 // #579 (gate review): a round-cap clean fallback with a clean current-head
@@ -2693,6 +2760,102 @@ test("round_cap_reached with clean current-head pre_approval AND clean draft_gat
   assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
 });
 
+// #579/#1472: mirrors "round_cap_clean_fallback with clean pre_approval but no
+// draft_gate evidence reconciles the draft gate" for the ROUND_CAP_REACHED
+// grant — a clean current head with no clean draft_gate evidence must
+// reconcile the draft gate, NOT jump to final approval (#579 no gate
+// exemptions). Pins the `!draftGate.cleanEvidenceExists` sub-branch: deleting
+// it flips this exact shape from draft_gate_needed/reconcile_draft_gate to
+// final_approval_ready/await_final_human_approval undetected.
+test("round_cap_reached with clean current-head pre_approval but no draft_gate evidence reconciles the draft gate (#579, #1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "success",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 0,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: true, headSha: "29aa40b7", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  assert.equal(result.draftGate.cleanEvidenceExists, false);
+  assert.equal(result.draftGateAlreadySatisfied, false);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
+  assert.match(result.reason, /no gate exemptions, #579/i);
+});
+
+// #1472: applyUnsettledCopilotReviewEntryGuard (the core-side #1190 mirror of
+// the detector's formal-request guard) runs unconditionally after the
+// evaluator's own ROUND_CAP_REACHED grant, on the SAME input this evaluator
+// call receives. A lingering requested/already-requested Copilot review
+// status on a post-cap head is for a review that can never come (no further
+// round is permitted), so — same as ROUND_CAP_CLEAN_FALLBACK — it must not
+// re-block this grant. Fails pre-fix: without widening this guard's exemption
+// with isRoundCapReachedCleanGrant, both statuses get rewritten to
+// waiting_for_copilot_review, dead-ending the loop.
+for (const copilotReviewRequestStatus of ["requested", "already-requested"]) {
+  test(`round_cap_reached + pre_approval_gate_window grant survives a lingering copilotReviewRequestStatus:${copilotReviewRequestStatus} (#1472)`, () => {
+    const result = evaluatePrGateCoordination({
+      pr: 1460,
+      currentHeadSha: "29aa40b7deadbeef",
+      prDraft: false,
+      lifecycleState: STATE.ROUND_CAP_REACHED,
+      loopDisposition: DISPOSITION.BLOCKED,
+      ciStatus: "success",
+      copilotReviewRoundCount: 2,
+      maxCopilotRounds: 2,
+      unresolvedThreadCount: 0,
+      copilotReviewRequestStatus,
+      draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+      draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+      preApprovalGate: gate({ visible: false }),
+      preApprovalGateMarker: gate({ visible: false }),
+    });
+
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+    assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  });
+}
+
+// #1472 control: the round-cap exemption above is scoped to the grant's own
+// shape (gateBoundary pre_approval_gate_window) via isRoundCapReachedCleanGrant
+// — it must NOT blanket-exempt every round_cap_reached result. When the same
+// facts instead reach FINAL_APPROVAL_READY (preApprovalGate already clean on
+// the current head), a lingering review request is still a genuinely unsettled
+// signal and the guard must still fire.
+test("round_cap_reached reaching final_approval_ready (not the window shape) still guards a lingering copilotReviewRequestStatus:requested (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "success",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 0,
+    copilotReviewRequestStatus: "requested",
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "29aa40b7", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
+});
+
 test("round_cap_reached with unresolved threads present stays blocked exactly as today (#1472)", () => {
   const result = evaluatePrGateCoordination({
     pr: 1460,
@@ -2794,6 +2957,7 @@ test("round_cap_reached grant branch and copilot-loop-state's round-cap fallback
   const roundCap = { copilotReviewRoundCount: 5, maxCopilotRounds: 5 };
 
   let checked = 0;
+  let grantedCount = 0;
   for (const ciStatus of ciStatuses) {
     for (const preApprovalRequireCi of requireCiOptions) {
       for (const unresolvedThreadCount of threadCounts) {
@@ -2813,6 +2977,7 @@ test("round_cap_reached grant branch and copilot-loop-state's round-cap fallback
         });
         const granted = evaluated.nextAction === PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE
           || evaluated.nextAction === PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL;
+        if (granted) grantedCount += 1;
 
         const interpreted = interpretLoopState({
           prExists: true,
@@ -2845,6 +3010,11 @@ test("round_cap_reached grant branch and copilot-loop-state's round-cap fallback
     }
   }
   assert.ok(checked > 0);
+  // #1472 (round-2 sweep defer, closed here): a vacuous sweep (e.g. the grant
+  // becoming unreachable) would still pass every assertion above — pin that
+  // at least one fact combination actually grants, so a future change that
+  // silently makes the grant unreachable fails this test.
+  assert.ok(grantedCount > 0, "sweep never exercised a granted case — the round_cap_reached grant may have become unreachable");
 });
 
 // #1472: general contract invariant, across every lifecycle state the

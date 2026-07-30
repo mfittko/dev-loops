@@ -13,8 +13,8 @@ import {
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { STATE, buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
-import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
+import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
+import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
@@ -24,6 +24,9 @@ import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.m
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+// #1472: re-exported so scripts/test callers that imported this predicate
+// from this module before it moved to packages/core keep working.
+export { isRoundCapReachedCleanGrant };
 const UNMERGED_GIT_STATUS_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 const USAGE = `Usage: detect-pr-gate-coordination-state.mjs --repo <owner/name> --pr <number>
 Determine which PR gate/transition is legal next for a pull request.
@@ -621,15 +624,15 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   };
 }
 
-// #1472: the evaluator's ROUND_CAP_REACHED grant branch (a defensive gate-entry
-// re-check, in evaluatePrGateCoordination, reachable only by a caller whose
-// unresolvedThreadCount/ciStatus are fresher than what the interpreter last
-// saw) settles on this exact shape: lifecycleState stays round_cap_reached
-// (never round_cap_clean_fallback) while gateBoundary is pre_approval_gate_window.
-// Exported so the formal-request-guard exemption below (and its test) can name
-// this shape without duplicating the literal comparison.
-export function isRoundCapReachedCleanGrant({ lifecycleState, gateBoundary } = {}) {
-  return lifecycleState === STATE.ROUND_CAP_REACHED && gateBoundary === PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW;
+// #1472: composes the formal-request guard's round-cap exemption from both
+// shapes that must suppress it — the interpreter's own roundCapCleanEligible
+// (round_cap_clean_fallback) and the evaluator's independent ROUND_CAP_REACHED
+// grant (isRoundCapReachedCleanGrant, imported from packages/core, the same
+// predicate the core-side applyUnsettledCopilotReviewEntryGuard mirror uses).
+// Exported so a test can exercise this exact composition instead of
+// re-implementing it.
+export function resolveRoundCapCleanFallback({ roundCapCleanEligible, evaluatorResult }) {
+  return roundCapCleanEligible === true || isRoundCapReachedCleanGrant(evaluatorResult);
 }
 
 async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
@@ -645,6 +648,57 @@ async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.e
     if (login && isCopilotLogin(login)) return true;
   }
   return false;
+}
+
+// #1472: builds the exact input object passed to evaluatePrGateCoordination.
+// Exported (and used by detectPrGateCoordinationState below, not duplicated)
+// so a test can assert the real production wiring — e.g. that
+// unresolvedThreadCount is threaded from context.snapshot rather than a test
+// re-implementing this object literal.
+export function buildGateCoordinationEvaluatorInput({
+  context,
+  maxCopilotRounds,
+  draftGateConfig,
+  preApprovalGateConfig,
+  postConvergenceSignificantChange,
+}) {
+  return {
+    repo: context.repo,
+    pr: context.pr,
+    currentHeadSha: context.currentHeadSha,
+    prDraft: Boolean(context.prData?.isDraft),
+    prClosed: String(context.prData?.state || "").toUpperCase() === "CLOSED",
+    prMerged: String(context.prData?.state || "").toUpperCase() === "MERGED",
+    prTitle: context.prData?.title,
+    mergeStateStatus: context.mergeStateStatus,
+    mergeable: context.mergeable,
+    conflictFiles: context.conflictFiles,
+    // UI e2e auto-scoping (#976): path-triggered + fail-closed precondition.
+    changedFiles: extractChangedFiles(context.prData),
+    uiE2ePassed: deriveUiE2ePassed(context.prData),
+    lifecycleState: context.interpretation.state,
+    loopDisposition: context.disposition.loopDisposition,
+    ciStatus: context.snapshot?.ciStatus ?? null,
+    copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount ?? 0,
+    maxCopilotRounds,
+    // #1472: lets the evaluator's ROUND_CAP_REACHED handling independently
+    // confirm "zero unresolved threads" (the exhaustion note's own promise)
+    // rather than trusting a stale/compound lifecycleState label alone.
+    unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
+    sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
+    // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
+    // sameHeadCleanConverged, so an outstanding request on the current head refuses
+    // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
+    copilotReviewRequestStatus: context.snapshot?.copilotReviewRequestStatus ?? "none",
+    draftGateRequireCi: draftGateConfig.requireCi,
+    preApprovalRequireCi: preApprovalGateConfig.requireCi,
+    draftGate: context.gateEvidence.draftGate,
+    draftGateMarker: context.gateEvidence.draftGateMarker,
+    preApprovalGate: context.gateEvidence.preApprovalGate,
+    preApprovalGateMarker: context.gateEvidence.preApprovalGateMarker,
+    refinementArtifact: context.refinementArtifact,
+    postConvergenceSignificantChange,
+  };
 }
 
 export async function detectPrGateCoordinationState(options, runtime = {}) {
@@ -681,43 +735,13 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     },
     runtime,
   );
-  const result = evaluatePrGateCoordination({
-    repo: context.repo,
-    pr: context.pr,
-    currentHeadSha: context.currentHeadSha,
-    prDraft: Boolean(context.prData?.isDraft),
-    prClosed: String(context.prData?.state || "").toUpperCase() === "CLOSED",
-    prMerged: String(context.prData?.state || "").toUpperCase() === "MERGED",
-    prTitle: context.prData?.title,
-    mergeStateStatus: context.mergeStateStatus,
-    mergeable: context.mergeable,
-    conflictFiles: context.conflictFiles,
-    // UI e2e auto-scoping (#976): path-triggered + fail-closed precondition.
-    changedFiles: extractChangedFiles(context.prData),
-    uiE2ePassed: deriveUiE2ePassed(context.prData),
-    lifecycleState: context.interpretation.state,
-    loopDisposition: context.disposition.loopDisposition,
-    ciStatus: context.snapshot?.ciStatus ?? null,
-    copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount ?? 0,
+  const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
+    context,
     maxCopilotRounds,
-    // #1472: lets the evaluator's ROUND_CAP_REACHED handling independently
-    // confirm "zero unresolved threads" (the exhaustion note's own promise)
-    // rather than trusting a stale/compound lifecycleState label alone.
-    unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
-    sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
-    // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
-    // sameHeadCleanConverged, so an outstanding request on the current head refuses
-    // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
-    copilotReviewRequestStatus: context.snapshot?.copilotReviewRequestStatus ?? "none",
-    draftGateRequireCi: draftGateConfig.requireCi,
-    preApprovalRequireCi: preApprovalGateConfig.requireCi,
-    draftGate: context.gateEvidence.draftGate,
-    draftGateMarker: context.gateEvidence.draftGateMarker,
-    preApprovalGate: context.gateEvidence.preApprovalGate,
-    preApprovalGateMarker: context.gateEvidence.preApprovalGateMarker,
-    refinementArtifact: context.refinementArtifact,
+    draftGateConfig,
+    preApprovalGateConfig,
     postConvergenceSignificantChange,
-  });
+  }));
   // Copilot review request guard (#613): When Copilot has reviewed the PR
   // but no formal review request was made, block pre-approval gate entry.
   // Only query timeline when cheap preconditions pass — avoids unnecessary
@@ -739,8 +763,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // re-blocking the exact fallback the grant just opened. Widen the exemption
   // to cover that shape too — it is the same "no further Copilot round is
   // legal" fact pattern roundCapCleanEligible already exempts.
-  const roundCapCleanFallback = (context.interpretation?.roundCapCleanEligible ?? false)
-    || isRoundCapReachedCleanGrant(result);
+  const roundCapCleanFallback = resolveRoundCapCleanFallback({
+    roundCapCleanEligible: context.interpretation?.roundCapCleanEligible ?? false,
+    evaluatorResult: result,
+  });
   const copilotReviewEverFormallyRequested = copilotReviewRequestStatus === "none"
     && guardBoundaries.has(result.gateBoundary)
     // cap-0 disables the Copilot gate, so shouldGuardCopilotReviewRequest always

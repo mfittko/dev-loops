@@ -7,6 +7,7 @@ import test, { after, before } from "node:test";
 import { DEFAULT_TEST_PR_BODY, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
+  buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
   parseUpsertCheckpointVerdictCliArgs,
   renderGateReviewCommentBody,
@@ -202,6 +203,49 @@ function buildGateComment({
     updated_at: updatedAt,
   };
 }
+
+// #1472: buildCoordinationEvaluatorInput is the exact function
+// upsertCheckpointVerdict calls to assemble evaluatePrGateCoordination's
+// input — not a re-implementation. Mutation check: replacing
+// `coordinationContext.snapshot?.unresolvedThreadCount ?? null` with a
+// hardcoded `null` in that function fails this assertion, unlike a test that
+// reproduces the object literal independently.
+test("buildCoordinationEvaluatorInput threads unresolvedThreadCount from coordinationContext.snapshot (#1472)", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "round_cap_reached", sameHeadCleanConverged: false },
+    disposition: { loopDisposition: "blocked" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 2, unresolvedThreadCount: 0, copilotReviewRequestStatus: "none" },
+    gateEvidence: {
+      draftGate: { visible: true, headSha: "29aa40b7", verdict: "clean" },
+      draftGateMarker: { visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true },
+      preApprovalGate: { visible: false },
+      preApprovalGateMarker: { visible: false },
+    },
+    refinementArtifact: null,
+  };
+  const input = buildCoordinationEvaluatorInput({
+    coordinationContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(input.unresolvedThreadCount, 0);
+
+  const nonZeroContext = { ...coordinationContext, snapshot: { ...coordinationContext.snapshot, unresolvedThreadCount: 4 } };
+  const nonZeroInput = buildCoordinationEvaluatorInput({
+    coordinationContext: nonZeroContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(nonZeroInput.unresolvedThreadCount, 4);
+});
 
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
   assert.throws(

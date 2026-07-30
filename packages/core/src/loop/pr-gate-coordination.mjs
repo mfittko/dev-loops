@@ -252,6 +252,19 @@ function formatRefinementBlockedReason(linkedIssue, status, refinementArtifact) 
   return `The draft gate cannot complete: the linked issue has no detectable refinement artifact (Acceptance criteria / DoD / linked refinement doc). finding=${REFINEMENT_ARTIFACT_FINDING}`;
 }
 
+// #1472: describes the CI state a round-cap-reached fallback branch actually
+// granted on, for human-read reason text. preApprovalRequireCi:false plus a
+// non-success/non-crediblyGreen ciStatus is not "green CI" — claiming it is
+// would be the same false-CI-claim buildRoundExhaustionGateEvidenceNote below
+// exists to avoid. The `ciStatus === "success"` fallback covers the
+// requireCi:true path, where these callers are only reachable with ciStatus
+// "success" (failure/crediblyGreen/pending/none all return earlier).
+function describeAcceptedCiState(ciStatus, preApprovalRequireCi) {
+  if (ciStatus === "crediblyGreen") return "credibly green CI";
+  if (ciStatus === "success" || preApprovalRequireCi !== false) return "green CI";
+  return "CI not required by config";
+}
+
 function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi }) {
   // #1472 defer: when CI is not required by config, the grant does not rest on
   // any CI verdict at all — do not claim "green or credibly green CI" for a
@@ -521,6 +534,21 @@ const PRE_APPROVAL_ENTRY_BOUNDARIES = Object.freeze([
   PR_CHECKPOINT.FINAL_APPROVAL_READY,
 ]);
 
+/**
+ * Identifies the ROUND_CAP_REACHED branch's own defensive grant shape (see
+ * that branch below): lifecycleState stays round_cap_reached (never
+ * round_cap_clean_fallback) while gateBoundary settles on
+ * pre_approval_gate_window. Every caller that exempts the round-cap clean
+ * fallback from the formal-request / unsettled-review guards
+ * (applyUnsettledCopilotReviewEntryGuard below, and
+ * detect-pr-gate-coordination-state.mjs's shouldGuardCopilotReviewRequest
+ * wiring) must exempt this shape too, or the grant this evaluator just
+ * returned gets rewritten straight back to a Copilot-review wait.
+ */
+export function isRoundCapReachedCleanGrant({ lifecycleState, gateBoundary } = {}) {
+  return lifecycleState === STATE.ROUND_CAP_REACHED && gateBoundary === PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW;
+}
+
 function applyUnsettledCopilotReviewEntryGuard(input, result) {
   if (!result || typeof result !== "object" || !PRE_APPROVAL_ENTRY_BOUNDARIES.includes(result.gateBoundary)) {
     return null;
@@ -551,7 +579,12 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
     maxCopilotRounds: input.maxCopilotRounds,
   });
   const lifecycleState = typeof input.lifecycleState === "string" ? input.lifecycleState.trim().toLowerCase() : "";
-  const roundCapCleanFallback = lifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK;
+  // Also exempt the evaluator's own ROUND_CAP_REACHED grant shape (#1472):
+  // without this, this guard would rewrite that grant back to
+  // waiting_for_copilot_review the instant it is produced, re-introducing the
+  // never-arriving-review dead-end the round-cap exemption exists to prevent.
+  const roundCapCleanFallback = lifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK
+    || isRoundCapReachedCleanGrant(result);
   if (
     roundCapReached
     && (input.sameHeadCleanConverged === true || roundCapCleanFallback)
@@ -1271,7 +1304,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     }
 
     const roundExhaustionGateEvidenceNote = (roundCapReached && !roundCapNewCycleRequired)
-      ? buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds })
+      ? buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi })
       : null;
 
     if (!sameHeadCleanConverged && (!roundCapReached || roundCapNewCycleRequired)) {
@@ -1350,7 +1383,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
         reason: roundCapReached
-          ? `Round-cap clean fallback accepted as draft gate equivalent (${copilotReviewRoundCount}/${maxCopilotRounds} rounds, zero unresolved threads, ${ciStatus === "crediblyGreen" ? "credibly green" : "green"} CI). The current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`
+          ? `Round-cap clean fallback accepted as draft gate equivalent (${copilotReviewRoundCount}/${maxCopilotRounds} rounds, zero unresolved threads, ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}). The current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`
           : (ciStatus === "crediblyGreen"
             ? "The current head has both a clean settled review cycle and clean `pre_approval_gate` evidence, and its zero-suite CI state is accepted as credibly green, so the PR is at the final approval boundary."
             : "The current head has both a clean settled review cycle and clean `pre_approval_gate` evidence, so the PR is at the final approval boundary."),
@@ -1381,7 +1414,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
       reason: roundCapReached
-        ? `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${ciStatus === "crediblyGreen" ? "credibly green" : "green"} CI, so \`pre_approval_gate\` fallback is now the next legal boundary.`
+        ? `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}, so \`pre_approval_gate\` fallback is now the next legal boundary.`
         : (ciStatus === "crediblyGreen"
           ? "The current head has a clean settled post-draft review cycle, and its zero-suite CI state is accepted as credibly green, so `pre_approval_gate` is now the next legal boundary."
           : "The current head has a clean settled post-draft review cycle, so `pre_approval_gate` is now the next legal boundary."),
@@ -1513,7 +1546,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
-        reason: `Round-cap clean fallback accepted as draft gate equivalent (${copilotReviewRoundCount}/${maxCopilotRounds} rounds, zero unresolved threads, ${ciStatus === "crediblyGreen" ? "credibly green" : "green"} CI). The current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`,
+        reason: `Round-cap clean fallback accepted as draft gate equivalent (${copilotReviewRoundCount}/${maxCopilotRounds} rounds, zero unresolved threads, ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}). The current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`,
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
@@ -1540,11 +1573,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
       allowedNextActions,
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-      reason: `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${ciStatus === "crediblyGreen" ? "credibly green" : "green"} CI, so \`pre_approval_gate\` fallback is now the next legal boundary (it reviews the current post-cap head; no further Copilot re-request is permitted).`,
+      reason: `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}, so \`pre_approval_gate\` fallback is now the next legal boundary (it reviews the current post-cap head; no further Copilot re-request is permitted).`,
       mergeStateStatus,
       conflictFiles,
       refinementArtifact,
-      gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds }),
+      gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi }),
     copilotReviewRoundCount,
     });
   }
@@ -1556,9 +1589,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // for a caller re-checking gate entry with signals fresher than the
   // interpreter's snapshot (e.g. threads resolved between the interpreter run
   // and this re-check) — it is NOT how a normal ROUND_CAP_REACHED classification
-  // is expected to look, because the interpreter uses the SAME strict-CI
-  // predicate below: whenever that predicate and zero unresolved threads both
-  // hold on the snapshot the interpreter itself observed, the interpreter emits
+  // is expected to look, because the interpreter's own CI predicate is
+  // strictly wider than this branch's (it also accepts `crediblyGreen`, #1371):
+  // whenever this branch's narrower predicate and zero unresolved threads both
+  // hold on the snapshot the interpreter itself observed, the interpreter's
+  // wider check has already passed too, so the interpreter emits
   // ROUND_CAP_CLEAN_FALLBACK instead of ROUND_CAP_REACHED (see the
   // equivalence test in pr-gate-coordination.test.mjs). So on facts unchanged
   // since interpretation, this branch never fires; it only grants when the
@@ -1579,20 +1614,13 @@ function evaluatePrGateCoordinationCore(input = {}) {
     const ciClause = ciStatus === "success" ? "green CI" : "CI not required by config";
     if (unresolvedThreadCount === 0 && ciConfirmedGreen) {
       if (preApprovalGate.currentHeadClean) {
-        const titleMarkers = findBlockingTitleMarkers(prTitle);
-        if (titleMarkers.length > 0) {
-          return buildTitleMarkerBlockedResult({
-            input,
-            currentHeadSha,
-            draftGateAlreadySatisfied: true,
-            draftGate,
-            preApprovalGate,
-            mergeStateStatus,
-            conflictFiles,
-            markers: titleMarkers,
-            refinementArtifact,
-          });
-        }
+        // No inline title-marker check here (#1472 coverage defer, equivalent
+        // mutant): both boundaries this block can return (FINAL_APPROVAL_READY,
+        // PRE_APPROVAL_GATE_WINDOW) are in TITLE_MARKER_GUARDED_BOUNDARIES, so
+        // evaluatePrGateCoordination's outer post-pass already re-blocks a
+        // title-marker head on the way out — an inline check here is
+        // byte-identical dead code, unlike the pre-existing ROUND_CAP_CLEAN_FALLBACK
+        // branch this one mirrors, which predates that outer post-pass.
         // Mirror ROUND_CAP_CLEAN_FALLBACK/#579: a clean current head with no clean
         // draft_gate evidence must reconcile the draft gate rather than jump to
         // final approval.
