@@ -25,7 +25,7 @@ function git(cwd, args, env = {}) {
   });
 }
 
-async function repoFixture() {
+async function repoFixture({ withRemote = false } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), "default-branch-guard-"));
   git(dir, ["init", "--quiet", "--initial-branch=main"]);
   git(dir, ["config", "user.email", "t@example.test"]);
@@ -36,7 +36,14 @@ async function repoFixture() {
   // the thing under test rather than this one.
   git(dir, ["commit", "--quiet", "--no-verify", "-m", "seed"]);
   const gitDir = git(dir, ["rev-parse", "--absolute-git-dir"]).trim();
-  return { dir, gitDir };
+  let remote = null;
+  if (withRemote) {
+    remote = await mkdtemp(path.join(tmpdir(), "default-branch-guard-remote-"));
+    git(remote, ["init", "--quiet", "--bare", "--initial-branch=main"]);
+    git(dir, ["remote", "add", "origin", remote]);
+    git(dir, ["push", "--quiet", "--no-verify", "origin", "main"]);
+  }
+  return { dir, gitDir, remote };
 }
 
 function commitAttempt(dir, file, env = {}) {
@@ -53,10 +60,10 @@ function commitAttempt(dir, file, env = {}) {
 test("blocks a commit on the default branch in the primary checkout", async () => {
   const { dir, gitDir } = await repoFixture();
   try {
-    installDefaultBranchGuard({ gitDir });
+    installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
     const result = commitAttempt(dir, "on-main.txt");
     assert.equal(result.blocked, true, "expected the commit to be refused");
-    assert.match(result.stderr, /refusing pre-commit on the default branch/);
+    assert.match(result.stderr, /refusing to commit on the default branch/);
     assert.match(result.stderr, new RegExp(GUARD_OVERRIDE_ENV));
     // The refusal must be the ONLY effect: nothing may have been recorded.
     assert.equal(git(dir, ["rev-list", "--count", "HEAD"]).trim(), "1");
@@ -68,7 +75,7 @@ test("blocks a commit on the default branch in the primary checkout", async () =
 test(`${GUARD_OVERRIDE_ENV}=1 permits the same commit — the sanctioned release path`, async () => {
   const { dir, gitDir } = await repoFixture();
   try {
-    installDefaultBranchGuard({ gitDir });
+    installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
     const result = commitAttempt(dir, "release.txt", { [GUARD_OVERRIDE_ENV]: "1" });
     assert.equal(result.blocked, false, `expected the override to allow it: ${result.stderr}`);
     assert.equal(git(dir, ["rev-list", "--count", "HEAD"]).trim(), "2");
@@ -80,7 +87,7 @@ test(`${GUARD_OVERRIDE_ENV}=1 permits the same commit — the sanctioned release
 test("a non-default branch commits freely — the loop's own path is untouched", async () => {
   const { dir, gitDir } = await repoFixture();
   try {
-    installDefaultBranchGuard({ gitDir });
+    installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
     git(dir, ["checkout", "--quiet", "-b", "issue-42"]);
     const result = commitAttempt(dir, "work.txt");
     assert.equal(result.blocked, false, `expected a branch commit to pass: ${result.stderr}`);
@@ -89,11 +96,11 @@ test("a non-default branch commits freely — the loop's own path is untouched",
   }
 });
 
-test("a linked worktree is unaffected even on a branch named like the default elsewhere", async () => {
+test("a linked worktree DOES run the hook — its non-default branch is what lets the commit through", async () => {
   const { dir, gitDir } = await repoFixture();
   const linked = path.join(dir, "..", `${path.basename(dir)}-linked`);
   try {
-    installDefaultBranchGuard({ gitDir });
+    installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
     git(dir, ["worktree", "add", "--quiet", "-b", "issue-7", linked]);
     const result = commitAttempt(linked, "in-worktree.txt");
     assert.equal(result.blocked, false, `expected the worktree commit to pass: ${result.stderr}`);
@@ -106,11 +113,11 @@ test("a linked worktree is unaffected even on a branch named like the default el
 test("install is idempotent — a re-run refreshes its own hooks rather than duplicating them", async () => {
   const { dir, gitDir } = await repoFixture();
   try {
-    const first = installDefaultBranchGuard({ gitDir });
+    const first = installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
     assert.deepEqual(first.installed, [...GUARDED_HOOKS]);
     assert.deepEqual(first.refreshed, []);
 
-    const second = installDefaultBranchGuard({ gitDir });
+    const second = installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
     assert.deepEqual(second.installed, []);
     assert.deepEqual(second.refreshed, [...GUARDED_HOOKS]);
 
@@ -133,7 +140,7 @@ test("a pre-existing foreign hook is preserved, never silently clobbered", async
     const foreign = "#!/bin/sh\n# someone else's hook\nexit 0\n";
     fs.writeFileSync(path.join(hooksDir, "pre-commit"), foreign, { mode: 0o755 });
 
-    const result = installDefaultBranchGuard({ gitDir });
+    const result = installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
     assert.deepEqual(result.installed, ["pre-push"], "the free hook slot should still be taken");
     assert.deepEqual(result.skipped.map((entry) => entry.hook), ["pre-commit"]);
     assert.equal(fs.readFileSync(path.join(hooksDir, "pre-commit"), "utf8"), foreign);
@@ -148,7 +155,7 @@ test("a pre-existing foreign hook is preserved, never silently clobbered", async
 test("the hook is executable, or git would ignore it entirely", async () => {
   const { dir, gitDir } = await repoFixture();
   try {
-    installDefaultBranchGuard({ gitDir });
+    installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
     for (const hook of GUARDED_HOOKS) {
       const mode = fs.statSync(path.join(gitDir, "hooks", hook)).mode;
       assert.ok(mode & 0o111, `${hook} must be executable`);
@@ -158,10 +165,80 @@ test("the hook is executable, or git would ignore it entirely", async () => {
   }
 });
 
-test("renderGuardHook names the hook it guards, so its refusal message is not generic", () => {
+test("renderGuardHook emits a runnable script that names what it refused", () => {
+  assert.match(renderGuardHook("pre-commit", "main"), /refusing to commit on the default branch/);
+  assert.match(renderGuardHook("pre-push", "main"), /refusing to push to the default branch/);
   for (const hook of GUARDED_HOOKS) {
-    const body = renderGuardHook(hook);
-    assert.match(body, new RegExp(`refusing ${hook} on the default branch`));
-    assert.ok(body.startsWith("#!/bin/sh"), "must be a runnable shell script");
+    assert.ok(renderGuardHook(hook, "main").startsWith("#!/bin/sh"), "must be a runnable shell script");
+  }
+});
+
+// The finding that mattered most: checking the CURRENT branch let every
+// explicit refspec through, and a probe confirmed `push origin HEAD:main` from
+// a feature branch actually moved the remote default.
+test("blocks a push to the default branch via an explicit refspec from another branch", async () => {
+  const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
+  try {
+    installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
+    git(dir, ["checkout", "--quiet", "-b", "issue-9"]);
+    fs.writeFileSync(path.join(dir, "sneaky.txt"), "sneaky\n");
+    git(dir, ["add", "sneaky.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "work on a branch"]);
+
+    const before = git(remote, ["rev-parse", "refs/heads/main"]).trim();
+    let blocked = false;
+    try {
+      git(dir, ["push", "--quiet", "origin", "HEAD:main"]);
+    } catch {
+      blocked = true;
+    }
+    assert.equal(blocked, true, "expected HEAD:main to be refused");
+    assert.equal(git(remote, ["rev-parse", "refs/heads/main"]).trim(), before, "remote default must not have moved");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(remote, { recursive: true, force: true });
+  }
+});
+
+test("allows a push to a non-default remote ref", async () => {
+  const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
+  try {
+    installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
+    git(dir, ["checkout", "--quiet", "-b", "issue-9"]);
+    fs.writeFileSync(path.join(dir, "work.txt"), "work\n");
+    git(dir, ["add", "work.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "work"]);
+    git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    assert.ok(git(remote, ["rev-parse", "refs/heads/issue-9"]).trim());
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(remote, { recursive: true, force: true });
+  }
+});
+
+test("refuses to install when core.hooksPath points elsewhere — a guard that cannot fire must not report success", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    const result = installDefaultBranchGuard({ gitDir, defaultBranch: "main", hooksPathOverride: ".husky" });
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.installed, []);
+    assert.match(result.reason, /core\.hooksPath/);
+    assert.equal(fs.existsSync(path.join(gitDir, "hooks", "pre-commit")), false, "must not write a hook git will never run");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an unresolvable default branch installs INERT hooks rather than guessing which branch to protect", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    const result = installDefaultBranchGuard({ gitDir, defaultBranch: null });
+    assert.equal(result.ok, true);
+    assert.match(result.reason, /could not be resolved/);
+    // Inert, not wrong: guessing `main` in a `master` repo would guard the
+    // wrong branch and leave the real default open.
+    assert.equal(commitAttempt(dir, "unresolved.txt").blocked, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

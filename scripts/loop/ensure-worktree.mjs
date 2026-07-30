@@ -180,7 +180,17 @@ function parseWorktreeList(porcelain) {
 function installGuard(gitCommand, root) {
   try {
     const gitDir = runGit(gitCommand, ["rev-parse", "--absolute-git-dir"], root).trim();
-    return installDefaultBranchGuard({ gitDir });
+    // Resolve the default at install time and bake it into the hook: deriving
+    // it in shell picks a stale local `main` in a `master` repo, guarding the
+    // wrong branch while the real default stays open.
+    const defaultBranch = resolveBaseBranch(undefined, { cwd: root });
+    let hooksPathOverride = null;
+    try {
+      hooksPathOverride = runGit(gitCommand, ["config", "--get", "core.hooksPath"], root).trim() || null;
+    } catch {
+      hooksPathOverride = null; // unset — `git config --get` exits 1, which is the normal case
+    }
+    return installDefaultBranchGuard({ gitDir, defaultBranch, hooksPathOverride });
   } catch (err) {
     const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
     process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${detail}\n`);
