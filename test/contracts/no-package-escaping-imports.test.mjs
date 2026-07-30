@@ -281,7 +281,15 @@ function optionalPeersOf(pkg) {
 // contains a minified vendor bundle. `import("x")` still cannot match: the
 // optional group requires a literal `from`, and the fallback requires a quote
 // immediately after `import`.
-const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[^'"]*?\bfrom\s*)?|export\s*[^'"]*?\bfrom\s*)["']([^"']+)["']/gm;
+// The span between the keyword and `from` accepts only BINDING-LIST characters
+// (identifiers, braces, commas, `*`, whitespace). It must keep matching across
+// newlines — `import {\n  a,\n  b\n} from "pkg"` is the dominant multi-name
+// style here — but a permissive `[^'"]*?` spans newlines through arbitrary
+// prose, pairing an `export` line with a quoted string far below it: a thrown
+// template literal reading `…version from "${spec}"` registered as a specifier
+// that way. Excluding parens, slashes and backticks ends that pairing while
+// accepting every real import form.
+const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[\w$*,{}\s]*?\bfrom\s*)?|export\s*[\w$*,{}\s]*?\bfrom\s*)["']([^"']+)["']/gm;
 
 test("shipped files never statically import an optional peer dependency", async () => {
   const repoRootUrl = new URL("../../", import.meta.url);
@@ -363,15 +371,7 @@ test("shipped files never statically import a package the root manifest does not
       if (VENDORED_PATH_RE.test(relative)) continue;
 
       const contents = await readFile(fileUrl, "utf8");
-      // Line-wise, deliberately: STATIC_SPECIFIER_RE's `[^'"]*?` matches
-      // newlines, so run against a whole file an `export` line pairs with a
-      // quoted string many lines below — e.g. a template literal in a thrown
-      // message reads as an import specifier. Scanning per line keeps the same
-      // accepted import forms (they are single-line in this tree) while making
-      // that cross-line pairing impossible.
-      for (const line of contents.split("\n")) {
-        const match = new RegExp(STATIC_SPECIFIER_RE.source).exec(line);
-        if (!match) continue;
+      for (const match of contents.matchAll(STATIC_SPECIFIER_RE)) {
         const specifier = match[1];
         // Relative and absolute specifiers are the other two guards' business;
         // `node:`-prefixed and bare builtins resolve without a manifest entry.
@@ -425,6 +425,28 @@ test("STATIC_SPECIFIER_RE catches every static form and no dynamic one", () => {
   assert.deepEqual(specifiers('  importPlaywright = () => import("@playwright/test")'), []);
   // A string that merely looks like one must not match.
   assert.deepEqual(specifiers('export default "@playwright/test";'), []);
+
+  // Multi-line binding lists, including the re-export twin — the dominant
+  // multi-name style in this tree, and the shape a future dependency arrives
+  // in. A matcher that only saw single lines would miss both silently.
+  assert.deepEqual(
+    specifiers('import {\n  webkit,\n  chromium,\n} from "@playwright/test";'),
+    ["@playwright/test"],
+  );
+  assert.deepEqual(
+    specifiers('export {\n  webkit,\n} from "@playwright/test";'),
+    ["@playwright/test"],
+  );
+  assert.deepEqual(specifiers('import * as pw from "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('export * as pw from "@playwright/test";'), ["@playwright/test"]);
+
+  // Prose between an `export` keyword and a quoted string must NOT pair across
+  // newlines: this exact shape (a thrown template literal containing the word
+  // `from`) reported `${spec}` as a specifier while the span was permissive.
+  assert.deepEqual(
+    specifiers('export function extractMajorMinor(spec) {\n  throw new Error(`cannot parse a version from "${spec}"`);\n}'),
+    [],
+  );
 });
 
 // The assert-empty test above cannot distinguish "nothing escapes" from "the
