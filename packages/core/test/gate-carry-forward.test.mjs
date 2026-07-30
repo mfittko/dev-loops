@@ -69,6 +69,24 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
     assert.equal(decision.carryForward, true);
   });
 
+  test(".devloops-only delta carries clean non-config angles but re-runs config-surface ones (classifier reclassification pinned)", () => {
+    // Previously .devloops classified unknown → fail-closed re-run of every
+    // angle. Now it is config: coverage/link-check may carry a clean verdict,
+    // while config-drift (a config-surface angle) must still re-run.
+    const carried = resolveAngleCarryForward({
+      angle: "coverage",
+      changedFiles: [".devloops"],
+      prevVerdict: "clean",
+    });
+    assert.equal(carried.carryForward, true);
+    const rerun = resolveAngleCarryForward({
+      angle: "config-drift",
+      changedFiles: [".devloops"],
+      prevVerdict: "clean",
+    });
+    assert.equal(rerun.carryForward, false);
+  });
+
   test("code delta + code angle -> false", () => {
     const decision = resolveAngleCarryForward({
       angle: "correctness",
