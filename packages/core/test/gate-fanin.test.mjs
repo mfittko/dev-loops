@@ -140,7 +140,7 @@ describe("toFindingsLogShape", () => {
     });
     const shaped = toFindingsLogShape(consolidated.findings);
     assert.deepEqual(shaped, [
-      { severity: "must-fix", angle: "scope", summary: "a", disposition: "accepted-for-fix", files: ["src/a.mjs"] },
+      { severity: "must-fix", angle: "scope", summary: "a", disposition: "accepted-for-fix", recommendation: "x", files: ["src/a.mjs"] },
       { severity: "defer", angle: "docs", summary: "b", disposition: "deferred" },
     ]);
   });

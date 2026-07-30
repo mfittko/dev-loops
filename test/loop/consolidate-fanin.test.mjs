@@ -33,12 +33,21 @@ test("parseConsolidateFaninCliArgs parses required + optional args", () => {
     "--findings-dir", "/tmp/x",
     "--gate", "draft_gate",
     "--out", "/tmp/out.json",
+    "--ledger-out", "/tmp/ledger.json",
     "--pr-checklist-matrix", "clean",
   ]);
   assert.equal(result.findingsDir, "/tmp/x");
   assert.equal(result.gate, "draft_gate");
   assert.equal(result.out, "/tmp/out.json");
+  assert.equal(result.ledgerOut, "/tmp/ledger.json");
   assert.equal(result.prChecklistMatrix, "clean");
+});
+
+test("parseConsolidateFaninCliArgs rejects a whitespace-only --ledger-out value", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--ledger-out", "   "]),
+    /non-empty path/,
+  );
 });
 
 test("parseConsolidateFaninCliArgs rejects missing --findings-dir", () => {
@@ -86,7 +95,6 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
       );
       assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": 1, "defer": 0 });
       assert.equal(result.findings.length, 2);
-      assert.deepEqual(result.ledger, result.findings);
       for (const finding of result.findings) {
         assert.ok(typeof finding.angle === "string" && finding.angle.length > 0);
       }
@@ -101,7 +109,7 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
           gate: "pre_approval_gate",
           headSha: "abc1234567890abcdef000000000000000000000",
           verdict: result.overallVerdict,
-          findings: JSON.stringify(result.ledger),
+          findings: JSON.stringify(result.findings),
           tmpRoot,
         });
         assert.equal(written.ok, true);
@@ -133,9 +141,81 @@ test("consolidateGateFanin writes --out as the nested findingsJson shape", async
   );
 });
 
+test("consolidateGateFanin writes --ledger-out as the flat findings shape (the --findings-file input write-gate-findings-log.mjs/post-gate-findings.mjs accept)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const ledgerPath = path.join(dir, "out", "ledger.json");
+      const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath });
+      const written = JSON.parse(await readFile(ledgerPath, "utf8"));
+      assert.deepEqual(written, result.findings);
+      assert.equal(result.findings.length, 1);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// recommendation passthrough + length cap
+// ---------------------------------------------------------------------------
+
+test("a reviewer-provided recommendation survives into both findingsJson and the flat findings shape", async () => {
+  await withFindingsDir(
+    {
+      "scope.json": {
+        angle: "scope",
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: "x", recommendation: "do the thing" }],
+      },
+    },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      assert.equal(result.findings[0].recommendation, "do the thing");
+      assert.equal(
+        result.findingsJson.find((a) => a.angle === "scope").findings[0].recommendation,
+        "do the thing",
+      );
+    },
+  );
+});
+
+test("a finding summary/recommendation over 2000 chars is truncated with a plain ellipsis suffix, never dropped", async () => {
+  const longSummary = "s".repeat(2100);
+  const longRecommendation = "r".repeat(2100);
+  await withFindingsDir(
+    {
+      "scope.json": {
+        angle: "scope",
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: longSummary, recommendation: longRecommendation }],
+      },
+    },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      const flat = result.findings[0];
+      assert.equal(flat.summary.length, 2000);
+      assert.ok(flat.summary.endsWith(" …"));
+      const nested = result.findingsJson.find((a) => a.angle === "scope").findings[0];
+      assert.equal(nested.recommendation.length, 2000);
+      assert.ok(nested.recommendation.endsWith(" …"));
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // pr-checklist-matrix mandatory-angle upsert
 // ---------------------------------------------------------------------------
+
+test("consolidateGateFanin rejects a --pr-checklist-matrix value other than \"clean\"", async () => {
+  await withFindingsDir(
+    { "dry.json": { angle: "dry", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, prChecklistMatrix: '{"angle":"scope","verdict":"findings_present","findings":[]}' }),
+        /accepts only "clean"/,
+      );
+    },
+  );
+});
 
 test("consolidateGateFanin upserts a clean pr-checklist-matrix angle when missing", async () => {
   await withFindingsDir(

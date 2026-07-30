@@ -683,8 +683,10 @@ export function buildGateContextArtifact(options) {
     artifact.adjacentCode = options.adjacentCode;
   }
   // Whether the rendered briefing prefix inlined the reviewed-head diff (in a
-  // fenced block) or fell back to the diffPath pointer (size cap). Only set
-  // when a caller actually rendered a prefix (writeGateContext does, always).
+  // fenced block), fell back to the diffPath pointer (size cap), or (CLI-only,
+  // `--prefix-file`) recorded an orchestrator-authored prefix verbatim
+  // ("file" — see writeGateContextWithPrefix below). Only set when a caller
+  // actually produced/recorded a prefix (writeGateContext does, always).
   if (typeof options.prefixMode === "string" && options.prefixMode.length > 0) {
     artifact.prefixMode = options.prefixMode;
   }
@@ -839,8 +841,9 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  * Write both the JSON context artifact AND its sibling rendered briefing
  * prefix (GATE-EXEC-BRIEFING-PREFIX): the byte-identical invariant block every
  * per-angle reviewer of this gate pass is seeded with. The prefix's
- * `prefixMode` (inline|pointer, from the diff-size cap) is recorded on the
- * JSON artifact so both files stay in sync.
+ * `prefixMode` (inline|pointer, from the diff-size cap; or file, when
+ * `--prefix-file` records an orchestrator-authored prefix verbatim) is
+ * recorded on the JSON artifact so both files stay in sync.
  *
  * @param {object} options — parsed CLI options shape, optionally carrying
  *   `diffOutput`, `prBody`, `issueBody` (all null-safe; a caller with none of

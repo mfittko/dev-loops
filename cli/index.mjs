@@ -120,13 +120,16 @@ export function compareSemver(a, b) {
 // Shape/length gate a registry-controlled dist-tag value must pass before it
 // can reach compareSemver's max-reduction or doctor's stdout: a plain
 // `x.y.z` numeric core (splitVersion already strips any prerelease/build
-// suffix off the core check). Rejects control characters, empty/absurdly long
-// strings, and non-numeric cores — the class of value that otherwise coerces
-// to 0.0.0 in compareCoreVersions (`Number("x") || 0`) or gets echoed verbatim
-// into doctor's output.
+// suffix off the core check) AND, since that core check alone leaves the
+// prerelease/build suffix unvalidated, the WHOLE string must also match
+// SemVer's own identifier charset. Rejects control/escape bytes, empty/
+// absurdly long strings, and non-numeric cores — the class of value that
+// otherwise coerces to 0.0.0 in compareCoreVersions (`Number("x") || 0`) or
+// gets echoed verbatim into doctor's output.
 export function isPlausibleDistTagVersion(v) {
   if (typeof v !== "string" || v.length === 0 || v.length > 64) return false;
-  return /^\d+\.\d+\.\d+$/.test(splitVersion(v).core);
+  if (!/^\d+\.\d+\.\d+$/.test(splitVersion(v).core)) return false;
+  return /^[0-9A-Za-z.+-]+$/.test(v);
 }
 
 const REGISTRY_TIMEOUT_MS = 2000;

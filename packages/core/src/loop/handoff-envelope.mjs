@@ -370,8 +370,8 @@ function deriveGateConfig(settings, subGate) {
   // invariants: everything advertised is within the validator pool, and
   // every mandatory angle is advertised.
   const resolved = resolveGateConfig(settings, gateKey);
-  const { mandatoryAngles, pool } = resolveGateAngleContract(settings, gateKey);
-  const runSet = resolveGateAngles(settings, gateKey) ?? pool ?? [];
+  const { mandatoryAngles } = resolveGateAngleContract(settings, gateKey);
+  const runSet = resolveGateAngles(settings, gateKey) ?? [];
   const angles = [...new Set([...runSet, ...mandatoryAngles])];
   return {
     angles,

@@ -9,18 +9,20 @@
  * via the result's "findingsJson" field / --out) accept directly — the orchestrator
  * no longer hand-authors this JSON with inline interpreters. "findingsJson"/--out is
  * the NESTED per-angle shape (one section per source artifact, clean angles included
- * with an empty findings array); "findings"/"ledger" is the FLAT per-finding shape.
+ * with an empty findings array); "findings"/--ledger-out is the FLAT per-finding shape.
  *
  * Per-angle findings artifact shape (one *.json file per angle in --findings-dir):
  *   {
  *     angle: string,
  *     verdict: "clean" | "findings_present" | "blocked",
- *     findings: [{ severity, summary, file?, line?, disposition? }]
+ *     findings: [{ severity, summary, file?, line?, disposition?, recommendation? }]
  *   }
  * `disposition` on an input finding is IGNORED — consolidateFanin() always
  * DERIVES it from severity (accepted-for-fix for a blocking severity,
  * deferred otherwise). It is accepted on the input shape only so a reviewer's
- * own artifact schema round-trips without a separate strip step.
+ * own artifact schema round-trips without a separate strip step. A
+ * reviewer-provided `recommendation` IS carried through to both output shapes
+ * unchanged (truncated only if it exceeds the length cap below).
  *
  * An angle reporting verdict "blocked" (or any malformed artifact) makes the
  * whole fan-in FAIL CLOSED (exit 1, naming the offending angles): a blocked
@@ -36,18 +38,20 @@ import { parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
-import { consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--pr-checklist-matrix <clean|json>] [--repo-root <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--repo-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
 Required:
   --findings-dir <dir>          Directory containing one *.json per-angle findings
-                                 artifact: { angle, verdict, findings: [{ severity, summary, file?, line?, disposition? }] }.
+                                 artifact: { angle, verdict, findings: [{ severity, summary, file?, line?, disposition?, recommendation? }] }.
                                  An input finding's "disposition" (if present) is IGNORED — the
                                  output disposition is always DERIVED from severity (see below).
+                                 An input finding's "recommendation" (if present) is carried through.
                                  Two artifacts naming the SAME angle fail closed (ambiguous fan-out).
 Optional:
   --gate <draft_gate|pre_approval_gate>   Echoed onto the result as "gate"; also loads this
@@ -58,22 +62,29 @@ Optional:
   --out <path>                  Write the nested per-angle "findingsJson" shape (below) to this
                                  path as JSON — the exact input upsert-checkpoint-verdict.mjs's
                                  --findings-json accepts
-  --pr-checklist-matrix <clean|json>      When no pr-checklist-matrix angle artifact was found,
-                                 upsert one: "clean" for { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
-                                 or a JSON artifact object ({ angle?, verdict, findings }) for a custom one
+  --ledger-out <path>            Write the flat "findings" shape (below) to this path as JSON — the
+                                 exact --findings-file input write-gate-findings-log.mjs and
+                                 post-gate-findings.mjs accept
+  --pr-checklist-matrix clean    When no pr-checklist-matrix angle artifact was found, upsert
+                                 { angle: "pr-checklist-matrix", verdict: "clean", findings: [] }
   --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
                                  --gate is given (default: process.cwd()) — makes the overall verdict
                                  deterministic regardless of the CLI's invocation directory
 Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount" }],
-    "findingsJson": [{ "angle", "verdict", "findings": [...] }], "findings": [...], "ledger": [...],
+    "findingsJson": [{ "angle", "verdict", "findings": [...] }], "findings": [...],
     "severityCounts": { "must-fix", "worth-fixing-now", "defer" },
     "overallVerdict": "clean"|"findings_present" }
   "findingsJson" is the nested per-angle shape (one section per source artifact, including clean
   angles with an empty findings array) — pass --out's file straight to
-  upsert-checkpoint-verdict.mjs's --findings-json. Every output finding's "disposition" is DERIVED
-  from severity (accepted-for-fix for a blocking severity, deferred otherwise) — an input
-  finding's own "disposition" is never honored.
+  upsert-checkpoint-verdict.mjs's --findings-json. "findings" is the FLAT per-finding shape — pass
+  --ledger-out's file straight to write-gate-findings-log.mjs/post-gate-findings.mjs's
+  --findings-file. Every output finding's "disposition" is DERIVED from severity (accepted-for-fix
+  for a blocking severity, deferred otherwise) — an input finding's own "disposition" is never
+  honored. A reviewer-provided "recommendation" is carried through to both shapes unchanged. A
+  finding "summary" or "recommendation" longer than 2000 chars is truncated with a plain " …"
+  suffix (never a "[truncated N chars]" marker), so the emitted findingsJson can never trip
+  upsert-checkpoint-verdict.mjs's fail-closed posted-comment length guard.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
@@ -84,8 +95,19 @@ Exit codes:
 
 const parseError = buildParseError(USAGE);
 
-const VALID_GATES = new Set(["draft_gate", "pre_approval_gate"]);
-const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
+const VALID_GATES = new Set(GATE_NAMES);
+// Findings text (summary/recommendation) longer than this is truncated with a
+// plain " …" suffix before emission — matching upsert-checkpoint-verdict.mjs's
+// plain-ellipsis truncation policy (never the "[truncated N chars]" marker,
+// which that CLI reserves for a posted comment being SHORTENED, not this
+// tool's own findings text) — so a reviewer's over-long field can never trip
+// upsert-checkpoint-verdict.mjs's fail-closed MAX_GATE_COMMENT_TEXT_LENGTH
+// guard on the rendered --findings-json block.
+const MAX_FINDING_TEXT_LENGTH = 2000;
+function truncateFindingText(value) {
+  if (typeof value !== "string" || value.length <= MAX_FINDING_TEXT_LENGTH) return value;
+  return `${value.slice(0, MAX_FINDING_TEXT_LENGTH - 2)} …`;
+}
 
 export function parseConsolidateFaninCliArgs(argv) {
   const options = {
@@ -93,6 +115,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     findingsDir: undefined,
     gate: undefined,
     out: undefined,
+    ledgerOut: undefined,
     prChecklistMatrix: undefined,
     repoRoot: undefined,
   };
@@ -103,6 +126,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "findings-dir": { type: "string" },
       gate: { type: "string" },
       out: { type: "string" },
+      "ledger-out": { type: "string" },
       "pr-checklist-matrix": { type: "string" },
       "repo-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -140,6 +164,14 @@ export function parseConsolidateFaninCliArgs(argv) {
         throw parseError("--out requires a non-empty path");
       }
       options.out = out;
+      continue;
+    }
+    if (token.name === "ledger-out") {
+      const ledgerOut = requireTokenValue(token, parseError).trim();
+      if (ledgerOut.length === 0) {
+        throw parseError("--ledger-out requires a non-empty path");
+      }
+      options.ledgerOut = ledgerOut;
       continue;
     }
     if (token.name === "pr-checklist-matrix") {
@@ -190,24 +222,16 @@ function validateArtifactShape(raw, sourceLabel) {
   }
 }
 
-// Resolve the --pr-checklist-matrix upsert value: the literal "clean" keyword
-// (the mandatory-angle convenience) or a JSON artifact object for a custom one.
+// Resolve the --pr-checklist-matrix upsert value: only the literal "clean"
+// keyword is accepted (the mandatory-angle convenience). AC1 only requires
+// upserting the mandatory clean entry when nothing covers it; no documented
+// caller ever passes a custom artifact, so that speculative surface is not
+// offered.
 function resolvePrChecklistMatrixUpsert(rawValue) {
-  const trimmed = rawValue.trim();
-  if (trimmed.toLowerCase() === "clean") {
-    return { angle: "pr-checklist-matrix", verdict: "clean", findings: [] };
+  if (rawValue.trim().toLowerCase() !== "clean") {
+    throw new Error('--pr-checklist-matrix accepts only "clean"');
   }
-  let parsed;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    throw new Error('--pr-checklist-matrix must be "clean" or a JSON artifact object: { angle?, verdict, findings }');
-  }
-  const artifact = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? { angle: "pr-checklist-matrix", findings: [], ...parsed }
-    : parsed;
-  validateArtifactShape(artifact, "--pr-checklist-matrix");
-  return artifact;
+  return { angle: "pr-checklist-matrix", verdict: "clean", findings: [] };
 }
 
 export async function consolidateGateFanin(options) {
@@ -337,6 +361,12 @@ export async function consolidateGateFanin(options) {
   }
 
   const consolidated = consolidateFanin({ angleResults: rawArtifacts, blockCleanOnFindingSeverities });
+  // Bound each finding's free-text fields before they reach either output
+  // shape — see MAX_FINDING_TEXT_LENGTH above.
+  for (const f of consolidated.findings) {
+    f.summary = truncateFindingText(f.summary);
+    if (f.recommendation) f.recommendation = truncateFindingText(f.recommendation);
+  }
   // toFindingsLogShape's output ({ severity, angle, summary, disposition?, files? })
   // is exactly both write-gate-findings-log.mjs's --findings shape and the flat
   // per-finding shape upsert-checkpoint-verdict.mjs's --findings-json accepts —
@@ -391,6 +421,7 @@ export async function consolidateGateFanin(options) {
         const entry = { severity: f.severity, summary: f.summary, disposition: f.disposition };
         if (f.file) entry.file = f.file;
         if (typeof f.line === "number") entry.line = f.line;
+        if (f.recommendation) entry.recommendation = f.recommendation;
         return entry;
       }),
     };
@@ -402,7 +433,6 @@ export async function consolidateGateFanin(options) {
     angles,
     findingsJson,
     findings,
-    ledger: findings,
     severityCounts: consolidated.counts.bySeverity,
     overallVerdict: consolidated.verdict,
   };
@@ -410,6 +440,10 @@ export async function consolidateGateFanin(options) {
   if (options.out !== undefined) {
     await mkdir(path.dirname(options.out), { recursive: true });
     await writeFile(options.out, `${JSON.stringify(findingsJson, null, 2)}\n`, "utf8");
+  }
+  if (options.ledgerOut !== undefined) {
+    await mkdir(path.dirname(options.ledgerOut), { recursive: true });
+    await writeFile(options.ledgerOut, `${JSON.stringify(findings, null, 2)}\n`, "utf8");
   }
 
   return result;

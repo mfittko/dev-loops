@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { resolveFindingsInput } from "./_findings-input.mjs";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> (--findings <json> | --findings-file <path>)
 Post (or idempotently update) a visible, marker-tagged PR issue comment that lists the
@@ -123,30 +123,11 @@ export function parseFindings(raw) {
 
 // Resolve the findings array from either --findings (inline JSON) or
 // --findings-file (a path to a file containing the same JSON array) —
-// mutually exclusive, identical validation either way.
-async function resolveFindings(options) {
-  if (options.findings !== undefined && options.findingsFile !== undefined) {
-    throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
-  }
-  if (options.findingsFile !== undefined) {
-    let raw;
-    try {
-      raw = await readFile(options.findingsFile, "utf8");
-    } catch (err) {
-      throw parseError(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw parseError(`--findings-file "${options.findingsFile}" must contain valid JSON`);
-    }
-    return validateFindingsArray(parsed, "--findings-file");
-  }
-  if (options.findings === undefined) {
-    throw parseError("Either --findings <json> or --findings-file <path> is required");
-  }
-  return parseFindings(options.findings);
+// mutually exclusive, identical validation either way. Shared plumbing lives
+// in _findings-input.mjs; this file's own validateFindingsArray is the
+// injected element validator.
+function resolveFindings(options) {
+  return resolveFindingsInput(options, { parseError, validate: validateFindingsArray });
 }
 
 export function parsePostGateFindingsCliArgs(argv) {

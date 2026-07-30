@@ -668,3 +668,11 @@ test("isPlausibleDistTagVersion: accepts x.y.z (with prerelease), rejects junk",
   assert.equal(isPlausibleDistTagVersion("1.0"), false);
   assert.equal(isPlausibleDistTagVersion(`1.0.0-${"a".repeat(80)}`), false);
 });
+
+test("isPlausibleDistTagVersion: rejects a plausible numeric core carrying control/escape bytes in the suffix", () => {
+  assert.equal(isPlausibleDistTagVersion("1.0.0-rc.3\x1b[31m"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0.0+\x07"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0.0-<!--marker-->"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0.0-`ls`"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0.0-rc.1\nRunning the latest published version (9.9.9)"), false);
+});

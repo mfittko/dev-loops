@@ -7,9 +7,12 @@
 // This computes the packed file set the same way `npm pack` would, WITHOUT
 // shelling out to `npm pack` (too slow for a unit-run contract test): it
 // parses the root package.json `files` array and expands it against the
-// worktree — directories walked recursively, honoring a root `.npmignore` if
-// one exists, plus the files npm always ships regardless of `files`
-// (package.json itself).
+// worktree — directories walked recursively — plus the files npm always
+// ships regardless of `files` (package.json itself). This repo ships no
+// `.npmignore` (when `files` is present, npm packs exactly what it expands
+// to — there is no separate ignore-pattern layer to reproduce here); the
+// expansion below is cross-validated against a live `npm pack --dry-run`
+// for exactness in test/packaged-install-smoke.test.mjs.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -22,43 +25,14 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 
 const ALWAYS_EXCLUDED_DIR_NAMES = new Set(["node_modules", ".git"]);
 
-function readNpmignorePatterns(repoRoot) {
-  const npmignorePath = path.join(repoRoot, ".npmignore");
-  if (!fs.existsSync(npmignorePath)) return [];
-  return fs
-    .readFileSync(npmignorePath, "utf8")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"));
-}
-
-// Minimal glob support (`*` and `**`) — enough for typical .npmignore lines;
-// not a full gitignore-pattern implementation.
-function globToRegExp(pattern) {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const withDoubleStar = escaped.replace(/\*\*/g, "\u0000");
-  const withSingleStar = withDoubleStar.replace(/\*/g, "[^/]*");
-  const restored = withSingleStar.replace(/\u0000/g, ".*");
-  return new RegExp(`^${restored}$`);
-}
-
-function isNpmignored(relPosixPath, ignorePatterns) {
-  return ignorePatterns.some((pattern) => {
-    const normalized = pattern.replace(/^\//, "").replace(/\/$/, "");
-    const re = globToRegExp(normalized);
-    return re.test(relPosixPath) || re.test(path.posix.basename(relPosixPath));
-  });
-}
-
-function walkFiles(absDir, repoRoot, ignorePatterns, out) {
+function walkFiles(absDir, repoRoot, out) {
   for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
     if (entry.isDirectory() && ALWAYS_EXCLUDED_DIR_NAMES.has(entry.name)) continue;
     const absChild = path.join(absDir, entry.name);
-    const relPosix = path.relative(repoRoot, absChild).split(path.sep).join("/");
-    if (isNpmignored(relPosix, ignorePatterns)) continue;
     if (entry.isDirectory()) {
-      walkFiles(absChild, repoRoot, ignorePatterns, out);
+      walkFiles(absChild, repoRoot, out);
     } else if (entry.isFile()) {
+      const relPosix = path.relative(repoRoot, absChild).split(path.sep).join("/");
       out.add(relPosix);
     }
   }
@@ -69,17 +43,16 @@ function walkFiles(absDir, repoRoot, ignorePatterns, out) {
 // include. A pure filesystem walk — never shells out to npm.
 function expandPackedFileSet(repoRoot) {
   const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-  const ignorePatterns = readNpmignorePatterns(repoRoot);
   const files = new Set(["package.json"]); // npm always ships package.json regardless of `files`
   for (const entry of pkg.files ?? []) {
     const absEntry = path.join(repoRoot, entry);
     if (!fs.existsSync(absEntry)) continue;
     const stat = fs.statSync(absEntry);
     if (stat.isDirectory()) {
-      walkFiles(absEntry, repoRoot, ignorePatterns, files);
+      walkFiles(absEntry, repoRoot, files);
     } else if (stat.isFile()) {
       const relPosix = path.relative(repoRoot, absEntry).split(path.sep).join("/");
-      if (!isNpmignored(relPosix, ignorePatterns)) files.add(relPosix);
+      files.add(relPosix);
     }
   }
   return files;
@@ -140,15 +113,6 @@ function effectiveCitingDir(repoRoot, absSurfaceFile) {
   return path.dirname(absSurfaceFile);
 }
 
-// Explicit, tiny allowlist of illustrative references that name a shape/
-// convention rather than an actual shipped path — each entry investigated
-// individually before being added here.
-const ILLUSTRATIVE_ALLOWLIST = new Set([
-  // (kept empty — every reference currently found resolves to a real,
-  // shipped script; add an entry here only after confirming a genuine
-  // illustrative-only mention, with a comment naming why.)
-]);
-
 function collectReferences(repoRoot) {
   const references = [];
   for (const surfaceFile of surfaceFiles(repoRoot)) {
@@ -200,7 +164,7 @@ test("every scripts/...mjs reference in the shipped instruction surfaces is in t
   const packedFiles = expandPackedFileSet(REPO_ROOT);
   assert.ok(packedFiles.size > 100, `packed file set looks too small (${packedFiles.size}) — expansion likely broken`);
 
-  const references = collectReferences(REPO_ROOT).filter(({ ref }) => !ILLUSTRATIVE_ALLOWLIST.has(ref));
+  const references = collectReferences(REPO_ROOT);
   assert.ok(references.length > 0, "expected at least one scripts/...mjs reference across the scanned surfaces");
 
   const failures = computeDanglingReferenceFailures(REPO_ROOT, references, packedFiles);

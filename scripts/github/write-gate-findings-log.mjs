@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
+import { resolveFindingsInput } from "./_findings-input.mjs";
 import { checkFanoutAngleCoverage, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
@@ -102,41 +103,13 @@ function validateFindingsArray(parsed, flagLabel) {
     return entry;
   });
 }
-function parseFindingsJson(raw) {
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw parseError("--findings must be valid JSON");
-  }
-  return validateFindingsArray(parsed, "--findings");
-}
 // Resolve the findings array from either --findings (inline JSON) or
 // --findings-file (a path to a file containing the same JSON array) —
-// mutually exclusive, identical validation either way.
-async function resolveFindings(options) {
-  if (options.findings !== undefined && options.findingsFile !== undefined) {
-    throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
-  }
-  if (options.findingsFile !== undefined) {
-    let raw;
-    try {
-      raw = await readFile(options.findingsFile, "utf8");
-    } catch (err) {
-      throw parseError(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw parseError(`--findings-file "${options.findingsFile}" must contain valid JSON`);
-    }
-    return validateFindingsArray(parsed, "--findings-file");
-  }
-  if (options.findings === undefined) {
-    throw parseError("Either --findings <json> or --findings-file <path> is required");
-  }
-  return parseFindingsJson(options.findings);
+// mutually exclusive, identical validation either way. Shared plumbing lives
+// in _findings-input.mjs; this file's own validateFindingsArray is the
+// injected element validator.
+function resolveFindings(options) {
+  return resolveFindingsInput(options, { parseError, validate: validateFindingsArray });
 }
 /**
  * Validate + normalize the fan-out provenance object. Records how many distinct
