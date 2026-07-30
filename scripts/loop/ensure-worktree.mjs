@@ -177,13 +177,34 @@ function parseWorktreeList(porcelain) {
 // guard exists to catch a commit that happens in the WRONG tree. Best-effort by
 // design — a repo whose hooks directory is unwritable (or managed by another
 // tool) must still get its worktree.
+// A baked-in branch name is only useful if it names something real; git exits
+// non-zero for an unknown ref, which is exactly the signal we want.
+function branchOrRemoteRefExists(gitCommand, branch, cwd) {
+  if (typeof branch !== "string" || branch.trim().length === 0) return false;
+  const name = branch.trim();
+  for (const ref of [`refs/heads/${name}`, `refs/remotes/origin/${name}`]) {
+    try {
+      runGit(gitCommand, ["show-ref", "--verify", "--quiet", ref], cwd);
+      return true;
+    } catch {
+      // try the next candidate
+    }
+  }
+  return false;
+}
+
 function installGuard(gitCommand, root) {
   try {
     const gitDir = runGit(gitCommand, ["rev-parse", "--absolute-git-dir"], root).trim();
     // Resolve the default at install time and bake it into the hook: deriving
     // it in shell picks a stale local `main` in a `master` repo, guarding the
     // wrong branch while the real default stays open.
-    const defaultBranch = resolveBaseBranch(undefined, { cwd: root });
+    // resolveBaseBranch falls back to the literal "main" when it cannot detect
+    // anything, so a `trunk`-only repo would otherwise bake in a branch that
+    // does not exist — reporting success for a hook guarding nothing. Confirm
+    // the name resolves to a real ref; if not, install inert and say so.
+    const candidate = resolveBaseBranch(undefined, { cwd: root });
+    const defaultBranch = branchOrRemoteRefExists(gitCommand, candidate, root) ? candidate : null;
     let hooksPathOverride = null;
     try {
       hooksPathOverride = runGit(gitCommand, ["config", "--get", "core.hooksPath"], root).trim() || null;

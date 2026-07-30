@@ -229,6 +229,35 @@ test("refuses to install when core.hooksPath points elsewhere — a guard that c
   }
 });
 
+// Why ensure-worktree verifies the name resolves to a real ref before baking it
+// in: resolveBaseBranch falls back to the literal "main", and a hook guarding a
+// branch that does not exist protects nothing while reporting success.
+test("a hook baked with a branch that does not exist leaves the real default unguarded", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "default-branch-guard-trunk-"));
+  try {
+    git(dir, ["init", "--quiet", "--initial-branch=trunk"]);
+    git(dir, ["config", "user.email", "t@example.test"]);
+    git(dir, ["config", "user.name", "Guard Test"]);
+    fs.writeFileSync(path.join(dir, "seed.txt"), "seed\n");
+    git(dir, ["add", "seed.txt"]);
+    git(dir, ["commit", "--quiet", "--no-verify", "-m", "seed"]);
+    const gitDir = git(dir, ["rev-parse", "--absolute-git-dir"]).trim();
+
+    installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
+    assert.equal(
+      commitAttempt(dir, "on-trunk.txt").blocked,
+      false,
+      "a guard baked with the wrong branch cannot protect the real default — hence the ref-existence check before install",
+    );
+
+    // Baked with the branch that IS the default, the same repo is protected.
+    installDefaultBranchGuard({ gitDir, defaultBranch: "trunk" });
+    assert.equal(commitAttempt(dir, "on-trunk-2.txt").blocked, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("an unresolvable default branch installs INERT hooks rather than guessing which branch to protect", async () => {
   const { dir, gitDir } = await repoFixture();
   try {
