@@ -50,7 +50,8 @@ evidence it already has. For the case where Copilot was asked to re-review a
 head that already carries its clean submitted review, declined to engage, and
 left the pre_approval_gate unable to post.
 
-Refuses unless ALL of these hold (each is what makes the withdrawal safe):
+Withdraws only when ALL of these hold (each is what makes the withdrawal safe;
+the last two REFUSE with exit 1, while no pending request is an exit-0 no-op):
   - a Copilot review request is actually pending
   - Copilot has already SUBMITTED a review on this PR (a real prior review to
     fall back on — never used to skip a first review). Note the gate itself
