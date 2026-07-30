@@ -28,7 +28,7 @@ The two browser-driving stages (`ui-review-drive`, and the `visual-grill-capture
 stage the loop-grill uses) launch headless WebKit through Playwright, which is an
 **optional** peer dependency: a consumer who never runs a UI review carries none
 of its weight. Where one is run, install it once —
-`npm install --save-dev @playwright/test @axe-core/playwright`, then
+`npm install --save-dev @playwright/test`, then
 `npx playwright install webkit`. When either the package or the browser binary is
 missing, both stages stop with those instructions as the stop reason and carry no
 failure entries. That is deliberate: `ui-review-diagnose` turns every failure into
@@ -37,10 +37,12 @@ nothing downstream and a local setup gap cannot be charged to the PR. Other
 stopped results are not alike — the missing-recipe stop carries a `must-fix` that
 is only surfaced by threading it onward, so read `failures`, not `stopped`, when
 deciding what to report.
-`@axe-core/playwright` is optional in the same
-way and drives only the computed-a11y artifact: without it every `axe.json` is a
-deterministic JSON `null`, so a11y findings lose their grounding while the rest of
-the review still works.
+
+`@axe-core/playwright` is a separate opt-in
+(`npm install --save-dev @axe-core/playwright`) that drives only the
+computed-a11y artifact: without it every `axe.json` is a deterministic JSON
+`null`, so a11y findings lose their grounding while the rest of the review still
+works.
 
 The route's handoff envelope carries its stop rules and acceptance
 self-validation (defined in `handoff-envelope.mjs`): no product-code writes,

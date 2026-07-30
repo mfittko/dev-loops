@@ -74,15 +74,32 @@ export async function resolveShippedDirs(files, repoRootUrl) {
     // Normalize "./scripts" and "scripts//" to "scripts" so the entry compares
     // equal to a path.relative() result.
     const name = path.normalize(entry).replace(/[\\/]+$/, "");
-    if (entry.endsWith("/")) {
-      dirs.add(name);
+    // Stat even a trailing-slash entry: npm resolves both spellings against the
+    // disk either way, but in THIS repo's manifest convention a trailing slash
+    // is the author saying "directory" — so an entry that is actually a
+    // FILE on disk is an author error — surface it here as a clear failure
+    // rather than deferring to findEscapingImports' own dir-exists stat, which
+    // would fail later with a raw ENOTDIR and no pointer to the bad entry. An ENOENT trailing-
+    // slash entry still passes through as an absent dir (unbuilt output, say) —
+    // findEscapingImports already tolerates a shipped dir that isn't there yet.
+    // stat inside the try, classification below it: the catch is strictly an
+    // errno filter for stat, so the deliberate author-error throw can never be
+    // coupled to (or later swallowed by) a widened errno filter.
+    let stats = null;
+    try {
+      stats = await stat(new URL(name, repoRootUrl));
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
+    if (stats === null) {
+      if (entry.endsWith("/")) dirs.add(name); // absent dir: trust the declared trailing slash
       continue;
     }
-    try {
-      if ((await stat(new URL(name, repoRootUrl))).isDirectory()) dirs.add(name);
-    } catch (err) {
-      if (err.code !== "ENOENT") throw err; // absent entry ships nothing to scan
-    }
+    if (stats.isDirectory()) {
+      dirs.add(name);
+    } else if (entry.endsWith("/")) {
+      throw new Error(`package.json "files" entry ${JSON.stringify(entry)} has a trailing slash but is a file on disk, not a directory — drop the slash to ship it as a file, or point the entry at the intended directory`);
+    } // a plain (non-slash) entry that is a file ships a single file, not a dir to scan
   }
   return [...dirs];
 }
@@ -331,6 +348,24 @@ test("resolveShippedDirs classifies a files entry by what it is on disk, not by 
       // "./withslash/" normalizes onto "withslash" and is deduped, so the dir is
       // walked once rather than double-reporting every offender inside it.
       ["withslash", "noslash", "absent"],
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+// A trailing slash claims "this is a directory"; when the entry is actually a
+// file on disk, that claim is wrong and must fail loudly here rather than
+// surfacing later as a raw ENOTDIR from the dir-exists probe.
+test("resolveShippedDirs refuses a trailing-slash files entry that is a file on disk", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "shipped-dirs-file-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await writeFile(path.join(fixture, "README.md"), "# not a dir\n");
+
+    await assert.rejects(
+      () => resolveShippedDirs(["README.md/"], repoRootUrl),
+      /has a trailing slash but is a file on disk/,
     );
   } finally {
     await rm(fixture, { recursive: true, force: true });

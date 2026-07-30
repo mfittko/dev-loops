@@ -135,3 +135,24 @@ test("collectKeys descends through effects/preprocess wrappers at nested levels"
     "walk must descend through pipe/transform wrappers to reach nested keys",
   );
 });
+
+test("prerequisites snippet matches the runtime PLAYWRIGHT_MISSING_MESSAGE install pair", async () => {
+  const { PLAYWRIGHT_MISSING_MESSAGE } = await import("../../scripts/loop/ui-review-capture.mjs");
+  const doc = await readFile(DOC_PATH, "utf8");
+  // The runtime stop reason names the exact default install pair; the doc's
+  // default snippet must carry both commands verbatim so they cannot drift.
+  for (const cmd of ["npm install --save-dev @playwright/test", "npx playwright install webkit"]) {
+    assert.ok(PLAYWRIGHT_MISSING_MESSAGE.includes(cmd), `runtime message must cite: ${cmd}`);
+    assert.ok(doc.includes(cmd), `doc must cite: ${cmd}`);
+  }
+  // Axe must NOT be part of the default pair in either surface. The doc check
+  // pins the exact default line (anchored to end-of-line), so re-merging
+  // "@playwright/test @axe-core/playwright" into one command fails here — a
+  // bare substring check would pass on the pre-split combined command.
+  assert.ok(!PLAYWRIGHT_MISSING_MESSAGE.includes("@axe-core/playwright"));
+  assert.match(
+    doc,
+    /^npm install --save-dev @playwright\/test$/m,
+    "the doc's default install line must be @playwright/test alone (axe is a separate opt-in)",
+  );
+});
