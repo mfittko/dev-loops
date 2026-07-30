@@ -12,7 +12,6 @@ import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
 // — see _draft-transition.mjs's header comment for the deadlock that reference
 // caused (#1455).
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
-export { convertPrToDraft, markPrReady };
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: reconcile-draft-gate.mjs --repo <owner/name> --pr <number>
 Optional/manual recovery tool for an already non-draft PR when you want to
