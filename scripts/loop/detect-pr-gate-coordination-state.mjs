@@ -689,6 +689,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     ciStatus: context.snapshot?.ciStatus ?? null,
     copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount ?? 0,
     maxCopilotRounds,
+    // #1472: lets the evaluator's ROUND_CAP_REACHED handling independently
+    // confirm "zero unresolved threads" (the exhaustion note's own promise)
+    // rather than trusting a stale/compound lifecycleState label alone.
+    unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
     // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
     // sameHeadCleanConverged, so an outstanding request on the current head refuses

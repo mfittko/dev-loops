@@ -2571,3 +2571,220 @@ test("preApproval requireCi:false ignores a real CI failure at the pre_approval 
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
   assert.notEqual(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
 });
+
+// #1472: ROUND_CAP_REACHED is a compound "unresolved threads OR non-clean CI"
+// hard stop with no dedicated boundary of its own. When a caller independently
+// affirms zero unresolved threads and green CI on the current head — exactly
+// the conditions buildRoundExhaustionGateEvidenceNote's own text promises — the
+// evaluator must recommend run_pre_approval_gate AND grant it in
+// allowedNextActions (never just forbiddenActions-silent), matching the
+// nextAction/allowedNextActions/forbiddenActions agreement upsert-checkpoint-
+// verdict.mjs (which validates against allowedNextActions/forbiddenActions,
+// not nextAction) relies on.
+test("round_cap_reached with zero unresolved threads and green CI allows run_pre_approval_gate (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "success",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 0,
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  // Mirrors upsert-checkpoint-verdict.mjs's gate-entry validation exactly:
+  // `gateActionForbidden = coordination.forbiddenActions.includes(requestedGateAction)`.
+  assert.equal(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), false);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  assert.equal(result.draftGateAlreadySatisfied, true);
+  assert.match(result.reason, /round limit is exhausted/i);
+  assert.ok(result.gateEvidenceNote);
+  assert.match(result.gateEvidenceNote, /zero unresolved threads/i);
+});
+
+test("round_cap_reached with zero unresolved threads and credibly green CI allows run_pre_approval_gate (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "crediblyGreen",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 0,
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("round_cap_reached with clean current-head pre_approval AND clean draft_gate evidence reaches final approval (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "success",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 0,
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "29aa40b7", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
+});
+
+test("round_cap_reached with unresolved threads present stays blocked exactly as today (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "success",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 1,
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("round_cap_reached with non-green CI stays blocked exactly as today even with zero unresolved threads (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "failure",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 0,
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("round_cap_reached with an unknown unresolved-thread count fails closed and stays blocked (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "success",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    // unresolvedThreadCount intentionally omitted — unknown must not be
+    // coerced to "clean".
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+// #1472: general contract invariant, across every lifecycle state the
+// evaluator can be handed and a broad sweep of companion signals — the
+// synthesized nextAction must always be a member of allowedNextActions and
+// never a member of forbiddenActions. This is the general safety net the
+// round_cap_reached deadlock slipped through: a return statement naming
+// nextAction without granting it in allowedNextActions (or while forbidding
+// it) is exactly the shape upsert-checkpoint-verdict.mjs cannot act on.
+test("contract: nextAction is always allowed and never forbidden, across every lifecycle state (#1472)", () => {
+  const lifecycleStates = Object.values(STATE);
+  const ciStatuses = ["success", "failure", "pending", "none", "crediblyGreen"];
+  const draftGateFixtures = [
+    gate({ visible: false }),
+    gate({ visible: true, headSha: "abc12345", verdict: "clean" }),
+  ];
+  const preApprovalGateFixtures = [
+    gate({ visible: false }),
+    gate({ visible: true, headSha: "abc12345", verdict: "clean" }),
+  ];
+  const unresolvedThreadCounts = [0, 1, undefined];
+  const prDrafts = [true, false];
+  const roundCapCombos = [
+    { copilotReviewRoundCount: 0, maxCopilotRounds: 5 },
+    { copilotReviewRoundCount: 5, maxCopilotRounds: 5 },
+  ];
+
+  let checked = 0;
+  for (const lifecycleState of lifecycleStates) {
+    for (const ciStatus of ciStatuses) {
+      for (const draftGateFixture of draftGateFixtures) {
+        for (const preApprovalGateFixture of preApprovalGateFixtures) {
+          for (const unresolvedThreadCount of unresolvedThreadCounts) {
+            for (const prDraft of prDrafts) {
+              for (const { copilotReviewRoundCount, maxCopilotRounds } of roundCapCombos) {
+                const result = evaluatePrGateCoordination({
+                  pr: 1,
+                  currentHeadSha: "abc123456789",
+                  prDraft,
+                  lifecycleState,
+                  ciStatus,
+                  copilotReviewRoundCount,
+                  maxCopilotRounds,
+                  unresolvedThreadCount,
+                  draftGate: draftGateFixture,
+                  draftGateMarker: draftGateFixture.visible
+                    ? { ...draftGateFixture, contractComplete: true }
+                    : draftGateFixture,
+                  preApprovalGate: preApprovalGateFixture,
+                  preApprovalGateMarker: preApprovalGateFixture.visible
+                    ? { ...preApprovalGateFixture, contractComplete: true }
+                    : preApprovalGateFixture,
+                });
+                checked += 1;
+                const context = JSON.stringify({ lifecycleState, ciStatus, unresolvedThreadCount, prDraft, copilotReviewRoundCount, maxCopilotRounds });
+                assert.ok(
+                  result.allowedNextActions.includes(result.nextAction),
+                  `nextAction "${result.nextAction}" missing from allowedNextActions for ${context}`,
+                );
+                assert.ok(
+                  !result.forbiddenActions.includes(result.nextAction),
+                  `nextAction "${result.nextAction}" present in forbiddenActions for ${context}`,
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.ok(checked > 0);
+});
