@@ -415,10 +415,15 @@ invisible to the CLI — mandatory-angle coverage is enforced downstream by
 `upsert-checkpoint-verdict.mjs`.) The render budget applies ONLY to the
 visible-comment shape (`--out`): a round too large to render even at minimum
 summary length still writes the ledger (`--ledger-out`) in FULL and exits 0 —
-`--out` is replaced with a single budget-marker section naming the omitted
-finding count and severity breakdown, and the result carries
-`commentBudgetExceeded: true`, so the disposition ledger is never lost to a
-render-budget overflow.
+each angle's findings in `--out` are replaced with ONE synthetic marker
+finding naming that angle's omitted count and severity breakdown, keeping the
+REAL angle set and each angle's REAL verdict intact (never collapsed into one
+foreign section, which would fail `upsert-checkpoint-verdict.mjs`'s
+mandatory-angle/pool validation). The result carries `commentBudgetExceeded:
+true`, so the disposition ledger is never lost to a render-budget overflow.
+The posted `**Findings summary:**` digest still counts these marker lines,
+not real findings, and undercounts on an over-budget round — the marker text
+and the ledger carry the true numbers.
 
 Consolidation:
 
