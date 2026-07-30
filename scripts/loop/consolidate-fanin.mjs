@@ -38,14 +38,20 @@
  * round too large to render even at minimum summary length still writes a
  * COMPLETE --ledger-out and exits 0; each angle's findings in "findingsJson"/
  * --out are replaced with ONE synthetic finding naming that angle's omitted
- * count and severity breakdown (never a silently-shrunk subset) — the real
+ * count and severity breakdown (never a half-truncated summary) — the real
  * angle set and each angle's real verdict are PRESERVED, never collapsed into
  * a foreign section, so upsert-checkpoint-verdict.mjs's fanout_fanin mandatory-
- * angle/pool validation still accepts the posted verdict. The result carries
- * "commentBudgetExceeded": true and "severityCounts" (always the true,
- * unbudgeted totals) is what a caller should pass through as
- * upsert-checkpoint-verdict.mjs's --findings-severity-counts so its posted
- * digest reflects the real round size even when the rendered block cannot.
+ * angle/pool validation still accepts the posted verdict. If even one marker
+ * line per angle still does not fit, the marker shortens to a bare
+ * omitted-count line; if EVEN THAT does not fit (a round with far more real
+ * angles than the default fan-out cap), "findingsJson"/--out is withheld
+ * (empty/not written) rather than emit a shape the renderer would reject.
+ * Every one of these cases sets "commentBudgetExceeded": true and still exits
+ * 0. NOTE: upsert-checkpoint-verdict.mjs's posted "Findings summary:" digest
+ * is derived solely from "findingsJson", so on an over-budget round it counts
+ * MARKER lines, not real findings, and undercounts — "findings"/--ledger-out
+ * and the marker text's own severity breakdown carry the true numbers; there
+ * is currently no flag that corrects the digest itself.
  */
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -79,7 +85,9 @@ Optional:
                                  --findings-json accepts. Each angle's findings are replaced with
                                  one budget-marker finding (angle set + per-angle verdict kept real)
                                  when the round is over the gate-comment render budget (see
-                                 "commentBudgetExceeded" below) — --ledger-out is unaffected.
+                                 "commentBudgetExceeded" below); WITHHELD (not written) on the rare
+                                 round wide enough that even that marker cannot fit. --ledger-out is
+                                 unaffected either way.
   --ledger-out <path>            Write the flat "findings" shape (below) to this path as JSON — the
                                  exact --findings-file input write-gate-findings-log.mjs and
                                  post-gate-findings.mjs accept
@@ -97,19 +105,25 @@ Output (stdout, JSON):
   angles with an empty findings array) — pass --out's file straight to
   upsert-checkpoint-verdict.mjs's --findings-json. "findings" is the FLAT per-finding shape — pass
   --ledger-out's file straight to write-gate-findings-log.mjs/post-gate-findings.mjs's
-  --findings-file, and is ALWAYS complete (never budgeted). "severityCounts" is ALWAYS the true,
-  unbudgeted totals — pass it straight to upsert-checkpoint-verdict.mjs's --findings-severity-counts
-  so the posted digest reflects the real round size even when "findingsJson" cannot. Every output
-  finding's "disposition" is DERIVED from severity (accepted-for-fix for a blocking severity,
-  deferred otherwise) — an input finding's own "disposition" is never honored. A reviewer-provided
-  "recommendation" is carried through to both shapes unchanged. A finding "summary" or
-  "recommendation" longer than 2000 chars is truncated with a plain " …" suffix (never a
-  "[truncated N chars]" marker), and "findingsJson" (--out) alone is budgeted against
-  upsert-checkpoint-verdict.mjs's rendered-block bound (summaries shrunk evenly first; a round still
-  over budget at minimum summary length replaces EACH angle's findings with one synthetic finding
-  naming that angle's omitted count and severity breakdown — the real angle set and each angle's
-  real verdict are kept intact so the posted verdict's mandatory-angle/pool validation still passes
-  — sets "commentBudgetExceeded": true, and still exits 0; "findings"/--ledger-out is unaffected).
+  --findings-file, and is ALWAYS complete (never budgeted). Every output finding's "disposition" is
+  DERIVED from severity (accepted-for-fix for a blocking severity, deferred otherwise) — an input
+  finding's own "disposition" is never honored, including on a budget-marker finding (below). A
+  reviewer-provided "recommendation" is carried through to both shapes unchanged. A finding
+  "summary" or "recommendation" longer than 2000 chars is truncated with a plain " …" suffix (never
+  a "[truncated N chars]" marker), and "findingsJson" (--out) alone is budgeted against
+  upsert-checkpoint-verdict.mjs's rendered-block bound: summaries are first shrunk evenly; a round
+  still over budget at minimum summary length instead replaces EACH angle's findings with ONE
+  synthetic marker finding naming that angle's omitted count and severity breakdown (never a
+  half-truncated summary) — the real angle set and each angle's real verdict are kept intact so the
+  posted verdict's mandatory-angle/pool validation still passes. If even one marker line per angle
+  still does not fit, the marker text shortens to a bare omitted-count line; if EVEN THAT does not
+  fit (this many real angles is far beyond the default fan-out cap), "findingsJson" is emitted empty
+  (--out, if given, is withheld) rather than a shape the renderer would reject. Every one of these
+  cases sets "commentBudgetExceeded": true and still exits 0; "findings"/--ledger-out is always
+  unaffected. NOTE: upsert-checkpoint-verdict.mjs's posted "Findings summary:" digest is derived
+  solely from "findingsJson", so on an over-budget round it counts marker lines, not real findings,
+  and undercounts — "findings"/--ledger-out and the marker text's own breakdown carry the true
+  numbers.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
@@ -139,14 +153,12 @@ function truncateFindingText(value, limit = MAX_FINDING_TEXT_LENGTH) {
 }
 
 // Approximate the renderer's output: one line per angle + one line per finding
-// (severity + summary + file:line + disposition). Shrink the longest summaries
-// evenly until the estimate fits the budget — deterministic, no consumer import.
-// Returns whether the (mutated in place) findingsJson now fits the budget; the
-// caller decides what to do when the floor is reached and it still does not
-// (see buildBudgetMarkedFindingsJson below) — this function never throws, so a
-// round too large to render never blocks the durable ledger write.
-function fitFindingsToRenderBudget(findingsJson) {
-  const estimate = () => findingsJson.reduce((sum, a) => {
+// (severity + summary + file:line + disposition). Pure (never mutates) — used
+// both by the shrink loop below and by the marker-shape decisions in
+// consolidateGateFanin, which must measure a candidate shape WITHOUT letting
+// the shrink loop mutate its (already-final) marker summary text.
+function estimateRenderSize(findingsJson) {
+  return findingsJson.reduce((sum, a) => {
     let s = sum + a.angle.length + a.verdict.length + 8;
     for (const f of a.findings) {
       s += (f.severity?.length ?? 0) + (f.summary?.length ?? 0)
@@ -154,8 +166,17 @@ function fitFindingsToRenderBudget(findingsJson) {
     }
     return s;
   }, 0);
+}
+
+// Shrink the longest summaries evenly until the estimate fits the budget —
+// deterministic, no consumer import. Returns whether the (mutated in place)
+// findingsJson now fits the budget; the caller decides what to do when the
+// floor is reached and it still does not (see buildBudgetMarkedFindingsJson
+// below) — this function never throws, so a round too large to render never
+// blocks the durable ledger write.
+function fitFindingsToRenderBudget(findingsJson) {
   let cap = MAX_FINDING_TEXT_LENGTH;
-  while (estimate() > RENDERED_BLOCK_BUDGET && cap > 40) {
+  while (estimateRenderSize(findingsJson) > RENDERED_BLOCK_BUDGET && cap > 40) {
     cap = Math.floor(cap / 2);
     for (const a of findingsJson) {
       for (const f of a.findings) {
@@ -163,13 +184,8 @@ function fitFindingsToRenderBudget(findingsJson) {
       }
     }
   }
-  return estimate() <= RENDERED_BLOCK_BUDGET;
+  return estimateRenderSize(findingsJson) <= RENDERED_BLOCK_BUDGET;
 }
-
-// Rank used to pick the synthetic marker finding's own severity: the highest
-// severity actually present in the angle's dropped findings, so a must-fix
-// angle still surfaces as must-fix even though its findings are collapsed.
-const SEVERITY_PRIORITY = ["must-fix", "worth-fixing-now", "defer"];
 
 // Floor reached and still over budget: the fan-in has too many findings to
 // render in one gate comment no matter how short each summary gets. Collapse
@@ -181,22 +197,35 @@ const SEVERITY_PRIORITY = ["must-fix", "worth-fixing-now", "defer"];
 // validates the posted angle set against the gate's configured mandatory
 // angles/pool, so a synthetic angle name or a missing real one would make the
 // verdict itself unpostable, which is the exact failure this exists to avoid.
-// `verbose` states the omitted count and severity breakdown; when even that
-// text still does not fit at the minimum summary cap, the caller retries with
-// `verbose: false` for a bare "N omitted — see ledger" line instead of
-// throwing.
+// `verbose` states the omitted count and severity breakdown; the caller picks
+// `verbose: false` for a bare "N omitted — see ledger" line when the verbose
+// text does not fit. Never partially truncates the marker text itself — the
+// caller (not this function) runs the fit check and chooses whole-sentence
+// verbose vs. whole-sentence bare, so a marker is always lossless or bare,
+// never a mangled hybrid.
 function buildBudgetMarkedFindingsJson(findingsJson, { verbose }) {
   return findingsJson.map((a) => {
     if (a.findings.length === 0) return a; // clean angle: nothing omitted
-    const bySeverity = { "must-fix": 0, "worth-fixing-now": 0, defer: 0 };
+    const bySeverity = Object.fromEntries([...VALID_SEVERITIES].map((s) => [s, 0]));
     for (const f of a.findings) {
       if (f.severity in bySeverity) bySeverity[f.severity] += 1;
     }
-    const severity = SEVERITY_PRIORITY.find((s) => bySeverity[s] > 0) ?? a.findings[0].severity;
+    // Represent the angle by its own highest-severity dropped finding — same
+    // severity+disposition pairing consolidateFanin already derived, so the
+    // marker's "disposition" still matches every other findingsJson finding's
+    // severity-derived disposition (accepted-for-fix for a blocking severity,
+    // deferred otherwise).
+    const representative = [...VALID_SEVERITIES]
+      .map((s) => a.findings.find((f) => f.severity === s))
+      .find(Boolean) ?? a.findings[0];
     const summary = verbose
       ? `${a.findings.length} finding(s) omitted from this comment (must-fix: ${bySeverity["must-fix"]}, worth-fixing-now: ${bySeverity["worth-fixing-now"]}, defer: ${bySeverity.defer}) — see the disposition ledger`
       : `${a.findings.length} omitted — see ledger`;
-    return { angle: a.angle, verdict: a.verdict, findings: [{ severity, summary }] };
+    return {
+      angle: a.angle,
+      verdict: a.verdict,
+      findings: [{ severity: representative.severity, summary, disposition: representative.disposition }],
+    };
   });
 }
 
@@ -520,14 +549,27 @@ export async function consolidateGateFanin(options) {
 
   const fitsRenderBudget = fitFindingsToRenderBudget(findingsJson);
   let commentFindingsJson = findingsJson;
+  let withheldOut = false;
   if (!fitsRenderBudget) {
-    commentFindingsJson = buildBudgetMarkedFindingsJson(findingsJson, { verbose: true });
-    // The per-angle marker summaries themselves go through the same shrink
-    // loop; a round with enough angles can still be over budget even with one
-    // marker line each — degrade to the bare form rather than throw.
-    if (!fitFindingsToRenderBudget(commentFindingsJson)) {
-      commentFindingsJson = buildBudgetMarkedFindingsJson(findingsJson, { verbose: false });
-      fitFindingsToRenderBudget(commentFindingsJson);
+    // Never run the mutating shrink loop on marker text: it truncates
+    // mid-sentence, losing the breakdown/ledger pointer. Each candidate is
+    // whole-sentence (verbose) or whole-sentence (bare) — measured, not
+    // shrunk — so the emitted marker is always lossless or bare, never a
+    // half-truncated hybrid.
+    const verboseMarked = buildBudgetMarkedFindingsJson(findingsJson, { verbose: true });
+    const bareMarked = buildBudgetMarkedFindingsJson(findingsJson, { verbose: false });
+    if (estimateRenderSize(verboseMarked) <= RENDERED_BLOCK_BUDGET) {
+      commentFindingsJson = verboseMarked;
+    } else if (estimateRenderSize(bareMarked) <= RENDERED_BLOCK_BUDGET) {
+      commentFindingsJson = bareMarked;
+    } else {
+      // Structural floor: this many real angles (far beyond the default
+      // fan-out cap) means even ONE bare "N omitted" line per angle cannot
+      // fit — no per-angle shape can, no matter how short the text gets.
+      // Withhold --out rather than emit one the renderer would still reject;
+      // the ledger (written below, always complete) is the durable record.
+      commentFindingsJson = [];
+      withheldOut = true;
     }
   }
 
@@ -542,7 +584,7 @@ export async function consolidateGateFanin(options) {
     ...(fitsRenderBudget ? {} : { commentBudgetExceeded: true }),
   };
 
-  if (options.out !== undefined) {
+  if (options.out !== undefined && !withheldOut) {
     await mkdir(path.dirname(options.out), { recursive: true });
     await writeFile(options.out, `${JSON.stringify(commentFindingsJson, null, 2)}\n`, "utf8");
   }
