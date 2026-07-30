@@ -16,6 +16,18 @@ const STATUS_CONTEXT_SUCCESS_STATES = new Set(["SUCCESS"]);
  */
 export const LOOP_DERIVED_CI_CHECK_NAME = "gate-evidence";
 
+/**
+ * The same workflow ALSO surfaces as a check run under its job id
+ * (`gate-evidence-runner`) beside the commit status named above, and both are
+ * the loop's own derived signal. Excluding only the status context left the
+ * runner's conclusion gating the loop's own pre_approval step: once the
+ * workflow gained job-level concurrency, a superseded run is cancelled as
+ * normal operation, and a cancelled run is deliberately NOT treated as green
+ * (see normalizeStatusCheckRollupStatus) — so one routine cancellation made
+ * the whole head read "none" and the loop waited on CI forever.
+ */
+export const LOOP_DERIVED_CI_CHECK_NAMES = Object.freeze([LOOP_DERIVED_CI_CHECK_NAME, "gate-evidence-runner"]);
+
 function checkEntryName(entry) {
   if (typeof entry?.name === "string" && entry.name.length > 0) return entry.name;
   if (typeof entry?.context === "string" && entry.context.length > 0) return entry.context;
@@ -28,15 +40,16 @@ function checkEntryName(entry) {
  * both use `.name` (check-runs also use `.context` for legacy StatusContext).
  *
  * @param {Array<object>} entries
- * @param {string} targetName
+ * @param {string|Array<string>} targetName One name, or several to match.
  * @returns {{ matched: Array<object>, rest: Array<object> }}
  */
 export function partitionEntriesByCheckName(entries, targetName) {
   const list = Array.isArray(entries) ? entries : [];
+  const targets = new Set(Array.isArray(targetName) ? targetName : [targetName]);
   const matched = [];
   const rest = [];
   for (const entry of list) {
-    (checkEntryName(entry) === targetName ? matched : rest).push(entry);
+    (targets.has(checkEntryName(entry)) ? matched : rest).push(entry);
   }
   return { matched, rest };
 }
@@ -292,7 +305,8 @@ export function normalizeHeadScopedCiContract({
 
 /**
  * Derive a loop-safe CI status from a PR `statusCheckRollup` snapshot: the
- * `LOOP_DERIVED_CI_CHECK_NAME` entry (`gate-evidence`) is excluded from the
+ * `LOOP_DERIVED_CI_CHECK_NAMES` entries (the `gate-evidence` status and the
+ * workflow's own `gate-evidence-runner` check run) are excluded from the
  * status computation before it can block, and surfaced separately so a
  * genuinely failing check right beside it can never be masked. Every reason
  * gate-evidence can be red (missing draft_gate/pre_approval evidence,
@@ -305,7 +319,7 @@ export function normalizeHeadScopedCiContract({
  * @returns {{ status: "success"|"failure"|"pending"|"none", excludedFailureDetails: Array<string> }}
  */
 export function deriveLoopCiStatusFromRollup(rollup) {
-  const { matched, rest } = partitionEntriesByCheckName(rollup, LOOP_DERIVED_CI_CHECK_NAME);
+  const { matched, rest } = partitionEntriesByCheckName(rollup, LOOP_DERIVED_CI_CHECK_NAMES);
   const status = normalizeStatusCheckRollupStatus(rest);
   const excludedFailureDetails = matched.length > 0 && normalizeStatusCheckRollupStatus(matched) === "failure"
     ? [LOOP_DERIVED_CI_CHECK_NAME]
