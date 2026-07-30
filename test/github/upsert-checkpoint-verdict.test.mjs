@@ -2312,6 +2312,130 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
   }
 });
 
+test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict instead of hanging on an unsettled top-level await (#1455)", async () => {
+  // REGRESSION for #1455: this must run as a REAL CLI subprocess (real spawn,
+  // real `import.meta.url` top-level `await main()`), NOT the in-process
+  // makeGhMock harness the local `runNode` helper in this file uses for most
+  // tests — the bug only manifests when upsert-checkpoint-verdict.mjs is itself
+  // the ESM entry point.
+  //
+  // Root cause: postDraftGateViaDraftTransition dynamically imported
+  // "./reconcile-draft-gate.mjs", which statically imports upsertCheckpointVerdict
+  // BACK from this very file — a circular module reference. When this file is the
+  // CLI entry point (still suspended on its own top-level `await main()`), that
+  // dynamic import of a module which circularly re-imports the still-evaluating
+  // entry module deadlocks Node's ESM linker: the import() promise never settles,
+  // main() never returns, and the process exits 13 with "Detected unsettled
+  // top-level await" — WITHOUT posting the gate verdict comment.
+  //
+  // Repro shape (exact): a ready (non-draft) PR with NO prior draft_gate marker,
+  // clean pre_approval_gate evidence on the current head (drives coordination to
+  // RECONCILE_DRAFT_GATE), `--gate draft_gate`, `--execution-mode
+  // inline_single_agent`, current head SHA, and a real (non-empty) run id (the
+  // production default this file's tests otherwise set to "" — see the `runNode`
+  // helper above — which happens to also skip the unrelated verifyComment path).
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-1455-unsettled-await-"));
+
+  try {
+    const headSha = "abc1234000000000000000000000000000000000";
+    const cleanPreApprovalComment = {
+      id: 501,
+      body: [
+        "### Gate review: `pre_approval_gate`",
+        "",
+        `**Reviewed head SHA:** \`${headSha}\``,
+        "**Verdict:** clean",
+        "**Execution mode:** inline_single_agent",
+        "",
+        "**Findings summary:** no issues found",
+        "",
+        "**Next action:** await final human approval",
+      ].join("\n"),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-501",
+      updated_at: "2026-05-30T17:00:00Z",
+    };
+    const copilotReviewOnHead = {
+      id: 1,
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      submittedAt: "2026-05-30T16:00:00Z",
+      commit: { oid: headSha },
+    };
+    const prFacts = (isDraft) => JSON.stringify({
+      number: 17,
+      state: "OPEN",
+      isDraft,
+      headRefOid: headSha,
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+      body: DEFAULT_TEST_PR_BODY,
+      title: "Test PR",
+      closingIssuesReferences: [],
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      reviews: [copilotReviewOnHead],
+    }) + "\n";
+
+    const { env, ghLogPath } = await writeGhStubHelper(tempDir, [
+      // --- coordination pass 1 (isDraft: false -> reconcile) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: headSha }) + "\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
+      // --- resolve PR node id + convert to draft (the self-heal transition) ---
+      { assertArgs: ["api", "graphql", "name=repo", "number=17"], stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_node","isDraft":false}}}}\n' },
+      { assertArgs: ["api", "graphql", "pullRequestId=PR_node"], stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_node","isDraft":true}}}}\n' },
+      // --- coordination pass 2 (isDraft: true -> posts normally) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(true) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: headSha }) + "\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
+      // --- post the draft_gate verdict + post-creation verify + restore ready ---
+      { assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"], stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-900"}\n' },
+      { assertArgs: ["api", "repos/owner/repo/issues/comments/900"], stdout: '{"id":900}\n' },
+      { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "{}\n" },
+    ], { matchMode: "claims", logCalls: true });
+    // A real (non-empty) run id — the production default — activates the
+    // post-creation verifyComment call above; it is orthogonal to the deadlock
+    // but matches the reported repro shape exactly.
+    env.DEVLOOPS_RUN_ID = "test-run-1455-real";
+
+    const result = await runNodeHelper(scriptPath, [
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent",
+      "--inline-reason", "single-agent inline review (test)",
+    ], { env, cwd: tempDir });
+
+    // Pre-fix this exits 13 with "Detected unsettled top-level await" on stderr
+    // and empty stdout (no comment posted). Fixed: exits 0 with the created
+    // comment in the JSON envelope.
+    assert.equal(result.code, 0, `expected exit 0, got ${result.code}. stderr: ${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /unsettled top-level await/i);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.action, "created");
+    assert.equal(payload.gate, "draft_gate");
+    assert.equal(payload.draftTransition, true);
+    assert.equal(payload.commentId, 900);
+
+    const ghLog = await readFile(ghLogPath, "utf8");
+    assert.ok(/convertPullRequestToDraft/.test(ghLog), "expected a convertPullRequestToDraft mutation");
+    assert.ok(/\["pr","ready","17"/.test(ghLog.replace(/\s/g, "")), "expected a `pr ready` call to restore the ready state");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict already-satisfied no-op sources executionMode from the gate marker (#891 review)", async () => {
   // The already-satisfied no-op must source executionMode from the gate MARKER
   // summary (which carries executionMode), not the strict COMMENT summary (which

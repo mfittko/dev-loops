@@ -6,6 +6,12 @@ import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
 import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
+// convertPrToDraft/markPrReady live in their own module (no dependency on this
+// file or upsert-checkpoint-verdict.mjs) so both callers can import them
+// statically without a circular reference back to upsert-checkpoint-verdict.mjs
+// — see _draft-transition.mjs's header comment for the deadlock that reference
+// caused (#1455).
+import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: reconcile-draft-gate.mjs --repo <owner/name> --pr <number>
 Optional/manual recovery tool for an already non-draft PR when you want to
@@ -84,91 +90,6 @@ export function parseReconcileDraftGateCliArgs(argv) {
     throw parseError(error instanceof Error ? error.message : String(error));
   }
   return options;
-}
-const CONVERT_TO_DRAFT_MUTATION = [
-  "mutation($pullRequestId:ID!) {",
-  "  convertPullRequestToDraft(input: {pullRequestId: $pullRequestId}) {",
-  "    pullRequest {",
-  "      id",
-  "      isDraft",
-  "    }",
-  "  }",
-  "}",
-].join("\n");
-const PR_ID_QUERY = [
-  "query($owner:String!, $name:String!, $number:Int!) {",
-  "  repository(owner: $owner, name: $name) {",
-  "    pullRequest(number: $number) {",
-  "      id",
-  "      isDraft",
-  "    }",
-  "  }",
-  "}",
-].join("\n");
-async function resolvePrNodeId({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
-  const [owner, name] = repo.split("/");
-  const result = await runChild(ghCommand, [
-    "api", "graphql",
-    "-f", "query=" + PR_ID_QUERY,
-    "-f", `owner=${owner}`,
-    "-f", `name=${name}`,
-    "-F", `number=${pr}`,
-  ], env);
-  if (result.code !== 0) {
-    throw new Error(
-      `Failed to resolve PR node ID for #${pr}: ${result.stderr.trim() || `exit code ${result.code}`}`
-    );
-  }
-  const payload = parseJsonText(result.stdout, {
-    label: `gh api graphql (resolvePrNodeId for #${pr})`,
-  });
-  const prData = payload?.data?.repository?.pullRequest;
-  if (!prData?.id) {
-    throw new Error(`Could not resolve PR node ID for #${pr}`);
-  }
-  return { id: prData.id, isDraft: prData.isDraft };
-}
-export async function convertPrToDraft({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
-  const resolvedPr = await resolvePrNodeId({ repo, pr }, { env, ghCommand, runChild });
-  if (resolvedPr.isDraft === true) {
-    return {
-      ...resolvedPr,
-      alreadyDraft: true,
-    };
-  }
-  const result = await runChild(ghCommand, [
-    "api", "graphql",
-    "-f", "query=" + CONVERT_TO_DRAFT_MUTATION,
-    "-F", `pullRequestId=${resolvedPr.id}`,
-  ], env);
-  if (result.code !== 0) {
-    throw new Error(
-      `Failed to convert PR #${pr} to draft: ${result.stderr.trim() || `exit code ${result.code}`}`
-    );
-  }
-  const payload = parseJsonText(result.stdout, {
-    label: `gh api graphql (convertPullRequestToDraft #${pr})`,
-  });
-  const converted = payload?.data?.convertPullRequestToDraft?.pullRequest;
-  if (converted?.isDraft !== true) {
-    throw new Error(`PR #${pr} was not set to draft state after mutation`);
-  }
-  return {
-    ...converted,
-    alreadyDraft: false,
-  };
-}
-export async function markPrReady({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
-  const result = await runChild(ghCommand, [
-    "pr", "ready", String(pr),
-    "--repo", repo,
-  ], env);
-  if (result.code !== 0) {
-    throw new Error(
-      `Failed to mark PR #${pr} ready: ${result.stderr.trim() || `exit code ${result.code}`}`
-    );
-  }
-  return true;
 }
 function normalizeCheckBucket(check = {}) {
   const bucket = typeof check.bucket === "string" ? check.bucket.trim().toLowerCase() : "";
