@@ -6,9 +6,10 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
+import { resolveFindingsInput } from "./_findings-input.mjs";
 import { checkFanoutAngleCoverage, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
-const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> --findings <json> [--tmp-root <path>]
+const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
   --repo <owner/name>
@@ -17,6 +18,8 @@ Required:
   --head-sha <sha>              FULL head commit SHA (40 or 64 hex chars) — a short prefix is rejected (it would write an unfindable ledger)
   --verdict <clean|findings_present|blocked>
   --findings <json>              JSON array of finding objects with severity, disposition, angle, and summary
+  --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
+                                 (mutually exclusive with --findings; identical validation)
 Optional:
   --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead? }] }
                                  carriedFromHead (7-64 hex) marks an angle whose clean verdict was carried forward from that prior head (reviewer stays the prior reviewer)
@@ -42,28 +45,25 @@ function normalizeVerdict(value) {
 }
 const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
 const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "disputed", "operator_acknowledged"]);
-function parseFindingsJson(raw) {
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw parseError("--findings must be valid JSON");
-  }
+// Validate + normalize a parsed --findings / --findings-file JSON array. Shared
+// by both flags so they carry identical validation — flagLabel only changes the
+// error-message prefix (--findings vs --findings-file).
+function validateFindingsArray(parsed, flagLabel) {
   if (!Array.isArray(parsed)) {
-    throw parseError("--findings must be a JSON array");
+    throw parseError(`${flagLabel} must be a JSON array`);
   }
   return parsed.map((f, i) => {
     if (!f || typeof f !== "object") {
-      throw parseError(`--findings[${i}] must be an object`);
+      throw parseError(`${flagLabel}[${i}] must be an object`);
     }
     if (!f.severity || !VALID_SEVERITIES.has(f.severity)) {
-      throw parseError(`--findings[${i}].severity must be one of: must-fix, worth-fixing-now, defer`);
+      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, defer`);
     }
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
-      throw parseError(`--findings[${i}].angle is required`);
+      throw parseError(`${flagLabel}[${i}].angle is required`);
     }
     if (!f.summary || typeof f.summary !== "string" || f.summary.trim().length === 0) {
-      throw parseError(`--findings[${i}].summary is required`);
+      throw parseError(`${flagLabel}[${i}].summary is required`);
     }
     const entry = {
       severity: f.severity,
@@ -72,29 +72,44 @@ function parseFindingsJson(raw) {
     };
     if ("disposition" in f) {
       if (typeof f.disposition !== "string" || f.disposition.trim().length === 0) {
-        throw parseError(`--findings[${i}].disposition must be a non-empty string`);
+        throw parseError(`${flagLabel}[${i}].disposition must be a non-empty string`);
       }
       const disp = f.disposition.trim();
       if (!VALID_DISPOSITIONS.has(disp)) {
-        throw parseError(`--findings[${i}].disposition must be one of: accepted-for-fix, deferred, disputed, operator_acknowledged`);
+        throw parseError(`${flagLabel}[${i}].disposition must be one of: accepted-for-fix, deferred, disputed, operator_acknowledged`);
       }
       entry.disposition = disp;
+    } else if (f.severity === "defer") {
+      // A non-blocking defer finding with no explicit disposition defaults to
+      // "deferred" so a hand-authored (or consolidate-fanin.mjs-produced) array
+      // need not repeat the obvious disposition for every defer-severity entry.
+      // Explicit dispositions (including an explicit "deferred") always keep the
+      // validation above unchanged.
+      entry.disposition = "deferred";
     }
     if (Array.isArray(f.files)) {
       entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0);
     }
     if ("resolvedIn" in f) {
       if (typeof f.resolvedIn !== "string" || f.resolvedIn.trim().length === 0) {
-        throw parseError(`--findings[${i}].resolvedIn must be a non-empty string`);
+        throw parseError(`${flagLabel}[${i}].resolvedIn must be a non-empty string`);
       }
       const sha = f.resolvedIn.trim();
       if (!/^[0-9a-f]{7,64}$/i.test(sha)) {
-        throw parseError(`--findings[${i}].resolvedIn must be a 7-64 char hex SHA`);
+        throw parseError(`${flagLabel}[${i}].resolvedIn must be a 7-64 char hex SHA`);
       }
       entry.resolvedIn = sha;
     }
     return entry;
   });
+}
+// Resolve the findings array from either --findings (inline JSON) or
+// --findings-file (a path to a file containing the same JSON array) —
+// mutually exclusive, identical validation either way. Shared plumbing lives
+// in _findings-input.mjs; this file's own validateFindingsArray is the
+// injected element validator.
+function resolveFindings(options) {
+  return resolveFindingsInput(options, { parseError, validate: validateFindingsArray });
 }
 /**
  * Validate + normalize the fan-out provenance object. Records how many distinct
@@ -218,6 +233,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       "head-sha": { type: "string" },
       verdict: { type: "string" },
       findings: { type: "string" },
+      "findings-file": { type: "string" },
       provenance: { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -233,6 +249,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     headSha: undefined,
     verdict: undefined,
     findings: undefined,
+    findingsFile: undefined,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -275,6 +292,14 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.findings = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "findings-file") {
+      const findingsFile = requireTokenValue(token, parseError).trim();
+      if (findingsFile.length === 0) {
+        throw parseError("--findings-file requires a non-empty path");
+      }
+      options.findingsFile = findingsFile;
+      continue;
+    }
     if (token.name === "provenance") {
       options.provenance = requireTokenValue(token, parseError);
       continue;
@@ -286,10 +311,16 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  const missing = ["repo", "pr", "gate", "headSha", "verdict", "findings"]
+  const missing = ["repo", "pr", "gate", "headSha", "verdict"]
     .filter(k => options[k] === undefined);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
+  }
+  if (options.findings === undefined && options.findingsFile === undefined) {
+    throw parseError("Missing required arguments: findings (pass --findings <json> or --findings-file <path>)");
+  }
+  if (options.findings !== undefined && options.findingsFile !== undefined) {
+    throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
   }
   return options;
 }
@@ -307,7 +338,7 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
   return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
-  const findings = parseFindingsJson(options.findings);
+  const findings = await resolveFindings(options);
   const provenance = options.provenance === undefined ? undefined : parseProvenanceJson(options.provenance);
   // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
   // angles) only applies when provenance is actually recorded — provenance

@@ -602,7 +602,10 @@ function groupFlatFindingsByAngle(input) {
 // Returns null when the input is empty/non-array (caller falls back to the
 // free-text summary). THROWS when the input is non-empty but matches NEITHER
 // shape, so a wrong input shape can never silently render an all-clean verdict.
-function normalizeStructuredFindings(input) {
+// Exported so tests can drive the exact same parsing/validation the
+// --findings-json code path below uses, end to end, without spawning a child
+// process (see test/loop/consolidate-fanin.test.mjs).
+export function normalizeStructuredFindings(input) {
   if (!Array.isArray(input) || input.length === 0) {
     return null;
   }

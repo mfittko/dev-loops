@@ -21,7 +21,10 @@
  *   "must-fix" | "worth-fixing-now" | "defer"
  */
 
-const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
+// Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs) validate
+// against this single copy of the severity vocabulary instead of hand-copying
+// it, keeping the fail-closed floor and this module's own validation in sync.
+export const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
 
 /**
@@ -395,8 +398,8 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
  * scripts/github/write-gate-findings-log.mjs (severity, angle, summary,
  * disposition, optional files). Pure.
  *
- * @param {Array<{severity: string, angle: string, summary: string, file?: string, disposition?: string}>} findings
- * @returns {Array<{severity: string, angle: string, summary: string, disposition?: string, files?: string[]}>}
+ * @param {Array<{severity: string, angle: string, summary: string, file?: string, disposition?: string, recommendation?: string}>} findings
+ * @returns {Array<{severity: string, angle: string, summary: string, disposition?: string, files?: string[], recommendation?: string}>}
  */
 export function toFindingsLogShape(findings) {
   const list = Array.isArray(findings) ? findings : [];
@@ -408,6 +411,9 @@ export function toFindingsLogShape(findings) {
     };
     if (typeof f.disposition === "string" && f.disposition.trim().length > 0) {
       entry.disposition = f.disposition.trim();
+    }
+    if (typeof f.recommendation === "string" && f.recommendation.trim().length > 0) {
+      entry.recommendation = f.recommendation.trim();
     }
     if (typeof f.file === "string" && f.file.trim().length > 0) {
       entry.files = [f.file.trim()];

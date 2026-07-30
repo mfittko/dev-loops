@@ -24,7 +24,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const CLI_SOURCE = path.join(REPO_ROOT, "cli/index.mjs");
 
-const RUN_ENV = { ...process.env, DEVLOOPS_RUN_ID: "test-run-123" };
+// DEVLOOPS_SKIP_REGISTRY_CHECK keeps `doctor` (spawned below with no
+// fetchLatestVersion injection seam available) from making a live HTTPS
+// request to the npm registry, so this suite stays offline-deterministic.
+const RUN_ENV = { ...process.env, DEVLOOPS_RUN_ID: "test-run-123", DEVLOOPS_SKIP_REGISTRY_CHECK: "1" };
 
 function buildDepsLessCheckout() {
   const dir = mkdtempSync(path.join(tmpdir(), "dev-loops-deps-less-"));

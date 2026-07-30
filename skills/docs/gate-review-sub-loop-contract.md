@@ -250,7 +250,7 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
   prohibition; `verify-fresh-review-context.mjs --context-path` enforces it mechanically —
   fails closed if the seeded artifact isn't present at the reviewer's cwd).
 - produces a focused findings artifact with verdict (clean/findings_present) and file references
-- completion is detected via the harness completion notification, or the reviewer's findings artifact at its deterministic output path; the orchestrator awaits fan-in on those paths and joins via `consolidateFanin` (Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
+- completion is detected via the harness completion notification, or the reviewer's findings artifact at its deterministic output path; the orchestrator awaits fan-in on those paths and joins via the sanctioned fan-in CLI `dev-loops gate consolidate-fanin` (backed by `consolidateFanin`; Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
 
 #### Briefing composition: invariant prefix first
 
@@ -278,7 +278,10 @@ unframed. Over the cap the prefix falls back to pointer mode: it references
 `scope.diffPath` when the persisted `.diff` is present, and otherwise discloses that the
 diff pointer is unavailable (reviewers re-derive via `git diff`). Either way the mode is
 disclosed in both the artifact (`prefixMode: "inline"|"pointer"`) and the prefix text
-itself. This is purely a
+itself — self-rendered modes only. A third, CLI-only mode, `prefixMode: "file"`
+(an orchestrator-authored prefix recorded via `--prefix-file`, below), discloses the mode
+in the artifact only: the recorded bytes are the orchestrator's own composed prefix
+verbatim, so the prefix text itself carries no `prefixMode` line. This is purely a
 size/performance choice and a zero-semantic change to the byte-identity requirement above:
 whichever mode ran, every reviewer of the same round still receives byte-identical prefix
 bytes, and `verify-fresh-review-context.mjs --prefix-file`/`verify-briefing-prefixes.mjs`
@@ -286,7 +289,11 @@ hash and compare those bytes exactly as before, oblivious to which mode produced
 
 **Enforcement.** Each reviewer passes `--prefix-hash <sha256>` (or `--prefix-file <path>`,
 hashed by the tool) to `verify-fresh-review-context.mjs`, which persists the hash on the
-reviewer's per-scope sentinel. Before Phase 3 consolidation, the fan-in MUST run
+reviewer's per-scope sentinel. An orchestrator that briefs reviewers with its OWN
+composed prefix records it with `write-gate-context.mjs --prefix-file <path>` — the
+record file then carries those exact bytes (`prefixMode: "file"`) instead of the
+tool's self-rendered prefix, so the fan-in verification below agrees with the actual
+briefing without any hand-edited record files. Before Phase 3 consolidation, the fan-in MUST run
 `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>`, which fails closed (exit 1)
 when sentinels for the same round record two or more DISTINCT prefix hashes, or when any
 sentinel for the round records no prefix hash at all — a missing hash means the
@@ -379,12 +386,35 @@ Before consolidating, run `scripts/github/verify-briefing-prefixes.mjs --head-sh
 missing prefix hashes across this round's reviewer sentinels) MUST stop the pass rather
 than proceed to consolidation.
 
-Merge the parallel reviewer findings into one consolidated fix plan using the
-pure `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` (not manual
-concatenation). It collates the per-angle artifacts, gates `clean` on
-`blockCleanOnFindingSeverities`, returns `blocked` when any per-angle artifact is
-malformed/missing, and `toFindingsLogShape` maps the result into the
-`write-gate-findings-log.mjs` `--findings` shape:
+Merge the parallel reviewer findings into one consolidated fix plan with the
+sanctioned fan-in CLI:
+
+```
+dev-loops gate consolidate-fanin --findings-dir <dir> \
+  --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path>
+```
+
+(`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure
+`consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` — never manual
+concatenation and never an inline interpreter over the artifacts. `--gate`
+applies that gate's configured `blockCleanOnFindingSeverities` to the overall
+verdict; omitting it falls back to the shipped `["must-fix"]` default. One
+invocation reads the per-angle artifacts directory and emits `findingsJson`
+(written to `--out <path>`) — the nested per-angle shape
+`upsert-checkpoint-verdict.mjs --findings-json` accepts directly, clean angles
+included — plus the flat ledger shape (written to `--ledger-out <path>`) —
+the exact `--findings-file` input `write-gate-findings-log.mjs` and
+`post-gate-findings.mjs` accept, so neither tool needs an improvised
+`--jq`/`node -e` extraction step to materialize it — the severity counts, and
+the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
+asked (`--pr-checklist-matrix clean`). FAILS CLOSED (exit 1, naming the
+offending angles) when any per-angle artifact is malformed or itself blocked
+— a blocked fan-in never yields a publishable findings shape; fix or re-run
+the offending reviewer first. (An angle whose artifact was never written is
+invisible to the CLI — mandatory-angle coverage is enforced downstream by
+`upsert-checkpoint-verdict.mjs`.)
+
+Consolidation:
 
 - collate findings from all review angles
 - classify each finding: `must-fix`, `worth-fixing-now`, `defer`
@@ -532,8 +562,16 @@ node scripts/github/write-gate-findings-log.mjs \
   --gate <draft_gate|pre_approval_gate> \
   --head-sha <sha> \
   --verdict <clean|findings_present|blocked> \
-  --findings '[{"severity":"must-fix","angle":"scope","summary":"...","disposition":"accepted-for-fix"}]'
+  --findings-file <path>   # or inline: --findings '[{"severity":"must-fix","angle":"scope","summary":"...","disposition":"accepted-for-fix"}]'
 ```
+
+`--findings-file` reads the same JSON array from a file (identical validation) —
+use it for any non-trivial ledger so the array never rides a shell string;
+`post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
+`--ledger-out <path>` writes exactly this shape — pass that path straight to
+`--findings-file` on both tools, no hand extraction. A finding with severity
+`defer` and no `disposition` gets `deferred` derived automatically by both
+tools.
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
 Each log entry records the full disposition: severity, angle, summary, affected files, and

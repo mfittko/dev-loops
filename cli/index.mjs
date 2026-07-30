@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { realpathSync, constants as fsConstants } from "node:fs";
+import { realpathSync, readFileSync, constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
+import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,6 +43,203 @@ function writeCoreUnresolvableError(stderr) {
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
+// ── Stale-install self-diagnosis (`doctor`) ────────────────────────
+// A dangling scripts/ reference or an unexplained tooling failure is often
+// actually a stale global/local `dev-loops` install shadowing a newer
+// checkout. `doctor` names its own running version + resolved install path
+// and — best-effort — whether it is behind the latest published release, so
+// that class of report self-diagnoses instead of masquerading as a bug.
+
+function readOwnVersion(pkgPath = path.join(REPO_ROOT, "package.json")) {
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    return typeof pkg.version === "string" ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+// Split off build metadata (ignored for precedence per SemVer) and the
+// prerelease suffix, e.g. "1.0.0-rc.3+abc" -> { core: "1.0.0", prerelease: "rc.3" }.
+function splitVersion(version) {
+  const withoutBuild = String(version).split("+")[0];
+  const dashIndex = withoutBuild.indexOf("-");
+  return dashIndex === -1
+    ? { core: withoutBuild, prerelease: null }
+    : { core: withoutBuild.slice(0, dashIndex), prerelease: withoutBuild.slice(dashIndex + 1) };
+}
+
+function compareCoreVersions(a, b) {
+  const numsA = a.split(".").map(Number);
+  const numsB = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const diff = (numsA[i] || 0) - (numsB[i] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+// SemVer prerelease precedence: compare dot-separated identifiers left to
+// right; numeric identifiers compare numerically, a shorter identifier list
+// is lower, numeric identifiers are always lower than alphanumeric ones.
+function comparePrereleaseIdentifiers(a, b) {
+  const idsA = a.split(".");
+  const idsB = b.split(".");
+  const len = Math.max(idsA.length, idsB.length);
+  for (let i = 0; i < len; i++) {
+    const idA = idsA[i];
+    const idB = idsB[i];
+    if (idA === undefined) return -1;
+    if (idB === undefined) return 1;
+    const numA = /^\d+$/.test(idA) ? Number(idA) : null;
+    const numB = /^\d+$/.test(idB) ? Number(idB) : null;
+    if (numA !== null && numB !== null) {
+      if (numA !== numB) return numA < numB ? -1 : 1;
+      continue;
+    }
+    if (numA !== null) return -1;
+    if (numB !== null) return 1;
+    if (idA !== idB) return idA < idB ? -1 : 1;
+  }
+  return 0;
+}
+
+// -1/0/1 per SemVer 2.0.0 precedence rules (build metadata ignored).
+// Exported for direct unit testing (prerelease ordering, malformed input).
+export function compareSemver(a, b) {
+  const va = splitVersion(a);
+  const vb = splitVersion(b);
+  const coreDiff = compareCoreVersions(va.core, vb.core);
+  if (coreDiff !== 0) return coreDiff;
+  if (va.prerelease === vb.prerelease) return 0;
+  if (va.prerelease === null) return 1; // a stable release outranks any prerelease
+  if (vb.prerelease === null) return -1;
+  return comparePrereleaseIdentifiers(va.prerelease, vb.prerelease);
+}
+
+// Shape/length gate a registry-controlled dist-tag value must pass before it
+// can reach compareSemver's max-reduction or doctor's stdout: a plain
+// `x.y.z` numeric core (splitVersion already strips any prerelease/build
+// suffix off the core check) AND, since that core check alone leaves the
+// prerelease/build suffix unvalidated, the WHOLE string must also match
+// SemVer's own identifier charset. Rejects control/escape bytes, empty/
+// absurdly long strings, and non-numeric cores — the class of value that
+// otherwise coerces to 0.0.0 in compareCoreVersions (`Number("x") || 0`) or
+// gets echoed verbatim into doctor's output.
+export function isPlausibleDistTagVersion(v) {
+  if (typeof v !== "string" || v.length === 0 || v.length > 64) return false;
+  if (!/^\d+\.\d+\.\d+$/.test(splitVersion(v).core)) return false;
+  return /^[0-9A-Za-z.+-]+$/.test(v);
+}
+
+const REGISTRY_TIMEOUT_MS = 2000;
+const REGISTRY_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+// ponytail: bare `https.get` (no `fetch`/dependency) keeps `doctor` zero-dep;
+// resolves null (never rejects) on any failure so a flaky/offline registry
+// degrades the freshness check instead of ever crashing `doctor`.
+// `getImpl` is an injectable https.get seam so tests can drive the
+// status/size-cap/deadline/dist-tag paths without network.
+export function fetchLatestPublishedVersion(packageName, { timeoutMs = REGISTRY_TIMEOUT_MS, getImpl = https.get } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let deadline;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      resolve(value);
+    };
+    // The abbreviated packument's dist-tags, not /latest: a prerelease line
+    // (dist-tag `rc`) can be ahead of `latest`, and an rc install behind the
+    // rc tag must still warn. The freshest published version is the MAX
+    // across all dist-tags.
+    const req = getImpl(`https://registry.npmjs.org/${packageName}`, {
+      timeout: timeoutMs,
+      headers: { accept: "application/vnd.npm.install-v1+json" },
+    }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); settle(null); return; }
+      let body = "";
+      let bodyBytes = 0;
+      res.on("data", (chunk) => {
+        bodyBytes += chunk.length;
+        // Response-size cap: `timeout` above is a socket INACTIVITY timeout, so
+        // an endpoint that keeps trickling bytes would otherwise let `body`
+        // grow unbounded. Abort and degrade rather than accumulate forever.
+        if (bodyBytes > REGISTRY_MAX_RESPONSE_BYTES) {
+          req.destroy();
+          settle(null);
+          return;
+        }
+        body += chunk;
+      });
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(body);
+          const tagVersions = Object.values(parsed?.["dist-tags"] ?? {}).filter(isPlausibleDistTagVersion);
+          if (tagVersions.length === 0) { settle(null); return; }
+          settle(tagVersions.reduce((max, v) => (compareSemver(v, max) > 0 ? v : max)));
+        } catch {
+          settle(null);
+        }
+      });
+    });
+    req.on("timeout", () => { req.destroy(); settle(null); });
+    req.on("error", () => settle(null));
+    // Wall-clock deadline: `timeout` above only fires on socket INACTIVITY, so
+    // a slow-drip response that keeps resetting it would otherwise hang this
+    // promise (and `doctor`) indefinitely. This is a hard ceiling regardless
+    // of activity.
+    deadline = setTimeout(() => { req.destroy(); settle(null); }, timeoutMs);
+  });
+}
+
+async function buildStaleInstallChecks({
+  currentVersion = readOwnVersion(),
+  installPath = REPO_ROOT,
+  packageName = "dev-loops",
+  fetchLatestVersion = fetchLatestPublishedVersion,
+} = {}) {
+  const infoCheck = {
+    id: "install-info",
+    label: "Running package version & install layout",
+    ok: true,
+    detail: currentVersion
+      ? `Running dev-loops@${currentVersion} from ${installPath}.`
+      : `Could not read this install's package.json at ${installPath}; running version unknown.`,
+  };
+
+  const skip = (detail) => [infoCheck, { id: "install-freshness", label: "Install freshness", ok: true, detail }];
+
+  // ponytail: hermeticity escape hatch for tests — skip the real registry
+  // probe entirely rather than relying on every caller to inject a stub
+  // fetcher. Set by test/cli-deps-less-checkout-preflight.test.mjs so the
+  // verify suite never makes a live network call.
+  if (process.env.DEVLOOPS_SKIP_REGISTRY_CHECK) {
+    return skip("latest-version check skipped (DEVLOOPS_SKIP_REGISTRY_CHECK set).");
+  }
+
+  if (!currentVersion) return skip("latest-version check skipped (running version unknown).");
+
+  let latestVersion = null;
+  try {
+    latestVersion = await fetchLatestVersion(packageName);
+  } catch {
+    latestVersion = null;
+  }
+  if (!latestVersion) return skip("latest-version check skipped (registry unreachable).");
+
+  const isStale = compareSemver(currentVersion, latestVersion) < 0;
+  return [infoCheck, {
+    id: "install-freshness",
+    label: "Install freshness",
+    ok: !isStale,
+    detail: isStale
+      ? `Running dev-loops@${currentVersion}; latest published is ${latestVersion} — a stale install can masquerade as a tooling bug. Update via \`npx dev-loops@latest\` or \`npm i -g dev-loops@latest\`.`
+      : `Running the latest published version (${currentVersion}).`,
+  }];
+}
+
 // `project` is an alias for `queue` minus the run driver — derived, not duplicated.
 const QUEUE_ROUTES = {
   run:            "scripts/loop/run-queue.mjs",
@@ -76,6 +274,7 @@ const SUBCOMMAND_ROUTES = {
   gate: {
     "upsert-verdict":     "scripts/github/upsert-checkpoint-verdict.mjs",
     "detect-evidence":    "scripts/github/detect-checkpoint-evidence.mjs",
+    "consolidate-fanin":  "scripts/loop/consolidate-fanin.mjs",
     "write-findings-log": "scripts/github/write-gate-findings-log.mjs",
     "post-findings":      "scripts/github/post-gate-findings.mjs",
     "request-copilot":    "scripts/github/request-copilot-review.mjs",
@@ -163,6 +362,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
   gate: {
     "upsert-verdict": "Post/update gate review comment",
     "detect-evidence": "Check merge preconditions",
+    "consolidate-fanin": "Consolidate per-angle findings artifacts",
     "write-findings-log": "Write disposition ledger",
     "post-findings": "Post gate fan-out findings comment",
     "request-copilot": "Request Copilot review",
@@ -421,6 +621,9 @@ export async function runCli({
   stderr = process.stderr,
   runtime,
   cwd = process.cwd(),
+  // Test-only injection seam for the `doctor` registry freshness check;
+  // production callers always take the real `fetchLatestPublishedVersion`.
+  fetchLatestVersion,
 } = {}) {
   const fromTop = parseTopLevelCommand(argv);
 
@@ -471,7 +674,7 @@ export async function runCli({
                 detail: coreOk
                   ? "`@dev-loops/core` resolves from this checkout; local scripts can run directly."
                   : CORE_UNRESOLVABLE_DETAIL,
-              }]
+              }, ...await buildStaleInstallChecks({ fetchLatestVersion })]
             : result.checks;
           const summary = summarizeChecks(checks);
           const readiness = describeReadiness(checks);

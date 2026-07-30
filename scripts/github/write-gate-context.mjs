@@ -123,6 +123,7 @@ Optional:
   --validation-posture <text>    Short description of the validation posture
   --pr-body <text>               PR description text, inlined into the rendered briefing prefix
   --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label; omitted entirely when absent
+  --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -240,6 +241,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "validation-posture": { type: "string" },
       "pr-body": { type: "string" },
       "issue-body": { type: "string" },
+      "prefix-file": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -261,6 +263,7 @@ export function parseWriteGateContextCliArgs(argv) {
     validationPosture: null,
     prBody: null,
     issueBody: null,
+    prefixFile: null,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -329,6 +332,14 @@ export function parseWriteGateContextCliArgs(argv) {
     }
     if (token.name === "issue-body") {
       options.issueBody = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "prefix-file") {
+      const trimmed = requireTokenValue(token, parseError).trim();
+      if (trimmed.length === 0) {
+        throw parseError("--prefix-file must not be empty/whitespace-only");
+      }
+      options.prefixFile = trimmed;
       continue;
     }
     if (token.name === "tmp-root") {
@@ -672,8 +683,10 @@ export function buildGateContextArtifact(options) {
     artifact.adjacentCode = options.adjacentCode;
   }
   // Whether the rendered briefing prefix inlined the reviewed-head diff (in a
-  // fenced block) or fell back to the diffPath pointer (size cap). Only set
-  // when a caller actually rendered a prefix (writeGateContext does, always).
+  // fenced block), fell back to the diffPath pointer (size cap), or (CLI-only,
+  // `--prefix-file`) recorded an orchestrator-authored prefix verbatim
+  // ("file" — see writeGateContextWithPrefix below). Only set when a caller
+  // actually produced/recorded a prefix (writeGateContext does, always).
   if (typeof options.prefixMode === "string" && options.prefixMode.length > 0) {
     artifact.prefixMode = options.prefixMode;
   }
@@ -828,14 +841,17 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  * Write both the JSON context artifact AND its sibling rendered briefing
  * prefix (GATE-EXEC-BRIEFING-PREFIX): the byte-identical invariant block every
  * per-angle reviewer of this gate pass is seeded with. The prefix's
- * `prefixMode` (inline|pointer, from the diff-size cap) is recorded on the
- * JSON artifact so both files stay in sync.
+ * `prefixMode` (inline|pointer, from the diff-size cap; or file, when
+ * `--prefix-file` records an orchestrator-authored prefix verbatim) is
+ * recorded on the JSON artifact so both files stay in sync.
  *
  * @param {object} options — parsed CLI options shape, optionally carrying
  *   `diffOutput`, `prBody`, `issueBody` (all null-safe; a caller with none of
- *   these still gets a valid — if thin — prefix).
+ *   these still gets a valid — if thin — prefix), and `prefixFile` (a path to
+ *   an ALREADY-rendered prefix whose exact bytes are recorded verbatim instead
+ *   of self-rendering — see the CLI's `--prefix-file` doc above).
  * @param {{ repoRoot?: string }} [runtime]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer" }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file" }>}
  */
 export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
   const contextPath = buildGateContextPath({
@@ -852,26 +868,51 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     headSha: options.headSha,
     tmpRoot: options.tmpRoot || "tmp",
   });
-  const rendered = renderBriefingPrefix({
-    repo: options.repo,
-    pr: options.pr,
-    gate: options.gate,
-    headSha: options.headSha,
-    worktreeRoot: path.resolve(repoRoot),
-    contextPath,
-    briefingPrefixPath,
-    prBody: options.prBody ?? null,
-    issueRef: options.acceptanceCriteria ?? null,
-    issueBody: options.issueBody ?? null,
-    diffOutput: options.diffOutput ?? null,
-    diffPath: options.diffPath ?? null,
-    changedFiles: options.changedFiles ?? [],
-    adjacentCode: options.adjacentCode ?? null,
-  });
+
+  // `--prefix-file` (an orchestrator that already briefed reviewers with its
+  // OWN rendered prefix cannot ever match verify-briefing-prefixes.mjs's
+  // on-disk record if this module always writes ITS self-rendered prefix
+  // instead): when given, record the supplied file's EXACT BYTES verbatim —
+  // no rendering, no trailing-newline normalization — and hash THOSE bytes.
+  // prefixMode reports "file" rather than inline|pointer. When omitted, the
+  // load-bearing default self-rendered path below runs byte-identically to
+  // before.
+  let prefixBytes;
+  let prefixMode;
+  if (typeof options.prefixFile === "string" && options.prefixFile.length > 0) {
+    try {
+      prefixBytes = await readFile(path.resolve(repoRoot, options.prefixFile));
+    } catch (err) {
+      throw new Error(`--prefix-file ${JSON.stringify(options.prefixFile)} is unreadable: ${err?.message ?? err}`);
+    }
+    if (prefixBytes.length === 0) {
+      throw new Error(`--prefix-file ${JSON.stringify(options.prefixFile)} is empty — refusing to record an empty invariant briefing prefix.`);
+    }
+    prefixMode = "file";
+  } else {
+    const rendered = renderBriefingPrefix({
+      repo: options.repo,
+      pr: options.pr,
+      gate: options.gate,
+      headSha: options.headSha,
+      worktreeRoot: path.resolve(repoRoot),
+      contextPath,
+      briefingPrefixPath,
+      prBody: options.prBody ?? null,
+      issueRef: options.acceptanceCriteria ?? null,
+      issueBody: options.issueBody ?? null,
+      diffOutput: options.diffOutput ?? null,
+      diffPath: options.diffPath ?? null,
+      changedFiles: options.changedFiles ?? [],
+      adjacentCode: options.adjacentCode ?? null,
+    });
+    prefixBytes = Buffer.from(rendered.text, "utf8");
+    prefixMode = rendered.prefixMode;
+  }
 
   const fullPath = path.resolve(repoRoot, contextPath);
   const artifact = {
-    ...buildGateContextArtifact({ ...options, prefixMode: rendered.prefixMode }),
+    ...buildGateContextArtifact({ ...options, prefixMode }),
     loggedAt: new Date().toISOString(),
   };
   // Write ORDER matters: the sibling briefing prefix goes first and the JSON
@@ -881,13 +922,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // leave a complete-looking artifact pointing at a missing prefix file.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
-  await writeFile(fullPrefixPath, rendered.text, "utf8");
-  const prefixHash = createHash("sha256").update(rendered.text, "utf8").digest("hex");
+  await writeFile(fullPrefixPath, prefixBytes);
+  const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
 
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
 
-  return { ok: true, path: contextPath, artifact, prefixPath: briefingPrefixPath, prefixHash, prefixMode: rendered.prefixMode };
+  return { ok: true, path: contextPath, artifact, prefixPath: briefingPrefixPath, prefixHash, prefixMode };
 }
 
 /**
@@ -916,6 +957,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object }>}
+ *   prefixMode is never "file" here — this programmatic entrypoint never threads a
+ *   `prefixFile` into its internal writeGateContext() call, so it always self-renders.
+ *   "file" mode is CLI-only (main()'s `--prefix-file` flag).
  *
  * The artifact additionally carries a deterministic, neutral `adjacentCode`
  * bundle (#895) when changed files are present: 1-hop import in/out-edges of the

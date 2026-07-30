@@ -61,6 +61,7 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     headSha: "abc1234567890abcdef000000000000000000000",
     verdict: "findings_present",
     findings: '[{"severity":"must-fix","angle":"scope","summary":"bad scope"}]',
+    findingsFile: undefined,
     tmpRoot: "tmp",
   });
 });
@@ -125,6 +126,38 @@ test("parseWriteGateFindingsLogCliArgs rejects missing required args", () => {
       "--pr", "1",
     ]);
   }, /Missing required/);
+});
+
+test("parseWriteGateFindingsLogCliArgs accepts --findings-file", () => {
+  const result = parseWriteGateFindingsLogCliArgs([
+    "--repo", "owner/repo",
+    "--pr", "42",
+    "--gate", "draft_gate",
+    "--head-sha", "abc1234567890abcdef000000000000000000000",
+    "--verdict", "clean",
+    "--findings-file", "/tmp/findings.json",
+  ]);
+  assert.equal(result.findingsFile, "/tmp/findings.json");
+  assert.equal(result.findings, undefined);
+});
+
+test("parseWriteGateFindingsLogCliArgs rejects --findings and --findings-file together", () => {
+  assert.throws(() => {
+    parseWriteGateFindingsLogCliArgs([
+      "--repo", "a/b", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc1234500000000000000000000000000000000", "--verdict", "clean",
+      "--findings", "[]", "--findings-file", "/tmp/findings.json",
+    ]);
+  }, /mutually exclusive/);
+});
+
+test("parseWriteGateFindingsLogCliArgs rejects when neither --findings nor --findings-file is given", () => {
+  assert.throws(() => {
+    parseWriteGateFindingsLogCliArgs([
+      "--repo", "a/b", "--pr", "1", "--gate", "draft_gate",
+      "--head-sha", "abc1234500000000000000000000000000000000", "--verdict", "clean",
+    ]);
+  }, /pass --findings <json> or --findings-file <path>/);
 });
 
 test("writeGateFindingsLog writes valid JSON log", async () => {
@@ -418,6 +451,111 @@ test("writeGateFindingsLog rejects empty-string resolvedIn", async () => {
       findings: JSON.stringify([{ severity: "must-fix", angle: "scope", summary: "x", resolvedIn: "" }]),
     });
   }, /resolvedIn must be a non-empty string/);
+});
+
+// --- --findings-file (mutually exclusive with --findings, identical validation) ---
+
+test("writeGateFindingsLog accepts findings from --findings-file", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-file-"));
+  try {
+    const findingsFile = path.join(tmpDir, "findings.json");
+    await writeFile(findingsFile, JSON.stringify([
+      { severity: "must-fix", angle: "scope", summary: "bad scope", disposition: "accepted-for-fix" },
+    ]), "utf8");
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234567890abcdef000000000000000000000",
+      verdict: "findings_present",
+      findingsFile,
+      tmpRoot: tmpDir,
+    });
+    assert.equal(result.ok, true);
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-1", "draft_gate-abc1234567890abcdef000000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings.length, 1);
+    assert.equal(parsed.findings[0].angle, "scope");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog rejects both --findings and --findings-file", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: "[]",
+      findingsFile: "/tmp/does-not-matter.json",
+    });
+  }, /mutually exclusive/);
+});
+
+test("writeGateFindingsLog rejects a missing --findings-file", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findingsFile: "/nonexistent/gate-findings-file-does-not-exist.json",
+    });
+  }, /Cannot read --findings-file/);
+});
+
+test("writeGateFindingsLog derives a deferred disposition for a defer-severity finding with no explicit disposition", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-defer-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 5,
+      gate: "draft_gate",
+      headSha: "eeeeeeeeeeeeeeeeeeee00000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit" }]),
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-5", "draft_gate-eeeeeeeeeeeeeeeeeeee00000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings[0].disposition, "deferred");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog keeps an explicit disposition on a defer-severity finding (still validated against the enum)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-defer-explicit-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 6,
+      gate: "draft_gate",
+      headSha: "ffffffffffffffffffff0000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit", disposition: "disputed" }]),
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-6", "draft_gate-ffffffffffffffffffff0000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings[0].disposition, "disputed");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit", disposition: "bad-value" }]),
+    });
+  }, /disposition must be one of/);
 });
 
 // --- Fan-out provenance (AC1) ---
