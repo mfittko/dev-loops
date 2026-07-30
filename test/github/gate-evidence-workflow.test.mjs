@@ -122,6 +122,10 @@ test("gate-evidence posts an explicit status to the resolved PR head SHA, not th
       !("strategy" in job),
       `job ${jobId} declares strategy: — a matrix appends values to the check-run name, and the loop's exclusion would miss it`,
     );
+    assert.ok(
+      !("uses" in job),
+      `job ${jobId} declares uses: — a called workflow's check runs are named "${jobId} / <inner job>", and the loop's exclusion would miss them`,
+    );
   }
 
   const steps = workflow.jobs["gate-evidence-runner"].steps;
