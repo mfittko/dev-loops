@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isBuiltin } from "node:module";
 
 // Static import/export-from, dynamic import(), and side-effect import relative specifiers.
 const RELATIVE_SPECIFIER_RE = /(?:from\s*|import\s*\(\s*|import\s+)["'](\.\.?\/[^"']+)["']/g;
@@ -311,6 +312,75 @@ test("shipped files never statically import an optional peer dependency", async 
         if (optionalPeers.includes(pkgName)) {
           offenders.push(`${path.relative(repoRootPath, filePath).split(path.sep).join("/")} -> ${specifier}`);
         }
+      }
+    }
+  }
+
+  assert.deepEqual(offenders.sort(), []);
+});
+
+// The third resolution failure mode, sibling to the two above: a shipped file
+// bare-imports a package the ROOT manifest never declares. It resolves in this
+// repo only because npm hoists `@dev-loops/core`'s own dependencies into the
+// install root — an implicit layout guarantee that does not hold under pnpm's
+// strict layout, Yarn PnP, `--install-strategy=nested`, or any version conflict
+// that forces nesting. Declared-or-builtin is the invariant; the check runs on
+// the same shipped set and the same static-import matcher as the peer guard
+// above, so a new offender cannot arrive through a form one of them misses.
+const VENDORED_PATH_RE = /(^|\/)vendor(\/|$)/;
+
+function packageNameOf(specifier) {
+  return specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
+}
+
+test("shipped files never statically import a package the root manifest does not declare", async () => {
+  const repoRootUrl = new URL("../../", import.meta.url);
+  const repoRootPath = fileURLToPath(repoRootUrl);
+  const pkg = await readRootPackage();
+  const declared = new Set([
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.peerDependencies ?? {}),
+  ]);
+  assert.ok(declared.size > 0, "expected the root manifest to declare at least one dependency");
+  const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
+
+  const offenders = [];
+  for (const dir of shippedDirs) {
+    const dirUrl = new URL(`${dir}/`, repoRootUrl);
+    try {
+      await stat(dirUrl);
+    } catch (err) {
+      if (err.code === "ENOENT") continue;
+      throw err;
+    }
+    for await (const fileUrl of walk(dirUrl)) {
+      const filePath = fileURLToPath(fileUrl);
+      if (!/\.(c|m)?(js|ts)x?$/.test(filePath)) continue;
+      if (filePath.includes(`${path.sep}node_modules${path.sep}`)) continue;
+      const relative = path.relative(repoRootPath, filePath).split(path.sep).join("/");
+      // Vendored bundles ship their dependencies inlined; their import-looking
+      // text is bundled source, not this package's resolution surface.
+      if (VENDORED_PATH_RE.test(relative)) continue;
+
+      const contents = await readFile(fileUrl, "utf8");
+      // Line-wise, deliberately: STATIC_SPECIFIER_RE's `[^'"]*?` matches
+      // newlines, so run against a whole file an `export` line pairs with a
+      // quoted string many lines below — e.g. a template literal in a thrown
+      // message reads as an import specifier. Scanning per line keeps the same
+      // accepted import forms (they are single-line in this tree) while making
+      // that cross-line pairing impossible.
+      for (const line of contents.split("\n")) {
+        const match = new RegExp(STATIC_SPECIFIER_RE.source).exec(line);
+        if (!match) continue;
+        const specifier = match[1];
+        // Relative and absolute specifiers are the other two guards' business;
+        // `node:`-prefixed and bare builtins resolve without a manifest entry.
+        if (/^[.\/]/.test(specifier)) continue;
+        if (specifier.startsWith("node:")) continue;
+        const pkgName = packageNameOf(specifier);
+        if (isBuiltin(pkgName)) continue;
+        if (declared.has(pkgName)) continue;
+        offenders.push(`${relative} -> ${specifier}`);
       }
     }
   }
