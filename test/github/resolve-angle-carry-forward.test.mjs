@@ -10,7 +10,7 @@ import {
   main,
   parseResolveAngleCarryForwardCliArgs,
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
-import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import { buildLogPath, parseProvenanceJson } from "../../scripts/github/write-gate-findings-log.mjs";
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -331,4 +331,69 @@ test("parseResolveAngleCarryForwardCliArgs requires the core args", () => {
   assert.equal(opts.gate, "draft_gate");
   assert.equal(opts.prevHead, "aaaaaaa");
   assert.equal(opts.headSha, "bbbbbbb");
+});
+
+test("round A→B: a clean angle the delta misses carries, gets no fresh reviewer, and still counts at head B", async () => {
+  // Round 1 at head A: correctness/coverage/docs all clean, one reviewer each.
+  // Round 2's delta is doc-only, so correctness and coverage carry and only
+  // docs is re-dispatched — and the head-B provenance built from that plan
+  // still passes the findings-log's consistency + one-reviewer-per-fresh-angle
+  // checks, i.e. the carried verdicts genuinely count at head B.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [
+      { angle: "correctness", reviewer: "review-a" },
+      { angle: "coverage", reviewer: "review-b" },
+      { angle: "docs", reviewer: "review-c" },
+    ],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\nMore prose.\n", "utf8");
+    },
+  });
+  try {
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.carried.map((c) => c.angle).sort(), ["correctness", "coverage"]);
+    assert.deepEqual(result.mustRerun.map((m) => m.angle), ["docs"]);
+    // Carried entries name the PRIOR head and the PRIOR reviewer — not a fresh one.
+    for (const entry of result.carried) {
+      assert.equal(entry.carriedFromHead, prevHead);
+    }
+    assert.equal(result.carried.find((c) => c.angle === "correctness").reviewer, "review-a");
+    assert.equal(result.carried.find((c) => c.angle === "coverage").reviewer, "review-b");
+
+    // Head B's findings-log: carried entries passed through verbatim, ONE fresh
+    // reviewer for the single re-run angle. This is what the procedure records.
+    const provenance = parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 3,
+      perAngle: [
+        ...result.carried.map(({ angle, carriedFromHead, reviewer }) => ({ angle, carriedFromHead, reviewer })),
+        { angle: "docs", reviewer: "review-d" },
+      ],
+    }));
+    assert.deepEqual(provenance.perAngle.map((a) => a.angle).sort(), ["correctness", "coverage", "docs"]);
+    assert.equal(provenance.perAngle.filter((a) => a.carriedFromHead === prevHead).length, 2);
+    assert.equal(provenance.perAngle.filter((a) => !("carriedFromHead" in a)).length, 1);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a carried angle may NOT reuse a fresh angle's reviewer identity at head B", async () => {
+  // The one-scoped-reviewer-per-fresh-angle floor still binds: carrying is an
+  // exemption for the CARRIED entry, never a licence to let one fresh reviewer
+  // cover two fresh angles.
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 2,
+      perAngle: [
+        { angle: "correctness", reviewer: "review-a", carriedFromHead: "aaaaaaa" },
+        { angle: "docs", reviewer: "review-d" },
+        { angle: "scope", reviewer: "review-d" },
+      ],
+    })),
+    /perAngle/,
+  );
 });
