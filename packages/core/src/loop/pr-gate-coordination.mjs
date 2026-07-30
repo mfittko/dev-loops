@@ -252,8 +252,15 @@ function formatRefinementBlockedReason(linkedIssue, status, refinementArtifact) 
   return `The draft gate cannot complete: the linked issue has no detectable refinement artifact (Acceptance criteria / DoD / linked refinement doc). finding=${REFINEMENT_ARTIFACT_FINDING}`;
 }
 
-function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds }) {
-  return `Copilot review rounds exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.`;
+function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi }) {
+  // #1472 defer: when CI is not required by config, the grant does not rest on
+  // any CI verdict at all — do not claim "green or credibly green CI" for a
+  // head whose CI may be failing/pending/none. Callers that omit ciStatus /
+  // preApprovalRequireCi keep the original CI-confirmed wording unchanged.
+  const ciDescriptor = preApprovalRequireCi === false && ciStatus !== "success"
+    ? "CI not required by config"
+    : "green or credibly green CI";
+  return `Copilot review rounds exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}); current head has zero unresolved threads and ${ciDescriptor}, so pre_approval_gate fallback is allowed without another Copilot re-request.`;
 }
 
 /**
@@ -1565,6 +1572,12 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // below, preserving today's blocked behavior exactly.
   if (effectiveLifecycleState === STATE.ROUND_CAP_REACHED && roundCapReached) {
     const ciConfirmedGreen = ciStatus === "success" || !preApprovalRequireCi;
+    // ciConfirmedGreen above is only true when ciStatus is literally "success"
+    // OR CI is not required by config — never for an unconfirmed/failing/absent
+    // status gated in only because requireCi is false. Naming it "green" in
+    // human-read reason/evidence text for the latter case would be a false CI
+    // claim (#1472 defer), so describe the actual grant basis instead.
+    const ciClause = ciStatus === "success" ? "green CI" : "CI not required by config";
     if (unresolvedThreadCount === 0 && ciConfirmedGreen) {
       if (preApprovalGate.currentHeadClean) {
         const titleMarkers = findBlockingTitleMarkers(prTitle);
@@ -1618,7 +1631,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           allowedNextActions,
           forbiddenActions,
           nextAction: PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
-          reason: `Round-cap exhaustion fallback accepted as draft gate equivalent (${copilotReviewRoundCount}/${maxCopilotRounds} rounds, zero unresolved threads, ${ciStatus === "crediblyGreen" ? "credibly green" : "green"} CI). The current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`,
+          reason: `Round-cap exhaustion fallback accepted as draft gate equivalent (${copilotReviewRoundCount}/${maxCopilotRounds} rounds, zero unresolved threads, ${ciClause}). The current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`,
           mergeStateStatus,
           conflictFiles,
           refinementArtifact,
@@ -1646,11 +1659,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-        reason: `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${ciStatus === "crediblyGreen" ? "credibly green" : "green"} CI, so \`pre_approval_gate\` fallback is now the next legal boundary (it reviews the current post-cap head; no further Copilot re-request is permitted).`,
+        reason: `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads and ${ciClause}, so \`pre_approval_gate\` fallback is now the next legal boundary (it reviews the current post-cap head; no further Copilot re-request is permitted).`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
-        gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds }),
+        gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi }),
         copilotReviewRoundCount,
       });
     }

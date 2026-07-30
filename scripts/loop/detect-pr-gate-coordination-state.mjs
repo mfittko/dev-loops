@@ -13,7 +13,7 @@ import {
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
+import { STATE, buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
@@ -621,6 +621,17 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   };
 }
 
+// #1472: the evaluator's ROUND_CAP_REACHED grant branch (a defensive gate-entry
+// re-check, in evaluatePrGateCoordination, reachable only by a caller whose
+// unresolvedThreadCount/ciStatus are fresher than what the interpreter last
+// saw) settles on this exact shape: lifecycleState stays round_cap_reached
+// (never round_cap_clean_fallback) while gateBoundary is pre_approval_gate_window.
+// Exported so the formal-request-guard exemption below (and its test) can name
+// this shape without duplicating the literal comparison.
+export function isRoundCapReachedCleanGrant({ lifecycleState, gateBoundary } = {}) {
+  return lifecycleState === STATE.ROUND_CAP_REACHED && gateBoundary === PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW;
+}
+
 async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
@@ -721,7 +732,15 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // Round-cap clean fallback (#896): the interpreter resolved a clean post-cap head
   // (zero unresolved threads + green CI) that Copilot will not re-review. The formal
   // request guard must not fire here — pre_approval_gate reviews the post-cap head.
-  const roundCapCleanFallback = context.interpretation?.roundCapCleanEligible ?? false;
+  //
+  // #1472: without this, the guard below would rewrite the evaluator's
+  // ROUND_CAP_REACHED grant (see isRoundCapReachedCleanGrant) to
+  // request_copilot_review whenever Copilot was never formally requested,
+  // re-blocking the exact fallback the grant just opened. Widen the exemption
+  // to cover that shape too — it is the same "no further Copilot round is
+  // legal" fact pattern roundCapCleanEligible already exempts.
+  const roundCapCleanFallback = (context.interpretation?.roundCapCleanEligible ?? false)
+    || isRoundCapReachedCleanGrant(result);
   const copilotReviewEverFormallyRequested = copilotReviewRequestStatus === "none"
     && guardBoundaries.has(result.gateBoundary)
     // cap-0 disables the Copilot gate, so shouldGuardCopilotReviewRequest always

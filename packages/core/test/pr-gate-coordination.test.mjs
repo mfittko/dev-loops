@@ -2612,6 +2612,38 @@ test("round_cap_reached with zero unresolved threads and green CI allows run_pre
   assert.match(result.gateEvidenceNote, /zero unresolved threads/i);
 });
 
+// #1472 defer: when preApprovalRequireCi is false, ciConfirmedGreen is true
+// regardless of the actual CI status, so a "failure" head can still reach this
+// grant. The reason/gateEvidenceNote must not claim the CI is green in that
+// case (a false claim in human-read gate evidence) — they must instead say CI
+// was not required.
+test("round_cap_reached with requireCi:false and failing CI grants run_pre_approval_gate without claiming green CI (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "failure",
+    preApprovalRequireCi: false,
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    unresolvedThreadCount: 0,
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.doesNotMatch(result.reason, /green CI/i);
+  assert.match(result.reason, /CI not required by config/i);
+  assert.ok(result.gateEvidenceNote);
+  assert.doesNotMatch(result.gateEvidenceNote, /green.{0,20}CI/i);
+  assert.match(result.gateEvidenceNote, /CI not required by config/i);
+});
+
 // #1371 re-verify: crediblyGreen is unconfirmed CI and stays blocked at the
 // round-cap-reached fallback exactly as it does at every other pre-approval
 // boundary in this file (lines ~1016/1219/1404/1655) — this branch must not

@@ -6,10 +6,10 @@ import test from "node:test";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact, isRoundCapReachedCleanGrant } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
-import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION, shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
@@ -1825,5 +1825,72 @@ test("deriveUiE2ePassed reads UI e2e checks from statusCheckRollup", () => {
     deriveUiE2ePassed({ statusCheckRollup: [{ name: "viewer-smoke", conclusion: "SKIPPED" }, { name: "deck-smoke", conclusion: "SUCCESS" }] }),
     true,
     "SKIPPED check should not block the gate",
+  );
+});
+
+// #1472: isRoundCapReachedCleanGrant names the shape evaluatePrGateCoordination's
+// defensive ROUND_CAP_REACHED grant branch settles on (lifecycleState stays
+// round_cap_reached — never round_cap_clean_fallback — while gateBoundary is
+// pre_approval_gate_window). The formal-request guard in
+// detectPrGateCoordinationState widens its round-cap exemption with this
+// predicate so that grant is not immediately re-blocked.
+test("isRoundCapReachedCleanGrant identifies the round_cap_reached + pre_approval_gate_window grant shape", () => {
+  assert.equal(
+    isRoundCapReachedCleanGrant({ lifecycleState: "round_cap_reached", gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW }),
+    true,
+  );
+  assert.equal(
+    isRoundCapReachedCleanGrant({ lifecycleState: "round_cap_clean_fallback", gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW }),
+    false,
+    "round_cap_clean_fallback is already covered by roundCapCleanEligible, not this shape",
+  );
+  assert.equal(
+    isRoundCapReachedCleanGrant({ lifecycleState: "round_cap_reached", gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_NEEDED }),
+    false,
+    "a different gate boundary is not the grant's own shape",
+  );
+  assert.equal(isRoundCapReachedCleanGrant(), false);
+});
+
+// #1472: this reproduces detectPrGateCoordinationState's exact guard-input
+// wiring (roundCapCleanFallback widened by isRoundCapReachedCleanGrant) for an
+// evaluator result with lifecycleState round_cap_reached + gateBoundary
+// pre_approval_gate_window and Copilot never formally requested. Pre-fix
+// (roundCapCleanFallback sourced only from context.interpretation's
+// roundCapCleanEligible, which is false at round_cap_reached) this returns
+// true — the guard fires and rewrites the grant to request_copilot_review,
+// re-blocking the exact fallback the grant just opened. Fixed, it must return
+// false so the grant survives the post-pass unchanged.
+test("formal-request guard does not re-block the round_cap_reached clean-grant shape when Copilot was never formally requested (#1472)", () => {
+  const evaluatorResult = { lifecycleState: "round_cap_reached", gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW };
+  const guardInputs = {
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 5,
+    copilotReviewEverFormallyRequested: false,
+    maxCopilotRounds: 5,
+    sameHeadCleanConverged: false,
+    postConvergenceSignificantChange: false,
+    gateBoundary: evaluatorResult.gateBoundary,
+  };
+
+  // Pre-fix shape: roundCapCleanFallback sourced only from
+  // context.interpretation.roundCapCleanEligible, which is false at
+  // round_cap_reached (that field is only true for round_cap_clean_fallback).
+  // With no exemption applying, the guard fires and would rewrite the grant
+  // to request_copilot_review.
+  assert.equal(
+    shouldGuardCopilotReviewRequest({ ...guardInputs, roundCapCleanFallback: false }),
+    true,
+    "sanity: without the #1472 exemption, the guard fires and re-blocks the grant",
+  );
+
+  // Fixed shape: roundCapCleanFallback widened with isRoundCapReachedCleanGrant,
+  // exactly as detectPrGateCoordinationState now computes it.
+  const roundCapCleanFallback = false || isRoundCapReachedCleanGrant(evaluatorResult);
+  assert.equal(roundCapCleanFallback, true);
+  assert.equal(
+    shouldGuardCopilotReviewRequest({ ...guardInputs, roundCapCleanFallback }),
+    false,
+    "the round_cap_reached clean grant must not be rewritten to request_copilot_review",
   );
 });
