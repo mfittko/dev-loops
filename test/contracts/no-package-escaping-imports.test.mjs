@@ -31,6 +31,7 @@ test("packages/*/src relative imports never resolve outside their package root",
   const packageDirs = (await readdir(packagesRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name);
+  const bareEscapeDirNames = await repoTopLevelDirNames(new URL("../../", import.meta.url));
 
   // Same scanner as the root-package check below: a package root is just another
   // "shipped set", so `findEscapingImports` answers both questions and there is
@@ -41,7 +42,7 @@ test("packages/*/src relative imports never resolve outside their package root",
       // Walk each package's src/, but allow anything inside that package root —
       // a package ships standalone, so leaving its ROOT is the defect.
       packageDirs.map((dir) =>
-        findEscapingImports({ repoRootUrl: packagesRoot, shippedDirs: [`${dir}/src`], allowDirs: [dir] }),
+        findEscapingImports({ repoRootUrl: packagesRoot, shippedDirs: [`${dir}/src`], allowDirs: [dir], bareEscapeDirNames }),
       ),
     )
   ).flat();
@@ -104,15 +105,46 @@ export async function resolveShippedDirs(files, repoRootUrl) {
   return [...dirs];
 }
 
+// Bare specifiers resolve through node_modules, not relative to the importing
+// file — `scripts/projects/move-queue-item.mjs` (no leading "./" or "../") is
+// Node looking for a package literally named "scripts", not this repo's
+// scripts/ directory. That was the exact defect in issue #1458:
+// queue-board-sync.mjs shipped a bare specifier into scripts/, which only
+// "worked" in the monorepo checkout (workspace hoisting happened to shadow it)
+// and threw ERR_MODULE_NOT_FOUND from a real install. RELATIVE_SPECIFIER_RE
+// above only matches `./`/`../` forms and cannot see this class, so a bare
+// specifier whose first path segment names one of this repo's own top-level
+// directories is flagged the same as a relative escape — it is never a real
+// npm dependency, always a forgotten "./".
+async function repoTopLevelDirNames(repoRootUrl) {
+  return (await readdir(repoRootUrl, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && entry.name !== "node_modules" && !entry.name.startsWith("."))
+    .map((entry) => entry.name);
+}
+
+// ponytail: dir names on disk in this repo are plain lowercase identifiers, so
+// no regex-metacharacter escaping is needed for the alternation below.
+function bareLocalSpecifierRe(dirNames) {
+  if (dirNames.length === 0) return null;
+  const alt = dirNames.join("|");
+  return new RegExp(`(?:from\\s*|import\\s*\\(\\s*|import\\s+)["']((?:${alt})\\/[^"']+)["']`, "g");
+}
+
 /**
  * Pure detector: every specifier in the shipped tree that would not resolve from
  * the published tarball. Returned sorted so a failure diff is reproducible
  * across filesystems (readdir order is not stable across APFS/ext4/fresh clones).
  *
+ * `bareEscapeDirNames` (optional) additionally flags a BARE specifier whose
+ * first path segment names one of the repo's own top-level directories (see
+ * `repoTopLevelDirNames` above) — the sibling defect class relative-only
+ * detection cannot see.
+ *
  * Exported shape is `<file> -> <specifier>` strings.
  */
-export async function findEscapingImports({ repoRootUrl, shippedDirs, allowDirs = shippedDirs }) {
+export async function findEscapingImports({ repoRootUrl, shippedDirs, allowDirs = shippedDirs, bareEscapeDirNames = [] }) {
   const repoRootPath = fileURLToPath(repoRootUrl);
+  const bareRe = bareLocalSpecifierRe(bareEscapeDirNames);
   // "files" entries are always "/"-separated; path.relative yields "\" on win32.
   // Normalizing to "/" keeps both the membership test and the emitted offender
   // strings platform-invariant (the sort order depends on the separator too).
@@ -156,6 +188,11 @@ export async function findEscapingImports({ repoRootUrl, shippedDirs, allowDirs 
           offenders.push(`${relativeFile} -> ${specifier}`);
         }
       }
+      if (bareRe) {
+        for (const match of contents.matchAll(bareRe)) {
+          offenders.push(`${relativeFile} -> ${match[1]}`);
+        }
+      }
     }
   }
   return offenders.sort();
@@ -174,7 +211,8 @@ async function rootPackageOffenders() {
   const repoRootUrl = new URL("../../", import.meta.url);
   const pkg = JSON.parse(await readFile(new URL("package.json", repoRootUrl), "utf8"));
   const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
-  return findEscapingImports({ repoRootUrl, shippedDirs });
+  const bareEscapeDirNames = await repoTopLevelDirNames(repoRootUrl);
+  return findEscapingImports({ repoRootUrl, shippedDirs, bareEscapeDirNames });
 }
 
 test("root package relative imports never resolve outside the shipped files set", async () => {
@@ -325,6 +363,41 @@ test("findEscapingImports flags an import leaving the shipped set and passes the
       "shipped/legal.mjs -> ../unshipped/other.mjs",
       "shipped/nested/entry.mjs -> ../../unshipped/deep.mjs",
       "shipped/nested/entry.mjs -> ../../unshipped/helper.mjs",
+    ]);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+// Pins the sibling defect class (issue #1458): a BARE specifier into a
+// top-level repo dir name resolves through node_modules, not the file system,
+// so RELATIVE_SPECIFIER_RE alone cannot see it. Same self-validation goal as
+// the fixture above — proves the detector actually fires rather than passing
+// vacuously.
+test("findEscapingImports flags a bare specifier into a named top-level dir", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "escaping-bare-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "shipped"), { recursive: true });
+    await writeFile(
+      path.join(fixture, "shipped", "entry.mjs"),
+      [
+        'import { main } from "scripts/projects/move-queue-item.mjs";', // offender: bare, static form
+        'const lazy = await import("scripts/other.mjs");',              // offender: bare, dynamic form
+        'import { y } from "./legal.mjs";',                             // legal: relative, stays inside shipped/
+        'import scoped from "@dev-loops/core/loop/queue-board-sync";',  // legal: real npm package, not a bare local dir
+      ].join("\n"),
+    );
+
+    const offenders = await findEscapingImports({
+      repoRootUrl,
+      shippedDirs: ["shipped"],
+      bareEscapeDirNames: ["scripts", "test"],
+    });
+
+    assert.deepEqual(offenders, [
+      "shipped/entry.mjs -> scripts/other.mjs",
+      "shipped/entry.mjs -> scripts/projects/move-queue-item.mjs",
     ]);
   } finally {
     await rm(fixture, { recursive: true, force: true });
