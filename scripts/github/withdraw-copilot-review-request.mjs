@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// Escape hatch for the one deadlock the review loop cannot resolve on its own
-// (#1441): a Copilot review was requested on a converged PR, Copilot declined to
-// re-engage a change it had effectively already approved, and the request sits
-// pending forever. The loop stays `waiting_for_copilot_review` with no on-head
-// review, so `pre_approval_gate` can never post and the PR cannot merge.
+// Escape hatch for a deadlock the review loop cannot resolve on its own
+// (#1502): a Copilot review was requested on a head that ALREADY carries
+// Copilot's own clean submitted review. Copilot does not re-engage a change it
+// effectively approved, so the request sits pending forever, the loop stays
+// `waiting_for_copilot_review`, and `pre_approval_gate` can never post.
+// (The sibling case — a head that has ADVANCED past the last review — is not
+// solved here and is tracked separately in #1441; see the caveat below.)
 //
 // Withdrawing the request removes a signal that will never arrive and lets the
 // loop re-evaluate on the evidence it already has. The path that then opens the
