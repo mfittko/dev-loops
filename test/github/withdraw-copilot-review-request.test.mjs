@@ -56,7 +56,7 @@ function ghStub({ copilotRequested, reviews, threads, removeFails = false, remov
       }
       return {
         code: 0,
-        stdout: JSON.stringify({ reviews: reviews ?? [], headRefOid: "abc123" }),
+        stdout: JSON.stringify({ reviews: reviews ?? [] }),
         stderr: "",
       };
     },

@@ -2,8 +2,11 @@
 // Escape hatch for a deadlock the review loop cannot resolve on its own
 // (#1502): a Copilot review was requested on a head that ALREADY carries
 // Copilot's own clean submitted review. Copilot does not re-engage a change it
-// effectively approved, so the request sits pending forever, the loop stays
-// `waiting_for_copilot_review`, and `pre_approval_gate` can never post.
+// effectively approved, so the request sits pending indefinitely. BELOW the
+// round cap that is a deadlock: the loop stays `waiting_for_copilot_review` and
+// `pre_approval_gate` cannot post. At the cap it is not — the interpreter
+// already emits `round_cap_clean_fallback` and the gate is allowed with the
+// request still pending, so withdrawing there changes nothing about the gate.
 // (The sibling case — a head that has ADVANCED past the last review — is not
 // solved here and is tracked separately in #1441; see the caveat below.)
 //
@@ -18,7 +21,8 @@
 //
 // It is NOT a general unsticker. At the round cap with clean threads and green
 // CI the loop already routes to `round_cap_clean_fallback` with the request
-// still pending, so nothing is stranded and this is a no-op. With non-green CI
+// still pending, so the gate is not blocked; the guards would still pass and a
+// real withdrawal would occur, but it buys nothing. With non-green CI
 // the gate stays blocked either way. And if the head has since advanced past
 // the submitted review, withdrawing below the cap just makes the loop re-request
 // — the same strand again. The case it fixes is the forced re-request on a head
@@ -150,7 +154,7 @@ async function collectState(args, { env, runChild }) {
   const copilotRequested = await fetchCopilotRequested(args, { env, runChild });
 
   const pr = await ghJson(runChild, env, [
-    "pr", "view", String(args.pr), "--repo", args.repo, "--json", "reviews,headRefOid",
+    "pr", "view", String(args.pr), "--repo", args.repo, "--json", "reviews",
   ]);
   const reviews = Array.isArray(pr?.reviews) ? pr.reviews : [];
   const submittedCopilotReview = reviews.some(
