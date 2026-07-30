@@ -481,6 +481,14 @@ The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryFo
 
 **Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's angle entries with `mandatory: true` and forces every one to re-run, never carried); or any changed file's kind is in the angle's surface.
 
+**A dev-loop config-source delta re-runs EVERY angle.** `.devloops` (and its
+`.devloops.yaml/.yml/.json` and `.pi/dev-loop/settings.*`/`defaults.*` siblings)
+defines the gate's angle pool, mandatory floor, and reviewer personas/prompts —
+a clean verdict produced under the OLD config has no valid provenance across a
+change to it, regardless of the angle's declared surface. `classifyFile`
+correctly reports these files as `config`; the carry-forward seam overrides
+that via `isDevLoopConfigSourcePath` and forces a full re-run (fail-closed).
+
 **Renames force the RENAME_ONLY angles to re-run.** A rename records only its destination path, so classifying that path alone would miss what the move itself implicates (a relocated doc breaking a link, a moved test/code file shifting scope/contract-surface). When the delta `git diff A..B` contains ANY rename/copy row, the CLI forces the RENAME_ONLY-mapped angles (`CATEGORY_ANGLE_MAP[RENAME_ONLY]`: `scope`, `correctness`, `contract-surface`, `docs`, `link-check`) to re-run for that run; the remaining angles still follow the surface rule above.
 
 **Provenance — carried, not fabricated.** A carried verdict preserves the fail-closed evidence contract. The new head's findings-log records the carried angle in `provenance.perAngle` with `carriedFromHead: <A>` and the SAME `reviewer` identity that reviewed it at head A (honest attribution — that reviewer genuinely reviewed this angle's surface, which the delta did not change). `distinctReviewers` still counts real reviewer identities and the mandatory-angle / distinct-reviewer consistency checks in `write-gate-findings-log.mjs` are unchanged; carry-forward never invents a reviewer or a fresh review.

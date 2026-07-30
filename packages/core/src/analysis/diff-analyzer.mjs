@@ -13,13 +13,21 @@
 // T0: File-level analysis
 // ---------------------------------------------------------------------------
 
+// Extensionless dotfile configs: static allowlist, no content sniffing. Matched
+// against the basename only, never a prefix/suffix guess. Deliberately just
+// .devloops (the reported consumer shape): runtime-version files like .nvmrc
+// were considered and REJECTED — classifying them config would let ci-guard/
+// determinism carry stale clean verdicts across a runtime bump; unknown
+// fails closed toward a full re-review, which is what a version bump needs.
+const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
+
 /**
  * @typedef {object} T0Result
  * @property {string[]} files — flat file paths
  * @property {string[]} extensions — unique file extensions (lowercase, with dot)
  * @property {string[]} directories — unique top-level path segments
  * @property {boolean} renameOnly — true when all entries are renames (no adds/deletes/modifies)
- * @property {boolean} allDocs — true when all files are under docs/ or are .md
+ * @property {boolean} allDocs — true when all files are under docs/ or have a docs extension (.md/.markdown)
  */
 
 /**
@@ -106,6 +114,9 @@ export function classifyFile(filePath) {
   ) {
     return "config";
   }
+  if (DOTFILE_CONFIG_BASENAMES.has(fp.split("/").pop())) {
+    return "config";
+  }
   if (fp.includes(".test.") || fp.startsWith("test/")) {
     return "test";
   }
@@ -115,7 +126,10 @@ export function classifyFile(filePath) {
   ) {
     return "code";
   }
-  if (fp.startsWith("docs/") || fp.endsWith(".md") || fp === "README.md") {
+  if (
+    fp.startsWith("docs/") || fp.endsWith(".md") || fp.endsWith(".markdown") ||
+    fp === "README.md"
+  ) {
     return "docs";
   }
   return "unknown";
@@ -242,7 +256,9 @@ export function diffHasSecuritySeam(diffOutput) {
  *
  * Detects:
  * - COMMENT_ONLY: only comment lines changed
- * - DOCS_ONLY: only .md files changed (from extensions)
+ * - DOCS_ONLY: emitted when docs files are PRESENT in the diff (docs extensions
+ *   .md/.markdown, or prose under docs/) — presence-based via
+ *   t0PresentSurfaceCategories, not exclusivity
  * - CONFIG_ONLY: only config files changed
  * - TEST_ONLY: only test files changed
  * - RENAME_ONLY: all renames, no content changes

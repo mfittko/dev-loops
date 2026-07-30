@@ -278,7 +278,7 @@ test("getLatestSubmittedCopilotReviewHeadSha tie-break: a valid timestamp beats 
 
 test("isTrivialDocumentationOnlyPath classifies prose docs as trivial but a docs/-hosted code/config/test file as non-trivial", () => {
   // Prose under docs/ (any case / surrounding whitespace) stays trivial.
-  for (const p of ["docs/guide.md", "docs/notes.rst", "DOCS/Guide.md", " docs/guide.md ", "README.md", "a.mdx", "notes.txt", "x.rst", "y.adoc", "", null, undefined]) {
+  for (const p of ["docs/guide.md", "docs/notes.rst", "DOCS/Guide.md", " docs/guide.md ", "README.md", "changes.markdown", "a.mdx", "notes.txt", "x.rst", "y.adoc", "", null, undefined]) {
     assert.equal(isTrivialDocumentationOnlyPath(p), true, `${p} should be trivial`);
   }
   // A code/config/test file hosted under docs/ is NOT trivial — it routes through
