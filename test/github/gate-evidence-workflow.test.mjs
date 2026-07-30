@@ -1,5 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
+import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-status";
 
 // Pins #1385 + #1464: gate-evidence must re-fire when a NEW unresolved thread
 // can appear (review submitted, or a review comment opens a thread) AND when a
@@ -97,6 +98,19 @@ test("gate-evidence posts an explicit status to the resolved PR head SHA, not th
   const workflow = parseYaml(content);
 
   assert.ok(!("gate-evidence" in workflow.jobs), "no job may be named gate-evidence — that context is reserved for the explicit head-SHA status");
+
+  // Every job here surfaces as a check run named after its id, and every one
+  // of those is the loop's OWN derived signal — so the loop must exclude it
+  // when deriving the CI status that gates its own pre_approval step. A job id
+  // missing from that list silently re-creates the waiting_for_ci deadlock,
+  // because a run this workflow cancels for concurrency is deliberately not
+  // read as green.
+  for (const jobId of Object.keys(workflow.jobs)) {
+    assert.ok(
+      LOOP_DERIVED_CI_CHECK_NAMES.includes(jobId),
+      `job id ${jobId} is not in LOOP_DERIVED_CI_CHECK_NAMES — add it, or the loop will gate itself on its own check run`,
+    );
+  }
 
   const steps = workflow.jobs["gate-evidence-runner"].steps;
   const factsStep = steps.find((step) => step.id === "pr");
