@@ -93,7 +93,9 @@
     ]
   },
   "dependencies": {
-    "@dev-loops/core": "^1.0.0-rc.1"
+    "@dev-loops/core": "^1.0.0-rc.1",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
   },
   "repository": {
     "type": "git",

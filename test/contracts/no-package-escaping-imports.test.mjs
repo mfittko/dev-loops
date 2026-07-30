@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isBuiltin } from "node:module";
 
 // Static import/export-from, dynamic import(), and side-effect import relative specifiers.
 const RELATIVE_SPECIFIER_RE = /(?:from\s*|import\s*\(\s*|import\s+)["'](\.\.?\/[^"']+)["']/g;
@@ -229,15 +230,12 @@ export async function findEscapingImports({ repoRootUrl, shippedDirs, allowDirs 
   return offenders.sort();
 }
 
-// ponytail: relative specifiers only. Bare-specifier escapes (a shipped script
-// importing an undeclared package) are the sibling defect class, and the
-// difference is what the answer has to be good for. A regex is adequate for a
-// CLOSED membership question — "does this file import one of these two names?",
-// which STATIC_SPECIFIER_RE below answers — because a miss is bounded and a
-// false hit is inspectable. It is not adequate for the EXHAUSTIVE question "is
-// every bare specifier here a declared dependency?", where a false hit on the
-// same words inside a string or a minified vendor bundle makes the check
-// unusable. That one needs real parsing, so it is tracked separately.
+// ponytail: relative specifiers only. Bare-specifier escapes are the sibling
+// defect class, answered below by `findUndeclaredBareImports` — without a
+// parser, because the two false-hit modes that would need one (prose bridging
+// into a quoted string; a minified vendor bundle) are closed by the matcher's
+// binding-list span and the vendor path skip. The residual is a bounded false
+// NEGATIVE, the direction a guard can afford to be wrong in.
 async function rootPackageOffenders() {
   const repoRootUrl = new URL("../../", import.meta.url);
   const pkg = JSON.parse(await readFile(new URL("package.json", repoRootUrl), "utf8"));
@@ -280,7 +278,23 @@ function optionalPeersOf(pkg) {
 // contains a minified vendor bundle. `import("x")` still cannot match: the
 // optional group requires a literal `from`, and the fallback requires a quote
 // immediately after `import`.
-const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[^'"]*?\bfrom\s*)?|export\s*[^'"]*?\bfrom\s*)["']([^"']+)["']/gm;
+// The span between the keyword and `from` accepts only BINDING-LIST characters
+// (identifiers, braces, commas, `*`, whitespace). It must keep matching across
+// newlines — `import {\n  a,\n  b\n} from "pkg"` is the dominant multi-name
+// style here — but a permissive `[^'"]*?` spans newlines through arbitrary
+// prose, pairing an `export` line with a quoted string far below it: a thrown
+// template literal reading `…version from "${spec}"` registered as a specifier
+// that way. Excluding parens, slashes and backticks ends that pairing while
+// accepting every real import form. `\w` is ASCII-only here, so a binding list
+// with a non-ASCII identifier would not match — none exists in the shipped set
+// and the convention is ASCII; if that changes, widen the CLASS (`u` flag with
+// `[\p{L}\p{N}_$*,{}\s]`), never the span back to `[^'"]*?`. A comment inside a
+// binding list (`import { a /* keep */ } from "yaml"`) is out of the class for
+// the same reason and equally absent here — same fix if it ever appears. The
+// `^`-anchor with `m` also means only the FIRST import on a physical line is
+// seen, so a compact `import{a}from"x";import{b}from"y";` under-reports; the
+// shipped tree has no such line outside the vendored bundle (itself skipped).
+const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[\w$*,{}\s]*?\bfrom\s*)?|export\s*[\w$*,{}\s]*?\bfrom\s*)["']([^"']+)["']/gm;
 
 test("shipped files never statically import an optional peer dependency", async () => {
   const repoRootUrl = new URL("../../", import.meta.url);
@@ -304,7 +318,9 @@ test("shipped files never statically import an optional peer dependency", async 
       if (!/\.(c|m)?(js|ts)x?$/.test(filePath)) continue;
       if (filePath.includes(`${path.sep}node_modules${path.sep}`)) continue;
 
-      const contents = await readFile(fileUrl, "utf8");
+      // `^[ \t]*` cannot skip U+FEFF, so a BOM-saved file whose FIRST line is an
+      // import would be scanned as if that import were absent.
+      const contents = (await readFile(fileUrl, "utf8")).replace(/^\uFEFF/, "");
       for (const match of contents.matchAll(STATIC_SPECIFIER_RE)) {
         const specifier = match[1];
         const pkgName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
@@ -316,6 +332,136 @@ test("shipped files never statically import an optional peer dependency", async 
   }
 
   assert.deepEqual(offenders.sort(), []);
+});
+
+// The third resolution failure mode, sibling to the two above: a shipped file
+// bare-imports a package the ROOT manifest never declares. It resolves in this
+// repo only because npm hoists `@dev-loops/core`'s own dependencies into the
+// install root — an implicit layout guarantee that does not hold under pnpm's
+// strict layout, Yarn PnP, `--install-strategy=nested`, or any version conflict
+// that forces nesting. Declared-or-builtin is the invariant. It shares the
+// static-import matcher with the peer guard above, so the two cannot DRIFT into
+// disagreeing about what an import is — not that neither misses anything: a
+// shared matcher misses a form for both, and the accepted residuals are named
+// at the regex. The shipped set is the same, minus vendored paths.
+const VENDORED_PATH_RE = /(^|\/)vendor(\/|$)/;
+
+function packageNameOf(specifier) {
+  return specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
+}
+
+/**
+ * Pure detector: every static BARE specifier in the shipped tree that names
+ * neither a declared dependency/peerDependency nor a Node builtin. Pure and
+ * exported for the same reason `findEscapingImports` is — an assert-empty test
+ * over the real tree cannot tell "nothing undeclared" from "the walk found
+ * nothing", so the positive control below drives it against a synthetic tree.
+ *
+ * Returns sorted `<file> -> <specifier>` strings, plus the count of declared
+ * bare imports it did resolve, so callers can assert the scan was not inert.
+ */
+export async function findUndeclaredBareImports({ repoRootUrl, shippedDirs, declared }) {
+  const repoRootPath = fileURLToPath(repoRootUrl);
+  const declaredSet = declared instanceof Set ? declared : new Set(declared);
+  const offenders = [];
+  let declaredSeen = 0;
+
+  for (const dir of shippedDirs) {
+    const dirUrl = new URL(`${dir}/`, repoRootUrl);
+    try {
+      await stat(dirUrl);
+    } catch (err) {
+      if (err.code === "ENOENT") continue;
+      throw err;
+    }
+    for await (const fileUrl of walk(dirUrl)) {
+      const filePath = fileURLToPath(fileUrl);
+      if (!/\.(c|m)?(js|ts)x?$/.test(filePath)) continue;
+      if (filePath.includes(`${path.sep}node_modules${path.sep}`)) continue;
+      const relative = path.relative(repoRootPath, filePath).split(path.sep).join("/");
+      // Vendored bundles ship their dependencies inlined; their import-looking
+      // text is bundled source, not this package's resolution surface.
+      if (VENDORED_PATH_RE.test(relative)) continue;
+
+      // BOM-stripped for the same reason as the peer guard above.
+      const contents = (await readFile(fileUrl, "utf8")).replace(/^\uFEFF/, "");
+      for (const match of contents.matchAll(STATIC_SPECIFIER_RE)) {
+        const specifier = match[1];
+        // Relative and absolute specifiers are the other two guards' business;
+        // `node:`-prefixed and bare builtins resolve without a manifest entry.
+        if (/^[.\/]/.test(specifier)) continue;
+        if (specifier.startsWith("node:")) continue;
+        const pkgName = packageNameOf(specifier);
+        if (isBuiltin(pkgName)) continue;
+        if (declaredSet.has(pkgName)) {
+          declaredSeen += 1;
+          continue;
+        }
+        offenders.push(`${relative} -> ${specifier}`);
+      }
+    }
+  }
+
+  return { offenders: offenders.sort(), declaredSeen };
+}
+
+test("shipped files never statically import a package the root manifest does not declare", async () => {
+  const repoRootUrl = new URL("../../", import.meta.url);
+  const pkg = await readRootPackage();
+  const declared = new Set([
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.peerDependencies ?? {}),
+  ]);
+  assert.ok(declared.size > 0, "expected the root manifest to declare at least one dependency");
+  const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
+
+  const { offenders, declaredSeen } = await findUndeclaredBareImports({ repoRootUrl, shippedDirs, declared });
+
+  assert.deepEqual(offenders, []);
+  // An empty offender list cannot distinguish "nothing undeclared" from "the
+  // scan stopped seeing imports" — the hazard this file documents for its
+  // sibling scanner, and a live one since the matcher was narrowed.
+  assert.ok(declaredSeen > 0, "scan resolved no declared bare import at all — the matcher or the walk is broken, not the tree");
+});
+
+test("findUndeclaredBareImports flags an undeclared bare import and passes the declared ones", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "undeclared-bare-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "shipped", "vendor"), { recursive: true });
+    await writeFile(
+      path.join(fixture, "shipped", "entry.mjs"),
+      [
+        'import { parse } from "yaml";',                    // legal: declared
+        'import { z } from "zod";',                         // legal: declared
+        'import { readFile } from "node:fs/promises";',     // legal: node: builtin
+        'import path from "path";',                         // legal: bare builtin
+        'import { x } from "./local.mjs";',                 // legal: relative, other guard
+        'import { rogue } from "not-declared";',            // OFFENDER
+        'import {\n  a,\n  b,\n} from "@scope/also-undeclared";', // OFFENDER, multi-line
+      ].join("\n"),
+    );
+    // A vendored bundle's inlined imports must not count against the manifest.
+    await writeFile(path.join(fixture, "shipped", "vendor", "bundle.min.js"), 'import{a}from"bundled-dep";');
+    // A BOM-saved file whose FIRST line is the import: without the strip above,
+    // `^[ \t]*` cannot skip U+FEFF and this offender scans as if absent.
+    await writeFile(path.join(fixture, "shipped", "bom.mjs"), '\uFEFFimport { q } from "bom-undeclared";\n');
+
+    const { offenders, declaredSeen } = await findUndeclaredBareImports({
+      repoRootUrl,
+      shippedDirs: ["shipped"],
+      declared: new Set(["yaml", "zod"]),
+    });
+
+    assert.deepEqual(offenders, [
+      "shipped/bom.mjs -> bom-undeclared",
+      "shipped/entry.mjs -> @scope/also-undeclared",
+      "shipped/entry.mjs -> not-declared",
+    ]);
+    assert.equal(declaredSeen, 2);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
 });
 
 // The guard above derives its names from the manifest, so it would go quiet if
@@ -355,6 +501,28 @@ test("STATIC_SPECIFIER_RE catches every static form and no dynamic one", () => {
   assert.deepEqual(specifiers('  importPlaywright = () => import("@playwright/test")'), []);
   // A string that merely looks like one must not match.
   assert.deepEqual(specifiers('export default "@playwright/test";'), []);
+
+  // Multi-line binding lists, including the re-export twin — the dominant
+  // multi-name style in this tree, and the shape a future dependency arrives
+  // in. A matcher that only saw single lines would miss both silently.
+  assert.deepEqual(
+    specifiers('import {\n  webkit,\n  chromium,\n} from "@playwright/test";'),
+    ["@playwright/test"],
+  );
+  assert.deepEqual(
+    specifiers('export {\n  webkit,\n} from "@playwright/test";'),
+    ["@playwright/test"],
+  );
+  assert.deepEqual(specifiers('import * as pw from "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('export * as pw from "@playwright/test";'), ["@playwright/test"]);
+
+  // Prose between an `export` keyword and a quoted string must NOT pair across
+  // newlines: this exact shape (a thrown template literal containing the word
+  // `from`) reported `${spec}` as a specifier while the span was permissive.
+  assert.deepEqual(
+    specifiers('export function extractMajorMinor(spec) {\n  throw new Error(`cannot parse a version from "${spec}"`);\n}'),
+    [],
+  );
 });
 
 // The assert-empty test above cannot distinguish "nothing escapes" from "the
