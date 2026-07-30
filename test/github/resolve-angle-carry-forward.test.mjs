@@ -12,8 +12,19 @@ import {
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { buildLogPath, parseProvenanceJson } from "../../scripts/github/write-gate-findings-log.mjs";
 
+// Scrub inherited global/system git config and any leaked GIT_DIR/GIT_WORK_TREE
+// so host-side commit signing, hooks, templates, or an exported repo pointer
+// cannot steer these fixtures. Same convention as the other CLI git fixtures.
+const GIT_FIXTURE_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_DIR: undefined,
+  GIT_WORK_TREE: undefined,
+};
+
 function git(cwd, args) {
-  return execFileSync("git", args, { cwd, encoding: "utf8" });
+  return execFileSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
 }
 
 // Run the CLI main() against a repoRoot and return the parsed JSON result it
@@ -364,12 +375,14 @@ test("round A→B: a clean angle the delta misses carries, gets no fresh reviewe
     assert.equal(result.carried.find((c) => c.angle === "correctness").reviewer, "review-a");
     assert.equal(result.carried.find((c) => c.angle === "coverage").reviewer, "review-b");
 
-    // Head B's findings-log: carried entries passed through verbatim, ONE fresh
-    // reviewer for the single re-run angle. This is what the procedure records.
+    // Head B's findings-log: carried entries passed through VERBATIM (every
+    // identity field the plan carries, not a hand-picked subset — a
+    // dispatchId-only prior entry would otherwise land identity-less), plus ONE
+    // fresh reviewer for the single re-run angle. This is what the procedure records.
     const provenance = parseProvenanceJson(JSON.stringify({
       distinctReviewers: 3,
       perAngle: [
-        ...result.carried.map(({ angle, carriedFromHead, reviewer }) => ({ angle, carriedFromHead, reviewer })),
+        ...result.carried.map(({ reason, ...entry }) => entry),
         { angle: "docs", reviewer: "review-d" },
       ],
     }));
@@ -381,10 +394,22 @@ test("round A→B: a clean angle the delta misses carries, gets no fresh reviewe
   }
 });
 
-test("a carried angle may NOT reuse a fresh angle's reviewer identity at head B", async () => {
-  // The one-scoped-reviewer-per-fresh-angle floor still binds: carrying is an
-  // exemption for the CARRIED entry, never a licence to let one fresh reviewer
-  // cover two fresh angles.
+test("carrying exempts the CARRIED entry from the reviewer-pairing floor, and nothing else", () => {
+  // A carried entry reuses the identity that reviewed it at the PRIOR head, so it
+  // is exempt from the one-scoped-reviewer-per-fresh-angle floor — even when a
+  // fresh angle at this head names the same reviewer.
+  const withCarriedCollision = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 2,
+    perAngle: [
+      { angle: "correctness", reviewer: "review-a", carriedFromHead: "aaaaaaa" },
+      { angle: "docs", reviewer: "review-a" },
+      { angle: "scope", reviewer: "review-d" },
+    ],
+  }));
+  assert.equal(withCarriedCollision.perAngle.length, 3);
+
+  // The floor still binds between two FRESH angles: the exemption is for carrying,
+  // never a licence to let one fresh reviewer cover two angles at this head.
   assert.throws(
     () => parseProvenanceJson(JSON.stringify({
       distinctReviewers: 2,
@@ -394,6 +419,75 @@ test("a carried angle may NOT reuse a fresh angle's reviewer identity at head B"
         { angle: "scope", reviewer: "review-d" },
       ],
     })),
-    /perAngle/,
+    /reviewer/i,
   );
+});
+
+test("an angle named by a prior finding never carries, even from a clean log", () => {
+  // A log is `clean` when nothing reached a BLOCKING severity — a `defer` finding
+  // still means that angle reported a problem, so it must be re-reviewed.
+  const plan = buildCarryForwardPlan({
+    log: {
+      headSha: "aaaaaaa",
+      verdict: "clean",
+      findings: [{ angle: "coverage", severity: "defer", summary: "open nit" }],
+      provenance: {
+        distinctReviewers: 2,
+        perAngle: [
+          { angle: "correctness", reviewer: "review-a" },
+          { angle: "coverage", reviewer: "review-b" },
+        ],
+      },
+    },
+    changedFiles: ["docs/guide.md"],
+  });
+  assert.deepEqual(plan.carried.map((c) => c.angle), ["correctness"]);
+  assert.ok(plan.mustRerun.some((m) => m.angle === "coverage"), "an angle with a prior finding must re-run");
+});
+
+test("buildCarryForwardPlan fails closed on a prior log that records one angle twice", () => {
+  assert.throws(
+    () => buildCarryForwardPlan({
+      log: {
+        headSha: "aaaaaaa",
+        verdict: "clean",
+        provenance: {
+          distinctReviewers: 2,
+          perAngle: [
+            { angle: "correctness", reviewer: "review-a" },
+            { angle: "correctness", reviewer: "review-b" },
+          ],
+        },
+      },
+      changedFiles: ["docs/guide.md"],
+    }),
+    /records angle "correctness" more than once/,
+  );
+});
+
+test("CLI fails closed when the prior log's own headSha is not --prev-head", async () => {
+  // The log path is keyed by --prev-head while carriedFromHead is stamped from the
+  // log's internal headSha; a disagreement would stamp a head that was never diffed.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "coverage", reviewer: "review-b" }],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\nMore.\n", "utf8");
+    },
+  });
+  try {
+    const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+    await writeFile(logPath, JSON.stringify({
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+      verdict: "clean",
+      provenance: { distinctReviewers: 1, perAngle: [{ angle: "coverage", reviewer: "review-b" }] },
+    }), "utf8");
+    const { stderr, exitCode } = await runMainRaw([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(exitCode, 1);
+    assert.match(stderr, /is not --prev-head/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });

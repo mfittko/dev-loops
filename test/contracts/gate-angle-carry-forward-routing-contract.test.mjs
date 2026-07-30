@@ -24,6 +24,15 @@ import {
 const SKILL = "skills/copilot-pr-followup/SKILL.md";
 const GENERATED_SKILL = ".claude/skills/copilot-pr-followup/SKILL.md";
 
+// Every skill that drives a gate retry, source and generated mirror alike. The
+// bare "only the angles that had findings" rule must survive in none of them.
+const GATE_DRIVING_SKILLS = [
+  SKILL,
+  GENERATED_SKILL,
+  "skills/local-implementation/SKILL.md",
+  ".claude/skills/local-implementation/SKILL.md",
+];
+
 const CARRY_FORWARD_ROUTING = [
   // The CLI is named, with the prior head that makes the decision possible.
   /resolve-angle-carry-forward\.mjs/,
@@ -36,9 +45,18 @@ const CARRY_FORWARD_ROUTING = [
   // and would otherwise go unreviewed.
   /subtract, never substitute/,
   /minus the plan's `carried` angles/,
+  // An abbreviated prev-head resolves no log file, so carry-forward would refuse
+  // forever without ever saying why.
+  /FULL 40-character form/,
   // Carried angles keep the prior reviewer's identity and head, never a fake one.
   /carriedFromHead/,
   /never a fabricated fresh review/i,
+  // Provenance rides a separate flag; the ledger file does not carry it, so a
+  // step that omits it drops every carried attribution.
+  /--provenance/,
+  // Round 1 has no prior head, so the step is explicitly skipped rather than
+  // left to fail-closed refusal by accident.
+  /Skip this step on a gate's first round/,
   // The rule itself stays owned by the contract doc.
   /GATE-EXEC-ANGLE-CARRY-FORWARD/,
   // A refusal must widen the fan-out, not silence it.
@@ -54,16 +72,19 @@ test("the carry-forward CLI the SKILL routes to exists", async () => {
   await access(fromRepoRoot("scripts/github/resolve-angle-carry-forward.mjs"));
 });
 
-test("no retry step re-states a bare findings_present-only re-run rule", async () => {
-  // The old wording ("only re-run reviewers that produced findings_present")
-  // is a SECOND, unevidenced scoping rule that silently overrides Phase 1.2 and
-  // would let a previously-clean angle skip without proof. Phase 1.2 owns this.
-  const skill = await readRepo(SKILL);
-  assert.doesNotMatch(
-    skill,
-    /only re-run reviewers that produced/i,
-    `${SKILL} must defer re-run scoping to the carry-forward step`,
-  );
+test("no gate-driving skill re-states a bare findings-only re-run rule", async () => {
+  // The old wording ("only re-run reviewers that produced findings") is a SECOND,
+  // unevidenced scoping rule that silently overrides Phase 1.2 and would let a
+  // previously-clean angle skip without proof its surface is untouched. It has to
+  // be gone from EVERY skill that drives a gate retry, and from the mirrors —
+  // leaving it in a sibling skill just moves the hole.
+  for (const file of GATE_DRIVING_SKILLS) {
+    assert.doesNotMatch(
+      await readRepo(file),
+      /only re-run reviewers that produced/i,
+      `${file} must defer re-run scoping to the carry-forward step`,
+    );
+  }
 });
 
 test("generated .claude mirror carries the same routing (when present)", async () => {

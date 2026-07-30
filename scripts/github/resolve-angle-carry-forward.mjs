@@ -164,6 +164,17 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   if (perAngle.length === 0) {
     throw new Error("prior gate findings-log has no provenance.perAngle reviewers to carry forward (fail-closed)");
   }
+  // FAIL-CLOSED: a duplicate angle row makes reviewer attribution ambiguous.
+  // identityByAngle below keeps only the LAST row for an angle, while prevAngles
+  // keeps both — so both carried entries would be stamped with one reviewer and
+  // the other reviewer's identity would vanish. Reject the log rather than
+  // silently misattribute a carried verdict.
+  const duplicateAngle = perAngle
+    .map((entry) => (entry && typeof entry.angle === "string" ? entry.angle : null))
+    .find((angle, index, all) => angle !== null && all.indexOf(angle) !== index);
+  if (duplicateAngle !== undefined) {
+    throw new Error(`prior gate findings-log records angle ${JSON.stringify(duplicateAngle)} more than once — reviewer attribution is ambiguous (fail-closed)`);
+  }
   // Preserve the FULL reviewer identity per angle. The provenance contract
   // (write-gate-findings-log / gate-fanin.countDistinctReviewers) counts an angle's
   // identity via `reviewer` OR `dispatchId`; carrying only `reviewer` would DROP the
@@ -180,10 +191,19 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
     identityByAngle.set(entry.angle, identity);
   }
   const prevAngles = perAngle.map((a) => a.angle).filter((a) => typeof a === "string" && a.length > 0);
+  // FAIL-CLOSED, per-angle: a log's overall verdict is `clean` when no finding
+  // reaches a BLOCKING severity — an angle can therefore sit in a clean log with
+  // an open `defer` (or, under a narrower blockCleanOnFindingSeverities, a
+  // `worth-fixing-now`) finding against it. The carry-forward rule is that an
+  // angle which previously returned findings never carries; the log's overall
+  // verdict cannot express that, so derive it from the findings themselves.
+  const anglesWithPriorFindings = (Array.isArray(log.findings) ? log.findings : [])
+    .map((finding) => (finding && typeof finding.angle === "string" ? finding.angle.trim() : ""))
+    .filter((angle) => angle.length > 0);
   const { carried, mustRerun } = resolveCarryForwardAngles({
     prevAngles,
     changedFiles,
-    options: { alwaysRerun: [...alwaysRerun] },
+    options: { alwaysRerun: [...alwaysRerun, ...anglesWithPriorFindings] },
   });
   const carriedProvenance = carried.map(({ angle, reason }) => ({
     angle,
@@ -215,6 +235,10 @@ function captureDeltaChangedFiles({ base, repoRoot }) {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    // An exported GIT_DIR/GIT_WORK_TREE overrides `cwd` outright, so the delta
+    // would be computed against a DIFFERENT repository than the one this plan is
+    // labeled for. The tool means the worktree at `cwd`; make that true.
+    env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined },
   });
   return { changedFiles: parseChangedFiles(out), hasRename: hasRenameEntry(out) };
 }
@@ -248,6 +272,14 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
         throw new Error(`prior gate findings-log not found at ${logPath} — cannot carry forward (fail-closed)`);
       }
       throw err;
+    }
+    // FAIL-CLOSED: the log path is keyed by --prev-head, but `carriedFromHead` is
+    // stamped from the log's OWN headSha and the delta is diffed from --prev-head.
+    // A log whose internal head disagrees with the path it sits at would stamp a
+    // provenance head that was never diffed — reject rather than reconcile.
+    const recordedHead = typeof log?.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
+    if (recordedHead !== options.prevHead) {
+      throw new Error(`prior gate findings-log at ${logPath} records headSha ${JSON.stringify(log?.headSha ?? null)}, which is not --prev-head ${options.prevHead} — cannot carry forward (fail-closed)`);
     }
     // Load the gate's CONFIGURED mandatory angles so any repo-configured
     // mandatory angle (even a CATEGORY_ANGLE_MAP-mapped one like `docs` or
