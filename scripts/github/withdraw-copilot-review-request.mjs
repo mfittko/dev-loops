@@ -28,6 +28,8 @@
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
+import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
+import { REVIEW_THREADS_QUERY } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -55,7 +57,8 @@ Options:
   --help, -h              Show this help.
 
 Output (stdout, JSON):
-  { ok: true, withdrawn: true|false, status: "withdrawn"|"refused"|"not-requested", reason }
+  { ok, withdrawn, status: "withdrawn"|"refused"|"not-requested"|"dry-run", reason,
+    operatorReason? }
 
 ${JQ_OUTPUT_USAGE}
 
@@ -120,6 +123,11 @@ function parseCliArgs(argv) {
   return args;
 }
 
+// A review counts as a real prior review only in a state GitHub uses for a
+// SUBMITTED one. Whitelisting (not `!== "PENDING"`) is what makes a missing,
+// null, lowercase, or newly-invented state fail closed.
+const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
+
 async function ghJson(runChild, env, ghArgs) {
   const result = await runChild("gh", ghArgs, env);
   if (result.code !== 0) {
@@ -138,14 +146,28 @@ async function collectState(args, { env, runChild }) {
   const copilotRequested = users.some((user) => isCopilotLogin(user?.login));
 
   const pr = await ghJson(runChild, env, [
-    "pr", "view", String(args.pr), "--repo", args.repo, "--json", "reviews,reviewThreads,headRefOid",
+    "pr", "view", String(args.pr), "--repo", args.repo, "--json", "reviews,headRefOid",
   ]);
   const reviews = Array.isArray(pr?.reviews) ? pr.reviews : [];
   const submittedCopilotReview = reviews.some(
-    (review) => isCopilotLogin(review?.author?.login) && review?.state !== "PENDING",
+    (review) => isCopilotLogin(review?.author?.login)
+      && SUBMITTED_REVIEW_STATES.has(String(review?.state ?? "").toUpperCase()),
   );
-  const threads = Array.isArray(pr?.reviewThreads) ? pr.reviewThreads : [];
-  const unresolvedThreadCount = threads.filter((thread) => thread?.isResolved === false).length;
+
+  // Threads come from GraphQL, not `gh pr view --json`: there is no
+  // `reviewThreads` JSON field, and every other thread-reading script here uses
+  // this query. parseReviewThreads normalizes the connection shape and counts a
+  // missing isResolved as unresolved, so an unfamiliar payload refuses rather
+  // than reading as clean.
+  const { owner, name } = parseRepoSlug(args.repo);
+  const threadsPayload = await ghJson(runChild, env, [
+    "api", "graphql",
+    "-f", `query=${REVIEW_THREADS_QUERY}`,
+    "-F", `owner=${owner}`,
+    "-F", `name=${name}`,
+    "-F", `pr=${args.pr}`,
+  ]);
+  const unresolvedThreadCount = parseReviewThreads(threadsPayload).summary.unresolvedThreads;
 
   return { copilotRequested, submittedCopilotReview, unresolvedThreadCount };
 }
