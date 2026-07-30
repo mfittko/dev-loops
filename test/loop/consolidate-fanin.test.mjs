@@ -594,3 +594,34 @@ test("--out rejects a whitespace-only value at parse time", () => {
     /non-empty path/,
   );
 });
+
+// The consumer bounds the WHOLE rendered --findings-json block at 2000 chars
+// and fails closed above it — so a large fan-in must be shrunk as a whole,
+// not just per field. Prove acceptance by driving the REAL renderer.
+test("large fan-ins are budgeted so upsert-verdict's whole-block render bound accepts them", async () => {
+  const { renderGateReviewCommentBody } = await import("../../scripts/github/upsert-checkpoint-verdict.mjs");
+  const files = {};
+  for (let i = 0; i < 6; i++) {
+    files[`angle${i}.json`] = {
+      angle: `angle-${i}`,
+      verdict: "findings_present",
+      findings: [
+        { severity: "worth-fixing-now", summary: `finding ${i}: ${"x".repeat(1500)}`, file: `src/f${i}.mjs`, line: i + 1 },
+      ],
+    };
+  }
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    // Must not throw the fail-closed length error:
+    const body = renderGateReviewCommentBody({
+      gate: "pre_approval_gate",
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+      verdict: "findings_present",
+      findingsSummary: "digest",
+      nextAction: "fix",
+      blockCleanOnFindingSeverities: [],
+      structuredFindings: result.findingsJson,
+    });
+    assert.ok(typeof body === "string" && body.length > 0);
+  });
+});

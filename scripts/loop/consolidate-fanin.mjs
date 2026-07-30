@@ -100,13 +100,40 @@ const VALID_GATES = new Set(GATE_NAMES);
 // plain " …" suffix before emission — matching upsert-checkpoint-verdict.mjs's
 // plain-ellipsis truncation policy (never the "[truncated N chars]" marker,
 // which that CLI reserves for a posted comment being SHORTENED, not this
-// tool's own findings text) — so a reviewer's over-long field can never trip
-// upsert-checkpoint-verdict.mjs's fail-closed MAX_GATE_COMMENT_TEXT_LENGTH
-// guard on the rendered --findings-json block.
+// tool's own findings text). upsert-checkpoint-verdict.mjs bounds the WHOLE
+// rendered --findings-json block at 2000 chars and FAILS CLOSED above it, so a
+// per-field cap alone is not enough: after per-field truncation, the emitted
+// set's estimated rendered size is budgeted as a whole, shrinking the longest
+// summaries evenly until the estimate fits under the consumer's bound (with
+// margin for the renderer's per-line decoration).
 const MAX_FINDING_TEXT_LENGTH = 2000;
-function truncateFindingText(value) {
-  if (typeof value !== "string" || value.length <= MAX_FINDING_TEXT_LENGTH) return value;
-  return `${value.slice(0, MAX_FINDING_TEXT_LENGTH - 2)} …`;
+const RENDERED_BLOCK_BUDGET = 1800; // consumer bound 2000, minus decoration margin
+function truncateFindingText(value, limit = MAX_FINDING_TEXT_LENGTH) {
+  if (typeof value !== "string" || value.length <= limit) return value;
+  return `${value.slice(0, Math.max(0, limit - 2))} …`;
+}
+
+// Approximate the renderer's output: one line per angle + one line per finding
+// (severity + summary + file:line + disposition). Shrink the longest summaries
+// evenly until the estimate fits the budget — deterministic, no consumer import.
+function fitFindingsToRenderBudget(findingsJson) {
+  const estimate = () => findingsJson.reduce((sum, a) => {
+    let s = sum + a.angle.length + a.verdict.length + 8;
+    for (const f of a.findings) {
+      s += (f.severity?.length ?? 0) + (f.summary?.length ?? 0)
+        + (f.file?.length ?? 0) + (f.disposition?.length ?? 0) + 16;
+    }
+    return s;
+  }, 0);
+  let cap = MAX_FINDING_TEXT_LENGTH;
+  while (estimate() > RENDERED_BLOCK_BUDGET && cap > 40) {
+    cap = Math.floor(cap / 2);
+    for (const a of findingsJson) {
+      for (const f of a.findings) {
+        f.summary = truncateFindingText(f.summary, cap);
+      }
+    }
+  }
 }
 
 export function parseConsolidateFaninCliArgs(argv) {
@@ -426,6 +453,8 @@ export async function consolidateGateFanin(options) {
       }),
     };
   });
+
+  fitFindingsToRenderBudget(findingsJson);
 
   const result = {
     ok: true,

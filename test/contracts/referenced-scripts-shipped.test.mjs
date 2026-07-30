@@ -10,9 +10,10 @@
 // worktree — directories walked recursively — plus the files npm always
 // ships regardless of `files` (package.json itself). This repo ships no
 // `.npmignore` (when `files` is present, npm packs exactly what it expands
-// to — there is no separate ignore-pattern layer to reproduce here); the
-// expansion below is cross-validated against a live `npm pack --dry-run`
-// for exactness in test/packaged-install-smoke.test.mjs.
+// to — there is no separate ignore-pattern layer to reproduce here). The
+// expansion was cross-validated once against a live `npm pack --dry-run`
+// (exact match, 358 files) during review; the test itself runs offline and
+// re-validating against a live pack is a manual spot-check, not a suite step.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
