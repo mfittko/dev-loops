@@ -10,7 +10,16 @@ manual step.** Everything after the tag is hands-off.
    into the generated `npx dev-loops@<version>` pins and the plugin manifest;
    a stale manifest fails `verify` at publish), and add the matching
    `## <version> - <date>` section to `CHANGELOG.md` (the empty `## Unreleased`
-   heading stays above the latest version).
+   heading stays above the latest version). Committing and pushing this release
+   commit lands directly on `main`, which the default-branch guard hooks (see
+   [Default-branch guard](worktree-guidance.md#default-branch-guard)) now refuse
+   by default — a sanctioned release commits and pushes with
+   `DEVLOOPS_ALLOW_MAIN=1`:
+
+   ```bash
+   DEVLOOPS_ALLOW_MAIN=1 git commit -m "chore(release): v<version>"
+   DEVLOOPS_ALLOW_MAIN=1 git push origin main
+   ```
 2. Tag the release commit and push the tag:
 
    ```bash

@@ -47,10 +47,18 @@ node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \
   [--branch <name>] [--base <ref, default origin/main>]
 ```
 
-It prints `{ ok, path, created|reused, provision: { actions, summary } }` (the
-full `provisionWorktree()` result, not just its summary). Provisioning is
+It prints `{ ok, path, created|reused, provision: { actions, summary }, guard }`
+(the full `provisionWorktree()` result, not just its summary). Provisioning is
 fail-soft (a warning never aborts the worktree); a `git worktree add` failure is
 a hard error. It does **not** run `npm install` (see dependencies below).
+
+`guard` is the default-branch guard's install result for the primary checkout
+(`{ ok, installed, refreshed, skipped, defaultBranch?, reason? }`), always
+present on both the create and reuse paths — installing it is best-effort and
+never fails the worktree. It goes inert (reports `ok: true` but installs
+nothing enforceable, or skips) when `core.hooksPath` is already set, a foreign
+hook already occupies the slot, or the guarded branch's remote-tracking ref
+does not exist; see [Default-branch guard](#default-branch-guard) below.
 
 ### Auto-provisioning (`.devloops` `worktree` section)
 
@@ -96,6 +104,36 @@ Run manually with:
 ```sh
 node scripts/loop/provision-worktree.mjs --worktree-path <p> --repo-root <p>
 ```
+
+### Default-branch guard
+
+<!-- rule: WORKTREE-DEFAULT-BRANCH-GUARD -->
+`WORKTREE-DEFAULT-BRANCH-GUARD`: `ensure-worktree.mjs` also best-effort
+installs `pre-commit`/`pre-push` hooks into the primary checkout's shared
+common hook directory, refusing a commit on the repo's default branch or a
+push to it (including via an explicit refspec such as `HEAD:main` from a
+feature branch). Linked worktrees run the same hooks — git resolves them from
+the common directory — but a worktree's own branch is not the default, so its
+work passes through untouched. Override for a sanctioned release or reconcile
+with `DEVLOOPS_ALLOW_MAIN=1 <command>`.
+
+This is **not an unconditional guarantee** — it has three silent no-op paths,
+each reported in the `guard` result rather than failing the worktree:
+
+- `core.hooksPath` is already configured to point elsewhere: installing into
+  `$GIT_DIR/hooks` would never run, so install refuses entirely
+  (`guard.ok: false`).
+- A pre-existing hook (from another tool, or hand-authored) already occupies
+  the `pre-commit`/`pre-push` slot: that hook is never clobbered, and the
+  slot is reported `skipped` — the default branch is unguarded for that hook.
+- The guarded branch's remote-tracking ref (`refs/remotes/<remote>/<branch>`)
+  does not exist at install time (offline, no remote, or a base that has
+  never been pushed): the hooks install inert (`guard.defaultBranch: null`)
+  rather than guess a branch to protect.
+
+Because of these, `ensure-worktree.mjs`'s hook is a defense-in-depth
+best-effort measure, not a substitute for `WORKTREE-CREATE-PROVISION` and
+addressing git operations with an absolute worktree path.
 
 ### Post-merge cleanup
 

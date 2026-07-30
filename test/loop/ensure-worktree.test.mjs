@@ -10,10 +10,18 @@ import {
   parseEnsureWorktreeCliArgs,
 } from "../../scripts/loop/ensure-worktree.mjs";
 
+// Scrubbed, not inherited: an ambient DEVLOOPS_ALLOW_MAIN (the guard's own
+// documented release/reconcile override) would make the guard-refusal
+// assertions below pass for the wrong reason, and a host-global
+// core.hooksPath/commit.gpgsign=true would break commits here for reasons
+// unrelated to the guard under test.
+const REPO_GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+delete REPO_GIT_ENV.DEVLOOPS_ALLOW_MAIN;
+
 // A real (tiny) git repo with one commit on `main`, so `git worktree add` works.
 function makeRepo({ devloops, branch = "main" } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "wt-ensure-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: REPO_GIT_ENV });
   git("init", "-q", "-b", branch);
   git("config", "user.email", "t@t.t");
   git("config", "user.name", "t");

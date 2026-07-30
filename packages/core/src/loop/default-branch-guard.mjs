@@ -41,17 +41,26 @@ const SHELL_SAFE_BRANCH = /^[A-Za-z0-9._/-]+$/;
  *   beats re-deriving it in shell: `origin/HEAD` is often absent, and a
  *   main-or-master guess picks a stale local `main` in a `master` repo, which
  *   would guard the wrong branch and leave the real default open.
+ * @throws {Error} when defaultBranch is non-empty and not shell-safe — this
+ *   function is the actual trust boundary (it is what interpolates the name
+ *   into shell), not just its installDefaultBranchGuard caller, so it must
+ *   refuse on its own rather than rely on every caller re-checking first.
  */
 export function renderGuardHook(hookName, defaultBranch = null) {
   const resolvedDefault = typeof defaultBranch === "string" && defaultBranch.trim().length > 0
     ? defaultBranch.trim()
     : "";
+  if (resolvedDefault && !SHELL_SAFE_BRANCH.test(resolvedDefault)) {
+    throw new Error(
+      `default branch ${JSON.stringify(resolvedDefault)} contains characters the generated hook's shell would expand; refusing to render a hook that could execute it`,
+    );
+  }
   const header = `#!/bin/sh
 # ${GUARD_MARKER}
 # Refuses a ${hookName} that would land on the default branch. Installed in the
 # common hook directory, so linked worktrees run it too — their branch is not
 # the default, which is what lets their work through.
-if [ -n "\${${GUARD_OVERRIDE_ENV}}" ]; then
+if [ "\${${GUARD_OVERRIDE_ENV}}" = "1" ]; then
   exit 0
 fi
 default="${resolvedDefault}"
@@ -166,10 +175,17 @@ export function installDefaultBranchGuard({ gitDir, defaultBranch = null, hooksP
       skipped.push({ hook, reason: "a pre-existing hook is present and was left untouched" });
       continue;
     }
-    fs.writeFileSync(hookPath, renderGuardHook(hook, resolvedDefault));
-    // chmod separately: writeFileSync's mode argument is ignored when the file
-    // already exists, and git silently ignores a non-executable hook.
-    fs.chmodSync(hookPath, 0o755);
+    // Write + chmod a temp file in the SAME directory, then rename into place.
+    // A direct writeFileSync is visible to git mid-write: the common hooks dir
+    // is shared, so a concurrent ensureWorktree call (or a real commit racing
+    // an install) can exec the file while it is still header-only, falling
+    // through to `exit 0` and letting a default-branch commit land. A same-dir
+    // rename is atomic, so any reader sees either the old hook or the new one,
+    // never a partial one.
+    const tmpPath = path.join(hooksDir, `.${hook}.tmp-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(tmpPath, renderGuardHook(hook, resolvedDefault), { mode: 0o755 });
+    fs.chmodSync(tmpPath, 0o755); // mode above is umask-limited; force it
+    fs.renameSync(tmpPath, hookPath);
     (absent ? installed : refreshed).push(hook);
   }
 

@@ -17,11 +17,21 @@ import {
 // The hooks are shell, and the whole point is that they fire inside real git —
 // asserting on their text would pass while the guard silently never ran. So
 // these drive an actual repository and let git invoke them.
+//
+// The fixture env is scrubbed, not inherited: an ambient GUARD_OVERRIDE_ENV
+// (this suite's own documented release/reconcile escape hatch — an operator
+// or a parent test runner may well have it exported) would make the override
+// tests indistinguishable from a broken guard, and a host-global
+// `core.hooksPath`/`commit.gpgsign=true` would break commits here for reasons
+// that have nothing to do with the guard under test.
+const BASE_GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+delete BASE_GIT_ENV[GUARD_OVERRIDE_ENV];
+
 function git(cwd, args, env = {}) {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...BASE_GIT_ENV, ...env },
   });
 }
 
@@ -96,7 +106,28 @@ test("a non-default branch commits freely — the loop's own path is untouched",
   }
 });
 
-test("a linked worktree DOES run the hook — its non-default branch is what lets the commit through", async () => {
+test("a linked worktree DOES run the hook — a commit on the default branch there is refused", async () => {
+  const { dir, gitDir } = await repoFixture();
+  const linked = path.join(dir, "..", `${path.basename(dir)}-linked`);
+  try {
+    installDefaultBranchGuard({ gitDir, defaultBranch: "main" });
+    // A branch can only be checked out in one worktree at a time, so move the
+    // primary off `main` first to free it for the linked worktree — that is
+    // what actually exercises "the hook fires in a linked worktree", as
+    // opposed to a passing commit on a non-default branch, which would pass
+    // identically whether or not the hook ran at all.
+    git(dir, ["checkout", "--quiet", "-b", "primary-holder"]);
+    git(dir, ["worktree", "add", "--quiet", linked, "main"]);
+    const result = commitAttempt(linked, "on-main-in-worktree.txt");
+    assert.equal(result.blocked, true, `expected the default-branch commit from the linked worktree to be refused: ${result.stderr}`);
+    assert.match(result.stderr, /refusing to commit on the default branch/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(linked, { recursive: true, force: true });
+  }
+});
+
+test("a linked worktree on a non-default branch commits freely", async () => {
   const { dir, gitDir } = await repoFixture();
   const linked = path.join(dir, "..", `${path.basename(dir)}-linked`);
   try {
@@ -171,6 +202,19 @@ test("renderGuardHook emits a runnable script that names what it refused", () =>
   for (const hook of GUARDED_HOOKS) {
     assert.ok(renderGuardHook(hook, "main").startsWith("#!/bin/sh"), "must be a runnable shell script");
   }
+});
+
+// renderGuardHook is the function that actually interpolates the branch name
+// into shell, so it — not just its installDefaultBranchGuard caller — is the
+// trust boundary: it must refuse on its own, since nothing stops a direct
+// caller from skipping installDefaultBranchGuard's own pre-check.
+test("renderGuardHook refuses to interpolate a branch name the shell would expand", () => {
+  for (const hostile of ["main$(id)", "main$HOME", "release`echo x`", 'main";id;#']) {
+    assert.throws(() => renderGuardHook("pre-commit", hostile), /shell would expand/);
+    assert.throws(() => renderGuardHook("pre-push", hostile), /shell would expand/);
+  }
+  // Ordinary names still render.
+  assert.doesNotThrow(() => renderGuardHook("pre-commit", "release/v1.0-rc"));
 });
 
 // The finding that mattered most: checking the CURRENT branch let every
