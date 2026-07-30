@@ -28,6 +28,7 @@ import {
   deriveLoopCiStatusFromRollup,
   partitionEntriesByCheckName,
   LOOP_DERIVED_CI_CHECK_NAME,
+  LOOP_DERIVED_CI_CHECK_NAMES,
 } from "@dev-loops/core/loop/copilot-ci-status";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -239,7 +240,7 @@ async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }
       const payload = JSON.parse(checkRunsResult.stdout);
       if (Array.isArray(payload?.check_runs)) {
         const { matched: loopDerivedRuns, rest: nonLoopDerivedRuns } =
-          partitionEntriesByCheckName(payload.check_runs, LOOP_DERIVED_CI_CHECK_NAME);
+          partitionEntriesByCheckName(payload.check_runs, LOOP_DERIVED_CI_CHECK_NAMES);
         loopDerivedFailureDetails = summarizeHeadScopedCheckRunsSignal({ check_runs: loopDerivedRuns }).status === "failure"
           ? [LOOP_DERIVED_CI_CHECK_NAME]
           : [];

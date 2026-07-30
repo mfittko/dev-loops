@@ -12,6 +12,7 @@ import {
   deriveLoopCiStatusFromRollup,
   partitionEntriesByCheckName,
   LOOP_DERIVED_CI_CHECK_NAME,
+  LOOP_DERIVED_CI_CHECK_NAMES,
 } from "../src/loop/copilot-ci-status.mjs";
 
 test("normalizeStatusCheckRollupStatus returns failure over pending for mixed rollup entries", () => {
@@ -209,6 +210,66 @@ test("summarizeHeadScopedCheckRunsSignal returns failureDetails undefined when n
 
 test("LOOP_DERIVED_CI_CHECK_NAME is the gate-evidence check", () => {
   assert.equal(LOOP_DERIVED_CI_CHECK_NAME, "gate-evidence");
+});
+
+test("LOOP_DERIVED_CI_CHECK_NAMES covers the status context and the workflow's check run", () => {
+  assert.deepEqual([...LOOP_DERIVED_CI_CHECK_NAMES], ["gate-evidence", "gate-evidence-runner"]);
+});
+
+test("partitionEntriesByCheckName accepts several names and still accepts one", () => {
+  const entries = [
+    { name: "verify" },
+    { name: "gate-evidence-runner" },
+    { context: "gate-evidence" },
+  ];
+
+  const many = partitionEntriesByCheckName(entries, LOOP_DERIVED_CI_CHECK_NAMES);
+  assert.equal(many.matched.length, 2);
+  assert.deepEqual(many.rest.map((entry) => entry.name), ["verify"]);
+
+  const one = partitionEntriesByCheckName(entries, LOOP_DERIVED_CI_CHECK_NAME);
+  assert.equal(one.matched.length, 1);
+  assert.equal(one.rest.length, 2);
+});
+
+// The live PR-1492 shape that deadlocked: every real check green, plus a
+// gate-evidence-runner run cancelled by the workflow's own concurrency and the
+// gate-evidence status pending on the very verdict the loop could not post
+// while CI read "none". Excluding both loop-derived entries (a cancelled run
+// is deliberately not green — that policy is unchanged) resolves it to success.
+test("a cancelled gate-evidence-runner beside green checks no longer blocks the loop", () => {
+  const { status, excludedFailureDetails } = deriveLoopCiStatusFromRollup([
+    { __typename: "CheckRun", name: "gate-evidence-runner", status: "COMPLETED", conclusion: "CANCELLED" },
+    { __typename: "CheckRun", name: "changes", status: "COMPLETED", conclusion: "SUCCESS" },
+    { __typename: "CheckRun", name: "gate-evidence-runner", status: "COMPLETED", conclusion: "SUCCESS" },
+    { __typename: "CheckRun", name: "verify-suite (test:core)", status: "COMPLETED", conclusion: "SUCCESS" },
+    { __typename: "CheckRun", name: "viewer-smoke", status: "COMPLETED", conclusion: "SKIPPED" },
+    { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" },
+    { __typename: "StatusContext", context: "gate-evidence", state: "PENDING" },
+  ]);
+
+  assert.equal(status, "success");
+  assert.deepEqual(excludedFailureDetails, []);
+});
+
+test("a cancelled run on a REAL check still blocks — the fail-closed policy is untouched", () => {
+  const { status } = deriveLoopCiStatusFromRollup([
+    { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "CANCELLED" },
+    { __typename: "CheckRun", name: "changes", status: "COMPLETED", conclusion: "SUCCESS" },
+    { __typename: "CheckRun", name: "gate-evidence-runner", status: "COMPLETED", conclusion: "CANCELLED" },
+  ]);
+
+  assert.equal(status, "none");
+});
+
+test("a failing gate-evidence-runner is still surfaced as an excluded failure, never masked", () => {
+  const { status, excludedFailureDetails } = deriveLoopCiStatusFromRollup([
+    { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" },
+    { __typename: "CheckRun", name: "gate-evidence-runner", status: "COMPLETED", conclusion: "FAILURE" },
+  ]);
+
+  assert.equal(status, "success");
+  assert.deepEqual(excludedFailureDetails, ["gate-evidence"]);
 });
 
 test("partitionEntriesByCheckName splits rollup entries by name/context", () => {
