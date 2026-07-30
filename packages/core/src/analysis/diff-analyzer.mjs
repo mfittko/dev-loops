@@ -252,7 +252,7 @@ export function diffHasSecuritySeam(diffOutput) {
  *
  * Detects:
  * - COMMENT_ONLY: only comment lines changed
- * - DOCS_ONLY: only docs-extension files changed (.md/.markdown, from extensions)
+ * - DOCS_ONLY: every changed file classifies as docs (docs extensions .md/.markdown, or prose under docs/)
  * - CONFIG_ONLY: only config files changed
  * - TEST_ONLY: only test files changed
  * - RENAME_ONLY: all renames, no content changes

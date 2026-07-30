@@ -60,6 +60,15 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
     assert.equal(decision.carryForward, true);
   });
 
+  test(".markdown-only delta carries a clean code angle like .md (post-convergence suppression parity)", () => {
+    const decision = resolveAngleCarryForward({
+      angle: "correctness",
+      changedFiles: ["changes.markdown"],
+      prevVerdict: "clean",
+    });
+    assert.equal(decision.carryForward, true);
+  });
+
   test("code delta + code angle -> false", () => {
     const decision = resolveAngleCarryForward({
       angle: "correctness",
