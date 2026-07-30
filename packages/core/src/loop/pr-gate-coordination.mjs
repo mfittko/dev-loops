@@ -1583,19 +1583,17 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // Defensive gate-entry re-check for ROUND_CAP_REACHED (#1472): the compound
   // "unresolved threads OR non-clean CI" hard stop that copilot-loop-state.mjs
   // emits has no dedicated boundary of its own, so without this branch the
-  // generic fallback below always names `report_blocked`. This branch exists
-  // for a caller re-checking gate entry with signals fresher than the
-  // interpreter's snapshot (e.g. threads resolved between the interpreter run
-  // and this re-check) — it is NOT how a normal ROUND_CAP_REACHED classification
-  // is expected to look, because the interpreter's own CI predicate is
-  // strictly wider than this branch's (it also accepts `crediblyGreen`, #1371):
-  // whenever this branch's narrower predicate and zero unresolved threads both
-  // hold on the snapshot the interpreter itself observed, the interpreter's
-  // wider check has already passed too, so the interpreter emits
-  // ROUND_CAP_CLEAN_FALLBACK instead of ROUND_CAP_REACHED (see the
-  // equivalence test in pr-gate-coordination.test.mjs). So on facts unchanged
-  // since interpretation, this branch never fires; it only grants when the
-  // caller's re-check facts diverge from what the interpreter last saw. The
+  // generic fallback below always names `report_blocked`. Both shipped
+  // callers read lifecycleState and the CI/thread facts from ONE snapshot, and
+  // the interpreter's own CI predicate is strictly wider than this branch's
+  // (it also accepts `crediblyGreen`, #1371): whenever this branch's narrower
+  // predicate and zero unresolved threads hold, the interpreter has already
+  // classified the snapshot ROUND_CAP_CLEAN_FALLBACK, never ROUND_CAP_REACHED
+  // (see the equivalence test in pr-gate-coordination.test.mjs). This branch
+  // is therefore unreachable through the shipped callers — it is pure
+  // defense-in-depth, demanded by issue 1472's corrected AC so the three
+  // fields can never disagree if a future caller hands the evaluator a
+  // round_cap_reached label alongside facts that satisfy the grant. The
   // predicate intentionally mirrors every other pre-approval CI boundary in
   // this file (success, or CI not required) — `crediblyGreen` is unconfirmed
   // CI and stays blocked here exactly as it does everywhere else (#1371). Any

@@ -2888,8 +2888,10 @@ for (const copilotReviewRequestStatus of ["requested", "already-requested"]) {
 // shape (gateBoundary pre_approval_gate_window) via isRoundCapReachedCleanGrant
 // — it must NOT blanket-exempt every round_cap_reached result. When the same
 // facts instead reach FINAL_APPROVAL_READY (preApprovalGate already clean on
-// the current head), a lingering review request is still a genuinely unsettled
-// signal and the guard must still fire.
+// the current head), the next step is human approval, a terminal claim held
+// to the conservative default: the guard still fires there, and the state
+// self-heals next cycle once the interpreter re-classifies the snapshot as
+// ROUND_CAP_CLEAN_FALLBACK (whose exemption is boundary-independent).
 test("round_cap_reached reaching final_approval_ready (not the window shape) still guards a lingering copilotReviewRequestStatus:requested (#1472)", () => {
   const result = evaluatePrGateCoordination({
     pr: 1460,
