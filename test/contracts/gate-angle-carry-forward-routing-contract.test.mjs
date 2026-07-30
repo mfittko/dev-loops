@@ -30,6 +30,12 @@ const CARRY_FORWARD_ROUTING = [
   /--prev-head/,
   // Only the angles it leaves to re-run get a fresh reviewer.
   /mustRerun/,
+  // …but the dispatch set is the CURRENT head's resolved angles minus the carried
+  // ones, never the plan's own lists — the plan's universe is the PRIOR head's
+  // angle set, so an angle first resolved at this head appears in neither list
+  // and would otherwise go unreviewed.
+  /subtract, never substitute/,
+  /minus the plan's `carried` angles/,
   // Carried angles keep the prior reviewer's identity and head, never a fake one.
   /carriedFromHead/,
   /never a fabricated fresh review/i,
