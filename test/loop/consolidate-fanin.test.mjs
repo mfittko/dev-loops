@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -674,6 +674,40 @@ test("large fan-ins are budgeted so upsert-verdict's whole-block render bound ac
   });
 });
 
+// Regression for a real reported false-negative: many SMALL findings, each
+// carrying "file" + "line" + "disposition", whose per-finding decoration
+// (path length, digits(line), the disposition wrap) an arithmetic size
+// estimate can under-count without reproducing the renderer's exact
+// formatting. Fit is now measured by actually rendering the candidate (see
+// fitsRenderBudget), so this can no longer under-count: whatever
+// "commentBudgetExceeded" says must match what the real renderer accepts.
+// Reverting to an estimate-based check (even a well-tuned one) risks
+// silently reintroducing this exact false negative.
+test("many small file/line/disposition-bearing findings are measured by rendering, so commentBudgetExceeded always matches what actually renders", async () => {
+  const files = { "angle-a.json": {
+    angle: "angle-a",
+    verdict: "findings_present",
+    findings: Array.from({ length: 48 }, (_, j) => ({
+      severity: "must-fix",
+      summary: `tiny finding ${j}`,
+      file: `src/module/nested/path/file${j}.mjs`,
+      line: 123 + j,
+    })),
+  } };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    // Whichever way it resolved, it must be renderable — this is the actual
+    // contract violated by an under-counting estimate (ok: true shipped with
+    // a shape the real renderer would reject).
+    assertRendersWithoutThrowing(result.findingsJson);
+    if (!result.commentBudgetExceeded) {
+      // If flagged as fitting, the RAW (unmarked) per-finding shape — not
+      // just a collapsed marker — must be what actually renders under budget.
+      assert.equal(result.findingsJson[0].findings.length, 48);
+    }
+  });
+});
+
 // Regression for the fan-in disposition ledger vs. gate-comment render budget
 // split: a round too large to render even at minimum summary length must
 // still write a COMPLETE --ledger-out and succeed (ok: true, no throw — the
@@ -792,13 +826,69 @@ test("a fan-in too large to render at minimum summary length still writes a comp
   });
 });
 
-// Bare-marker regression: enough angles that the VERBOSE per-angle marker
-// (the breakdown sentence) no longer fits, but a bare "N omitted" line per
-// angle still does. The verbose text must never appear half-truncated here —
-// the marker is either the whole verbose sentence or the whole bare one.
-test("a fan-in with enough angles that the verbose budget marker doesn't fit degrades to a whole bare omitted-count line and still renders", async () => {
+// Per-angle degradation regression: the verbose-vs-bare choice is decided
+// PER ANGLE, not once for the whole round — a round with enough angles that
+// NOT ALL of them can afford the verbose breakdown must still give the ones
+// that fit the full sentence, rather than dropping to bare everywhere the
+// instant any single angle can't afford it (that would leave most of the
+// budget unused and the documented breakdown effectively unreachable). Every
+// marker is either the WHOLE verbose sentence or the WHOLE bare one — never a
+// half-truncated fragment of either. These thresholds are measured against
+// the real renderer (see fitsRenderBudget) — retune if the marker/renderer
+// text changes.
+test("a fan-in with enough angles that not all can afford the verbose marker keeps it on the ones that fit and uses bare only where it doesn't", async () => {
   const FINDINGS_PER_ANGLE = 30;
-  const ANGLE_COUNT = 15;
+  const ANGLE_COUNT = 14;
+  const files = {};
+  for (let i = 0; i < ANGLE_COUNT; i++) {
+    files[`angle${i}.json`] = {
+      angle: `angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "worth-fixing-now",
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+    assert.equal(result.findingsJson.length, ANGLE_COUNT); // real angle set preserved
+
+    let verboseCount = 0;
+    let bareCount = 0;
+    for (const section of result.findingsJson) {
+      assert.equal(section.verdict, "findings_present");
+      assert.equal(section.findings.length, 1);
+      const summary = section.findings[0].summary;
+      if (summary === `${FINDINGS_PER_ANGLE} omitted — see ledger`) {
+        bareCount += 1;
+      } else if (summary.startsWith(`${FINDINGS_PER_ANGLE} finding(s) omitted from this comment`) && summary.endsWith("see the disposition ledger")) {
+        verboseCount += 1;
+      } else {
+        assert.fail(`marker summary is neither the whole verbose sentence nor the whole bare one (half-truncated?): ${summary}`);
+      }
+      assert.equal(section.findings[0].disposition, "deferred");
+    }
+    // BOTH forms present — proves the choice is per angle, not per round.
+    assert.ok(verboseCount > 0, "expected at least one angle to keep the verbose breakdown");
+    assert.ok(bareCount > 0, "expected at least one angle to degrade to bare");
+
+    // The ledger is still complete regardless of how far any marker degraded.
+    assert.equal(result.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// All-bare tier regression: enough angles that NONE can afford the verbose
+// marker (not even one), so every angle degrades to the bare form — proves
+// tier 2 still functions on its own, independent of the per-angle mix above.
+test("a fan-in with enough angles that none can afford the verbose marker uses bare everywhere and still renders", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 21;
   const files = {};
   for (let i = 0; i < ANGLE_COUNT; i++) {
     files[`angle${i}.json`] = {
@@ -868,5 +958,40 @@ test("a fan-in with far more angles than even bare markers can fit withholds --o
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
     assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
     assert.deepEqual(writtenLedger, result.findings);
+  });
+});
+
+// Stale-file regression: a withheld round must actively REMOVE a prior
+// round's --out, not just skip writing a new one — otherwise a caller that
+// unconditionally reads --out (rather than checking "commentBudgetExceeded")
+// posts a PRIOR round's findings as though they were current. Reverting the
+// fix (skip-write instead of remove) fails this test.
+test("a withheld round removes a stale --out left on disk from a prior round", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 25;
+  const files = {};
+  for (let i = 0; i < ANGLE_COUNT; i++) {
+    files[`angle${i}.json`] = {
+      angle: `angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "worth-fixing-now",
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  await withFindingsDir(files, async (dir) => {
+    const outPath = path.join(dir, "out", "findings.json");
+    await mkdir(path.dirname(outPath), { recursive: true });
+    const staleFromPriorRound = [{ angle: "angle-0", verdict: "clean", findings: [] }];
+    await writeFile(outPath, JSON.stringify(staleFromPriorRound), "utf8");
+
+    const result = await consolidateGateFanin({ findingsDir: dir, out: outPath });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.findingsJson, []); // withheld tier
+
+    await assert.rejects(() => readFile(outPath, "utf8"), { code: "ENOENT" });
   });
 });
