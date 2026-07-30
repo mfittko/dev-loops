@@ -6,13 +6,16 @@ const STATUS_CONTEXT_PENDING_STATES = new Set(["PENDING", "EXPECTED"]);
 const STATUS_CONTEXT_SUCCESS_STATES = new Set(["SUCCESS"]);
 
 /**
- * Name of the server-side "Gate evidence" check dev-loops posts on its own
- * pull requests (`.github/workflows/gate-evidence.yml`). Its conclusion is
- * DERIVED from the loop's own progress (a clean current-head
- * pre_approval_gate verdict), not an independent build/test signal — so the
- * loop must exclude it, by this exact name only, when deriving the CI status
- * that gates its own pre_approval step. Otherwise the loop could never post
- * the very verdict that would turn this check green (#1358).
+ * Name of the explicit commit STATUS dev-loops posts on its own pull requests
+ * from `.github/workflows/gate-evidence.yml`. Its conclusion is DERIVED from
+ * the loop's own progress (a clean current-head pre_approval_gate verdict),
+ * not an independent build/test signal — so the loop must exclude it when
+ * deriving the CI status that gates its own pre_approval step. Otherwise the
+ * loop could never post the very verdict that would turn this check green
+ * (#1358). This constant names ONLY the status context; the workflow also
+ * surfaces as a check run, so anything partitioning check runs must use
+ * `LOOP_DERIVED_CI_CHECK_NAMES` below. It remains the label reported in
+ * `excludedFailureDetails` for either shape, since both name one workflow.
  */
 export const LOOP_DERIVED_CI_CHECK_NAME = "gate-evidence";
 

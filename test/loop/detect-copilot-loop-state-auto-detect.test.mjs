@@ -586,8 +586,10 @@ test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fa
               commit: { oid: "oldsha-5" },
             },
           ],
-          // Mirrors the live #1383 rollup exactly: gate-evidence is the only red
-          // check, every other check (including CI test suites) is green.
+          // Mirrors the live #1383 rollup: gate-evidence is the only red check
+          // and every other real check is green, plus the workflow's own
+          // check run cancelled by its job-level concurrency — both
+          // loop-derived entries must drop out of the computation.
           statusCheckRollup: [
             { status: "COMPLETED", conclusion: "FAILURE", name: "gate-evidence" },
             { status: "COMPLETED", conclusion: "CANCELLED", name: "gate-evidence-runner" },
