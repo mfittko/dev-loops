@@ -32,12 +32,20 @@ import {
   resolveCarryForwardAngles,
   resolveConvergenceCarryForward,
 } from "@dev-loops/core/loop/gate-carry-forward";
+import { baseAngleName } from "@dev-loops/core/loop/gate-fanin";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { assertWorktreeAtHead, hasRenameEntry, mapGateToConfigKey, parseChangedFiles } from "./write-gate-context.mjs";
+import {
+  assertWorktreeAtHead,
+  gitEnvWithoutDirOverrides,
+  hasRenameEntry,
+  mapGateToConfigKey,
+  parseChangedFiles,
+} from "./write-gate-context.mjs";
 
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 
@@ -48,7 +56,8 @@ Required:
   --repo <owner/name>
   --pr <number>
   --gate <draft_gate|pre_approval_gate>
-  --prev-head <sha>              Head SHA the prior CLEAN findings-log was recorded on (head A)
+  --prev-head <sha>              FULL head SHA the prior CLEAN findings-log was recorded on (head A);
+                                 the log path is keyed by the full SHA, so a prefix refuses "not found"
   --head-sha <sha>              Current head SHA (head B); must be the CWD worktree HEAD
 Optional:
   --tmp-root <path>             Root tmp directory (default: tmp/)
@@ -108,8 +117,20 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
       continue;
     }
     if (token.name === "prev-head") {
-      const sha = normalizeHeadSha(requireTokenValue(token, parseError));
-      if (!sha) throw parseError("--prev-head must be a 7-64 character hex SHA");
+      // FULL SHA only: buildLogPath keys the prior findings-log's path on --prev-head
+      // verbatim, and every log the sanctioned writer produces is keyed by the FULL
+      // SHA (write-gate-findings-log's normalizeFullHeadSha). An abbreviated value
+      // would resolve a path that can never exist and refuse with a misleading
+      // "log not found" — reading as "no prior round" and silently disabling
+      // carry-forward forever instead of surfacing the real mistake.
+      const sha = normalizeFullHeadSha(requireTokenValue(token, parseError));
+      if (!sha) {
+        throw parseError(
+          "--prev-head must be the FULL head commit SHA (40 or 64 hex chars), not a short prefix — " +
+          "the prior findings-log path is keyed by the full SHA, so a prefix resolves a path that can " +
+          "never exist and refuses with a misleading \"log not found\", silently disabling carry-forward",
+        );
+      }
       options.prevHead = sha;
       continue;
     }
@@ -197,9 +218,32 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   // `worth-fixing-now`) finding against it. The carry-forward rule is that an
   // angle which previously returned findings never carries; the log's overall
   // verdict cannot express that, so derive it from the findings themselves.
-  const anglesWithPriorFindings = (Array.isArray(log.findings) ? log.findings : [])
-    .map((finding) => (finding && typeof finding.angle === "string" ? finding.angle.trim() : ""))
-    .filter((angle) => angle.length > 0);
+  //
+  // FAIL-CLOSED attribution: `log.findings` must be an array (a malformed/
+  // truncated log cannot prove no angle has an open finding), and every finding
+  // must be attributable to a KNOWN prevAngles entry — matched by
+  // {@link baseAngleName} (a `<angle>-delta-at-...` re-review entry still counts
+  // toward its base angle, exactly as gate-fanin's own coverage check does) and
+  // case-insensitively (the finding's angle and provenance.perAngle's angle are
+  // independently authored). A finding this cannot attribute to any known angle
+  // means no angle is provably clean, so it refuses the whole plan rather than
+  // silently forcing nothing.
+  if (log.findings !== undefined && !Array.isArray(log.findings)) {
+    throw new Error("prior gate findings-log's findings field is not an array — cannot verify which angles are clean (fail-closed)");
+  }
+  const prevAngleByLowerBase = new Map(prevAngles.map((angle) => [baseAngleName(angle).toLowerCase(), angle]));
+  const anglesWithPriorFindings = [];
+  for (const finding of Array.isArray(log.findings) ? log.findings : []) {
+    const rawAngle = finding && typeof finding.angle === "string" ? finding.angle.trim() : "";
+    if (rawAngle.length === 0) {
+      throw new Error("prior gate findings-log has a finding with no angle — cannot attribute it to a carried angle (fail-closed)");
+    }
+    const matched = prevAngleByLowerBase.get(baseAngleName(rawAngle).toLowerCase());
+    if (!matched) {
+      throw new Error(`prior gate findings-log has a finding for angle ${JSON.stringify(rawAngle)}, which matches no provenance.perAngle entry — cannot prove that angle is clean (fail-closed)`);
+    }
+    anglesWithPriorFindings.push(matched);
+  }
   const { carried, mustRerun } = resolveCarryForwardAngles({
     prevAngles,
     changedFiles,
@@ -211,7 +255,19 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
     ...(identityByAngle.get(angle) ?? {}),
     reason,
   }));
-  return { prevHead: headSha, carried: carriedProvenance, mustRerun };
+  // resolveCarryForwardAngles forces both mandatory/always-include angles AND
+  // prior-finding angles the same way (surface kind "always"), so it stamps both
+  // with the generic "mandatory / always-include surface" reason. That
+  // misattributes the prior-finding case — give it its own reason so a plan
+  // reader can tell "this angle is always re-run by config" apart from "this
+  // angle had an open finding last round".
+  const priorFindingAngles = new Set(anglesWithPriorFindings);
+  const mustRerunWithReasons = mustRerun.map((entry) => (
+    priorFindingAngles.has(entry.angle)
+      ? { ...entry, reason: "angle returned a finding at the prior head — an angle with an open finding never carries forward regardless of the delta" }
+      : entry
+  ));
+  return { prevHead: headSha, carried: carriedProvenance, mustRerun: mustRerunWithReasons };
 }
 
 // git-diff isolation flags (subset of write-gate-context's captureDiffFromBase):
@@ -235,10 +291,10 @@ function captureDeltaChangedFiles({ base, repoRoot }) {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    // An exported GIT_DIR/GIT_WORK_TREE overrides `cwd` outright, so the delta
-    // would be computed against a DIFFERENT repository than the one this plan is
-    // labeled for. The tool means the worktree at `cwd`; make that true.
-    env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined },
+    // See gitEnvWithoutDirOverrides (write-gate-context.mjs): assertWorktreeAtHead,
+    // called just before this, scrubs the SAME way, so the guard and this delta
+    // always mean the worktree at `cwd`, never a repo an inherited GIT_DIR points at.
+    env: gitEnvWithoutDirOverrides(),
   });
   return { changedFiles: parseChangedFiles(out), hasRename: hasRenameEntry(out) };
 }

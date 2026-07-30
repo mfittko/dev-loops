@@ -336,12 +336,22 @@ test("CLI fails closed when --head-sha does not match the worktree HEAD (wrong w
 
 test("parseResolveAngleCarryForwardCliArgs requires the core args", () => {
   assert.throws(() => parseResolveAngleCarryForwardCliArgs(["--repo", "o/n"]), /Missing required arguments/);
+  const fullPrevHead = "a".repeat(40);
   const opts = parseResolveAngleCarryForwardCliArgs([
-    "--repo", "o/n", "--pr", "5", "--gate", "draft_gate", "--prev-head", "aaaaaaa", "--head-sha", "bbbbbbb",
+    "--repo", "o/n", "--pr", "5", "--gate", "draft_gate", "--prev-head", fullPrevHead, "--head-sha", "bbbbbbb",
   ]);
   assert.equal(opts.gate, "draft_gate");
-  assert.equal(opts.prevHead, "aaaaaaa");
+  assert.equal(opts.prevHead, fullPrevHead);
   assert.equal(opts.headSha, "bbbbbbb");
+});
+
+test("parseResolveAngleCarryForwardCliArgs rejects an abbreviated --prev-head (the log path is keyed by the full SHA)", () => {
+  assert.throws(
+    () => parseResolveAngleCarryForwardCliArgs([
+      "--repo", "o/n", "--pr", "5", "--gate", "draft_gate", "--prev-head", "aaaaaaa", "--head-sha", "bbbbbbb",
+    ]),
+    /--prev-head must be the FULL head commit SHA/,
+  );
 });
 
 test("round A→B: a clean angle the delta misses carries, gets no fresh reviewer, and still counts at head B", async () => {
@@ -443,6 +453,87 @@ test("an angle named by a prior finding never carries, even from a clean log", (
   });
   assert.deepEqual(plan.carried.map((c) => c.angle), ["correctness"]);
   assert.ok(plan.mustRerun.some((m) => m.angle === "coverage"), "an angle with a prior finding must re-run");
+  // The reason is attributed to the actual cause, not the generic
+  // mandatory/always-include phrasing resolveCarryForwardAngles uses for that surface.
+  const coverageRerun = plan.mustRerun.find((m) => m.angle === "coverage");
+  assert.match(coverageRerun.reason, /returned a finding at the prior head/);
+});
+
+test("a prior finding on a delta-suffixed re-review entry still forces its BASE angle to re-run", () => {
+  // gate-fanin's baseAngleName strips `-delta-at-...`; a finding recorded under
+  // that suffixed name must still attribute to the base angle's provenance row.
+  const plan = buildCarryForwardPlan({
+    log: {
+      headSha: "aaaaaaa",
+      verdict: "clean",
+      findings: [{ angle: "coverage-delta-at-deadbeef", severity: "defer", summary: "still open" }],
+      provenance: {
+        distinctReviewers: 2,
+        perAngle: [
+          { angle: "correctness", reviewer: "review-a" },
+          { angle: "coverage", reviewer: "review-b" },
+        ],
+      },
+    },
+    changedFiles: ["docs/guide.md"],
+  });
+  assert.deepEqual(plan.carried.map((c) => c.angle), ["correctness"]);
+  assert.ok(plan.mustRerun.some((m) => m.angle === "coverage"), "the base angle must re-run, not just the suffixed name");
+});
+
+test("a prior finding attributes to its angle case-insensitively", () => {
+  const plan = buildCarryForwardPlan({
+    log: {
+      headSha: "aaaaaaa",
+      verdict: "clean",
+      findings: [{ angle: "Coverage", severity: "defer", summary: "still open" }],
+      provenance: {
+        distinctReviewers: 2,
+        perAngle: [
+          { angle: "correctness", reviewer: "review-a" },
+          { angle: "coverage", reviewer: "review-b" },
+        ],
+      },
+    },
+    changedFiles: ["docs/guide.md"],
+  });
+  assert.ok(plan.mustRerun.some((m) => m.angle === "coverage"), "case drift between the two authored lists must still attribute");
+});
+
+test("buildCarryForwardPlan fails closed when a prior finding's angle matches no provenance.perAngle entry", () => {
+  assert.throws(
+    () => buildCarryForwardPlan({
+      log: {
+        headSha: "aaaaaaa",
+        verdict: "clean",
+        findings: [{ angle: "typo-ed-angle", severity: "defer", summary: "open nit" }],
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+        },
+      },
+      changedFiles: ["docs/guide.md"],
+    }),
+    /matches no provenance\.perAngle entry/,
+  );
+});
+
+test("buildCarryForwardPlan fails closed when the prior log's findings field is not an array", () => {
+  assert.throws(
+    () => buildCarryForwardPlan({
+      log: {
+        headSha: "aaaaaaa",
+        verdict: "clean",
+        findings: { angle: "correctness" },
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+        },
+      },
+      changedFiles: ["docs/guide.md"],
+    }),
+    /findings field is not an array/,
+  );
 });
 
 test("buildCarryForwardPlan fails closed on a prior log that records one angle twice", () => {
@@ -489,5 +580,48 @@ test("CLI fails closed when the prior log's own headSha is not --prev-head", asy
     assert.match(stderr, /is not --prev-head/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI's worktree guard and delta are pinned to repoRoot, not an inherited GIT_DIR/GIT_WORK_TREE pointing at a different repo", async () => {
+  // Before the fix, assertWorktreeAtHead's `git rev-parse HEAD` inherited the raw
+  // env: an exported GIT_DIR/GIT_WORK_TREE overrides `cwd` outright, so the guard
+  // would read the OTHER repo's HEAD instead of repoRoot's — a syntactically valid
+  // repo, so it fails EITHER by wrongly refusing (HEADs differ) or, if they
+  // happened to match, by validating one repo while the (already-scrubbed) delta
+  // capture diffs a different one. Either way the plan must be unaffected.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    },
+  });
+  const otherRepo = await mkdtemp(path.join(os.tmpdir(), "carry-forward-other-"));
+  git(otherRepo, ["init", "-q"]);
+  git(otherRepo, ["config", "user.email", "other@example.com"]);
+  git(otherRepo, ["config", "user.name", "Other"]);
+  await writeFile(path.join(otherRepo, "unrelated.txt"), "unrelated\n", "utf8");
+  git(otherRepo, ["add", "-A"]);
+  git(otherRepo, ["commit", "-q", "-m", "unrelated"]);
+
+  const savedGitDir = process.env.GIT_DIR;
+  const savedWorkTree = process.env.GIT_WORK_TREE;
+  process.env.GIT_DIR = path.join(otherRepo, ".git");
+  process.env.GIT_WORK_TREE = otherRepo;
+  try {
+    const { stdout, stderr, exitCode } = await runMainRaw([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(exitCode, 0, `an inherited GIT_DIR pointing at a different repo must not break the CLI: ${stderr}`);
+    const result = JSON.parse(stdout);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.deltaChangedFiles, ["src/foo.mjs"], "delta must resolve against repoRoot, not the redirected repo");
+    assert.ok(result.mustRerun.some((m) => m.angle === "correctness"), "plan must match the un-redirected run");
+  } finally {
+    if (savedGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGitDir;
+    if (savedWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedWorkTree;
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(otherRepo, { recursive: true, force: true });
   }
 });

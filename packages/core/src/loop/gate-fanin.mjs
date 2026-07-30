@@ -220,7 +220,7 @@ export function fanoutReviewerPairingError(perAngle) {
  * @param {string} angle
  * @returns {string}
  */
-function baseAngleName(angle) {
+export function baseAngleName(angle) {
   return angle.replace(/-delta-at-.+$/, "");
 }
 
