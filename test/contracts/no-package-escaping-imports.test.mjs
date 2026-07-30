@@ -231,16 +231,11 @@ export async function findEscapingImports({ repoRootUrl, shippedDirs, allowDirs 
 }
 
 // ponytail: relative specifiers only. Bare-specifier escapes are the sibling
-// defect class, answered below by `findUndeclaredBareImports`. The objection
-// that used to stand here — that the EXHAUSTIVE question ("is every bare
-// specifier a declared dependency?") needs real parsing, because a false hit on
-// the same words inside a string or a minified bundle makes the check unusable
-// — was aimed at a PERMISSIVE matcher. Both failure modes it named are closed
-// structurally rather than by parsing: the keyword→`from` span accepts only
-// binding-list characters, so prose can no longer bridge into a quoted string,
-// and vendored bundles are skipped by path. What remains is a bounded
-// false-NEGATIVE (a binding list containing a comment), which leaves the check
-// usable — the direction a guard can afford to be wrong in.
+// defect class, answered below by `findUndeclaredBareImports` — without a
+// parser, because the two false-hit modes that would need one (prose bridging
+// into a quoted string; a minified vendor bundle) are closed by the matcher's
+// binding-list span and the vendor path skip. The residual is a bounded false
+// NEGATIVE, the direction a guard can afford to be wrong in.
 async function rootPackageOffenders() {
   const repoRootUrl = new URL("../../", import.meta.url);
   const pkg = JSON.parse(await readFile(new URL("package.json", repoRootUrl), "utf8"));
@@ -386,8 +381,7 @@ export async function findUndeclaredBareImports({ repoRootUrl, shippedDirs, decl
       // text is bundled source, not this package's resolution surface.
       if (VENDORED_PATH_RE.test(relative)) continue;
 
-      // `^[ \t]*` cannot skip U+FEFF, so a BOM-saved file whose FIRST line is an
-      // import would be scanned as if that import were absent.
+      // BOM-stripped for the same reason as the peer guard above.
       const contents = (await readFile(fileUrl, "utf8")).replace(/^\uFEFF/, "");
       for (const match of contents.matchAll(STATIC_SPECIFIER_RE)) {
         const specifier = match[1];
