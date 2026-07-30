@@ -2754,6 +2754,28 @@ test("round_cap_reached with an unknown unresolved-thread count fails closed and
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
+test("round_cap_reached with a non-integer unresolved-thread count fails closed and stays blocked (#1472)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    loopDisposition: DISPOSITION.BLOCKED,
+    ciStatus: "success",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    // A fractional count must be treated as unknown (null), never floored to
+    // 0 — flooring would satisfy the grant's zero-threads precondition.
+    unresolvedThreadCount: 0.5,
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
 // #1472 reachability: the ROUND_CAP_REACHED grant branch above is a defensive
 // gate-entry re-check, not a path the interpreter's own routing is expected to
 // take. Prove the equivalence the branch's comment claims: for every
@@ -2828,10 +2850,12 @@ test("round_cap_reached grant branch and copilot-loop-state's round-cap fallback
 // #1472: general contract invariant, across every lifecycle state the
 // evaluator can be handed and a broad sweep of companion signals — the
 // synthesized nextAction must always be a member of allowedNextActions and
-// never a member of forbiddenActions. This is the general safety net the
-// round_cap_reached deadlock slipped through: a return statement naming
-// nextAction without granting it in allowedNextActions (or while forbidding
-// it) is exactly the shape upsert-checkpoint-verdict.mjs cannot act on.
+// never a member of forbiddenActions. Forward-drift guard: no committed
+// evaluator version violates this matrix (the pre-fix round_cap_reached shape
+// returned a self-consistent report_blocked), but a future return statement
+// naming a nextAction without granting it in allowedNextActions (or while
+// forbidding it) is exactly the shape upsert-checkpoint-verdict.mjs cannot
+// act on, so the sweep pins the invariant against regression.
 test("contract: nextAction is always allowed and never forbidden, across every lifecycle state (#1472)", () => {
   const lifecycleStates = Object.values(STATE);
   const ciStatuses = ["success", "failure", "pending", "none", "crediblyGreen"];

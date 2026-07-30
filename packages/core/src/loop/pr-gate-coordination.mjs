@@ -680,10 +680,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // (which safely defaults to 0 when absent), an absent/invalid count here must
   // NOT be coerced to 0 — that would silently treat an unknown thread count as
   // clean and wrongly unblock the fallback. `null` means "unknown" (fail closed).
-  const unresolvedThreadCount = typeof input.unresolvedThreadCount === "number"
-    && Number.isFinite(input.unresolvedThreadCount)
+  const unresolvedThreadCount = Number.isInteger(input.unresolvedThreadCount)
     && input.unresolvedThreadCount >= 0
-    ? Math.floor(input.unresolvedThreadCount)
+    ? input.unresolvedThreadCount
     : null;
   const postConvergenceSignificantChange = input.postConvergenceSignificantChange === true;
   const roundCapNewCycleRequired = roundCapReached && copilotReviewRoundCount > 0 && postConvergenceSignificantChange;
