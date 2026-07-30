@@ -5,11 +5,21 @@
 // pending forever. The loop stays `waiting_for_copilot_review` with no on-head
 // review, so `pre_approval_gate` can never post and the PR cannot merge.
 //
-// Withdrawing the stranded request returns the loop to `round_cap_reached`,
-// where the existing round-cap-clean fallback grants gate entry on its own
-// terms (zero unresolved threads and strictly green CI). Nothing here loosens a
-// gate precondition — it removes a signal that was never going to arrive, and
-// lets the hardened path decide.
+// Withdrawing the request removes a signal that will never arrive and lets the
+// loop re-evaluate on the evidence it already has. The path that then opens the
+// gate is same-head clean convergence: a Copilot review SUBMITTED on the current
+// head, zero unresolved and zero actionable threads, and strictly green CI
+// (`crediblyGreen` stays blocked). Those checks are unchanged and unrelaxed —
+// nothing here loosens a precondition, and a PR that could not reach the gate
+// before a withdrawal still cannot reach it after one.
+//
+// It is NOT a general unsticker. At the round cap with clean threads and green
+// CI the loop already routes to `round_cap_clean_fallback` with the request
+// still pending, so nothing is stranded and this is a no-op. With non-green CI
+// the gate stays blocked either way. And if the head has since advanced past
+// the submitted review, withdrawing below the cap just makes the loop re-request
+// — the same strand again. The case it fixes is the forced re-request on a head
+// that already carries a clean submitted review.
 //
 // It is deliberately NOT automatic. "Copilot will not re-engage this" is a
 // human judgement about a model's behavior, so it stays an explicit, audited
@@ -23,9 +33,10 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 
 const USAGE = `Usage: node scripts/github/withdraw-copilot-review-request.mjs --repo <owner/name> --pr <number> [--reason <text>]
 
-Withdraw a STRANDED Copilot review request so the loop can fall back to the
-round-cap-clean path. For the case where Copilot was asked to re-review a
-converged PR, declined to engage, and left the pre_approval_gate unable to post.
+Withdraw a STRANDED Copilot review request so the loop can re-evaluate on the
+evidence it already has. For the case where Copilot was asked to re-review a
+head that already carries its clean submitted review, declined to engage, and
+left the pre_approval_gate unable to post.
 
 Refuses unless ALL of these hold (each is what makes the withdrawal safe):
   - a Copilot review request is actually pending
@@ -162,22 +173,31 @@ async function main(args, { env = process.env, runChild = defaultRunChild } = {}
     return { ok: true, withdrawn: false, status: "dry-run", reason: "Guards hold; the request would be withdrawn.", operatorReason: args.reason ?? null };
   }
 
+  // `gh pr edit --remove-reviewer` is the documented inverse of the
+  // `--add-reviewer "@copilot"` the request path uses, so the reviewer identity
+  // is resolved by gh rather than guessed here. A raw requested_reviewers DELETE
+  // needs the literal login, which is the app-style
+  // `copilot-pull-request-reviewer[bot]`, not `Copilot` — getting that wrong
+  // deletes nothing and still exits 0.
   const result = await runChild(
     "gh",
-    [
-      "api", "-X", "DELETE", `repos/${args.repo}/pulls/${args.pr}/requested_reviewers`,
-      "-f", "reviewers[]=Copilot",
-    ],
+    ["pr", "edit", String(args.pr), "--repo", args.repo, "--remove-reviewer", "@copilot"],
     env,
   );
   if (result.code !== 0) {
     throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
   }
+  // Post-verify, mirroring the request path: an escape hatch whose whole job is
+  // unsticking a deadlock must never report a withdrawal it did not perform.
+  const after = await collectState(args, { env, runChild });
+  if (after.copilotRequested) {
+    throw new Error("Copilot review request is still pending after gh pr edit --remove-reviewer; nothing was withdrawn.");
+  }
   return {
     ok: true,
     withdrawn: true,
     status: "withdrawn",
-    reason: "Stranded Copilot review request withdrawn; the loop falls back to the round-cap-clean path.",
+    reason: "Stranded Copilot review request withdrawn; the loop re-evaluates without a pending review it will never receive.",
     operatorReason: args.reason ?? null,
   };
 }

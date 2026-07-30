@@ -18,22 +18,29 @@ function collectingStream() {
 // gh stub driven by argv shape: the requested-reviewers probe, the PR view, and
 // the DELETE. Records every call so a test can assert the DELETE did or did not
 // fire — the difference between withdrawing and merely reporting.
-function ghStub({ copilotRequested, reviews, threads, deleteFails = false } = {}) {
+function ghStub({ copilotRequested, reviews, threads, removeFails = false, removeIsNoop = false } = {}) {
   const calls = [];
+  // Models the real transition: `gh pr edit --remove-reviewer` clears the
+  // pending request, so the post-verify re-read must observe it gone. With
+  // removeIsNoop the command "succeeds" while the request stays — the exact
+  // shape a wrong reviewer identity produces, which must NOT report success.
+  let requested = Boolean(copilotRequested);
   return {
     calls,
+    get requested() {
+      return requested;
+    },
     runChild: async (_cmd, argv) => {
       calls.push(argv);
-      const hitsReviewers = argv.some((a) => typeof a === "string" && a.includes("requested_reviewers"));
-      if (hitsReviewers && argv.includes("-X")) {
-        return deleteFails
-          ? { code: 1, stdout: "", stderr: "gh: not authorized" }
-          : { code: 0, stdout: "{}", stderr: "" };
+      if (argv.includes("--remove-reviewer")) {
+        if (removeFails) return { code: 1, stdout: "", stderr: "gh: not authorized" };
+        if (!removeIsNoop) requested = false;
+        return { code: 0, stdout: "", stderr: "" };
       }
-      if (hitsReviewers) {
+      if (argv.some((a) => typeof a === "string" && a.includes("requested_reviewers"))) {
         return {
           code: 0,
-          stdout: JSON.stringify({ users: copilotRequested ? [{ login: "Copilot" }] : [], teams: [] }),
+          stdout: JSON.stringify({ users: requested ? [{ login: "copilot-pull-request-reviewer[bot]" }] : [], teams: [] }),
           stderr: "",
         };
       }
@@ -67,7 +74,7 @@ describe("withdraw-copilot-review-request", () => {
       assert.equal(result.ok, true);
       assert.equal(result.status, "not-requested");
       assert.equal(result.withdrawn, false);
-      assert.ok(!gh.calls.some((argv) => argv.includes("-X")), "must not issue a DELETE");
+      assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "must not remove the reviewer");
     });
 
     it("REFUSES when Copilot never submitted a review — withdrawing would skip the first review", async () => {
@@ -76,7 +83,7 @@ describe("withdraw-copilot-review-request", () => {
       assert.equal(result.ok, false);
       assert.equal(result.status, "refused");
       assert.match(result.reason, /no prior review to fall back on/);
-      assert.ok(!gh.calls.some((argv) => argv.includes("-X")), "must not issue a DELETE");
+      assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "must not remove the reviewer");
     });
 
     it("REFUSES while unresolved threads remain", async () => {
@@ -89,7 +96,7 @@ describe("withdraw-copilot-review-request", () => {
       assert.equal(result.ok, false);
       assert.equal(result.status, "refused");
       assert.match(result.reason, /1 unresolved review thread/);
-      assert.ok(!gh.calls.some((argv) => argv.includes("-X")), "must not issue a DELETE");
+      assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "must not remove the reviewer");
     });
 
     it("a PENDING Copilot review does not count as a submitted prior review", async () => {
@@ -114,9 +121,12 @@ describe("withdraw-copilot-review-request", () => {
       assert.equal(result.withdrawn, true);
       assert.equal(result.status, "withdrawn");
       assert.equal(result.operatorReason, "Copilot declined a converged reword");
-      const del = gh.calls.find((argv) => argv.includes("-X"));
-      assert.ok(del, "expected the DELETE to fire");
-      assert.ok(del.includes("reviewers[]=Copilot"));
+      const removal = gh.calls.find((argv) => argv.includes("--remove-reviewer"));
+      assert.ok(removal, "expected the removal to fire");
+      // gh resolves the Copilot identity; hard-coding a login here is what
+      // silently deletes nothing (the real one is the [bot] form).
+      assert.ok(removal.includes("@copilot"));
+      assert.equal(gh.requested, false);
     });
 
     it("--dry-run reports the guards hold without issuing the DELETE", async () => {
@@ -124,14 +134,25 @@ describe("withdraw-copilot-review-request", () => {
       const result = await main({ repo: "o/n", pr: 10, dryRun: true }, { env: {}, runChild: gh.runChild });
       assert.equal(result.status, "dry-run");
       assert.equal(result.withdrawn, false);
-      assert.ok(!gh.calls.some((argv) => argv.includes("-X")), "dry-run must not issue a DELETE");
+      assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "dry-run must not remove the reviewer");
     });
 
-    it("surfaces a failing DELETE as an error rather than reporting success", async () => {
-      const gh = ghStub({ copilotRequested: true, reviews: SUBMITTED_COPILOT_REVIEW, threads: [], deleteFails: true });
+    it("surfaces a failing removal as an error rather than reporting success", async () => {
+      const gh = ghStub({ copilotRequested: true, reviews: SUBMITTED_COPILOT_REVIEW, threads: [], removeFails: true });
       await assert.rejects(
         () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild }),
         /gh command failed/,
+      );
+    });
+
+    it("refuses to claim success when the removal succeeded but the request is still pending", async () => {
+      // A wrong reviewer identity exits 0 and removes nothing. Without the
+      // post-verify re-read the operator would be told the deadlock is cleared
+      // while the PR stays stuck — the one lie this tool must never tell.
+      const gh = ghStub({ copilotRequested: true, reviews: SUBMITTED_COPILOT_REVIEW, threads: [], removeIsNoop: true });
+      await assert.rejects(
+        () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild }),
+        /still pending after/,
       );
     });
   });
