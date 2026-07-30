@@ -31,6 +31,15 @@
  * re-run the offending reviewer, then re-consolidate. Two artifacts naming the
  * SAME angle also fails closed (ambiguous fan-out) — see "duplicate angle
  * name" below.
+ *
+ * The render budget applies ONLY to "findingsJson"/--out (the visible gate
+ * comment) — never to "findings"/--ledger-out (the durable disposition
+ * ledger, which write-gate-findings-log.mjs accepts at arbitrary size). A
+ * round too large to render even at minimum summary length still writes a
+ * COMPLETE --ledger-out and exits 0; "findingsJson"/--out is replaced with a
+ * single budget-marker section naming the omitted finding count and severity
+ * breakdown (never a silently-shrunk subset), and the result carries
+ * "commentBudgetExceeded": true.
  */
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -61,7 +70,9 @@ Optional:
                                  rather than silently falling back to the shipped default severities.
   --out <path>                  Write the nested per-angle "findingsJson" shape (below) to this
                                  path as JSON — the exact input upsert-checkpoint-verdict.mjs's
-                                 --findings-json accepts
+                                 --findings-json accepts. Replaced with a single budget-marker
+                                 section when the round is over the gate-comment render budget
+                                 (see "commentBudgetExceeded" below) — --ledger-out is unaffected.
   --ledger-out <path>            Write the flat "findings" shape (below) to this path as JSON — the
                                  exact --findings-file input write-gate-findings-log.mjs and
                                  post-gate-findings.mjs accept
@@ -74,18 +85,20 @@ Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount" }],
     "findingsJson": [{ "angle", "verdict", "findings": [...] }], "findings": [...],
     "severityCounts": { "must-fix", "worth-fixing-now", "defer" },
-    "overallVerdict": "clean"|"findings_present" }
+    "overallVerdict": "clean"|"findings_present", "commentBudgetExceeded"?: true }
   "findingsJson" is the nested per-angle shape (one section per source artifact, including clean
   angles with an empty findings array) — pass --out's file straight to
   upsert-checkpoint-verdict.mjs's --findings-json. "findings" is the FLAT per-finding shape — pass
   --ledger-out's file straight to write-gate-findings-log.mjs/post-gate-findings.mjs's
-  --findings-file. Every output finding's "disposition" is DERIVED from severity (accepted-for-fix
-  for a blocking severity, deferred otherwise) — an input finding's own "disposition" is never
-  honored. A reviewer-provided "recommendation" is carried through to both shapes unchanged. A
-  finding "summary" or "recommendation" longer than 2000 chars is truncated with a plain " …"
-  suffix (never a "[truncated N chars]" marker), and the WHOLE emitted set is budgeted against
-  upsert-checkpoint-verdict.mjs's rendered-block bound (summaries shrunk evenly; a fan-in still
-  over budget at minimum summary length FAILS CLOSED with exit 1 rather than emitting).
+  --findings-file, and is ALWAYS complete (never budgeted). Every output finding's "disposition" is
+  DERIVED from severity (accepted-for-fix for a blocking severity, deferred otherwise) — an input
+  finding's own "disposition" is never honored. A reviewer-provided "recommendation" is carried
+  through to both shapes unchanged. A finding "summary" or "recommendation" longer than 2000 chars
+  is truncated with a plain " …" suffix (never a "[truncated N chars]" marker), and "findingsJson"
+  (--out) alone is budgeted against upsert-checkpoint-verdict.mjs's rendered-block bound (summaries
+  shrunk evenly first; a round still over budget at minimum summary length REPLACES "findingsJson"
+  with a single budget-marker section naming the omitted finding count and severity breakdown, sets
+  "commentBudgetExceeded": true, and still exits 0 — "findings"/--ledger-out is unaffected).
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
@@ -117,6 +130,10 @@ function truncateFindingText(value, limit = MAX_FINDING_TEXT_LENGTH) {
 // Approximate the renderer's output: one line per angle + one line per finding
 // (severity + summary + file:line + disposition). Shrink the longest summaries
 // evenly until the estimate fits the budget — deterministic, no consumer import.
+// Returns whether the (mutated in place) findingsJson now fits the budget; the
+// caller decides what to do when the floor is reached and it still does not
+// (see buildBudgetMarkedFindingsJson below) — this function never throws, so a
+// round too large to render never blocks the durable ledger write.
 function fitFindingsToRenderBudget(findingsJson) {
   const estimate = () => findingsJson.reduce((sum, a) => {
     let s = sum + a.angle.length + a.verdict.length + 8;
@@ -135,16 +152,28 @@ function fitFindingsToRenderBudget(findingsJson) {
       }
     }
   }
-  // Floor reached and still over budget: the fan-in has too many findings to
-  // render in one gate comment no matter how short each summary gets. FAIL
-  // CLOSED here (the consumer would fail closed anyway, but later and with a
-  // less actionable message) rather than emit an over-budget block.
-  if (estimate() > RENDERED_BLOCK_BUDGET) {
-    const findingCount = findingsJson.reduce((sum, a) => sum + a.findings.length, 0);
-    throw new Error(
-      `fan-in renders over the gate-comment budget even at minimum summary length (${findingCount} findings across ${findingsJson.length} angles) — fix the highest-severity findings first and re-run the fan-out, or split the review`,
-    );
-  }
+  return estimate() <= RENDERED_BLOCK_BUDGET;
+}
+
+// Floor reached and still over budget: the fan-in has too many findings to
+// render in one gate comment no matter how short each summary gets. Replace
+// the visible-comment shape with a single budget-marker section rather than
+// failing closed — the durable ledger (--ledger-out) already carries every
+// finding in full; only the rendered comment is space-constrained. The marker
+// states the omitted count and severity breakdown so the posted comment can
+// never read as a smaller round than it was (a partial/silently-shrunk finding
+// list would).
+function buildBudgetMarkedFindingsJson(findingsJson, consolidated) {
+  const findingCount = consolidated.counts.findings;
+  const { "must-fix": mustFix, "worth-fixing-now": worthFixingNow, defer } = consolidated.counts.bySeverity;
+  return [{
+    angle: "budget",
+    verdict: consolidated.verdict,
+    findings: [{
+      severity: "",
+      summary: `Comment budget exceeded: ${findingCount} finding(s) across ${findingsJson.length} angle(s) omitted from this comment (must-fix: ${mustFix}, worth-fixing-now: ${worthFixingNow}, defer: ${defer}) — see the disposition ledger for the full list.`,
+    }],
+  }];
 }
 
 export function parseConsolidateFaninCliArgs(argv) {
@@ -465,21 +494,25 @@ export async function consolidateGateFanin(options) {
     };
   });
 
-  fitFindingsToRenderBudget(findingsJson);
+  const fitsRenderBudget = fitFindingsToRenderBudget(findingsJson);
+  const commentFindingsJson = fitsRenderBudget
+    ? findingsJson
+    : buildBudgetMarkedFindingsJson(findingsJson, consolidated);
 
   const result = {
     ok: true,
     ...(options.gate !== undefined ? { gate: options.gate } : {}),
     angles,
-    findingsJson,
+    findingsJson: commentFindingsJson,
     findings,
     severityCounts: consolidated.counts.bySeverity,
     overallVerdict: consolidated.verdict,
+    ...(fitsRenderBudget ? {} : { commentBudgetExceeded: true }),
   };
 
   if (options.out !== undefined) {
     await mkdir(path.dirname(options.out), { recursive: true });
-    await writeFile(options.out, `${JSON.stringify(findingsJson, null, 2)}\n`, "utf8");
+    await writeFile(options.out, `${JSON.stringify(commentFindingsJson, null, 2)}\n`, "utf8");
   }
   if (options.ledgerOut !== undefined) {
     await mkdir(path.dirname(options.ledgerOut), { recursive: true });
