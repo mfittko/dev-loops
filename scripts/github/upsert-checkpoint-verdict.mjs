@@ -83,6 +83,13 @@ Optional:
                                              (e.g. '{"must-fix":0,"worth-fixing-now":0}').
                                              Required for --verdict clean when
                                              blockCleanOnFindingSeverities is configured.
+                                             Also, when given alongside --findings-json,
+                                             its values are SUMMED and used as the posted
+                                             "Findings summary:" total instead of counting
+                                             --findings-json's own (possibly budget-marked)
+                                             entries — pass a fan-in's true, unbudgeted
+                                             "severityCounts" here so the digest never
+                                             undercounts a marker-collapsed round.
   --execution-mode <fanout_fanin|inline_single_agent>
                                             How the gate review was executed.
                                             Defaults to inline_single_agent. Inline
@@ -698,8 +705,20 @@ export function renderStructuredFindings(angles) {
 // line to carry non-empty, single-line content (parseGateReviewCommentFields
 // captures only the remainder of this one line), so the structured block below it
 // is purely presentational.
-function buildStructuredFindingsDigest(angles) {
-  const totalFindings = angles.reduce((sum, a) => sum + a.findings.length, 0);
+//
+// `angles[].findings.length` undercounts whenever a fan-in's over-budget
+// degradation has collapsed an angle's real findings into one marker finding
+// (consolidate-fanin.mjs) — the digest would then report e.g. "14 findings"
+// for a round that actually carries hundreds. When the caller supplies
+// `severityCounts` (--findings-severity-counts, the TRUE unbudgeted totals a
+// gate-review fan-in always emits alongside its possibly-marked
+// "findingsJson"), sum that instead so the posted digest matches the ledger
+// rather than the rendered marker count.
+function buildStructuredFindingsDigest(angles, severityCounts) {
+  const countedTotal = severityCounts && typeof severityCounts === "object" && !Array.isArray(severityCounts)
+    ? Object.values(severityCounts).reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0)
+    : null;
+  const totalFindings = countedTotal ?? angles.reduce((sum, a) => sum + a.findings.length, 0);
   const angleWord = angles.length === 1 ? "angle" : "angles";
   if (totalFindings === 0) {
     return `${angles.length} ${angleWord} reviewed; no findings (see per-angle breakdown below).`;
@@ -717,7 +736,7 @@ function renderExecutionModeLine(executionMode, inlineReason) {
   }
   return `**Execution mode:** ${mode}`;
 }
-export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, gateEvidenceNote }) {
+export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, findingsSeverityCounts, gateEvidenceNote }) {
   const lines = [
     `### Gate review: \`${gate}\``,
     "",
@@ -738,7 +757,7 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
   if (angles) {
     lines.push(
       "",
-      `**Findings summary:** ${buildStructuredFindingsDigest(angles)}`,
+      `**Findings summary:** ${buildStructuredFindingsDigest(angles, findingsSeverityCounts)}`,
       "",
       renderStructuredFindings(angles),
     );
@@ -1287,7 +1306,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // force a re-post — a known, narrow ceiling of the current parser contract,
   // which this fix does not extend.
   const effectiveFindingsSummary = structuredFindings
-    ? buildStructuredFindingsDigest(structuredFindings)
+    ? buildStructuredFindingsDigest(structuredFindings, options.findingsSeverityCounts)
     : options.findingsSummary;
   const desiredBody = renderGateReviewCommentBody({
     ...options,
