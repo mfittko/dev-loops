@@ -2588,12 +2588,13 @@ describe("role resolution", () => {
 // consumer .devloops must now explicitly disable a shipped angle it doesn't
 // want (enabled: false), or the angle silently merges back in by name. Pins
 // this repo's own shipped .devloops + extension-defaults.yaml against the
-// exact angle sets / mandatory sets / blockCleanOnFindingSeverities the
-// pre-redesign flat-key config resolved, so a future edit can't silently
-// regrow (or shrink) the effective gate-review surface.
+// exact angle sets / mandatory sets the pre-redesign flat-key config
+// resolved (blockCleanOnFindingSeverities is pinned to the current shipped
+// baseline instead — see CURRENT_BLOCK_CLEAN below), so a future edit can't
+// silently regrow (or shrink) the effective gate-review surface.
 // ============================================================================
 
-describe("shipped .devloops + extension-defaults.yaml resolve byte-identically to pre-#1404 (D3 regression guard)", () => {
+describe("shipped .devloops + extension-defaults.yaml resolve byte-identically to pre-#1404 for angle/mandatory sets, and to the current shipped baseline for blockCleanOnFindingSeverities (D3 regression guard)", () => {
   const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
   // The exact sets origin/main (pre-#1404, flat mandatoryAngles/excludeAngles
@@ -2637,7 +2638,7 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
   const sortedSet = (arr) => [...new Set(arr)].sort();
 
   for (const gate of /** @type {const} */ (["draft", "preApproval", "spike"])) {
-    test(`${gate} gate: resolved angle set, mandatory set, and blockCleanOnFindingSeverities match pre-#1404`, async () => {
+    test(`${gate} gate: resolved angle set and mandatory set match pre-#1404; blockCleanOnFindingSeverities matches the current baseline`, async () => {
       const { loadDevLoopConfig, resolveGateAngles, resolveGateConfig } = await import("../src/config/config.mjs");
       const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
       assert.deepEqual(errors, []);

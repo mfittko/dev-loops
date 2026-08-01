@@ -41,12 +41,19 @@ gates:
     # while worth-fixing-now renewed itself every round, because each fix round
     # creates fresh surface for the next round to review. Measured over eight
     # rounds on one PR (72 reviewer dispatches), must-fix per round ran
-    # 1,1,7,0,1,3,3,0 while worth-fixing-now ran 6,11,17,14,16,9,12,7.
+    # 1,1,7,0,1,1,3,0 while worth-fixing-now ran 6,11,17,14,16,9,12,7.
     #
     # worth-fixing-now findings are still recorded in the ledger and the
     # findings comment; they just stop blocking the draft-to-ready transition.
-    # preApproval below still blocks on both — that is the last bar before
-    # merge, and a finding that survives the draft gate is caught there.
+    # preApproval blocks on both, but it re-reviews through its own, mostly
+    # disjoint angle pool (draft and preApproval share only contradiction-lens)
+    # and does not carry a specific unblocked draft-gate finding forward — the
+    # ledger records it "deferred" and nothing re-raises it. A worth-fixing-now
+    # finding from a draft-only angle is not "caught later"; it is recorded and
+    # left. This also affects light-mode dispatch: resolveGateDispatchMode
+    # escalates inline to full fan-out only on a blocking-severity inline
+    # finding, so a light-dispatched draft PR whose inline pass surfaces only
+    # worth-fixing-now now stays inline instead of escalating.
     #
     # Interim: the better shape is the full severity set with a round cap, so
     # the first rounds still block and only a demonstrated plateau softens.

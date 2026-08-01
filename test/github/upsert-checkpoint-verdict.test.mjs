@@ -1965,7 +1965,9 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
       "--verdict", "clean",
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":1}',
+      // draft_gate blocks on must-fix only: a non-zero worth-fixing-now count
+      // (like the non-zero defer count) must not block a clean verdict.
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":1,"defer":1}',
     ], { env });
 
     assert.equal(result.code, 0);
@@ -2005,8 +2007,12 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot set verdict "clean"/);
     assert.match(payload.error, /--findings-severity-counts is required/);
-    assert.match(payload.error, /must-fix/);
-    assert.match(payload.error, /worth-fixing-now/);
+    // The error text embeds a static example payload alongside the
+    // config-derived "(blocking: [...])" tail; assert the tail, which is
+    // the part that actually reflects draft_gate's configured blocking set
+    // (must-fix only — worth-fixing-now would match the example text
+    // regardless of what is configured).
+    assert.match(payload.error, /\(blocking: \[must-fix\]\)/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
