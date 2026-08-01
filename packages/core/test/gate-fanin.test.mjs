@@ -89,6 +89,16 @@ describe("consolidateFanin — verdict", () => {
       assert.equal(result.findings.length, 0);
     }
   });
+
+  // Boundary fixture for MAX_ANGLE_NAME_LENGTH (200): pins the accept side so
+  // the 201-char reject fixture above cannot be satisfied by silently
+  // tightening the guard from `>` to `>=` (which would also reject a
+  // legitimate 200-char name).
+  test("an angle name at exactly the 200-char cap is accepted, not malformed", () => {
+    const result = consolidateFanin({ angleResults: [cleanAngle("x".repeat(200))] });
+    assert.equal(result.verdict, "clean");
+    assert.equal(result.malformed.length, 0);
+  });
 });
 
 describe("consolidateFanin — multi-angle merge", () => {

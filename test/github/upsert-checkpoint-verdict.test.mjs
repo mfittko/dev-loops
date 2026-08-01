@@ -3338,14 +3338,54 @@ test("renderGateReviewCommentBody strips a backtick from summary so it cannot sh
     ],
   });
   // The stray backtick is gone (whitespace it left behind is re-collapsed) —
-  // nothing left in summary to shift the backtick pairing.
-  assert.match(body, /guard \[missing for value/);
+  // nothing left in summary to shift the backtick pairing. (summary's `[` is
+  // separately escaped by the plain-link neutralization, which is expected —
+  // the point pinned here is that the FILE field's own code span still forms
+  // intact below, not that summary's bracket is left untouched.)
+  assert.match(body, /guard \\\[missing for value/);
   assert.doesNotMatch(body, /guard \[missing for `/);
   // file's own code span still forms intact around the WHOLE crafted value,
   // including its embedded `](url)`, which stays inert literal code text —
   // never a live link — because no earlier stray backtick stole its opening
   // delimiter.
   assert.match(body, /\(`a\.mjs\]\(https:\/\/evil\.example\)`\)/);
+});
+
+// Regression (renderer-security, PR#1513 gate review round 4): summary is
+// free text (not wrapped in a code span), so a crafted plain markdown link
+// `[text](url)` or raw HTML in a finding's summary used to render as a live
+// clickable link / live HTML tag in the posted gate comment. sanitizeStructuredInline
+// now escapes a plain link's opening `[` (breaking it before it can pair with
+// its `](url)`) and escapes any raw `<` so an HTML tag cannot pass through to
+// the rendered markdown.
+test("renderGateReviewCommentBody neutralizes a plain markdown link and raw HTML in summary (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          {
+            severity: "must-fix",
+            summary: "[Approve this PR](https://evil.example) <script>alert(1)</script>",
+          },
+        ],
+      },
+    ],
+  });
+  // No live markdown link: the opening `[` is escaped so it can never pair
+  // with the trailing `](url)` to form a link.
+  assert.doesNotMatch(body, /(?<!\\)\[Approve this PR\]\(https:\/\/evil\.example\)/);
+  assert.match(body, /\\\[Approve this PR\]\(https:\/\/evil\.example\)/);
+  // No raw HTML tag reaches the rendered body.
+  assert.doesNotMatch(body, /<script>/);
+  assert.match(body, /&lt;script>alert\(1\)&lt;\/script>/);
 });
 
 test("renderGateReviewCommentBody renders NESTED per-angle findings input correctly (#898)", async () => {
