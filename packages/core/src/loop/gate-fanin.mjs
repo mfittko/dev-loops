@@ -21,10 +21,15 @@
  *   "must-fix" | "worth-fixing-now" | "defer"
  */
 
-// Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs) validate
-// against this single copy of the severity vocabulary instead of hand-copying
-// it, keeping the fail-closed floor and this module's own validation in sync.
-export const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
+// Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs,
+// scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
+// this single ordered copy of the severity vocabulary instead of each
+// hand-copying its own list (and its own load-time drift guard) — ORDER is
+// part of the contract here (most blocking first), not just membership, so a
+// consumer that only checked membership against a Set could accept a
+// silently reordered copy.
+export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
+export const VALID_SEVERITIES = new Set(SEVERITY_ORDER);
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
 
 /**
@@ -268,8 +273,11 @@ export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
 // function already owns, fails a pathological artifact closed as malformed —
 // the same place every other angle-result defect is caught — instead of
 // leaving an unbounded reviewer-supplied string to reach the render path,
-// where consolidate-fanin.mjs's per-angle budget marking cannot compress it
-// and a single oversized angle header can consume the whole comment budget.
+// where consolidate-fanin.mjs's per-angle budget marking cannot compress it.
+// This is a malformed-artifact guard, not a comment-budget guarantee: several
+// angles each right at this cap can still exceed the render budget on their
+// headers alone and force the withheld tier — that outcome is the render
+// budget's degradation ladder doing its job, not something this cap prevents.
 const MAX_ANGLE_NAME_LENGTH = 200;
 
 /**
@@ -354,7 +362,7 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
     if (err) malformed.push({ index, reason: err });
   });
 
-  const bySeverity = { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 };
+  const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
   /** @type {Array<{severity: string, angle: string, summary: string, file?: string, line?: number, recommendation?: string, disposition: string}>} */
   const findings = [];
   let blockingCount = 0;

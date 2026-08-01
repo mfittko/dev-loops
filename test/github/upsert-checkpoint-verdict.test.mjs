@@ -3099,10 +3099,12 @@ test("renderGateReviewCommentBody renders structured per-angle fan-in findings a
   });
 
   // Structured block is multi-line with one bullet per angle and nested findings.
-  assert.match(body, /\n- `correctness` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] off-by-one in loop bound \(`src\/loop\.mjs:42`\) — _accepted-for-fix_\n/);
-  assert.match(body, /\n {2}- \[worth-fixing-now\] missing null guard\n/);
-  assert.match(body, /\n- `acceptance-criteria` → clean/);
+  // severity/verdict/disposition render inside backtick code spans (enum
+  // labels, never prose — see sanitizeStructuredCodeSpan).
+  assert.match(body, /\n- `correctness` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] off-by-one in loop bound \(`src\/loop\.mjs:42`\) — _`accepted-for-fix`_\n/);
+  assert.match(body, /\n {2}- \[`worth-fixing-now`\] missing null guard\n/);
+  assert.match(body, /\n- `acceptance-criteria` → `clean`/);
   // Newlines are preserved (not collapsed to a run-on line).
   assert.ok(body.split("\n").length > 8, "structured body should be multi-line");
   // The free-text summary is NOT rendered; the digest line is used instead.
@@ -3249,7 +3251,7 @@ test("renderGateReviewCommentBody sanitizes structured angle/finding text and su
     ],
   });
   // Angle backtick stripped (no premature code-span close).
-  assert.match(body, /\n- `weirdangle` → findings_present\n/);
+  assert.match(body, /\n- `weirdangle` → `findings_present`\n/);
   // Embedded newline collapsed; HTML-comment delimiters neutralized.
   assert.match(body, /line one line two &lt;!-- dev-loops:gate-findings gate=draft_gate --&gt;/);
   assert.doesNotMatch(body, /<!-- dev-loops:gate-findings/);
@@ -3259,6 +3261,51 @@ test("renderGateReviewCommentBody sanitizes structured angle/finding text and su
   assert.equal(parsed.headSha, "deadbeef");
   assert.equal(parsed.executionMode, "fanout_fanin");
   assert.equal(parsed.contractComplete, true);
+});
+
+// Regression (renderer-security, PR#1513 gate review): severity/verdict/
+// disposition are enum-like fields, but this file previously rendered them
+// bare (only summary/file went through a code span). A `--findings-json`
+// producer other than consolidate-fanin can supply an arbitrary string there,
+// so a crafted severity like `must-fix](https://evil.example)` used to close
+// the literal `[...]` early and open a clickable markdown link in a posted
+// gate comment. severity/verdict/disposition now render inside a backtick
+// code span (like angle/file already did), which markdown parses before
+// link/image syntax, so the value can never break out of its literal
+// position. summary also neutralizes the `![` image-embed form (a
+// read-receipt/IP-leak vector via an auto-loaded remote image).
+test("renderGateReviewCommentBody neutralizes markdown link/image injection via severity/verdict/disposition/summary (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present](https://evil.example)",
+        findings: [
+          {
+            severity: "must-fix](https://evil.example)",
+            summary: "see ![leak](https://evil.example/track.png) for details",
+            disposition: "accepted-for-fix](https://evil.example)",
+          },
+        ],
+      },
+    ],
+  });
+  // A crafted severity/verdict/disposition never closes its own `[...]`/`_..._`
+  // wrapper early: the whole value, including its embedded `](url)`, is
+  // wrapped in ITS OWN backtick code span — CommonMark parses a code span
+  // before link syntax, so this renders as inert literal text, never a link.
+  assert.match(body, /\[`must-fix\]\(https:\/\/evil\.example\)`\]/);
+  assert.match(body, /→ `findings_present\]\(https:\/\/evil\.example\)`\n/);
+  assert.match(body, /_`accepted-for-fix\]\(https:\/\/evil\.example\)`_/);
+  // The image-embed form in summary is neutralized (no bare `![`).
+  assert.doesNotMatch(body, /!\[leak\]/);
+  assert.match(body, /!\\\[leak\]/);
 });
 
 test("renderGateReviewCommentBody renders NESTED per-angle findings input correctly (#898)", async () => {
@@ -3279,9 +3326,9 @@ test("renderGateReviewCommentBody renders NESTED per-angle findings input correc
       { angle: "tests", verdict: "clean", findings: [] },
     ],
   });
-  assert.match(body, /\n- `correctness` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] bad bound \(`x\.mjs:3`\)\n/);
-  assert.match(body, /\n- `tests` → clean/);
+  assert.match(body, /\n- `correctness` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] bad bound \(`x\.mjs:3`\)\n/);
+  assert.match(body, /\n- `tests` → `clean`/);
   assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 1 finding \(see per-angle breakdown below\)\./);
   const parsed = parseGateReviewCommentMarkerBody(body);
   assert.ok(parsed);
@@ -3398,13 +3445,13 @@ test("renderGateReviewCommentBody groups FLAT per-finding input by angle without
     ],
   });
   // Findings are NOT dropped: grouped per angle.
-  assert.match(body, /\n- `correctness` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] off-by-one \(`src\/loop\.mjs`\) — _accepted-for-fix_\n/);
-  assert.match(body, /\n {2}- \[worth-fixing-now\] missing guard\n/);
-  assert.match(body, /\n- `style` → findings_present\n/);
-  assert.match(body, /\n {2}- \[defer\] naming nit\n/);
-  assert.match(body, /\n- `general` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] no-angle finding\n/);
+  assert.match(body, /\n- `correctness` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] off-by-one \(`src\/loop\.mjs`\) — _`accepted-for-fix`_\n/);
+  assert.match(body, /\n {2}- \[`worth-fixing-now`\] missing guard\n/);
+  assert.match(body, /\n- `style` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`defer`\] naming nit\n/);
+  assert.match(body, /\n- `general` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] no-angle finding\n/);
   // 3 angles (correctness, style, general), 4 findings total — none dropped.
   assert.match(body, /\*\*Findings summary:\*\* 3 angles reviewed; 4 findings \(see per-angle breakdown below\)\./);
   const parsed = parseGateReviewCommentMarkerBody(body);
@@ -3534,9 +3581,9 @@ test("renderGateReviewCommentBody renders an angle-less NESTED entry under `gene
     ],
   });
   // Both angle-less entries render under `general` — findings are NOT dropped.
-  assert.match(body, /\n- `general` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] angle-less nested finding\n/);
-  assert.match(body, /\n {2}- \[worth-fixing-now\] blank-angle nested finding\n/);
+  assert.match(body, /\n- `general` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] angle-less nested finding\n/);
+  assert.match(body, /\n {2}- \[`worth-fixing-now`\] blank-angle nested finding\n/);
   // The structured digest is used; the free-text fallback is NOT rendered.
   assert.match(body, /per-angle breakdown below/);
   assert.doesNotMatch(body, /must NOT be rendered/);
@@ -3739,9 +3786,9 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
         assertArgContains: [
           "**Execution mode:** fanout_fanin",
-          "- `correctness` → findings_present",
-          "  - [must-fix] broken edge case (`a.mjs:7`)",
-          "- `coverage` → clean",
+          "- `correctness` → `findings_present`",
+          "  - [`must-fix`] broken edge case (`a.mjs:7`)",
+          "- `coverage` → `clean`",
           "**Findings summary:** 3 angles reviewed; 1 finding (see per-angle breakdown below).",
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
@@ -3841,7 +3888,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
         assertArgContains: [
           "body=### Gate review: `pre_approval_gate`",
           "**Execution mode:** fanout_fanin",
-          "- `dry` → findings_present",
+          "- `dry` → `findings_present`",
           // The structured single-line digest stays plain; the gateEvidenceNote
           // renders on its own labeled line, not spliced into the digest.
           "**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).",
@@ -3892,7 +3939,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
     assert.match(body, /\n\*\*Gate evidence note:\*\* Copilot review rounds exhausted/);
     assert.doesNotMatch(body, /\*\*Findings summary:\*\*[^\n]*; Copilot review rounds exhausted/);
     // The structured per-angle bullet is unchanged by carrying the note.
-    assert.match(body, /\n- `correctness` → findings_present\n/);
+    assert.match(body, /\n- `correctness` → `findings_present`\n/);
     const parsed = parseGateReviewCommentMarkerBody(body);
     assert.ok(parsed, "structured body with gateEvidenceNote must parse via the marker parser");
     assert.equal(parsed.contractComplete, true);
