@@ -712,7 +712,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1274,7 +1274,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
     // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
     assert.equal(result.ghCallCount(), 8);
@@ -1516,7 +1516,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1609,7 +1609,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       warning: "A gate comment for \`draft_gate\` already exists on a different head SHA \`def5678000000000000000000000000000000000\` (comment 202). The old comment is stale for the current head.",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1701,7 +1701,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-202",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1933,8 +1933,10 @@ test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-s
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot set verdict "clean"/);
-    assert.match(payload.error, /must-fix/);
-    assert.match(payload.error, /worth-fixing-now/);
+    // draft_gate blocks on must-fix only (worth-fixing-now is recorded but
+    // non-blocking here); assert the exact bracketed list so this fails if
+    // worth-fixing-now ever becomes blocking again for draft_gate.
+    assert.match(payload.error, /blocking severities \[must-fix\]\./);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1962,9 +1964,11 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-summary", "no issues found",
+      "--findings-summary", "0 must-fix; 1 worth-fixing-now recorded (non-blocking), 1 defer",
       "--next-action", "mark ready for review",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":1}',
+      // draft_gate blocks on must-fix only: a non-zero worth-fixing-now count
+      // (like the non-zero defer count) must not block a clean verdict.
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":1,"defer":1}',
     ], { env });
 
     assert.equal(result.code, 0);
@@ -2261,8 +2265,12 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot set verdict "clean"/);
     assert.match(payload.error, /--findings-severity-counts is required/);
-    assert.match(payload.error, /must-fix/);
-    assert.match(payload.error, /worth-fixing-now/);
+    // The error text embeds a static example payload alongside the
+    // config-derived "(blocking: [...])" tail; assert the tail, which is
+    // the part that actually reflects draft_gate's configured blocking set
+    // (must-fix only — worth-fixing-now would match the example text
+    // regardless of what is configured).
+    assert.match(payload.error, /\(blocking: \[must-fix\]\)/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2285,7 +2293,9 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
       "--verdict", "clean",
       "--findings-summary", "all clear",
       "--next-action", "mark ready",
-      "--findings-severity-counts", '{"must-fix":0,"defer":0}',
+      // draft_gate blocks on must-fix only, so omitting must-fix (not
+      // worth-fixing-now) is what exercises "missing a blocking key" here.
+      "--findings-severity-counts", '{"worth-fixing-now":0,"defer":0}',
     ], { env });
 
     assert.equal(result.code, 1);
@@ -2293,7 +2303,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /must include explicit counts for all configured blocking severities/);
-    assert.match(payload.error, /worth-fixing-now/);
+    assert.match(payload.error, /must-fix/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
