@@ -4024,9 +4024,11 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
 // could not render even at minimum shape has neither --out nor --findings-json available
 // (see the sub-loop contract's "Execution mode and fan-out evidence enforcement"), so the
 // caller posts with --findings-summary only — no --findings-json, and therefore no
-// --findings-severity-counts either, since that flag's requirement lives entirely inside
-// the `structuredFindings && executionMode === "fanout_fanin"` branch this path never
-// enters. This must succeed, or the sole escape hatch for a withheld round closes.
+// --findings-severity-counts either. This test's verdict is "findings_present", so it
+// does not exercise --findings-severity-counts' actual requirement (scoped to
+// `verdict === "clean" && blockCleanOnFindingSeverities.length > 0`, independent of
+// structuredFindings/executionMode) — a clean tier-4 round would still need it. This
+// must succeed, or the sole escape hatch for a withheld round closes.
 test("upsert-checkpoint-verdict posts a withheld (tier-4) fanout_fanin round via --findings-summary alone, with neither --findings-json nor --findings-severity-counts", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-tier4-findings-summary-"));
   try {

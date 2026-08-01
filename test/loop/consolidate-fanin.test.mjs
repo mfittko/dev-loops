@@ -1430,9 +1430,9 @@ test("a fan-in with far more angles than even bare markers can fit withholds --o
 // written. Pre-existing behavior (before the render-budget split) failed
 // closed (exit 1) on exactly this input; this must too, naming the round size
 // so the caller knows to re-run with --ledger-out rather than losing the
-// round silently. This is also the shape the sanctioned SKILL.md gate-comment
-// example invokes (--findings-dir/--gate/--out only), so a caller following
-// that documented form must not lose findings silently either.
+// round silently. This pins the fail-closed behavior for any caller that
+// still omits --ledger-out; every sanctioned SKILL.md gate-comment example
+// now includes it.
 test("an over-budget round with no --ledger-out fails closed instead of returning ok:true over zero durable evidence", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const ANGLE_COUNT = 25;

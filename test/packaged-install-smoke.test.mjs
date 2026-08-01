@@ -125,6 +125,12 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
       ["loop", "ui-review-report", "--help"],
       ["loop", "ui-review-teardown", "--help"],
       ["loop", "visual-grill-capture", "--help"],
+      // Resolves the new scripts/loop -> scripts/github cross-module import
+      // this CLI added (consolidate-fanin.mjs imports
+      // normalizeStructuredFindings/renderStructuredFindings from
+      // upsert-checkpoint-verdict.mjs) from the installed tarball — no other
+      // entry above loads that import graph.
+      ["gate", "consolidate-fanin", "--help"],
     ]) {
       // execFileSync throws on a non-zero exit, so reaching here already means
       // the command succeeded; additionally assert it printed real help (a

@@ -80,6 +80,7 @@ describe("consolidateFanin — verdict", () => {
       [{ angle: "x", verdict: "findings_present", findings: [] }], // findings_present w/o findings
       [{ angle: "x", verdict: "clean", findings: [{ severity: "must-fix", summary: "y" }] }], // clean w/ findings
       [{ angle: "x", verdict: "findings_present", findings: [{ severity: "nope", summary: "y" }] }],
+      [{ angle: "x".repeat(201), verdict: "clean", findings: [] }], // pathologically long angle
     ];
     for (const angleResults of cases) {
       const result = consolidateFanin({ angleResults });
