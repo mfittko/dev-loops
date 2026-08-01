@@ -108,10 +108,12 @@ node scripts/loop/provision-worktree.mjs --worktree-path <p> --repo-root <p>
 
 <!-- rule: WORKTREE-DEFAULT-BRANCH-GUARD -->
 `WORKTREE-DEFAULT-BRANCH-GUARD`: `ensure-worktree.mjs` also best-effort
-installs `pre-commit`/`pre-push` hooks into the primary checkout's shared
-common hook directory, refusing a commit on a guarded branch or a push to one
-(including via an explicit refspec such as `HEAD:main` from a feature
-branch). The hooks guard the repo's OWN default branch (git's advertised
+installs `pre-commit`/`pre-merge-commit`/`pre-push` hooks into the primary
+checkout's shared common hook directory, refusing a commit (plain or via
+`git merge`, which git runs `pre-merge-commit` for, not `pre-commit`) on a
+guarded branch, or a push to one (including via an explicit refspec such as
+`HEAD:main` from a feature branch). The hooks guard the repo's OWN default
+branch (git's advertised
 `<remote>/HEAD`) — resolved fresh on every install, never from a --base guess
 — and, additionally, an EXPLICIT `--base` (an operator's flag, or the
 `.devloops` `workflow.baseBranch` the resolver injects as one) when it
@@ -135,13 +137,16 @@ the worktree. Refused entirely (`guard.ok: false`, nothing written):
 Installed but with reduced coverage (`guard.ok: true`):
 
 - A pre-existing hook (from another tool, or hand-authored) already occupies
-  the `pre-commit`/`pre-push` slot: that hook is never clobbered, and the
-  slot is reported `skipped` — a guarded branch is unenforced for that hook.
+  one of the guarded slots: that hook is never clobbered, and the slot is
+  reported `skipped` — a guarded branch is unenforced for that hook.
 - Neither the repo's own default nor an explicit base resolves to a real
   remote-tracking ref (`refs/remotes/<remote>/<branch>`) at install time
   (offline, no remote, or a base that has never been pushed): the hooks
   install inert (`guard.defaultBranches: []`) rather than guess a branch to
   protect.
+- `git rebase` replays commits without running `pre-commit`/`pre-merge-commit`
+  at all (git's own rebase behavior, not something an installed hook can
+  change) — a rebase that moves a guarded branch is not caught by this guard.
 
 Because of these, `ensure-worktree.mjs`'s hook is a defense-in-depth
 best-effort measure, not a substitute for `WORKTREE-CREATE-PROVISION` and

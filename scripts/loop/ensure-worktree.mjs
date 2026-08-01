@@ -144,6 +144,25 @@ function remoteFromBase(base) {
   return slash > 0 ? base.slice(0, slash) : "origin";
 }
 
+/**
+ * Configured remote names (`git remote`), so a slashed `--base` is only ever
+ * split into remote/branch when its first segment genuinely names one. A bare
+ * `--base release/1.0` (the shape `workflow.baseBranch` documents, "main" or
+ * "spike/foo") has no remote named "release" — treating it as one anyway
+ * resolves nothing and, before this fix, fed the same wrong remote into the
+ * repo's-own-default lookup below.
+ */
+function listRemotes(gitCommand, cwd) {
+  try {
+    return runGit(gitCommand, ["remote"], cwd)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 function runGit(gitCommand, args, cwd) {
   return execFileSync(gitCommand, args, {
     cwd,
@@ -240,20 +259,30 @@ function remoteAdvertisedDefaultBranch(gitCommand, remote, cwd) {
  * .devloops workflow.baseBranch the resolver injects as one) when it differs.
  * An auto-detected base that was never given explicitly is never trusted for
  * this: trusting it here would bake in the exact same wrong guess it can
- * itself be. Because the repo default is re-derived identically every time,
- * a later call with a different (or no) explicit base can never strip its
- * protection — only ever add or drop the SECOND, explicit-base slot.
+ * itself be. Because the repo default is re-derived identically every time —
+ * ALWAYS from "origin", never from the invocation's --base — a later call
+ * with a different (or no) explicit base can never strip its protection —
+ * only ever add or drop the SECOND, explicit-base slot.
  */
 function guardedBranches(gitCommand, root, explicitBase) {
-  const remote = explicitBase ? remoteFromBase(explicitBase) : "origin";
-  const repoDefaultCandidate = remoteAdvertisedDefaultBranch(gitCommand, remote, root);
-  const repoDefault = repoDefaultCandidate && remoteDefaultRefExists(gitCommand, remote, repoDefaultCandidate, root)
+  // "origin" unconditionally: the repo's own default must not move just
+  // because this particular call's --base happens to name a different
+  // remote (or, worse, a bare slashed branch that only LOOKS like one).
+  const repoDefaultCandidate = remoteAdvertisedDefaultBranch(gitCommand, "origin", root);
+  const repoDefault = repoDefaultCandidate && remoteDefaultRefExists(gitCommand, "origin", repoDefaultCandidate, root)
     ? repoDefaultCandidate
     : null;
 
   let explicitCandidate = null;
   if (explicitBase) {
-    const branch = branchFromBase(explicitBase);
+    // Only split off a remote when the first segment is an actually
+    // configured one; a bare slashed branch (or a --base on a remote this
+    // checkout has never heard of) is instead checked whole against origin.
+    const remotes = listRemotes(gitCommand, root);
+    const maybeRemote = remoteFromBase(explicitBase);
+    const isRealRemote = remotes.includes(maybeRemote);
+    const remote = isRealRemote ? maybeRemote : "origin";
+    const branch = isRealRemote ? branchFromBase(explicitBase) : explicitBase;
     explicitCandidate = remoteDefaultRefExists(gitCommand, remote, branch, root) ? branch : null;
   }
 
@@ -272,7 +301,11 @@ function installGuard(gitCommand, root, explicitBase) {
     const defaultBranches = guardedBranches(gitCommand, root, explicitBase);
     let hooksPathOverride = null;
     try {
-      hooksPathOverride = runGit(gitCommand, ["config", "--get", "core.hooksPath"], root).trim() || null;
+      // Exit 0 means SET (even to ""), exit 1 means unset — `.trim() || null`
+      // collapsed both to the same null, so `core.hooksPath=""` (git runs NO
+      // hooks at all in that case) read as "unset" and installed hooks git
+      // would never execute while reporting guard.ok: true.
+      hooksPathOverride = runGit(gitCommand, ["config", "--get", "core.hooksPath"], root).trim();
     } catch {
       hooksPathOverride = null; // unset — `git config --get` exits 1, which is the normal case
     }

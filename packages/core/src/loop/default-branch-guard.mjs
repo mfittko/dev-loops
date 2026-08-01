@@ -17,7 +17,10 @@ import path from "node:path";
  */
 export const GUARD_MARKER = "dev-loops:default-branch-guard";
 export const GUARD_OVERRIDE_ENV = "DEVLOOPS_ALLOW_MAIN";
-export const GUARDED_HOOKS = Object.freeze(["pre-commit", "pre-push"]);
+// pre-merge-commit, not pre-commit, is what git runs for `git merge` (a plain
+// `git commit` never fires during a merge); omitting it let a merge onto a
+// guarded branch land while a plain commit on the same branch was refused.
+export const GUARDED_HOOKS = Object.freeze(["pre-commit", "pre-merge-commit", "pre-push"]);
 
 const REFUSAL_BODY = (what, branchExpr) => `  echo "dev-loops: refusing to ${what} ($${branchExpr}) from this checkout." >&2
   echo "  The dev-loop works in a linked worktree; a cwd that silently reset to the" >&2
@@ -97,7 +100,10 @@ if [ -z "$defaults" ]; then
 fi
 `;
 
-  if (hookName === "pre-commit") {
+  // pre-commit and pre-merge-commit both fire with HEAD already on the branch
+  // the commit would land on (a plain commit vs. finishing a merge) — same
+  // check, just under the name git actually invokes for each operation.
+  if (hookName !== "pre-push") {
     return `${header}
 # Full ref, not --short: git DISAMBIGUATES a --short symbolic-ref to
 # "heads/main" when a tag also named "main" exists, so comparing the short
@@ -137,10 +143,17 @@ exit 0
 `;
 }
 
+/** The `defaults="..."` a previously-installed hook of ours baked in. */
+function extractExistingDefaults(contents) {
+  const match = contents.match(/^defaults="([^"]*)"$/mu);
+  return match ? match[1].split(/\s+/u).filter(Boolean) : [];
+}
+
 function readHookState(hookPath) {
-  if (!fs.existsSync(hookPath)) return { ours: true, absent: true };
+  if (!fs.existsSync(hookPath)) return { ours: true, absent: true, existingBranches: [] };
   const contents = fs.readFileSync(hookPath, "utf8");
-  return { ours: contents.includes(GUARD_MARKER), absent: false };
+  const ours = contents.includes(GUARD_MARKER);
+  return { ours, absent: false, existingBranches: ours ? extractExistingDefaults(contents) : [] };
 }
 
 /**
@@ -165,12 +178,21 @@ export function installDefaultBranchGuard({ gitDir, defaultBranches = null, hook
     reason,
   });
 
-  if (typeof hooksPathOverride === "string" && hooksPathOverride.trim().length > 0) {
+  // Any STRING means core.hooksPath is set (`git config --get` exits 0), even
+  // to "" — which git treats as "run no hooks at all", not "unset". A caller
+  // that collapsed exit-0-empty and exit-1-unset to the same null would make
+  // this refusal unreachable for exactly the config value it exists to catch.
+  if (typeof hooksPathOverride === "string") {
     const configured = hooksPathOverride.trim();
-    return refuse(
-      `core.hooksPath is set to "${configured}" — install the guard there, or unset it, or use ${GUARD_OVERRIDE_ENV} discipline instead`,
-      `core.hooksPath is set to "${configured}", so hooks in $GIT_DIR/hooks would never run`,
-    );
+    return configured.length > 0
+      ? refuse(
+          `core.hooksPath is set to "${configured}" — install the guard there, or unset it, or use ${GUARD_OVERRIDE_ENV} discipline instead`,
+          `core.hooksPath is set to "${configured}", so hooks in $GIT_DIR/hooks would never run`,
+        )
+      : refuse(
+          `core.hooksPath is set to an empty string — git runs no hooks at all; unset it, or use ${GUARD_OVERRIDE_ENV} discipline instead`,
+          "core.hooksPath is set to an empty string, so git runs no hooks at all",
+        );
   }
 
   // A relative or empty gitDir resolves against the caller's cwd, which writes a
@@ -195,6 +217,19 @@ export function installDefaultBranchGuard({ gitDir, defaultBranches = null, hook
     );
   }
 
+  // A linked worktree's OWN per-worktree gitdir (`.git/worktrees/<name>`) also
+  // has a HEAD file, so the probe above alone lets it through — hooks written
+  // there are never resolved by git (hooks always come from the COMMON dir),
+  // so this would report ok:true for a guard that can never fire. `commondir`
+  // exists only in a linked worktree's own gitdir, never in the common one:
+  // a one-line, same-cost discriminator against exactly that gitdir.
+  if (fs.existsSync(path.join(gitDir, "commondir"))) {
+    return refuse(
+      `gitDir ${JSON.stringify(gitDir)} is a linked worktree's own git directory, not the common one — hooks installed there never run`,
+      "gitDir is a linked worktree's own git directory (has a commondir file), not the common one hooks are resolved from",
+    );
+  }
+
   const branches = normalizeBranchList(defaultBranches);
   const unsafeBranch = branches.find((branch) => !SHELL_SAFE_BRANCH.test(branch));
 
@@ -211,14 +246,25 @@ export function installDefaultBranchGuard({ gitDir, defaultBranches = null, hook
   const installed = [];
   const refreshed = [];
   const skipped = [];
+  // Union across whatever this call resolved (`branches`) with what any
+  // already-installed hook of ours had baked in — never a straight overwrite.
+  // A caller's resolution can legitimately come back empty or narrower on a
+  // later call (a transient fetch/network hiccup, a remote HEAD that briefly
+  // stopped advertising); rewriting to that smaller set would silently un-guard
+  // a branch an earlier install already protected while still reporting
+  // ok: true. Reported here (not just `branches`) so the result reflects what
+  // is actually now enforced.
+  const finalBranches = new Set(branches);
 
   for (const hook of GUARDED_HOOKS) {
     const hookPath = path.join(hooksDir, hook);
-    const { ours, absent } = readHookState(hookPath);
+    const { ours, absent, existingBranches } = readHookState(hookPath);
     if (!ours) {
       skipped.push({ hook, reason: "a pre-existing hook is present and was left untouched" });
       continue;
     }
+    const hookBranches = [...new Set([...branches, ...existingBranches])];
+    for (const branch of hookBranches) finalBranches.add(branch);
     // Write + chmod a temp file in the SAME directory, then rename into place.
     // A direct writeFileSync is visible to git mid-write: the common hooks dir
     // is shared, so a concurrent ensureWorktree call (or a real commit racing
@@ -227,18 +273,19 @@ export function installDefaultBranchGuard({ gitDir, defaultBranches = null, hook
     // rename is atomic, so any reader sees either the old hook or the new one,
     // never a partial one.
     const tmpPath = path.join(hooksDir, `.${hook}.tmp-${process.pid}-${Date.now()}`);
-    fs.writeFileSync(tmpPath, renderGuardHook(hook, branches), { mode: 0o755 });
+    fs.writeFileSync(tmpPath, renderGuardHook(hook, hookBranches), { mode: 0o755 });
     fs.chmodSync(tmpPath, 0o755); // mode above is umask-limited; force it
     fs.renameSync(tmpPath, hookPath);
     (absent ? installed : refreshed).push(hook);
   }
 
+  const reportedBranches = [...finalBranches];
   return {
     ok: true,
     installed,
     refreshed,
     skipped,
-    defaultBranches: branches,
-    ...(branches.length === 0 ? { reason: "default branch could not be resolved at install time; the hooks are inert rather than guessing which branch to protect" } : {}),
+    defaultBranches: reportedBranches,
+    ...(reportedBranches.length === 0 ? { reason: "default branch could not be resolved at install time; the hooks are inert rather than guessing which branch to protect" } : {}),
   };
 }

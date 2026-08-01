@@ -127,6 +127,32 @@ test(`${GUARD_OVERRIDE_ENV}=1 permits pushing to the default branch too — the 
   }
 });
 
+// git runs `pre-merge-commit`, NOT `pre-commit`, when finishing a `git merge`
+// — a plain commit and a merge onto the same guarded branch used to get
+// different outcomes (only the plain commit was refused) until
+// pre-merge-commit joined GUARDED_HOOKS.
+test("blocks a merge onto the default branch (pre-merge-commit, not just pre-commit)", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    git(dir, ["checkout", "--quiet", "-b", "feature"]);
+    fs.writeFileSync(path.join(dir, "feature.txt"), "feature\n");
+    git(dir, ["add", "feature.txt"]);
+    git(dir, ["commit", "--quiet", "--no-verify", "-m", "feature work"]);
+    git(dir, ["checkout", "--quiet", "main"]);
+    let blocked = false;
+    try {
+      git(dir, ["merge", "--no-ff", "feature", "-m", "merge feature"]);
+    } catch {
+      blocked = true;
+    }
+    assert.equal(blocked, true, "expected the merge onto main to be refused");
+    assert.equal(git(dir, ["rev-list", "--count", "HEAD"]).trim(), "1", "no merge commit must have landed");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a non-default branch commits freely — the loop's own path is untouched", async () => {
   const { dir, gitDir } = await repoFixture();
   try {
@@ -171,6 +197,47 @@ test("a linked worktree on a non-default branch commits freely", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
     await rm(linked, { recursive: true, force: true });
+  }
+});
+
+// A linked worktree's OWN per-worktree gitdir (.git/worktrees/<name>) also has
+// a HEAD file, so the absolute-git-directory probe alone let it through —
+// hooks written there are never resolved by git (hooks always come from the
+// COMMON dir), so this used to report ok:true for a guard that could never
+// fire.
+test("install: refuses a linked worktree's OWN gitdir, not just the common one", async () => {
+  const { dir, gitDir } = await repoFixture();
+  const linked = path.join(dir, "..", `${path.basename(dir)}-linked2`);
+  try {
+    git(dir, ["checkout", "--quiet", "-b", "primary-holder"]);
+    git(dir, ["worktree", "add", "--quiet", linked, "main"]);
+    const linkedGitDir = git(linked, ["rev-parse", "--absolute-git-dir"]).trim();
+    assert.notEqual(linkedGitDir, gitDir, "the linked worktree's own gitdir must differ from the common one");
+
+    const result = installDefaultBranchGuard({ gitDir: linkedGitDir, defaultBranches: "main" });
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /own git directory/);
+    assert.equal(fs.existsSync(path.join(linkedGitDir, "hooks", "pre-commit")), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(linked, { recursive: true, force: true });
+  }
+});
+
+// Because the hooks share one repo-wide directory, a rewrite must never
+// narrow what an earlier install already protected — even when a LATER call
+// resolves a smaller (or empty) set, e.g. a transient remote-HEAD lookup
+// failure. Union, not overwrite.
+test("install: a later call resolving fewer branches never narrows an already-installed guard", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    const second = installDefaultBranchGuard({ gitDir, defaultBranches: null });
+    assert.equal(second.ok, true);
+    assert.deepEqual(second.defaultBranches, ["main"], "the previously-baked branch must survive an empty resolution");
+    assert.equal(commitAttempt(dir, "still-guarded.txt").blocked, true, "main must still be refused");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -222,7 +289,7 @@ test("a pre-existing foreign hook is preserved, never silently clobbered", async
     fs.writeFileSync(path.join(hooksDir, "pre-commit"), foreign, { mode: 0o755 });
 
     const result = installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
-    assert.deepEqual(result.installed, ["pre-push"], "the free hook slot should still be taken");
+    assert.deepEqual(result.installed, ["pre-merge-commit", "pre-push"], "the other free hook slots should still be taken");
     assert.deepEqual(result.skipped.map((entry) => entry.hook), ["pre-commit"]);
     assert.equal(fs.readFileSync(path.join(hooksDir, "pre-commit"), "utf8"), foreign);
     // And the un-clobbered slot means main is NOT guarded for commits — the

@@ -160,7 +160,7 @@ test("ensure: reuse is idempotent (second call reuses, no error)", async () => {
     // paths — deleting installGuard's call on the reuse branch would leave
     // this whole suite green while breaking that contract.
     assert.equal(second.guard.ok, true);
-    assert.deepEqual(second.guard.refreshed, ["pre-commit", "pre-push"]);
+    assert.deepEqual(second.guard.refreshed, ["pre-commit", "pre-merge-commit", "pre-push"]);
   } finally {
     repo.cleanup();
   }
@@ -460,6 +460,76 @@ test("ensure: a later call with a DIFFERENT explicit --base never un-guards the 
     assert.throws(
       () => repo.git("commit", "-q", "--allow-empty", "-m", "on main"),
       (err) => /refusing to commit on the default branch/.test(String(err.stderr)),
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// Regression for the bug this fixes: guardedBranches() used to resolve the
+// repo's OWN default from the --base's remote, so a --base whose first
+// segment was NOT a real remote name (a bare slashed branch, exactly the
+// shape `workflow.baseBranch` documents — "main" or "spike/foo") misparsed
+// as remote="release", found no such remote, and rewrote the shared hooks to
+// defaults="" — silently un-guarding the real default while guard.ok stayed
+// true.
+test("ensure: a bare slashed --base (no matching remote) never un-guards the real default", async () => {
+  const repo = makeRepo();
+  try {
+    await ensureWorktree({ repoRoot: repo.root, issue: 1 });
+    repo.git("branch", "release/1.0");
+    repo.git("fetch", "-q", "origin");
+    const second = await ensureWorktree({ repoRoot: repo.root, issue: 2, base: "release/1.0" });
+    assert.equal(second.guard.ok, true);
+    assert.ok(second.guard.defaultBranches.includes("main"), "the real default survives a bare slashed --base");
+    assert.ok(second.guard.defaultBranches.includes("release/1.0"), "the explicit base is still guarded too");
+    assert.throws(
+      () => repo.git("commit", "-q", "--allow-empty", "-m", "on main"),
+      (err) => /refusing to commit on the default branch/.test(String(err.stderr)),
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// Same defect, different trigger: a --base on a SECOND real remote (a fork's
+// "upstream") must not make the repo's OWN default track THAT remote's HEAD
+// either — the repo default is always origin's, independent of --base.
+test("ensure: a --base on a different real remote never un-guards the real default", async () => {
+  const repo = makeRepo();
+  try {
+    await ensureWorktree({ repoRoot: repo.root, issue: 1 });
+    // A second, genuinely-configured remote whose HEAD is not "main" — the
+    // pre-fix code used THIS remote to resolve the repo's own default too.
+    repo.git("branch", "develop");
+    repo.git("remote", "add", "upstream", repo.root);
+    repo.git("fetch", "-q", "upstream");
+    const second = await ensureWorktree({ repoRoot: repo.root, issue: 2, base: "upstream/develop" });
+    assert.equal(second.guard.ok, true);
+    assert.ok(second.guard.defaultBranches.includes("main"), "the real default (origin's) survives a --base on a different remote");
+    assert.throws(
+      () => repo.git("commit", "-q", "--allow-empty", "-m", "on main"),
+      (err) => /refusing to commit on the default branch/.test(String(err.stderr)),
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// An empty-but-SET core.hooksPath ("" — git runs NO hooks at all in that
+// case) used to collapse to the same `null` as unset, so the guard installed
+// hooks git would never execute and reported guard.ok: true anyway.
+test("ensure: refuses to install when core.hooksPath is set to an empty string", async () => {
+  const repo = makeRepo();
+  try {
+    repo.git("config", "core.hooksPath", "");
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1452 });
+    assert.equal(res.ok, true, "worktree still created — the guard is best-effort");
+    assert.equal(res.guard.ok, false);
+    assert.match(res.guard.reason, /core\.hooksPath/);
+    assert.ok(
+      !existsSync(path.join(repo.root, ".git", "hooks", "pre-commit")),
+      "no hook written where git would never read it",
     );
   } finally {
     repo.cleanup();

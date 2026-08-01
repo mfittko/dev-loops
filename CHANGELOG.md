@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- `ensure-worktree` now best-effort installs `pre-commit`/`pre-push` hooks into the primary checkout's shared common git directory, refusing a commit or push (including via an explicit refspec) that would land on a guarded branch — the repo's own default, and, when it differs, an explicit `--base`. Override for a sanctioned release or reconcile with `DEVLOOPS_ALLOW_MAIN=1`. The install is fail-soft and has documented no-op paths (an existing `core.hooksPath`, a foreign pre-existing hook, or an unresolvable default) — see [Default-branch guard](skills/docs/worktree-guidance.md#default-branch-guard).
+- `ensure-worktree` now best-effort installs `pre-commit`/`pre-merge-commit`/`pre-push` hooks into the primary checkout's shared common git directory, refusing a commit, merge, or push (including via an explicit refspec) that would land on a guarded branch — the repo's own default (always re-derived from `origin`, independent of any given invocation's `--base`), and, when it differs, an explicit `--base`. Override for a sanctioned release or reconcile with `DEVLOOPS_ALLOW_MAIN=1`. The install is fail-soft and has documented no-op paths (an existing `core.hooksPath`, a foreign pre-existing hook, or an unresolvable default) — see [Default-branch guard](skills/docs/worktree-guidance.md#default-branch-guard).
 
 ## 1.0.0-rc.4 - 2026-07-30
 
