@@ -1101,7 +1101,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1190,7 +1190,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });

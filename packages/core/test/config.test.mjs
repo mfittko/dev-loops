@@ -2594,7 +2594,7 @@ describe("role resolution", () => {
 // silently regrow (or shrink) the effective gate-review surface.
 // ============================================================================
 
-describe("shipped .devloops + extension-defaults.yaml resolve byte-identically to pre-#1404 for angle/mandatory sets, and to the current shipped baseline for blockCleanOnFindingSeverities (D3 regression guard)", () => {
+describe("shipped .devloops + extension-defaults.yaml resolve byte-identically to pre-#1404 for angle/mandatory sets; blockCleanOnFindingSeverities tracks the current shipped baseline for draft/preApproval and stays pinned to pre-#1404 for spike (D3 regression guard)", () => {
   const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
   // The exact sets origin/main (pre-#1404, flat mandatoryAngles/excludeAngles
@@ -2623,22 +2623,23 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     preApproval: ["pr-checklist-matrix", "acceptance-criteria", "yagni", "contradiction-lens"],
     spike: [],
   };
-  // draft's blocking set is NOT the pre-#1404 baseline: it was deliberately
-  // narrowed to must-fix only (see .devloops gates.draft comment / issue
-  // #1527) because worth-fixing-now churns every draft-gate round on a
-  // non-trivial change and never converges. preApproval and spike are still
-  // pinned to their pre-#1404 values — only draft's entry here tracks the
-  // current shipped baseline rather than the pre-#1404 one.
+  // draft's and preApproval's blocking sets are NOT the pre-#1404 baseline:
+  // both were deliberately narrowed to must-fix only (see the .devloops
+  // gates.draft and gates.preApproval comments / issue #1527) because
+  // worth-fixing-now churns every gate round on a non-trivial change and
+  // never converges. spike is still pinned to its pre-#1404 value — draft's
+  // and preApproval's entries here track the current shipped baseline
+  // rather than the pre-#1404 one.
   const CURRENT_BLOCK_CLEAN = {
     draft: ["must-fix"],
-    preApproval: ["must-fix", "worth-fixing-now"],
+    preApproval: ["must-fix"],
     spike: ["must-fix"],
   };
 
   const sortedSet = (arr) => [...new Set(arr)].sort();
 
   for (const gate of /** @type {const} */ (["draft", "preApproval", "spike"])) {
-    test(`${gate} gate: resolved angle set and mandatory set match pre-#1404; blockCleanOnFindingSeverities matches the pinned baseline (see CURRENT_BLOCK_CLEAN comment above for which gate tracks which)`, async () => {
+    test(`${gate} gate: resolved angle set and mandatory set match pre-#1404; blockCleanOnFindingSeverities matches the current shipped baseline for draft/preApproval and the pre-#1404 baseline for spike (see CURRENT_BLOCK_CLEAN comment above)`, async () => {
       const { loadDevLoopConfig, resolveGateAngles, resolveGateConfig } = await import("../src/config/config.mjs");
       const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
       assert.deepEqual(errors, []);
