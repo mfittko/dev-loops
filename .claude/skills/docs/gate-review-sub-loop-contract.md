@@ -438,11 +438,12 @@ though its own verbose sentence would fit alone:
    synthetic marker finding naming its omitted count and severity breakdown.
 3. **bare** — that angle's marker shortens to a bare omitted-count line when
    neither its real findings nor the verbose sentence fit.
-4. **withheld** — reached only when even ONE bare line per angle across the
-   WHOLE round still does not fit: `findingsJson` in the result is emitted
-   empty and `--out`, if given, is REMOVED from disk (deleted, not merely
-   skipped — a stale prior-round `--out` is never left for a caller to read
-   as this round's findings).
+4. **withheld** — reached only when even the CHEAPEST per-angle shape (the
+   bare line, or an angle's own real findings when those render shorter)
+   across the WHOLE round still does not fit: `findingsJson` in the result is
+   emitted empty and `--out`, if given, is REMOVED from disk (deleted, not
+   merely skipped — a stale prior-round `--out` is never left for a caller to
+   read as this round's findings).
 
 Tiers 1-3 keep the REAL angle set and each angle's REAL verdict intact (never
 collapsed into one foreign section, which would fail

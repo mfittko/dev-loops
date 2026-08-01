@@ -297,11 +297,11 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --head-sha <current_head_sha> \
   --verdict <clean|findings_present|blocked> \
   --findings-summary "<summary>" \
-  --next-action "<next action>" --findings-severity-counts '<this round's true severity counts>' \
+  --next-action "<next action>" --findings-severity-counts '<true severity counts tallied for this round>' \
   --execution-mode inline_single_agent --inline-reason "<why>"
 ```
 
-`--findings-severity-counts` is only required for `--verdict clean` when the gate's `blockCleanOnFindingSeverities` is configured (see `--help`); when passed for a `findings_present`/`blocked` inline round, substitute the counts you actually tallied, never a copy-pasted all-zero literal — an inline run has no fan-in to source a placeholder from.
+When passing `--findings-severity-counts` for an inline round, substitute the counts you actually tallied, never a copy-pasted all-zero literal — an inline run has no fan-in to source a placeholder from. See `--help` for when it is required.
 
 `--execution-mode <fanout_fanin|inline_single_agent>` records how the gate inspection ran (default `inline_single_agent`). When the gate did not run via the fan-out/fan-in sub-loop ([Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)), you MUST pass `--execution-mode inline_single_agent --inline-reason "<why>"` — silent inline runs are no longer allowed: inline mode requires a non-empty `--inline-reason` and emits a stderr warning. Because inline is the default mode, a bare call with neither flag now fails with an argument error, so always pass `--execution-mode` explicitly (and `--inline-reason` for inline). The recorded `executionMode` is surfaced by `detect-checkpoint-evidence.mjs` and gated by `gates.requireFanoutEvidence`.
 

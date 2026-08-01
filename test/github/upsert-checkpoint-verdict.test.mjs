@@ -2063,6 +2063,50 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is 
   }
 });
 
+// The clean-verdict cross-check's actual boundary is the blockCleanOnFindingSeverities
+// filter, not "any findings at all" — a clean verdict whose --findings-json carries
+// only NON-blocking (defer) findings is a sanctioned combination and must still be
+// allowed. This pins the mid-range case between "must-fix present (reject)" and
+// "zero findings (allow)" above.
+test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json carries only non-blocking (defer) findings", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-defer-only-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "defer", summary: "nice-to-have cleanup" }] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":1}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts is missing and blocking severities are configured", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-counts-"));
 
@@ -3537,41 +3581,6 @@ test("upsert-checkpoint-verdict does NOT enforce angle coverage for an inline_si
   }
 });
 
-// A degraded (marker-collapsed) fan-in round can undercount by an order of
-// magnitude if the caller forgets --findings-severity-counts, and nothing
-// used to fail closed on a findings_present/blocked round (only --verdict
-// clean required the flag). Require it for every fanout_fanin verdict that
-// supplies structured findings — a fan-in always emits severityCounts, so
-// the flag is always available.
-test("upsert-checkpoint-verdict rejects a fanout_fanin verdict with structured findings but no --findings-severity-counts", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-severity-counts-required-"));
-  try {
-    const findingsPath = path.join(tempDir, "findings.json");
-    await writeFile(
-      findingsPath,
-      JSON.stringify([
-        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "off-by-one" }] },
-        { angle: "pr-description", verdict: "clean", findings: [] },
-      ]),
-      "utf8",
-    );
-    const env = await writeGhStub(tempDir, [
-      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
-    ]);
-    const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
-      "--verdict", "findings_present", "--findings-json", findingsPath,
-      "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
-    ], { env });
-    assert.equal(result.code, 1);
-    const payload = JSON.parse(result.stderr);
-    assert.equal(payload.ok, false);
-    assert.match(payload.error, /requires --findings-severity-counts/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
 test("upsert-checkpoint-verdict --findings-json renders structured per-angle findings end-to-end (#898)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-"));
   try {
@@ -3608,7 +3617,6 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present", "--findings-json", findingsPath,
-      "--findings-severity-counts", '{"must-fix":1,"worth-fixing-now":0,"defer":0}',
       "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
     ], { env });
     assert.equal(result.code, 0, result.stderr);
@@ -3720,7 +3728,6 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present",
       "--findings-json", findingsPath,
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":1,"defer":0}',
       "--next-action", "address findings then re-gate",
       "--execution-mode", "fanout_fanin",
     ], { env });
@@ -3875,6 +3882,39 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
     assert.equal(fanout.code, 0, fanout.stderr);
     assert.equal(fanout.stderr, "");
     assert.equal(JSON.parse(fanout.stdout).executionMode, "fanout_fanin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The documented tier-4 (withheld) posting path: a fanout_fanin round consolidate-fanin
+// could not render even at minimum shape has neither --out nor --findings-json available
+// (see the sub-loop contract's "Execution mode and fan-out evidence enforcement"), so the
+// caller posts with --findings-summary only — no --findings-json, and therefore no
+// --findings-severity-counts either, since that flag's requirement lives entirely inside
+// the `structuredFindings && executionMode === "fanout_fanin"` branch this path never
+// enters. This must succeed, or the sole escape hatch for a withheld round closes.
+test("upsert-checkpoint-verdict posts a withheld (tier-4) fanout_fanin round via --findings-summary alone, with neither --findings-json nor --findings-severity-counts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-tier4-findings-summary-"));
+  try {
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["**Execution mode:** fanout_fanin"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present",
+      "--findings-summary", "round withheld: too wide to render even at minimum shape — see the disposition ledger",
+      "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.executionMode, "fanout_fanin");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

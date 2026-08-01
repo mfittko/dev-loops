@@ -56,10 +56,11 @@
  *      omitted count and severity breakdown;
  *   3. bare — that angle's marker shortens to a bare omitted-count line when
  *      neither its real findings nor the verbose sentence fit;
- *   4. withheld — reached only when even ONE bare line per angle across the
- *      WHOLE round still does not fit: "findingsJson" is emitted empty and
- *      --out, if given, is REMOVED from disk (never left stale from a prior
- *      round) rather than written or silently left in place.
+ *   4. withheld — reached only when even the CHEAPEST per-angle shape (the
+ *      bare line, or an angle's own real findings when those render shorter)
+ *      across the WHOLE round still does not fit: "findingsJson" is emitted
+ *      empty and --out, if given, is REMOVED from disk (never left stale
+ *      from a prior round) rather than written or silently left in place.
  * Tiers 1-3 PRESERVE the real angle set and each angle's real verdict, never
  * collapsing into a foreign section, so upsert-checkpoint-verdict.mjs's
  * fanout_fanin mandatory-angle/pool validation still accepts the posted
@@ -108,8 +109,9 @@ Optional:
                                  fit (angle set + per-angle verdict kept real either way — see
                                  "commentBudgetExceeded" below); REMOVED (deleted, not just skipped,
                                  so a stale prior-round file is never mistaken for this round's) on
-                                 the rare round wide enough that even one bare marker line per angle
-                                 cannot fit. --ledger-out is unaffected either way.
+                                 the rare round wide enough that even the cheapest per-angle shape
+                                 (a bare marker line, or an angle's own real findings when those
+                                 render shorter) cannot fit. --ledger-out is unaffected either way.
   --ledger-out <path>            Write the flat "findings" shape (below) to this path as JSON — the
                                  exact --findings-file input write-gate-findings-log.mjs and
                                  post-gate-findings.mjs accept. Rejected at parse time (exit 1) when
@@ -148,8 +150,9 @@ Output (stdout, JSON):
   something bigger; (2) verbose — failing that, the angle's findings replaced
   with ONE synthetic marker finding naming its omitted count and severity breakdown; (3) bare —
   that angle's marker shortens to a bare omitted-count line when neither its real findings nor the
-  verbose sentence fit; (4) withheld — reached only when even ONE bare line per angle across the
-  WHOLE round does not fit: "findingsJson" is emitted empty and --out, if given, is REMOVED from
+  verbose sentence fit; (4) withheld — reached only when even the cheapest per-angle shape (a bare
+  line, or an angle's own real findings when those render shorter) across the WHOLE round does not
+  fit: "findingsJson" is emitted empty and --out, if given, is REMOVED from
   disk (never left stale from a prior run). Tiers 1-3 keep the real angle set and each angle's real
   verdict intact so the posted verdict's mandatory-angle/pool validation still passes. Every
   degraded round sets "commentBudgetExceeded": true and still exits 0; "findings"/--ledger-out is
@@ -310,11 +313,38 @@ function angleWorstSeverityRank(a) {
   return best;
 }
 
+// Render-cost proxy for one angle's candidate shape, in isolation — used only
+// to pick the cheaper of two shapes for the SAME angle (bare marker vs its
+// own real findings), never to judge whole-round fit (that stays an actual
+// renderStructuredFindings call over the whole array). A candidate so large
+// that even alone it exceeds the comment-length bound sorts last (Infinity),
+// since it can never be the cheaper choice.
+function angleRenderCost(a) {
+  try {
+    return renderStructuredFindings(normalizeStructuredFindings([a])).length;
+  } catch {
+    return Infinity;
+  }
+}
+
 function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
-  const marked = findingsJson.map((a) => buildAngleMarker(a, false));
+  const bareMarkers = findingsJson.map((a) => buildAngleMarker(a, false));
+  // The bare marker is USUALLY the cheapest possible per-angle shape, but not
+  // always: a narrow angle carrying very few, very short real findings can
+  // render shorter than even the compressed "N omitted — see ledger" line.
+  // Seed each angle with whichever of the two costs less in isolation, so the
+  // tier-4 feasibility probe below tests the actual cheapest achievable shape
+  // instead of assuming bare-everywhere always is the smallest. An angle
+  // seeded with its own real findings here already holds its ideal (real,
+  // unmarked) form and is never later replaced with a marker — a marker is a
+  // compression and must never replace real content with something bigger.
+  const marked = findingsJson.map((a, i) => {
+    if (a.findings.length === 0) return a; // clean angle: nothing to compress
+    return angleRenderCost(a) <= angleRenderCost(bareMarkers[i]) ? a : bareMarkers[i];
+  });
   if (!fitsRenderBudget(marked)) {
     // Structural floor: this many real angles (far beyond the default
-    // fan-out cap) means even ONE bare "N omitted" line per angle cannot
+    // fan-out cap) means even the cheapest per-angle shape available cannot
     // fit — no per-angle shape can, no matter how short the text gets.
     return { commentFindingsJson: [], withheldOut: true };
   }
@@ -323,10 +353,12 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
   // scarce comment budget must land on the angles whose omitted findings
   // carry the most decision weight, not on whichever angle happens to sort
   // first alphabetically. Ties break by index, so the order stays
-  // deterministic.
+  // deterministic. Angles already seeded with their real findings above hold
+  // their ideal shape already and are excluded — there is nothing "up" from
+  // real to upgrade to.
   const upgradeOrder = findingsJson
     .map((_, i) => i)
-    .filter((i) => findingsJson[i].findings.length > 0)
+    .filter((i) => findingsJson[i].findings.length > 0 && marked[i] === bareMarkers[i])
     .sort((i, j) => angleWorstSeverityRank(findingsJson[i]) - angleWorstSeverityRank(findingsJson[j]) || i - j);
   for (const i of upgradeOrder) {
     const bare = marked[i];
@@ -666,6 +698,22 @@ export async function consolidateGateFanin(options) {
     throw new Error(`fan-in is blocked — refusing to emit a consolidated findings shape (${detail})`);
   }
 
+  // --ledger-out is the durable, always-complete audit trail and must land on
+  // disk before ANY throw-capable step runs against it — not just --out's own
+  // I/O (EISDIR/EEXIST/EACCES on a bad caller-supplied path), but also the
+  // render-budget computation below: fitFindingsToRenderBudget/
+  // buildBudgetMarkedFindingsJson call fitsRenderBudget, which deliberately
+  // RETHROWS any non-length-bound error (a shape/schema throw out of
+  // normalizeStructuredFindings/renderStructuredFindings). "findings" is
+  // final at this point (the blocked-verdict guard above already ran), so
+  // writing here is the latest point that still precedes every remaining
+  // throw in this function (see the --ledger-out doc above: "ALWAYS complete
+  // (never budgeted)").
+  if (options.ledgerOut !== undefined) {
+    await mkdir(path.dirname(options.ledgerOut), { recursive: true });
+    await writeFile(options.ledgerOut, `${JSON.stringify(findings, null, 2)}\n`, "utf8");
+  }
+
   const findingsJson = rawArtifacts.map((a) => {
     const angle = a.angle.trim();
     const angleFindings = findingsByAngle.get(angle) ?? [];
@@ -706,15 +754,6 @@ export async function consolidateGateFanin(options) {
     ...(wholeRoundFits ? {} : { commentBudgetExceeded: true }),
   };
 
-  // --ledger-out is the durable, always-complete audit trail and must land on
-  // disk before any --out I/O runs: --out's directory/rm can throw on a bad
-  // caller-supplied path (EISDIR, EEXIST, EACCES, ...), and that throw must
-  // never suppress the ledger this CLI exists to guarantee (see the
-  // --ledger-out doc above: "ALWAYS complete (never budgeted)").
-  if (options.ledgerOut !== undefined) {
-    await mkdir(path.dirname(options.ledgerOut), { recursive: true });
-    await writeFile(options.ledgerOut, `${JSON.stringify(findings, null, 2)}\n`, "utf8");
-  }
   // parseConsolidateFaninCliArgs already rejects an --out/--ledger-out pair
   // that resolves to the identical STRING, but a programmatic caller of this
   // function (e.g. a test, or another script) can skip that parser entirely,
@@ -723,8 +762,9 @@ export async function consolidateGateFanin(options) {
   // (APFS/NTFS default), or a symlink/hardlink. Re-check by file IDENTITY
   // here, right before the destructive --out rm/writeFile, so every caller of
   // this shared function is protected regardless of how it got here. Both
-  // paths must already exist (the ledger write above just created --ledger-out)
-  // for dev+ino to be comparable; a nonexistent --out is never the same file.
+  // paths must already exist (the ledger write above, before the render-budget
+  // computation, already created --ledger-out) for dev+ino to be comparable;
+  // a nonexistent --out is never the same file.
   if (options.out !== undefined && options.ledgerOut !== undefined) {
     const [outStat, ledgerStat] = await Promise.all([
       stat(options.out).catch(() => null),
