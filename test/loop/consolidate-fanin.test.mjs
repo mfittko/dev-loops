@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   consolidateGateFanin,
+  fitsRenderBudget,
   parseConsolidateFaninCliArgs,
 } from "../../scripts/loop/consolidate-fanin.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
@@ -643,6 +644,22 @@ test("--out rejects a whitespace-only value at parse time", () => {
   );
 });
 
+// fitsRenderBudget must classify "over budget" ONLY by the length-exceeded
+// throw (enforcePostedCommentLimit's "... exceeds N chars ..."); a shape
+// error from normalizeStructuredFindings (producer drift: unrecognized
+// items, mixed nested+flat) is a different failure class entirely and must
+// propagate, not be silently reported as an over-budget round — which would
+// otherwise degrade a malformed-input defect to a withheld/marker-collapsed
+// round that still exits 0 (see buildBudgetMarkedFindingsJson's tier-3 --out
+// deletion).
+test("fitsRenderBudget rethrows a non-length-bound error instead of misreporting it as over budget", () => {
+  const shapeInvalid = [
+    { angle: "correctness", verdict: "findings_present", findings: [] },
+    { severity: "must-fix", summary: "a flat finding mixed into a per-angle array" },
+  ];
+  assert.throws(() => fitsRenderBudget(shapeInvalid), /mixes per-angle entries/);
+});
+
 // The consumer bounds the WHOLE rendered --findings-json block at 2000 chars
 // and fails closed above it — so a large fan-in must be shrunk as a whole,
 // not just per field. Prove acceptance by driving the REAL renderer.
@@ -660,6 +677,19 @@ test("large fan-ins are budgeted so upsert-verdict's whole-block render bound ac
   }
   await withFindingsDir(files, async (dir) => {
     const result = await consolidateGateFanin({ findingsDir: dir });
+    // This is the SHRINK-AND-FIT tier (summaries evenly shrunk, never marked):
+    // the round fits after shrinking, so it must be indistinguishable from an
+    // under-budget round — no "commentBudgetExceeded" flag, and every angle
+    // keeps its real (truncated) summary text rather than an "omitted ... see
+    // ledger" marker. A regression that bypasses the shrink loop and degrades
+    // straight to markers would also render without throwing, so those two
+    // properties (not "does not throw") are what actually pin this tier.
+    assert.equal(result.commentBudgetExceeded, undefined);
+    for (const [i, section] of result.findingsJson.entries()) {
+      const summary = section.findings[0].summary;
+      assert.ok(summary.startsWith(`finding ${i}: `), `angle-${i} must keep its real summary text, got: ${summary}`);
+      assert.ok(!/omitted.*see (the disposition )?ledger/.test(summary), `angle-${i} must not be marker-collapsed, got: ${summary}`);
+    }
     // Must not throw the fail-closed length error:
     const body = renderGateReviewCommentBody({
       gate: "pre_approval_gate",
@@ -744,12 +774,9 @@ test("a false-negative-under-estimation fixture is correctly flagged over budget
   });
 });
 
-// Near-boundary UNDER-budget companion: a round that really does fit must
-// stay raw/unmarked (commentBudgetExceeded absent) and render as-is —
-// unconditionally, not only "if the marker path wasn't taken" — so a
-// reversion that starts marking everything (or estimating too
-// conservatively) fails this half of the pair too.
-test("a near-boundary under-budget round stays raw/unmarked and renders", async () => {
+// A comfortably under-budget round (well under half the render bound) must
+// stay raw/unmarked (commentBudgetExceeded absent) and render as-is.
+test("a comfortably under-budget round stays raw/unmarked and renders", async () => {
   const files = { "angle-a.json": {
     angle: "angle-a",
     verdict: "findings_present",
@@ -764,6 +791,34 @@ test("a near-boundary under-budget round stays raw/unmarked and renders", async 
     const result = await consolidateGateFanin({ findingsDir: dir });
     assert.equal(result.commentBudgetExceeded, undefined);
     assert.equal(result.findingsJson[0].findings.length, 10);
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// Near-boundary UNDER-budget companion to the false-negative fixture above: 33
+// of the SAME shape (must-fix, 3-char summary, "src/a.mjs", 3-digit line)
+// renders at 1944 chars — just 56 chars of headroom, since the 34th (the
+// false-negative fixture) is exactly what tips it to 2002 and throws. A round
+// that really does fit this close to the bound must still stay raw/unmarked
+// (commentBudgetExceeded absent) and render as-is — unconditionally, not only
+// "if the marker path wasn't taken" — so a reversion that starts marking
+// everything, or an over-conservative estimate, fails this half of the pair.
+test("a near-boundary under-budget round (one finding short of the false-negative fixture's throw) stays raw/unmarked and renders", async () => {
+  const FINDINGS_PER_ANGLE = 33;
+  const files = { "angle-a.json": {
+    angle: "angle-a",
+    verdict: "findings_present",
+    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "must-fix",
+      summary: "aaa",
+      file: "src/a.mjs",
+      line: 100 + j,
+    })),
+  } };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    assert.equal(result.commentBudgetExceeded, undefined);
+    assert.equal(result.findingsJson[0].findings.length, FINDINGS_PER_ANGLE);
     assertRendersWithoutThrowing(result.findingsJson);
   });
 });
@@ -882,6 +937,53 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     });
     assert.deepEqual(missingMandatory, []);
     assert.deepEqual(foreignAngles, []);
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// Real-findings-preferred-over-marker regression: an angle with real findings
+// that ALREADY fit alongside the rest of the (marked) round must keep them
+// as-is, never a marker — a marker is a compression and must never replace
+// real content with something rendered BIGGER. Reproduces the reported case:
+// a single must-fix finding (file+line) renders far smaller than the verbose
+// marker that would otherwise replace it (134 vs 183 chars), while a sibling
+// "style" angle with 300 defer findings is what actually forces the round
+// over budget and must itself still degrade to a marker.
+test("a narrow angle keeps its real finding instead of a longer marker when a wide sibling angle forces the round over budget", async () => {
+  const files = {
+    "correctness.json": {
+      angle: "correctness",
+      verdict: "findings_present",
+      findings: [{ severity: "must-fix", summary: "null deref at foo.mjs:12 when x is undefined", file: "foo.mjs", line: 12 }],
+    },
+    "style.json": {
+      angle: "style",
+      verdict: "findings_present",
+      findings: Array.from({ length: 300 }, (_, j) => ({
+        severity: "defer",
+        summary: `naming nit ${j} ${"z".repeat(150)}`,
+        file: `src/f${j}.mjs`,
+        line: j + 1,
+      })),
+    },
+  };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true); // the wide "style" angle alone forces this
+
+    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
+    // "correctness" keeps its REAL finding (severity + file + line), not a marker.
+    const correctnessFinding = byAngle.get("correctness").findings[0];
+    assert.equal(correctnessFinding.severity, "must-fix");
+    assert.equal(correctnessFinding.file, "foo.mjs");
+    assert.equal(correctnessFinding.line, 12);
+    assert.ok(correctnessFinding.summary.startsWith("null deref at foo.mjs:12"), `expected the real summary to survive, got: ${correctnessFinding.summary}`);
+    assert.ok(!/omitted.*see the disposition ledger/.test(correctnessFinding.summary), "a narrow angle must not be marker-collapsed when its real finding already fits");
+
+    // "style" (the actual cause of the overflow) IS collapsed to a marker.
+    const styleFinding = byAngle.get("style").findings[0];
+    assert.match(styleFinding.summary, /^300 finding\(s\) omitted from this comment/);
     assertRendersWithoutThrowing(result.findingsJson);
   });
 });

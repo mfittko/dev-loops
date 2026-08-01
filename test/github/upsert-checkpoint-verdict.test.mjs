@@ -3021,6 +3021,35 @@ test("renderGateReviewCommentBody renders NESTED per-angle findings input correc
   assert.equal(parsed.contractComplete, true);
 });
 
+// A marker-collapsed fan-in round replaces an angle's real findings with ONE
+// synthetic marker finding (consolidate-fanin.mjs), so counting
+// `angles[].findings.length` alone would report e.g. "1 finding" for a round
+// that actually carries hundreds — wrong by an order of magnitude, and this
+// digest line is machine-parsed evidence. When the caller also supplies
+// `findingsSeverityCounts` (a fan-in's own true, unbudgeted `severityCounts`),
+// the digest must sum THAT instead of the rendered marker count.
+test("renderGateReviewCommentBody's Findings summary counts the true totals from findingsSeverityCounts, not the marker-collapsed findingsJson", async () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        // A single marker finding standing in for many real findings.
+        findings: [{ severity: "must-fix", summary: "20 finding(s) omitted from this comment (must-fix: 5, worth-fixing-now: 10, defer: 5) — see the disposition ledger", disposition: "accepted-for-fix" }],
+      },
+      { angle: "tests", verdict: "clean", findings: [] },
+    ],
+    findingsSeverityCounts: { "must-fix": 5, "worth-fixing-now": 10, defer: 5 },
+  });
+  assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 20 findings \(see per-angle breakdown below\)\./);
+});
+
 test("renderGateReviewCommentBody groups FLAT per-finding input by angle without dropping findings (#898)", async () => {
   const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
   // This is consolidateFanin's OUTPUT / toFindingsLogShape: a FLAT array where
