@@ -41,7 +41,11 @@
  * approximated size — so a shape this CLI accepts as fitting is exactly a
  * shape that renderer accepts too. A round too large to render even at
  * minimum summary length still writes a COMPLETE --ledger-out and exits 0,
- * degrading "findingsJson"/--out through four tiers. Which tier an angle
+ * degrading "findingsJson"/--out through four tiers — but ONLY when
+ * --ledger-out was given: without it, a degraded round has NO durable record
+ * anywhere (the tier-4 marker text points at a ledger that was never written,
+ * or tier 4 itself emits "findingsJson": [] with nothing else on stdout), so
+ * this FAILS CLOSED (exit 1) instead of returning ok:true over zero evidence. Which tier an angle
  * lands on is NOT decided by whether that angle's own marker fits in
  * isolation — angles are upgraded one at a time, in order of each angle's
  * most blocking severity (ties by artifact index), and an upgrade is kept
@@ -112,11 +116,19 @@ Optional:
                                  the rare round wide enough that even the cheapest per-angle shape
                                  (a bare marker line, or an angle's own real findings when those
                                  render shorter) cannot fit. --ledger-out is unaffected either way.
+                                 A round over the render budget FAILS CLOSED (exit 1) when
+                                 --ledger-out was not also given — a degraded round otherwise has
+                                 no durable record of its findings anywhere.
   --ledger-out <path>            Write the flat "findings" shape (below) to this path as JSON — the
                                  exact --findings-file input write-gate-findings-log.mjs and
                                  post-gate-findings.mjs accept. Rejected at parse time (exit 1) when
                                  it resolves to the same path as --out — one write would otherwise
-                                 destroy the other.
+                                 destroy the other. Neither --out nor --ledger-out may resolve INSIDE
+                                 --findings-dir (also rejected at parse time, exit 1) — the withheld
+                                 tier deletes --out outright (so an --out aliased into --findings-dir
+                                 would delete a real artifact), and a .json write under --findings-dir
+                                 would be picked up as a per-angle findings artifact by the NEXT
+                                 consolidation of that same directory.
   --pr-checklist-matrix clean    When no pr-checklist-matrix angle artifact was found, upsert
                                  { angle: "pr-checklist-matrix", verdict: "clean", findings: [] }
   --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
@@ -166,7 +178,8 @@ Exit codes:
   0  Success
   1  Argument error, missing/empty --findings-dir, unparseable artifact, schema
      violation, duplicate angle name across artifacts, blocked fan-in (a malformed or
-     blocked per-angle artifact), or (with --gate) an unloadable/invalid worktree config
+     blocked per-angle artifact), (with --gate) an unloadable/invalid worktree config,
+     or a round over the render budget with --ledger-out not given
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -479,6 +492,22 @@ export function parseConsolidateFaninCliArgs(argv) {
       && path.resolve(options.out) === path.resolve(options.ledgerOut)) {
     throw parseError("--out and --ledger-out must not resolve to the same path");
   }
+  // Neither --out nor --ledger-out may resolve INSIDE --findings-dir: the
+  // withheld tier rm()s --out outright (so an --out aliased to a reviewer
+  // artifact under --findings-dir would be deleted, not merely overwritten),
+  // and a plain --out/--ledger-out write under --findings-dir with a .json
+  // name poisons the NEXT consolidation of the same directory (it gets picked
+  // up as a per-angle findings artifact, failing with a misleading "artifact
+  // must be a JSON object" — it's a findings array, not one). Prefix-compare
+  // the resolved paths with a trailing separator so a same-named sibling
+  // directory (e.g. --findings-dir "out" vs --out "out-2/x.json") is not a
+  // false positive.
+  const resolvedFindingsDir = path.resolve(options.findingsDir) + path.sep;
+  for (const [flag, value] of [["--out", options.out], ["--ledger-out", options.ledgerOut]]) {
+    if (value !== undefined && (path.resolve(value) + path.sep).startsWith(resolvedFindingsDir)) {
+      throw parseError(`${flag} must not resolve inside --findings-dir "${options.findingsDir}"`);
+    }
+  }
   return options;
 }
 
@@ -740,6 +769,19 @@ export async function consolidateGateFanin(options) {
   let commentFindingsJson = findingsJson;
   let withheldOut = false;
   if (!wholeRoundFits) {
+    // A degraded round's only durable record is --ledger-out (the marker text
+    // in "findingsJson"/--out literally says "see the disposition ledger", and
+    // tier 4 emits "findingsJson": [] with nothing else on stdout). Without
+    // --ledger-out this call has produced no durable evidence at all — exactly
+    // the "success envelope over zero evidence" this CLI's own guards
+    // elsewhere exist to prevent — so fail closed here instead of returning
+    // ok:true, naming the round size so the caller knows to re-run with
+    // --ledger-out rather than just guessing.
+    if (options.ledgerOut === undefined) {
+      throw new Error(
+        `fan-in round (${findingsJson.length} angles) is over the gate-comment render budget and would degrade "findingsJson"/--out, but --ledger-out was not given — re-run with --ledger-out <path> so the round's findings are not lost`,
+      );
+    }
     ({ commentFindingsJson, withheldOut } = buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson));
   }
 

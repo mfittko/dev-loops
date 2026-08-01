@@ -459,9 +459,18 @@ of tier. A `--findings-summary` fanout_fanin verdict bypasses
 `upsert-checkpoint-verdict.mjs`'s mandatory-angle/foreign-angle check entirely
 (that check only runs when `--findings-json` was supplied), so a tier-4 round
 MUST still write its findings-log ledger via `write-gate-findings-log.mjs
---provenance` covering the gate's mandatory angles — that ledger's
-`provenance.perAngle` becomes the ONLY mandatory-angle enforcement left for
-the round. `commentBudgetExceeded: true` is set on every degraded round
+--provenance` covering the gate's mandatory angles. This is a POLICY
+obligation on the agent, not a machine-enforced one by default:
+`write-gate-findings-log.mjs` only runs its provenance/mandatory-angle check
+when `--provenance` is actually supplied at write time,
+`gates.requireFanoutProvenance` (which would make that flag required) defaults
+to `false`, and the CI gate-evidence verifier calls
+`detect-checkpoint-evidence.mjs` with `--skip-fanout-ledger-check`, skipping
+the whole ledger/provenance layer. A tier-4 round therefore has ZERO
+machine-checked mandatory-angle coverage unless the repo has opted into
+`gates.requireFanoutProvenance` — pass `--provenance` on the tier-4 ledger
+write regardless, since it is the only record of mandatory-angle coverage this
+round can have, enforced or not. `commentBudgetExceeded: true` is set on every degraded round
 (tiers 1-4 alike), so it does NOT distinguish tier 4 from tiers 1-3 — `--out`'s
 existence is the only correct discriminator. On a marker-collapsed round, the
 posted `**Findings summary:**` digest counts the real totals (not the marker

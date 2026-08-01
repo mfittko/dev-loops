@@ -2103,6 +2103,56 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
   }
 });
 
+// The cross-check's "unresolved" boundary is disposition, not bare severity:
+// the sub-loop contract's clean criterion is "no findings with a blocking
+// severity REMAIN", and "operator_acknowledged"/"disputed" are the sanctioned
+// vocabulary (write-gate-findings-log.mjs's VALID_DISPOSITIONS) for a
+// blocking-severity finding the fix cycle/operator has already closed out
+// without changing its severity. A clean verdict whose only blocking-severity
+// --findings-json entry carries that disposition must still be postable.
+test("upsert-checkpoint-verdict allows a clean verdict whose only blocking-severity --findings-json finding is operator_acknowledged", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-ack-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "known limitation", disposition: "operator_acknowledged" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts is missing and blocking severities are configured", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-counts-"));
 
