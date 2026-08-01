@@ -86,9 +86,23 @@ gates:
       - name: renderer-security
         persona: review
         prompt: Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
+    # Operator-directed, and narrower in justification than the draft-gate
+    # entry above: the pre-approval gate showed the same non-convergence on the
+    # PR that carries this change. Two rounds ran 2 must-fix / 17
+    # worth-fixing-now and 2 / 16 — correctness flat, the soft column flat
+    # beside it, each pass creating fresh surface for the next.
+    #
+    # Unlike the draft gate, this IS a relaxation below the shipped default's
+    # intent: pre-approval is the last bar before merge, and a worth-fixing-now
+    # finding unblocked here is not caught anywhere later. Surviving findings
+    # are filed as follow-up issues and named in the verdict, which is the only
+    # thing that keeps this from being lossy.
+    #
+    # Revisit when the round cap lands: the correct shape is the full severity
+    # set for the first N rounds, softening only on a demonstrated plateau,
+    # rather than a permanently softened final gate.
     blockCleanOnFindingSeverities:
       - must-fix
-      - worth-fixing-now
 
 workflow:
   requireRetrospective: true
