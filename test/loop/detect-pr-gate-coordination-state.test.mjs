@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { describe, it } from "node:test";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
@@ -1873,6 +1874,135 @@ test("buildGateCoordinationEvaluatorInput threads unresolvedThreadCount from con
     postConvergenceSignificantChange: false,
   });
   assert.equal(nonZeroInput.unresolvedThreadCount, 3);
+});
+
+test("buildGateCoordinationEvaluatorInput threads postConvergenceReviewSuppressed from context (#1441)", () => {
+  const context = {
+    repo: "owner/repo",
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN", title: "Fix things", reviews: [], files: [] },
+    mergeStateStatus: "CLEAN",
+    mergeable: "MERGEABLE",
+    conflictFiles: [],
+    interpretation: { state: "ready_to_rerequest_review", sameHeadCleanConverged: false, roundCapCleanEligible: false },
+    disposition: { loopDisposition: "action_required" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 1, unresolvedThreadCount: 0, copilotReviewRequestStatus: "none" },
+    gateEvidence: {
+      draftGate: { visible: true, headSha: "29aa40b7", verdict: "clean" },
+      draftGateMarker: { visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true },
+      preApprovalGate: { visible: false },
+      preApprovalGateMarker: { visible: false },
+    },
+    refinementArtifact: null,
+    postConvergenceReviewSuppressed: true,
+  };
+  const input = buildGateCoordinationEvaluatorInput({
+    context,
+    maxCopilotRounds: 5,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    postConvergenceSignificantChange: false,
+  });
+  assert.equal(input.postConvergenceReviewSuppressed, true);
+
+  const unsuppressedInput = buildGateCoordinationEvaluatorInput({
+    context: { ...context, postConvergenceReviewSuppressed: false },
+    maxCopilotRounds: 5,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    postConvergenceSignificantChange: false,
+  });
+  assert.equal(unsuppressedInput.postConvergenceReviewSuppressed, false);
+});
+
+// #1441: resolvePostConvergenceReviewSuppressed is the real function
+// loadPrGateCoordinationContext calls to compute postConvergenceReviewSuppressed
+// — exercised directly here (real marker read + real live re-verification via a
+// stubbed gh compare call) rather than a hand-asserted boolean.
+describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
+  async function withTempCheckpointDir(fn) {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "gate-coordination-suppression-"));
+    try {
+      await fn(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  const snapshot = { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0 };
+
+  it("returns true when a marker matches the current head and the delta re-verifies as docs-only", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump" },
+        { checkpointDir },
+      );
+      const { runChild } = makeGhMock([
+        {
+          assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
+          stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }] }) + "\n",
+        },
+      ]);
+      const suppressed = await resolvePostConvergenceReviewSuppressed(
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot },
+        { env: {}, ghCommand: "gh", runChild, checkpointDir },
+      );
+      assert.equal(suppressed, true);
+    });
+  });
+
+  it("returns false without any gh call when no marker exists", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      const { runChild, calls } = makeGhMock([]);
+      const suppressed = await resolvePostConvergenceReviewSuppressed(
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot },
+        { env: {}, ghCommand: "gh", runChild, checkpointDir },
+      );
+      assert.equal(suppressed, false);
+      assert.equal(calls.length, 0, "must not call gh when no marker is present");
+    });
+  });
+
+  it("returns false when the marker's head no longer matches (a further push invalidates it)", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "stalesha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump" },
+        { checkpointDir },
+      );
+      const { runChild, calls } = makeGhMock([]);
+      const suppressed = await resolvePostConvergenceReviewSuppressed(
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot },
+        { env: {}, ghCommand: "gh", runChild, checkpointDir },
+      );
+      assert.equal(suppressed, false);
+      assert.equal(calls.length, 0);
+    });
+  });
+
+  it("returns false when a pending request or unresolved threads exist, without even reading the marker", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump" },
+        { checkpointDir },
+      );
+      const { runChild } = makeGhMock([]);
+      assert.equal(
+        await resolvePostConvergenceReviewSuppressed(
+          { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: { copilotReviewRequestStatus: "requested", unresolvedThreadCount: 0 } },
+          { env: {}, ghCommand: "gh", runChild, checkpointDir },
+        ),
+        false,
+      );
+      assert.equal(
+        await resolvePostConvergenceReviewSuppressed(
+          { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: { copilotReviewRequestStatus: "none", unresolvedThreadCount: 1 } },
+          { env: {}, ghCommand: "gh", runChild, checkpointDir },
+        ),
+        false,
+      );
+    });
+  });
 });
 
 // #1472: isRoundCapReachedCleanGrant names the shape evaluatePrGateCoordination's

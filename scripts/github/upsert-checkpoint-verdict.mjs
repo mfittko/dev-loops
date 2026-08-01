@@ -982,6 +982,10 @@ export function buildCoordinationEvaluatorInput({
     // rather than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: coordinationContext.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: coordinationContext.interpretation.sameHeadCleanConverged,
+    // Operator-authorized post-convergence suppression (#1441): computed and
+    // verified once in loadPrGateCoordinationContext (resolvePostConvergenceReviewSuppressed)
+    // — see detect-pr-gate-coordination-state.mjs.
+    postConvergenceReviewSuppressed: coordinationContext.postConvergenceReviewSuppressed === true,
     // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.

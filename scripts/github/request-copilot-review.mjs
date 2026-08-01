@@ -18,6 +18,7 @@ import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/lo
 import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { readSuppressionMarker } from "../loop/_post-convergence-review-suppression.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
@@ -57,6 +58,11 @@ Request statuses:
   suppressed_post_convergence_docs_only  At the round cap, the post-convergence head bump is a provable pure doc/prose
                                 delta since the last Copilot-reviewed head; no fresh blocking round is forced (the prior
                                 converged review stands). Any code/test/config/CI or unclassifiable delta re-opens the round.
+                                Also returned BELOW the round cap when an operator explicitly withdrew a stranded review
+                                request for this exact head via withdraw-copilot-review-request.mjs (issue #1441): that
+                                tool proves and records the same pure doc/prose delta since Copilot's last submitted
+                                review, so a below-cap re-request cannot immediately re-strand the same head. Never
+                                triggered without that prior explicit withdrawal, and any further push invalidates it.
   suppressed_draft              PR is in draft state; review requests are blocked until the PR is marked ready for review
 Error output (stderr, JSON):
   Argument/usage errors:
@@ -360,7 +366,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
 // Only a provably linear, rename-free, non-truncated delta yields the destination
 // paths, which the path-based resolveConvergenceCarryForward can then classify.
 const COMPARE_FILES_PAGE_CAP = 300;
-async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   let result;
   try {
     result = await runChild(ghCommand, ["api", `repos/${repo}/compare/${base}...${head}`], env);
@@ -396,7 +402,7 @@ async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env,
   }
   return changed;
 }
-function getLastCopilotReviewHeadSha(prData) {
+export function getLastCopilotReviewHeadSha(prData) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
   // Only consider submitted (non-PENDING) Copilot reviews.
   // A PENDING review on a stale head could be selected as "most recent"
@@ -431,6 +437,20 @@ function getLastCopilotReviewHeadSha(prData) {
   // Tolerate both GraphQL commit.oid and REST commit_id shapes
   const sha = lastReview?.commit?.oid ?? lastReview?.commit_id;
   return typeof sha === "string" && sha.trim().length > 0 ? sha.trim() : null;
+}
+
+// Shared classification seam (issue #1441): the same fail-closed
+// fetch-delta-then-classify pipeline the round-cap AC2 check below performs,
+// exposed for withdraw-copilot-review-request.mjs and
+// detect-pr-gate-coordination-state.mjs to reuse instead of re-implementing it.
+// Fails closed to `{ carryForward: false }` whenever the delta itself is
+// unavailable/unproven (see fetchDeltaChangedFiles above for every such case).
+export async function classifyDeltaSinceLastReview({ repo, base, head }, runtime = {}) {
+  const deltaChangedFiles = await fetchDeltaChangedFiles({ repo, base, head }, runtime);
+  if (deltaChangedFiles === null) {
+    return { carryForward: false, reason: "delta since the last reviewed head is unavailable or unproven (fail-closed)" };
+  }
+  return resolveConvergenceCarryForward({ changedFiles: deltaChangedFiles });
 }
 function classifyRequestFailure(detail) {
   const normalized = detail.toLowerCase();
@@ -560,6 +580,44 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
         detail: "Non-Copilot PR comment(s) detected containing @copilot or /copilot. Delete the violating comment(s) and re-run this helper instead.",
         violationCommentIds: copilotCommentCheck.violationCommentIds,
       };
+    }
+  }
+  // Operator-authorized post-convergence suppression (#1441): withdraw-copilot-
+  // review-request.mjs writes a marker, scoped to an EXACT head SHA, only after
+  // explicitly withdrawing a stranded request on a head that has advanced past
+  // Copilot's last submitted review with a provable pure doc/prose delta since
+  // then. Checked BEFORE the round-cap logic below (unlike the round-cap AC2
+  // carry-forward check, this applies regardless of round count) so a below-cap
+  // re-request cannot immediately re-strand the exact head an operator already
+  // proved is safe to skip. Never automatic: without that marker this check is a
+  // no-op, and any further push invalidates it (new head no longer matches).
+  if (!before.requested && !before.hasPendingReviewOnCurrentHead && !before.hasSubmittedReviewOnCurrentHead) {
+    const currentHeadSha = typeof before.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
+      ? before.prData.headRefOid.trim()
+      : null;
+    if (currentHeadSha) {
+      const marker = await readSuppressionMarker(
+        { repo: options.repo, pr: options.pr },
+        { checkpointDir: options.checkpointDir },
+      );
+      if (marker && marker.headSha === currentHeadSha) {
+        // Re-verify live rather than trusting the marker's stored reason —
+        // defense in depth against a stale or hand-edited file.
+        const reverified = await classifyDeltaSinceLastReview(
+          { repo: options.repo, base: marker.lastReviewedHeadSha, head: currentHeadSha },
+          runtime,
+        );
+        if (reverified.carryForward) {
+          return {
+            ok: true,
+            status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
+            repo: options.repo,
+            pr: options.pr,
+            reviewer: "Copilot",
+            detail: `An operator explicitly withdrew a stranded Copilot review request for this exact head (${marker.reason}); the delta since Copilot's last submitted review is still provably a pure doc/prose bump (${reverified.reason}), so no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
+          };
+        }
+      }
     }
   }
   let refinementConfig = { maxCopilotRounds: 5 };
