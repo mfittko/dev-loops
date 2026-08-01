@@ -231,18 +231,33 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   if (log.findings !== undefined && !Array.isArray(log.findings)) {
     throw new Error("prior gate findings-log's findings field is not an array — cannot verify which angles are clean (fail-closed)");
   }
-  const prevAngleByLowerBase = new Map(prevAngles.map((angle) => [baseAngleName(angle).toLowerCase(), angle]));
+  // MANY-TO-ONE, not last-wins: a base+lowercase key can legitimately collect
+  // MORE THAN ONE prevAngles entry — a base angle and its `-delta-at-...`
+  // re-review sibling are both legal, independently-carry-forward-eligible rows
+  // (the contract doc and gate-fanin's own coverage check both treat a
+  // delta-suffixed row as counting toward its base angle), and the exact-string
+  // duplicate guard above does not catch a base/case collision either. A Map
+  // keyed 1:1 to the LAST matching row would silently drop every other row
+  // sharing that key from attribution — exactly the fail-open this guard exists
+  // to close — so bucket every match instead.
+  const prevAnglesByLowerBase = new Map();
+  for (const angle of prevAngles) {
+    const key = baseAngleName(angle).toLowerCase();
+    const bucket = prevAnglesByLowerBase.get(key);
+    if (bucket) bucket.push(angle);
+    else prevAnglesByLowerBase.set(key, [angle]);
+  }
   const anglesWithPriorFindings = [];
   for (const finding of Array.isArray(log.findings) ? log.findings : []) {
     const rawAngle = finding && typeof finding.angle === "string" ? finding.angle.trim() : "";
     if (rawAngle.length === 0) {
       throw new Error("prior gate findings-log has a finding with no angle — cannot attribute it to a carried angle (fail-closed)");
     }
-    const matched = prevAngleByLowerBase.get(baseAngleName(rawAngle).toLowerCase());
-    if (!matched) {
+    const matches = prevAnglesByLowerBase.get(baseAngleName(rawAngle).toLowerCase());
+    if (!matches || matches.length === 0) {
       throw new Error(`prior gate findings-log has a finding for angle ${JSON.stringify(rawAngle)}, which matches no provenance.perAngle entry — cannot prove that angle is clean (fail-closed)`);
     }
-    anglesWithPriorFindings.push(matched);
+    anglesWithPriorFindings.push(...matches);
   }
   const { carried, mustRerun } = resolveCarryForwardAngles({
     prevAngles,

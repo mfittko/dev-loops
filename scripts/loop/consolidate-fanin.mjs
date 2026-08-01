@@ -42,7 +42,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { VALID_SEVERITIES, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--repo-root <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json>] [--repo-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -67,6 +67,15 @@ Optional:
                                  post-gate-findings.mjs accept
   --pr-checklist-matrix clean    When no pr-checklist-matrix angle artifact was found, upsert
                                  { angle: "pr-checklist-matrix", verdict: "clean", findings: [] }
+  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean
+                                 head (resolve-angle-carry-forward.mjs's plan.carried) rather than
+                                 freshly reviewed this round — Phase 2 dispatches no artifact for
+                                 them, so without this flag they are invisible to findingsJson/
+                                 checkFanoutAngleCoverage and the posted verdict comment reads as a
+                                 truncated fan-out instead of a full one. For any named angle with no
+                                 real per-angle artifact, upserts { angle, verdict: "clean", findings: [] }
+                                 (a real artifact for that angle, if present, always wins — this never
+                                 overrides one). Same upsert semantics as --pr-checklist-matrix, generalized.
   --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
                                  --gate is given (default: process.cwd()) — makes the overall verdict
                                  deterministic regardless of the CLI's invocation directory
@@ -155,6 +164,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     out: undefined,
     ledgerOut: undefined,
     prChecklistMatrix: undefined,
+    carriedAngles: undefined,
     repoRoot: undefined,
   };
   const { tokens } = parseArgs({
@@ -166,6 +176,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       out: { type: "string" },
       "ledger-out": { type: "string" },
       "pr-checklist-matrix": { type: "string" },
+      "carried-angles": { type: "string" },
       "repo-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -214,6 +225,20 @@ export function parseConsolidateFaninCliArgs(argv) {
     }
     if (token.name === "pr-checklist-matrix") {
       options.prChecklistMatrix = requireTokenValue(token, parseError);
+      continue;
+    }
+    if (token.name === "carried-angles") {
+      const raw = requireTokenValue(token, parseError);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw parseError("--carried-angles must be a JSON array of angle-name strings");
+      }
+      if (!Array.isArray(parsed) || parsed.some((a) => typeof a !== "string" || a.trim().length === 0)) {
+        throw parseError("--carried-angles must be a JSON array of non-empty angle-name strings");
+      }
+      options.carriedAngles = parsed.map((a) => a.trim());
       continue;
     }
     if (token.name === "repo-root") {
@@ -359,6 +384,22 @@ export async function consolidateGateFanin(options) {
     );
     if (!hasPrChecklistMatrix) {
       rawArtifacts.push(resolvePrChecklistMatrixUpsert(options.prChecklistMatrix));
+    }
+  }
+
+  // A carried angle (Phase 1.2's plan.carried) got no Phase 2 artifact — upsert
+  // its clean entry the same way --pr-checklist-matrix does, so it is not
+  // invisible to findingsJson/checkFanoutAngleCoverage/the posted verdict
+  // comment. A REAL artifact for that angle always wins (e.g. Phase 1 resolved
+  // it fresh for the first time this head even though a stale plan still named
+  // it) — this only fills a gap, never overrides.
+  if (options.carriedAngles !== undefined) {
+    const presentAngles = new Set(rawArtifacts.map((a) => a.angle.trim()));
+    for (const angle of options.carriedAngles) {
+      if (!presentAngles.has(angle)) {
+        rawArtifacts.push({ angle, verdict: "clean", findings: [] });
+        presentAngles.add(angle);
+      }
     }
   }
 

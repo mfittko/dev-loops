@@ -500,6 +500,64 @@ test("a prior finding attributes to its angle case-insensitively", () => {
   assert.ok(plan.mustRerun.some((m) => m.angle === "coverage"), "case drift between the two authored lists must still attribute");
 });
 
+// A base+lowercase key can legitimately collect MORE THAN ONE provenance.perAngle
+// row (a base angle plus its `-delta-at-...` sibling, or a case-drifted pair —
+// neither is caught by the exact-string duplicate guard). A finding naming that
+// base must force EVERY colliding row to re-run, not just whichever one a
+// last-wins Map happened to keep — and the outcome must not depend on row order.
+for (const [label, perAngle] of [
+  ["base row first", [
+    { angle: "coverage", reviewer: "review-b" },
+    { angle: "coverage-delta-at-cafe", reviewer: "review-d" },
+  ]],
+  ["delta-suffixed row first", [
+    { angle: "coverage-delta-at-cafe", reviewer: "review-d" },
+    { angle: "coverage", reviewer: "review-b" },
+  ]],
+]) {
+  test(`a prior finding on "coverage" forces BOTH the base row and its -delta-at- sibling to re-run (${label})`, () => {
+    const plan = buildCarryForwardPlan({
+      log: {
+        headSha: "aaaaaaa",
+        verdict: "clean",
+        findings: [{ angle: "coverage", severity: "defer", summary: "still open" }],
+        provenance: {
+          distinctReviewers: 3,
+          perAngle: [{ angle: "correctness", reviewer: "review-a" }, ...perAngle],
+        },
+      },
+      changedFiles: ["docs/guide.md"],
+    });
+    assert.deepEqual(plan.carried.map((c) => c.angle), ["correctness"]);
+    const rerun = plan.mustRerun.map((m) => m.angle);
+    assert.ok(rerun.includes("coverage"), `${label}: base row must re-run`);
+    assert.ok(rerun.includes("coverage-delta-at-cafe"), `${label}: delta-suffixed sibling must re-run too`);
+  });
+}
+
+test("a prior finding on a base angle forces every case-drifted row sharing it to re-run", () => {
+  const plan = buildCarryForwardPlan({
+    log: {
+      headSha: "aaaaaaa",
+      verdict: "clean",
+      findings: [{ angle: "coverage", severity: "defer", summary: "still open" }],
+      provenance: {
+        distinctReviewers: 3,
+        perAngle: [
+          { angle: "correctness", reviewer: "review-a" },
+          { angle: "coverage", reviewer: "review-b" },
+          { angle: "Coverage", reviewer: "review-c" },
+        ],
+      },
+    },
+    changedFiles: ["docs/guide.md"],
+  });
+  assert.deepEqual(plan.carried.map((c) => c.angle), ["correctness"]);
+  const rerun = plan.mustRerun.map((m) => m.angle);
+  assert.ok(rerun.includes("coverage"), "the exact-cased row must re-run");
+  assert.ok(rerun.includes("Coverage"), "the case-drifted sibling must re-run too, not silently carry");
+});
+
 test("buildCarryForwardPlan fails closed when a prior finding's angle matches no provenance.perAngle entry", () => {
   assert.throws(
     () => buildCarryForwardPlan({

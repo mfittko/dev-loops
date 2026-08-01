@@ -249,6 +249,85 @@ test("consolidateGateFanin does not upsert pr-checklist-matrix when an artifact 
 });
 
 // ---------------------------------------------------------------------------
+// --carried-angles upsert: a carry-forward plan's `carried` angles got no
+// Phase 2 artifact and would otherwise be invisible to findingsJson/
+// checkFanoutAngleCoverage/the posted verdict comment — indistinguishable
+// from a truncated fan-out.
+// ---------------------------------------------------------------------------
+
+test("parseConsolidateFaninCliArgs parses --carried-angles as a string array", () => {
+  const result = parseConsolidateFaninCliArgs([
+    "--findings-dir", "/tmp/x",
+    "--carried-angles", '["correctness","docs"]',
+  ]);
+  assert.deepEqual(result.carriedAngles, ["correctness", "docs"]);
+});
+
+test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --carried-angles", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", "not json"]),
+    /--carried-angles must be a JSON array/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", '{"angle":"docs"}']),
+    /--carried-angles must be a JSON array of non-empty angle-name strings/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", '["docs",""]']),
+    /--carried-angles must be a JSON array of non-empty angle-name strings/,
+  );
+});
+
+test("consolidateGateFanin upserts a clean entry for every carried angle with no real artifact", async () => {
+  await withFindingsDir(
+    { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, carriedAngles: ["correctness", "coverage"] });
+      assert.deepEqual(
+        result.angles.map((a) => a.angle).sort(),
+        ["correctness", "coverage", "docs"],
+      );
+      assert.deepEqual(
+        result.findingsJson.find((a) => a.angle === "correctness"),
+        { angle: "correctness", verdict: "clean", findings: [] },
+      );
+      assert.equal(result.overallVerdict, "clean");
+    },
+  );
+});
+
+test("consolidateGateFanin never overrides a REAL artifact with a --carried-angles upsert for the same angle", async () => {
+  await withFindingsDir(
+    {
+      "correctness.json": {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: "real finding, not carried" }],
+      },
+    },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, carriedAngles: ["correctness"] });
+      assert.equal(result.angles.length, 1);
+      assert.equal(result.angles[0].findingCount, 1, "the real artifact's finding must survive, not be replaced by the synthetic clean upsert");
+    },
+  );
+});
+
+test("e2e: carried angles fill a gate's mandatory/pool coverage check, matching a real fan-out", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, carriedAngles: ["dry", "pr-checklist-matrix"] });
+      const coverage = checkFanoutAngleCoverage(result.findingsJson, {
+        mandatoryAngles: ["pr-checklist-matrix"],
+        pool: ["scope", "dry", "pr-checklist-matrix"],
+      });
+      assert.deepEqual(coverage, { missingMandatory: [], foreignAngles: [] });
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // defer -> deferred disposition derivation
 // ---------------------------------------------------------------------------
 

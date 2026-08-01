@@ -82,11 +82,18 @@ const PHASE_2_ROUTING = [
 
 // Phase 3 (Fan-in): --provenance belongs to the LEDGER WRITE, not the comment
 // post — pinned on this line specifically so a reworded sentence that reattaches
-// the flag to the wrong command (the exact defect this pins) fails here.
+// the flag to the wrong command (the exact defect this pins) fails here. The
+// whole step is ONE line, so `[^\n]*` spans it end to end and cannot fail on a
+// reattached flag; anchor inside the backtick-delimited code span instead
+// (`[^`]*`), which stops at the first closing backtick and so cannot reach past
+// the ledger-write command into a later, separately-quoted mention.
 const PHASE_3_ROUTING = [
-  /write-gate-findings-log\.mjs[^\n]*--provenance/,
+  /write-gate-findings-log\.mjs[^`]*--provenance/,
   /carriedFromHead/,
 ];
+// --provenance must NOT be reachable, within one code span, from the comment-post
+// command — this is the exact defect round 3 fixed and pins it from reintroduction.
+const PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST = /post-gate-findings\.mjs[^`]*--provenance/;
 
 // The class of banned rule this PR removed: "re-run only ... (findings |
 // findings_present) ... previous pass/head/round". Broad enough to catch a
@@ -113,6 +120,11 @@ test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledg
   const skill = await readRepo(SKILL);
   const line = extractStepLine(skill, "**Fan-in (Phase 3):**", SKILL);
   assertMatchesAll(line, PHASE_3_ROUTING, `${SKILL} Phase 3 step`);
+  assert.doesNotMatch(
+    line,
+    PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST,
+    `${SKILL} Phase 3 step must not attach --provenance to the post-gate-findings.mjs comment post`,
+  );
 });
 
 test("the carry-forward CLI the SKILL routes to exists", async () => {
@@ -169,5 +181,12 @@ test("generated .claude mirrors carry the same routing (when present)", async ()
     }
     const line = extractStepLine(generated, heading, file);
     assertMatchesAll(line, patterns, `${file} ${heading}`);
+    if (patterns === PHASE_3_ROUTING) {
+      assert.doesNotMatch(
+        line,
+        PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST,
+        `${file} Phase 3 step must not attach --provenance to the post-gate-findings.mjs comment post`,
+      );
+    }
   }
 });
