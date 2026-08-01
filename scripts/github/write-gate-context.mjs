@@ -36,8 +36,10 @@ import { parseArgs } from "node:util";
 
 import { loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 
-import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { viewPr } from "./view-pr.mjs";
+import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES } from "./_gate-names.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -119,10 +121,10 @@ Optional:
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
   --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
-  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix
+  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted it resolves to the PR's closing issue reference.
   --validation-posture <text>    Short description of the validation posture
-  --pr-body <text>               PR description text, inlined into the rendered briefing prefix
-  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label; omitted entirely when absent
+  --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less.
+  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference; omitted from the prefix entirely when the PR closes no issue.
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
@@ -489,6 +491,17 @@ export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot =
 export const BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES = 200 * 1024;
 
 /**
+ * Rendered when no PR body text reaches the prefix. The CLI resolves the live
+ * body itself (resolvePrSpecContext) and fails closed when it cannot, so from
+ * the CLI path this wording is reached only for a PR whose description is
+ * genuinely empty on GitHub — it is a truthful statement, not the old
+ * "(no PR body provided)" which described the CALLER's arguments and read as a
+ * claim about the PR. Programmatic callers that pass no `prBody` still land
+ * here; that is their explicit choice of a thin briefing.
+ */
+export const PR_BODY_ABSENT_SENTINEL = "(this PR has an empty description on GitHub)";
+
+/**
  * Render the invariant briefing-prefix text (GATE-EXEC-BRIEFING-PREFIX):
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
  * instruction), PR body, linked-issue body (when present), the full diff at the
@@ -542,7 +555,7 @@ export function renderBriefingPrefix({
   lines.push("");
   lines.push("## PR body");
   lines.push("");
-  lines.push(typeof prBody === "string" && prBody.trim().length > 0 ? prBody.trim() : "(no PR body provided)");
+  lines.push(typeof prBody === "string" && prBody.trim().length > 0 ? prBody.trim() : PR_BODY_ABSENT_SENTINEL);
   lines.push("");
   const hasIssueBody = typeof issueBody === "string" && issueBody.trim().length > 0;
   if (hasIssueBody) {
@@ -668,6 +681,14 @@ export function buildGateContextArtifact(options) {
       validationPosture: options.validationPosture ?? null,
     },
   };
+  // How scope.acceptanceCriteria came to be — "provided" (caller flag),
+  // "linked-issue" (resolved from the PR's closing reference), or "none" (the
+  // PR closes no issue). Only the CLI path sets it, so a null
+  // acceptanceCriteria WITH this field means "genuinely absent" and one
+  // WITHOUT it means "never resolved" (#1496).
+  if (typeof options.acceptanceCriteriaSource === "string") {
+    artifact.scope.acceptanceCriteriaSource = options.acceptanceCriteriaSource;
+  }
   // ADD (#1140): an explicit posture marker distinguishing a full build-once
   // bundle from a thin briefing. Only set by the CLI (`--base` present → "base";
   // absent → "none"); programmatic `buildGateContext`/`writeGateContext` callers
@@ -1089,13 +1110,84 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
 }
 
 /**
+ * Resolve the spec-of-record text the briefing prefix states as fact — the PR
+ * description, the linked issue's ref, and that issue's body — from GitHub, so
+ * a caller that simply omits the flags can never seed every fan-out reviewer
+ * with the claim that the PR has no description and no acceptance criteria
+ * (#1496/#1511). Explicit flags win: only fields still unset are fetched, and a
+ * caller that passes all three never touches the network.
+ *
+ * Fails closed with a named error when the PR read fails. An unresolvable body
+ * must not degrade into an assertion of absence — the whole defect being fixed
+ * is that "the caller passed nothing" was rendered as "the PR has nothing".
+ *
+ * @param {object} options — parsed CLI options shape (mutated in place)
+ * @param {{ run?: Function, env?: object, ghCommand?: string }} [deps]
+ * @returns {Promise<object>} the same options object
+ */
+export async function resolvePrSpecContext(options, { run = runChild, env = process.env, ghCommand = "gh" } = {}) {
+  const needsBody = options.prBody === null;
+  const needsIssue = options.issueBody === null || options.acceptanceCriteria === null;
+  if (!needsBody && !needsIssue) {
+    options.acceptanceCriteriaSource = "provided";
+    return options;
+  }
+
+  let pr;
+  try {
+    ({ pr } = await viewPr(
+      { repo: options.repo, pr: options.pr, fields: "body,closingIssuesReferences" },
+      { env, ghCommand, run },
+    ));
+  } catch (error) {
+    throw new Error(
+      `gate-context spec resolution failed: could not read PR #${options.pr} in ${options.repo} (${error?.message ?? error}). Refusing to write a bundle whose briefing prefix would state the PR has no description and no acceptance criteria. Pass --pr-body (and --issue-body/--acceptance-criteria) explicitly to build without GitHub access.`,
+    );
+  }
+  // An empty string here is a RESOLVED fact (the PR genuinely has no
+  // description) and renders as PR_BODY_ABSENT_SENTINEL. That is distinct from
+  // the throw above, which is the unresolvable case.
+  if (needsBody) options.prBody = typeof pr.body === "string" ? pr.body : "";
+
+  if (!needsIssue) {
+    options.acceptanceCriteriaSource = "provided";
+    return options;
+  }
+  const linked = Array.isArray(pr.closingIssuesReferences) ? pr.closingIssuesReferences : [];
+  const first = linked.find((entry) => Number.isInteger(entry?.number));
+  if (!first) {
+    // Genuinely no closing reference — recorded as such, so a consumer can tell
+    // "this PR closes no issue" from "nobody fetched the issue".
+    options.acceptanceCriteriaSource = "none";
+    return options;
+  }
+  if (options.acceptanceCriteria === null) options.acceptanceCriteria = `#${first.number}`;
+  if (options.issueBody === null) {
+    try {
+      const { issue } = await viewIssue(
+        { repo: options.repo, issue: first.number, fields: "body" },
+        { env, ghCommand, run },
+      );
+      options.issueBody = typeof issue.body === "string" ? issue.body : "";
+    } catch (error) {
+      throw new Error(
+        `gate-context spec resolution failed: PR #${options.pr} closes issue #${first.number} but its body could not be read (${error?.message ?? error}). Refusing to write a bundle whose briefing prefix would omit the acceptance criteria it claims to carry.`,
+      );
+    }
+  }
+  options.acceptanceCriteriaSource = "linked-issue";
+  return options;
+}
+
+/**
  * CLI entrypoint. Exported (argv + repoRoot both overridable) so tests can
  * drive the `--base` diff-capture path against a throwaway git repo fixture
- * without spawning a subprocess.
+ * without spawning a subprocess. `run` is the injectable child-process runner
+ * the GitHub spec-resolution reads go through.
  * @param {string[]} [argv]
- * @param {{ repoRoot?: string }} [runtime]
+ * @param {{ repoRoot?: string, run?: Function }} [runtime]
  */
-export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd() } = {}) {
+export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), run = runChild } = {}) {
   let options;
   try {
     options = parseWriteGateContextCliArgs(argv);
@@ -1109,6 +1201,10 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
+    // Resolve the spec-of-record (PR body, linked issue + its body) BEFORE any
+    // diff work: a bundle that cannot state the spec truthfully must not be
+    // written at all, and failing here costs nothing (#1496/#1511).
+    await resolvePrSpecContext(options, { run });
     // AC3 (#1140): the CLI only produces the full build-once bundle
     // (scope.diffPath + scope.changedFiles + adjacentCode) when it has a
     // resolvable diff source. --base is OPTIONAL rather than required — making

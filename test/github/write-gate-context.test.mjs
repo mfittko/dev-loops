@@ -21,7 +21,9 @@ import {
   mapGateToConfigKey,
   parseChangedFiles,
   parseWriteGateContextCliArgs,
+  PR_BODY_ABSENT_SENTINEL,
   rationaleFromResolver,
+  resolvePrSpecContext,
   readGateContext,
   renderBriefingPrefix,
   writeGateContext,
@@ -32,6 +34,19 @@ const briefingCheckerPath = path.resolve("scripts/github/verify-briefing-prefixe
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" });
+}
+
+// The CLI resolves the PR body + linked issue from GitHub itself (#1496), so
+// every in-process main() call needs a `gh` reader. This one answers with a PR
+// that has a body and closes no issue — the shape most of these tests assume.
+async function stubGhRun(_command, args) {
+  if (args[0] === "pr" && args[1] === "view") {
+    return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [] }), stderr: "" };
+  }
+  if (args[0] === "issue" && args[1] === "view") {
+    return { code: 0, stdout: JSON.stringify({ body: "stub issue body" }), stderr: "" };
+  }
+  return { code: 1, stdout: "", stderr: `stubGhRun: unexpected gh call: ${args.join(" ")}` };
 }
 
 // A git repo fixture with a `base` commit and a later HEAD commit that adds an
@@ -974,7 +989,7 @@ test("CLI --base <ref> produces a full build-once bundle: non-null diffPath, pop
       "--head-sha", headSha,
       "--angles", '["scope"]',
       "--base", baseSha,
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 40, gate: "draft_gate", headSha,
@@ -1007,7 +1022,7 @@ test("CLI without --base emits an explicit thin-briefing posture, not a silent f
       "--repo", "owner/repo", "--pr", "41", "--gate", "draft_gate",
       "--head-sha", headSha,
       "--angles", '["scope"]',
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 41, gate: "draft_gate", headSha,
@@ -1038,7 +1053,7 @@ test("CLI without --angles resolves angles dynamically (trims for a docs-only di
     await main([
       "--repo", "owner/repo", "--pr", "50", "--gate", "draft_gate",
       "--head-sha", headSha, "--base", baseSha,
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 50, gate: "draft_gate", headSha,
@@ -1068,7 +1083,7 @@ test("CLI without --angles matches buildGateContext resolvedAngles (CLI/API pari
     await main([
       "--repo", "owner/repo", "--pr", "51", "--gate", "draft_gate",
       "--head-sha", headSha, "--base", baseSha,
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const cliArtifact = await readGateContext({
       repo: "owner/repo", pr: 51, gate: "draft_gate", headSha,
@@ -1097,7 +1112,7 @@ test("CLI --rationale supplied WITHOUT --angles is ignored; resolver-derived rat
       "--repo", "owner/repo", "--pr", "55", "--gate", "draft_gate",
       "--head-sha", headSha, "--base", baseSha,
       "--rationale", JSON.stringify(staleRationale),
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 55, gate: "draft_gate", headSha,
@@ -1125,7 +1140,7 @@ test("CLI without --angles + dynamicAngles:false falls back to the full static p
     await main([
       "--repo", "owner/repo", "--pr", "52", "--gate", "draft_gate",
       "--head-sha", headSha, "--base", baseSha,
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const cliArtifact = await readGateContext({
       repo: "owner/repo", pr: 52, gate: "draft_gate", headSha,
@@ -1152,7 +1167,7 @@ test("CLI with --angles uses the list VERBATIM (override bypasses dynamic resolu
       "--repo", "owner/repo", "--pr", "53", "--gate", "draft_gate",
       "--head-sha", headSha, "--base", baseSha,
       "--angles", '["coverage","custom-angle"]',
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 53, gate: "draft_gate", headSha,
@@ -1177,7 +1192,7 @@ test("CLI without --base and without --angles: static fallback pool + CLI/API pa
     await main([
       "--repo", "owner/repo", "--pr", "60", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const cliArtifact = await readGateContext({
       repo: "owner/repo", pr: 60, gate: "draft_gate", headSha: "abc1234567890",
@@ -1213,7 +1228,7 @@ test("writeDraftDevLoops honors an excludeAngles override (emitted excludeAngles
     await main([
       "--repo", "owner/repo", "--pr", "63", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const cliArtifact = await readGateContext({
       repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: "abc1234567890",
@@ -1238,7 +1253,7 @@ test("CLI --angles '[]' is used VERBATIM (empty escape hatch bypasses dynamic re
       "--repo", "owner/repo", "--pr", "62", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
       "--angles", "[]",
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 62, gate: "draft_gate", headSha: "abc1234567890",
@@ -1279,7 +1294,7 @@ test("CLI without --angles + malformed .devloops: warns to stderr and proceeds w
       await main([
         "--repo", "owner/repo", "--pr", "63", "--gate", "draft_gate",
         "--head-sha", "abc1234567890",
-      ], { repoRoot });
+      ], { repoRoot, run: stubGhRun });
     } finally {
       process.stderr.write = origErr;
     }
@@ -1331,7 +1346,7 @@ test("CLI without --angles + a gate with no configured angles/mandatoryAngles: w
       await main([
         "--repo", "owner/repo", "--pr", "64", "--gate", "draft_gate",
         "--head-sha", "abc1234567890",
-      ], { repoRoot });
+      ], { repoRoot, run: stubGhRun });
     } finally {
       process.stderr.write = origErr;
     }
@@ -1367,7 +1382,7 @@ test("CLI --base <ref> that fails to resolve fails closed (no artifact written, 
         "--head-sha", headSha,
         "--angles", '["scope"]',
         "--base", "this-ref-does-not-exist",
-      ], { repoRoot });
+      ], { repoRoot, run: stubGhRun });
 
       assert.equal(process.exitCode, 1, "fails closed with a non-zero exit rather than degrading to a thin bundle");
 
@@ -1396,7 +1411,7 @@ test("CLI --base fails closed when the CWD worktree HEAD does not match --head-s
         "--head-sha", baseSha,
         "--angles", '["scope"]',
         "--base", "HEAD~1",
-      ], { repoRoot });
+      ], { repoRoot, run: stubGhRun });
 
       assert.equal(process.exitCode, 1, "fails closed on a HEAD/--head-sha mismatch");
       const artifact = await readGateContext({
@@ -1424,7 +1439,7 @@ test("CLI --base fails closed when CWD is not inside a git worktree", async () =
         "--head-sha", "abcdef1234567890abcdef1234567890abcdef12",
         "--angles", '["scope"]',
         "--base", "HEAD~1",
-      ], { repoRoot });
+      ], { repoRoot, run: stubGhRun });
 
       assert.equal(process.exitCode, 1, "fails closed when CWD is not a git worktree");
       const artifact = await readGateContext({
@@ -1454,7 +1469,7 @@ test("CLI --base fails closed on a degenerate empty change set (no changedFiles)
         "--head-sha", headSha,
         "--angles", '["scope"]',
         "--base", "HEAD",
-      ], { repoRoot });
+      ], { repoRoot, run: stubGhRun });
 
       assert.equal(process.exitCode, 1, "fails closed on an empty --base change set");
       const artifact = await readGateContext({
@@ -1519,7 +1534,7 @@ test("CLI --base accepts an ancestry ref (HEAD~1) and resolves it end-to-end", a
       "--head-sha", headSha,
       "--angles", '["scope"]',
       "--base", "HEAD~1",
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 43, gate: "draft_gate", headSha,
     }, { repoRoot });
@@ -1544,7 +1559,7 @@ test("CLI --base isolates git config: persisted diff is color-free even with col
       "--head-sha", headSha,
       "--angles", '["scope"]',
       "--base", "HEAD~1",
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 44, gate: "draft_gate", headSha,
@@ -1573,7 +1588,7 @@ test("CLI --base degrades to scope.diffPath=null but STILL writes the artifact w
       "--head-sha", headSha,
       "--angles", '["scope"]',
       "--base", "HEAD~1",
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 45, gate: "draft_gate", headSha,
@@ -1847,7 +1862,7 @@ test("renderBriefingPrefix: fully empty optional input (no PR/issue/diff/changed
     worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.briefing-prefix.txt",
   });
   assert.equal(prefixMode, "inline");
-  assert.ok(text.includes("(no PR body provided)"));
+  assert.ok(text.includes(PR_BODY_ABSENT_SENTINEL));
   assert.ok(text.includes("(no diff text captured for this bundle)"));
   assert.ok(text.includes("Changed files (0):"));
   assert.ok(!text.includes("## Linked issue"));
@@ -1965,7 +1980,7 @@ test("dogfood round-trip: CLI-built briefing prefix verifies clean across two re
       "--pr-body", "Fixes the helper.",
       "--acceptance-criteria", "#900",
       "--issue-body", "The helper must return the right value.",
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({ repo: "owner/repo", pr: 60, gate: "draft_gate", headSha }, { repoRoot });
     assert.ok(artifact, "artifact written");
@@ -2153,7 +2168,7 @@ test("dogfood: an orchestrator-supplied --prefix-file record verifies clean via 
       "--angles", '["scope"]',
       "--base", baseSha,
       "--prefix-file", orchestratorPrefixPath,
-    ], { repoRoot });
+    ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha }, { repoRoot });
     assert.ok(artifact, "artifact written");
@@ -2177,6 +2192,124 @@ test("dogfood: an orchestrator-supplied --prefix-file record verifies clean via 
     const finalResult = JSON.parse(fanin.stdout.trim());
     assert.equal(finalResult.verified, true, JSON.stringify(finalResult));
     assert.equal(finalResult.reviewerCount, 2);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Spec-of-record resolution (#1496 / #1511) — the briefing prefix must never
+// state that a PR has no description just because the caller passed no flag.
+// ---------------------------------------------------------------------------
+
+function specStubRun({ prBody = "live PR body", closing = [], issueBody = "live issue body", prFails = false, issueFails = false } = {}) {
+  return async (_command, args) => {
+    if (args[0] === "pr" && args[1] === "view") {
+      if (prFails) return { code: 1, stdout: "", stderr: "gh: could not resolve PR" };
+      return { code: 0, stdout: JSON.stringify({ body: prBody, closingIssuesReferences: closing }), stderr: "" };
+    }
+    if (args[0] === "issue" && args[1] === "view") {
+      if (issueFails) return { code: 1, stdout: "", stderr: "gh: could not resolve issue" };
+      return { code: 0, stdout: JSON.stringify({ body: issueBody }), stderr: "" };
+    }
+    return { code: 1, stdout: "", stderr: `unexpected: ${args.join(" ")}` };
+  };
+}
+
+test("resolvePrSpecContext fetches the live PR body and the closing issue's body+ref when no flags are given", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, { run: specStubRun({ closing: [{ number: 42 }] }) });
+  assert.equal(options.prBody, "live PR body");
+  assert.equal(options.issueBody, "live issue body");
+  assert.equal(options.acceptanceCriteria, "#42");
+  assert.equal(options.acceptanceCriteriaSource, "linked-issue");
+});
+
+test("resolvePrSpecContext: explicit flags win and never hit the network", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: "flag body", issueBody: "flag issue", acceptanceCriteria: "docs/plan.md" };
+  const run = async () => { throw new Error("must not call gh"); };
+  await resolvePrSpecContext(options, { run });
+  assert.equal(options.prBody, "flag body");
+  assert.equal(options.issueBody, "flag issue");
+  assert.equal(options.acceptanceCriteria, "docs/plan.md");
+  assert.equal(options.acceptanceCriteriaSource, "provided");
+});
+
+test("resolvePrSpecContext: a PR that closes no issue records acceptanceCriteriaSource=none (absent, not unfetched)", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, { run: specStubRun({ closing: [] }) });
+  assert.equal(options.acceptanceCriteria, null);
+  assert.equal(options.issueBody, null);
+  assert.equal(options.acceptanceCriteriaSource, "none");
+});
+
+test("resolvePrSpecContext fails closed with a named error when the PR body is unresolvable", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await assert.rejects(
+    () => resolvePrSpecContext(options, { run: specStubRun({ prFails: true }) }),
+    /gate-context spec resolution failed: could not read PR #7/,
+  );
+});
+
+test("resolvePrSpecContext fails closed when the linked issue's body is unresolvable", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await assert.rejects(
+    () => resolvePrSpecContext(options, { run: specStubRun({ closing: [{ number: 42 }], issueFails: true }) }),
+    /closes issue #42 but its body could not be read/,
+  );
+});
+
+test("CLI: a PR with a body renders that body in the prefix and never the absent sentinel", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "77", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], { repoRoot, run: specStubRun({ prBody: "## Summary\nreal description", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- [ ] a" }) });
+
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha });
+    const text = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.ok(text.includes("real description"), "live PR body inlined");
+    assert.ok(!text.includes(PR_BODY_ABSENT_SENTINEL), "absent sentinel not rendered for a PR that has a body");
+    assert.ok(text.includes("## Linked issue #42"), "linked issue section labeled from the closing reference");
+    assert.ok(text.includes("## Acceptance criteria"), "linked issue body inlined");
+
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(artifact.scope.acceptanceCriteria, "#42");
+    assert.equal(artifact.scope.acceptanceCriteriaSource, "linked-issue");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI: an unresolvable PR read writes NO artifact rather than a bundle asserting the PR has no description", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "78", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], { repoRoot, run: specStubRun({ prFails: true }) });
+    assert.equal(process.exitCode, 1);
+    process.exitCode = 0;
+
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 78, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(artifact, null, "no artifact written on a fail-closed spec resolution");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI: a PR whose description is genuinely empty renders the truthful absent sentinel", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "79", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], { repoRoot, run: specStubRun({ prBody: "" }) });
+
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 79, gate: "draft_gate", headSha });
+    const text = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.ok(text.includes(PR_BODY_ABSENT_SENTINEL));
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
