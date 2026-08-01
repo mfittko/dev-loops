@@ -279,9 +279,11 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --head-sha <current_head_sha> \
   --verdict <clean|findings_present|blocked> \
   --findings-json <path-to-per-angle-results.json> \
-  --next-action "<next action>" --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"defer":0}' \
+  --next-action "<next action>" --findings-severity-counts '<consolidate-fanin severityCounts>' \
   --execution-mode fanout_fanin
 ```
+
+Substitute `<consolidate-fanin severityCounts>` with the fan-in CLI's own `severityCounts` field (its output's true, unbudgeted totals) — never a literal all-zero placeholder. `buildStructuredFindingsDigest` only lets this value RAISE the posted `**Findings summary:**` total above `--findings-json`'s own count, never lower it, but a placeholder that always sums to 0 defeats the point of passing it at all and, more importantly, must never be typed in by hand for a `findings_present`/`blocked` round.
 
 `--findings-json` accepts the per-angle review-results array (`[{ angle, verdict?, findings:[{severity, summary, file?, line?, disposition?}] }]`, the primary shape that feeds `consolidateFanin`); it also accepts the flat per-finding array that `consolidateFanin`/`toFindingsLogShape` produce (`[{ severity, summary, angle?, ... }]`), grouping it by each finding's `.angle`. A non-empty input matching neither shape is rejected rather than silently rendering all-clean. If the structured results are not available (an inline run, or a `fanout_fanin` `consolidate-fanin` round withheld to tier 4 — see the sub-loop contract's [Execution mode and fan-out evidence enforcement](../docs/gate-review-sub-loop-contract.md#execution-mode-and-fan-out-evidence-enforcement)), fall back to `--findings-summary "<summary>"`.
 
@@ -295,9 +297,11 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --head-sha <current_head_sha> \
   --verdict <clean|findings_present|blocked> \
   --findings-summary "<summary>" \
-  --next-action "<next action>" --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"defer":0}' \
+  --next-action "<next action>" --findings-severity-counts '<this round's true severity counts>' \
   --execution-mode inline_single_agent --inline-reason "<why>"
 ```
+
+`--findings-severity-counts` is only required for `--verdict clean` when the gate's `blockCleanOnFindingSeverities` is configured (see `--help`); when passed for a `findings_present`/`blocked` inline round, substitute the counts you actually tallied, never a copy-pasted all-zero literal — an inline run has no fan-in to source a placeholder from.
 
 `--execution-mode <fanout_fanin|inline_single_agent>` records how the gate inspection ran (default `inline_single_agent`). When the gate did not run via the fan-out/fan-in sub-loop ([Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)), you MUST pass `--execution-mode inline_single_agent --inline-reason "<why>"` — silent inline runs are no longer allowed: inline mode requires a non-empty `--inline-reason` and emits a stderr warning. Because inline is the default mode, a bare call with neither flag now fails with an argument error, so always pass `--execution-mode` explicitly (and `--inline-reason` for inline). The recorded `executionMode` is surfaced by `detect-checkpoint-evidence.mjs` and gated by `gates.requireFanoutEvidence`.
 

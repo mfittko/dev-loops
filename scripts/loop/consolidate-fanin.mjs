@@ -41,14 +41,15 @@
  * approximated size — so a shape this CLI accepts as fitting is exactly a
  * shape that renderer accepts too. A round too large to render even at
  * minimum summary length still writes a COMPLETE --ledger-out and exits 0,
- * degrading "findingsJson"/--out through three tiers. Which tier an angle
+ * degrading "findingsJson"/--out through four tiers. Which tier an angle
  * lands on is NOT decided by whether that angle's own marker fits in
  * isolation — angles are upgraded one at a time, in order of each angle's
  * most blocking severity (ties by artifact index), and an upgrade is kept
  * only while the WHOLE round still renders, so a defer-only angle can stay
  * bare purely because a higher-severity angle consumed the budget first:
- *   1. real (unmarked) — an angle whose own real findings (already shrunk to
- *      the minimum summary length) still let the whole round render keeps
+ *   1. real (unmarked) — an angle whose own real findings, tried first at
+ *      their ORIGINAL (pre-shrink) length and falling back to the
+ *      whole-round-shrunk length, still let the whole round render keeps
  *      them as-is, since a marker is a compression and must never replace
  *      real content with something bigger;
  *   2. verbose — failing that, one synthetic finding per angle naming its
@@ -111,7 +112,9 @@ Optional:
                                  cannot fit. --ledger-out is unaffected either way.
   --ledger-out <path>            Write the flat "findings" shape (below) to this path as JSON — the
                                  exact --findings-file input write-gate-findings-log.mjs and
-                                 post-gate-findings.mjs accept
+                                 post-gate-findings.mjs accept. Rejected at parse time (exit 1) when
+                                 it resolves to the same path as --out — one write would otherwise
+                                 destroy the other.
   --pr-checklist-matrix clean    When no pr-checklist-matrix angle artifact was found, upsert
                                  { angle: "pr-checklist-matrix", verdict: "clean", findings: [] }
   --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
@@ -136,12 +139,13 @@ Output (stdout, JSON):
   (--out) alone is bounded against upsert-checkpoint-verdict.mjs's OWN rendered-block limit — fit is
   measured by actually rendering a candidate through that CLI's normalizeStructuredFindings/
   renderStructuredFindings and catching the throw, not an approximated size. Summaries are first
-  shrunk evenly; a round still over budget at minimum summary length instead degrades through three
+  shrunk evenly; a round still over budget at minimum summary length instead degrades through four
   tiers, one angle at a time in order of each angle's most blocking severity (ties by artifact
   index), an upgrade kept only while the WHOLE round still renders — NOT decided by whether an
-  angle's own marker fits in isolation: (1) real (unmarked) — an angle whose real (already
-  shrunk) findings alone let the whole round render keeps them, since a marker must never replace
-  real content with something bigger; (2) verbose — failing that, the angle's findings replaced
+  angle's own marker fits in isolation: (1) real (unmarked) — an angle whose real findings (tried
+  first at their original pre-shrink length, falling back to the whole-round-shrunk length) alone
+  let the whole round render keeps them, since a marker must never replace real content with
+  something bigger; (2) verbose — failing that, the angle's findings replaced
   with ONE synthetic marker finding naming its omitted count and severity breakdown; (3) bare —
   that angle's marker shortens to a bare omitted-count line when neither its real findings nor the
   verbose sentence fit; (4) withheld — reached only when even ONE bare line per angle across the
@@ -283,7 +287,7 @@ function buildAngleMarker(a, verbose) {
 // up on the WHOLE round's real findings: start every over-threshold angle at
 // the bare marker (the smallest possible per-angle shape) so an early,
 // single render check tells us whether ANY per-angle shape can fit at all
-// (tier 3 below). If bare-everywhere fits, greedily upgrade angles one at a
+// (tier 4 below). If bare-everywhere fits, greedily upgrade angles one at a
 // time in blocking-severity order, trying that angle's REAL (already
 // minimum-shrunk) findings before its verbose marker — a marker is a
 // compression and must never replace real content with something bigger
@@ -305,7 +309,7 @@ function angleWorstSeverityRank(a) {
   return best;
 }
 
-function buildBudgetMarkedFindingsJson(findingsJson) {
+function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
   const marked = findingsJson.map((a) => buildAngleMarker(a, false));
   if (!fitsRenderBudget(marked)) {
     // Structural floor: this many real angles (far beyond the default
@@ -325,13 +329,17 @@ function buildBudgetMarkedFindingsJson(findingsJson) {
     .sort((i, j) => angleWorstSeverityRank(findingsJson[i]) - angleWorstSeverityRank(findingsJson[j]) || i - j);
   for (const i of upgradeOrder) {
     const bare = marked[i];
-    // Try the angle's real findings first — never bigger than what it
-    // represents, so an upgrade can only ever add information per rendered
-    // char, not spend more of the budget than the real content itself
-    // needs — then the verbose marker, keeping the first candidate that
-    // still lets the WHOLE round render; fall back to bare when neither fits.
+    // Try the angle's real findings first — the PRE-SHRINK original, not the
+    // already-summary-floor-shrunk findingsJson (fitFindingsToRenderBudget
+    // mutated that array in place trying to fit the whole round, so by the
+    // time we get here every summary is already crushed to the minimum
+    // length; offering that as "real" would let a marker-tier round replace
+    // a must-fix angle's readable finding with an unreadable 31-char stub
+    // even when ~1750 chars of budget are unused) — then the shrunk form,
+    // then the verbose marker, keeping the first candidate that still lets
+    // the WHOLE round render; fall back to bare when none fit.
     let upgraded = false;
-    for (const candidate of [findingsJson[i], buildAngleMarker(findingsJson[i], true)]) {
+    for (const candidate of [originalFindingsJson[i], findingsJson[i], buildAngleMarker(findingsJson[i], true)]) {
       marked[i] = candidate;
       if (fitsRenderBudget(marked)) {
         upgraded = true;
@@ -427,6 +435,16 @@ export function parseConsolidateFaninCliArgs(argv) {
   }
   if (!options.findingsDir) {
     throw parseError("Missing required argument: --findings-dir <dir>");
+  }
+  // The withheld tier writes --ledger-out first, then rm()s --out; the
+  // under-budget path writes --ledger-out and then overwrites --out. Either
+  // way the same resolved path for both flags means one write destroys the
+  // other, and the CLI still returns ok:true — a success envelope over zero
+  // durable evidence. Compare resolved (path.resolve) paths, not raw
+  // strings, so "./x.json" vs "x.json" is caught too.
+  if (options.out !== undefined && options.ledgerOut !== undefined
+      && path.resolve(options.out) === path.resolve(options.ledgerOut)) {
+    throw parseError("--out and --ledger-out must not resolve to the same path");
   }
   return options;
 }
@@ -663,11 +681,17 @@ export async function consolidateGateFanin(options) {
     };
   });
 
+  // Snapshot BEFORE fitFindingsToRenderBudget mutates findingsJson in place
+  // (it shrinks every summary evenly, in-place, chasing the whole-round
+  // budget) — buildBudgetMarkedFindingsJson needs the pristine, un-shrunk
+  // findings as its tier-1 "real" candidate; the post-shrink array alone
+  // would only ever offer an already-floor-shrunk stub.
+  const originalFindingsJson = structuredClone(findingsJson);
   const wholeRoundFits = fitFindingsToRenderBudget(findingsJson);
   let commentFindingsJson = findingsJson;
   let withheldOut = false;
   if (!wholeRoundFits) {
-    ({ commentFindingsJson, withheldOut } = buildBudgetMarkedFindingsJson(findingsJson));
+    ({ commentFindingsJson, withheldOut } = buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson));
   }
 
   const result = {

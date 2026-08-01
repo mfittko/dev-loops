@@ -71,6 +71,32 @@ test("parseConsolidateFaninCliArgs rejects a whitespace-only --ledger-out value"
   );
 });
 
+// --out and --ledger-out must never resolve to the same path: the withheld
+// tier writes --ledger-out first, then rm()s --out, so an identical path
+// would delete the ledger it just wrote while still returning ok:true — a
+// success envelope over zero durable evidence, the exact class of failure
+// this CLI exists to eliminate. Compared as RESOLVED paths, not raw strings,
+// so "./out.json" vs "out.json" is caught too.
+test("parseConsolidateFaninCliArgs rejects --out and --ledger-out resolving to the same path (#1513)", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/same.json", "--ledger-out", "/tmp/same.json"]),
+    /--out and --ledger-out must not resolve to the same path/,
+  );
+});
+
+test("parseConsolidateFaninCliArgs rejects --out and --ledger-out that resolve to the same path via different spellings (#1513)", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/dir/../same.json", "--ledger-out", "/tmp/same.json"]),
+    /--out and --ledger-out must not resolve to the same path/,
+  );
+});
+
+test("parseConsolidateFaninCliArgs allows distinct --out/--ledger-out paths", () => {
+  assert.doesNotThrow(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/out.json", "--ledger-out", "/tmp/ledger.json"]),
+  );
+});
+
 test("parseConsolidateFaninCliArgs rejects missing --findings-dir", () => {
   assert.throws(() => parseConsolidateFaninCliArgs([]), /findings-dir/);
 });
@@ -978,7 +1004,14 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
     assert.equal(correctnessFinding.severity, "must-fix");
     assert.equal(correctnessFinding.file, "foo.mjs");
     assert.equal(correctnessFinding.line, 12);
-    assert.ok(correctnessFinding.summary.startsWith("null deref at foo.mjs:12"), `expected the real summary to survive, got: ${correctnessFinding.summary}`);
+    // Full, UN-shrunk text — not just a startsWith prefix, which a
+    // whole-round-shrunk-to-the-31-char-floor stub would also satisfy (both
+    // start with the same first 25 chars). The pre-shrink snapshot must be
+    // offered as the tier-1 candidate, not the already-crushed array
+    // fitFindingsToRenderBudget mutated in place while chasing the whole
+    // round's budget.
+    assert.equal(correctnessFinding.summary, "null deref at foo.mjs:12 when x is undefined", `expected the ORIGINAL, un-shrunk summary to survive, got: ${correctnessFinding.summary}`);
+    assert.ok(!correctnessFinding.summary.endsWith(" …"), "a narrow angle's real finding must not be shrunk when it already fits the whole round");
     assert.ok(!/omitted.*see the disposition ledger/.test(correctnessFinding.summary), "a narrow angle must not be marker-collapsed when its real finding already fits");
 
     // "style" (the actual cause of the overflow) IS collapsed to a marker.
