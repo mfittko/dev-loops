@@ -533,18 +533,31 @@ function sanitizeStructuredCodeSpan(value) {
 // does not yet carry the backtick-strip or link/image/HTML neutralization
 // added here (tracked separately — this file's renderer is the one exposed to
 // the pairing-shift bypass and to arbitrary --findings-json producer input).
+//
+// The bracket neutralization below uses an HTML entity (`&#91;`), not a
+// backslash escape. A backslash escape (`\[`) introduces a NEW character
+// (`\`) whose own escaping must then be correct — and it isn't: a
+// value-supplied literal backslash immediately before `[` (e.g.
+// `\[text](url)`) absorbs the inserted escape, turning it into `\\[`, which
+// CommonMark parses as an escaped-literal-backslash followed by a live,
+// unescaped `[`. An entity has no such failure mode: the parser's
+// link/image bracket-matching scans the raw source for the literal `[`
+// character, and `&#91;` never contains one — it only decodes to the
+// bracket glyph as opaque text once rendering is done, after link/image
+// syntax has already been resolved. There is no escape character for a
+// later replacement (or a value's own content) to absorb.
 function sanitizeStructuredInline(value) {
   return sanitizeStructuredCodeSpan(value)
     .replace(/<!--/gu, "&lt;!--")
     .replace(/-->/gu, "--&gt;")
     .replace(/</gu, "&lt;")
-    // Escape a plain link's opening bracket (any `[` NOT already part of an
-    // image's `![`, handled next) so `[text](url)` can never open a live
-    // link. Order matters: this runs BEFORE the image-form escape below so
-    // it can tell an image's `[` (still preceded by a literal `!` here) apart
-    // from a plain link's `[`.
-    .replace(/(?<!!)\[/gu, "\\[")
-    .replace(/!\[/gu, "!\\[");
+    // Neutralize a plain link's opening bracket (any `[` NOT already part of
+    // an image's `![`, handled next) so `[text](url)` can never open a live
+    // link. Order matters: this runs BEFORE the image-form neutralization
+    // below so it can tell an image's `[` (still preceded by a literal `!`
+    // here) apart from a plain link's `[`.
+    .replace(/(?<!!)\[/gu, "&#91;")
+    .replace(/!\[/gu, "!&#91;");
 }
 // Normalize a single finding object into a deterministic render entry, or null
 // when it carries no usable summary.
