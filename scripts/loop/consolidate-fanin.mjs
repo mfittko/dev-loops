@@ -167,13 +167,6 @@ function truncateFindingText(value, limit = MAX_FINDING_TEXT_LENGTH) {
   return `${value.slice(0, Math.max(0, limit - 2))} …`;
 }
 
-// SEVERITY_RANK is gate-fanin's own SEVERITY_ORDER (imported), used only for
-// picking a marker's representative severity and for the severity-count
-// buckets below — most blocking first. Importing the single ordered copy
-// (rather than hand-copying it here) means a future reordering there is
-// automatically reflected here too, instead of silently drifting apart.
-const SEVERITY_RANK = SEVERITY_ORDER;
-
 // Does a candidate findingsJson shape actually fit upsert-checkpoint-verdict.mjs's
 // posted-comment render bound? Measured by RENDERING it through that CLI's own
 // normalizeStructuredFindings/renderStructuredFindings and catching the
@@ -243,7 +236,7 @@ function fitFindingsToRenderBudget(findingsJson) {
 // always lossless or bare, never a mangled hybrid.
 function buildAngleMarker(a, verbose) {
   if (a.findings.length === 0) return a; // clean angle: nothing omitted
-  const bySeverity = Object.fromEntries(SEVERITY_RANK.map((s) => [s, 0]));
+  const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
   for (const f of a.findings) {
     if (Object.hasOwn(bySeverity, f.severity)) bySeverity[f.severity] += 1;
   }
@@ -252,11 +245,16 @@ function buildAngleMarker(a, verbose) {
   // marker's "disposition" still matches every other findingsJson finding's
   // severity-derived disposition (accepted-for-fix for a blocking severity,
   // deferred otherwise).
-  const representative = SEVERITY_RANK
+  const representative = SEVERITY_ORDER
     .map((s) => a.findings.find((f) => f.severity === s))
     .find(Boolean) ?? a.findings[0];
+  // Built from SEVERITY_ORDER (not hand-listed severity names) so a severity
+  // added there is automatically included in the breakdown instead of being
+  // silently omitted from the only in-comment record a marker-collapsed round
+  // carries.
+  const severityBreakdown = SEVERITY_ORDER.map((s) => `${s}: ${bySeverity[s]}`).join(", ");
   const summary = verbose
-    ? `${a.findings.length} finding(s) omitted from this comment (must-fix: ${bySeverity["must-fix"]}, worth-fixing-now: ${bySeverity["worth-fixing-now"]}, defer: ${bySeverity.defer}) — see the disposition ledger`
+    ? `${a.findings.length} finding(s) omitted from this comment (${severityBreakdown}) — see the disposition ledger`
     : `${a.findings.length} omitted — see ledger`;
   return {
     angle: a.angle,
@@ -279,13 +277,13 @@ function buildAngleMarker(a, verbose) {
 // upgrade is kept only while the WHOLE round still renders. Returns
 // { commentFindingsJson, withheldOut }.
 // The angle's own worst (most blocking) severity among its real findings, as
-// a SEVERITY_RANK index (0 = must-fix, lower is more severe); a clean angle
+// a SEVERITY_ORDER index (0 = must-fix, lower is more severe); a clean angle
 // (no findings) ranks last. Used only to ORDER the greedy upgrade below by
 // decision value, never to change which findings a marker represents.
 function angleWorstSeverityRank(a) {
-  let best = SEVERITY_RANK.length;
+  let best = SEVERITY_ORDER.length;
   for (const f of a.findings) {
-    const idx = SEVERITY_RANK.indexOf(f.severity);
+    const idx = SEVERITY_ORDER.indexOf(f.severity);
     if (idx !== -1 && idx < best) best = idx;
   }
   return best;

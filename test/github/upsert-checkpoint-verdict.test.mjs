@@ -3308,6 +3308,46 @@ test("renderGateReviewCommentBody neutralizes markdown link/image injection via 
   assert.match(body, /!\\\[leak\]/);
 });
 
+// Regression (renderer-security, PR#1513 gate review round 3): a lone backtick
+// in `summary` used to shift CommonMark's left-to-right backtick pairing so a
+// LATER field on the same line — here `file` — never got its own code span,
+// letting its crafted `](url)` combine with `summary`'s `[` into a live
+// markdown link. sanitizeStructuredInline now strips backticks from EVERY
+// field it sanitizes (summary included), so no field can unbalance another
+// field's code span on the same rendered line.
+test("renderGateReviewCommentBody strips a backtick from summary so it cannot shift pairing and break a later field's code-span defense (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          {
+            severity: "must-fix",
+            summary: "guard [missing for ` value",
+            file: "a.mjs](https://evil.example)",
+          },
+        ],
+      },
+    ],
+  });
+  // The stray backtick is gone (whitespace it left behind is re-collapsed) —
+  // nothing left in summary to shift the backtick pairing.
+  assert.match(body, /guard \[missing for value/);
+  assert.doesNotMatch(body, /guard \[missing for `/);
+  // file's own code span still forms intact around the WHOLE crafted value,
+  // including its embedded `](url)`, which stays inert literal code text —
+  // never a live link — because no earlier stray backtick stole its opening
+  // delimiter.
+  assert.match(body, /\(`a\.mjs\]\(https:\/\/evil\.example\)`\)/);
+});
+
 test("renderGateReviewCommentBody renders NESTED per-angle findings input correctly (#898)", async () => {
   const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
   const body = renderGateReviewCommentBody({
