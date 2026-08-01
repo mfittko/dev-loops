@@ -180,7 +180,7 @@ function collapseWhitespace(value) {
 // (e.g. consolidate-fanin.mjs's fitsRenderBudget/angleRenderCost) discriminate
 // "over budget" from a shape/producer defect via this code, never by
 // pattern-matching the human-readable message, which can be reworded freely.
-export const POSTED_COMMENT_LIMIT_EXCEEDED_CODE = "GATE_COMMENT_LIMIT_EXCEEDED";
+const POSTED_COMMENT_LIMIT_EXCEEDED_CODE = "GATE_COMMENT_LIMIT_EXCEEDED";
 export function isPostedCommentLimitError(err) {
   return err instanceof Error && err.code === POSTED_COMMENT_LIMIT_EXCEEDED_CODE;
 }
@@ -484,35 +484,49 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   }
   return options;
 }
-// gate-fanin's own SEVERITY_ORDER (imported) IS the "most blocking first"
-// contract (VALID_SEVERITIES' Set iteration order is an implementation
-// detail, not one) — used for sort order, the digest tally, and the
-// clean-verdict cross-check below. Importing the single ordered copy
-// (rather than hand-copying it here, as consolidate-fanin.mjs's SEVERITY_RANK
-// used to) means a severity added or reordered there is reflected here too,
-// instead of silently drifting apart.
-const STRUCTURED_FINDINGS_SEVERITY_ORDER = SEVERITY_ORDER;
 // The closed set of disposition values that mark a blocking finding as already
-// resolved without changing its severity: write-gate-findings-log.mjs's
-// VALID_DISPOSITIONS minus "accepted-for-fix"/"deferred", which are NOT
-// resolutions. Derived by subtraction (not hand-copied) so a disposition added
-// to VALID_DISPOSITIONS there is automatically treated as still-blocking here
-// unless explicitly added to NON_RESOLVING_DISPOSITIONS too. Anything outside
-// this set — missing, "accepted-for-fix", "deferred", or an unrecognized/
-// typo'd string — must still count as blocking.
-const NON_RESOLVING_DISPOSITIONS = new Set(["accepted-for-fix", "deferred"]);
-const RESOLVED_DISPOSITIONS = new Set(
-  [...VALID_DISPOSITIONS].filter((d) => !NON_RESOLVING_DISPOSITIONS.has(d)),
-);
-// Sanitize free text for a single-line markdown bullet. Collapse whitespace
-// (LLM text often carries embedded newlines, which would split a bullet across
-// lines), neutralize HTML-comment delimiters so a finding field cannot smuggle
-// a hidden marker into the rendered body, and neutralize the markdown image-embed
-// form (`![...]`) so a finding field cannot silently embed a remote image (a
+// resolved without changing its severity. Declared as a literal (not derived
+// from VALID_DISPOSITIONS by subtraction) so a disposition added there later
+// defaults to still-blocking by construction, rather than silently landing in
+// this set the moment it is added upstream. The assertion below fails loudly
+// if this set ever drifts to include a value VALID_DISPOSITIONS does not (a
+// typo here), rather than drifting the other way (fail-open) as a derived set
+// would. Anything outside this set — missing, "accepted-for-fix", "deferred",
+// or an unrecognized/typo'd string — must still count as blocking.
+const RESOLVED_DISPOSITIONS = new Set(["disputed", "operator_acknowledged"]);
+for (const disposition of RESOLVED_DISPOSITIONS) {
+  if (!VALID_DISPOSITIONS.has(disposition)) {
+    throw new Error(`RESOLVED_DISPOSITIONS contains "${disposition}", which is not in write-gate-findings-log.mjs's VALID_DISPOSITIONS`);
+  }
+}
+// Sanitize free text for a single-line markdown bullet. Strip backticks FIRST
+// (before every other transform) so NO field rendered through this sanitizer —
+// summary included, not only the fields already wrapped in a code span — can
+// carry a stray backtick onto the rendered line: a lone backtick in one field
+// (e.g. summary) would otherwise shift CommonMark's left-to-right backtick
+// pairing and prevent a LATER field's own code span (severity/file/disposition)
+// from ever forming, silently unwrapping it back to raw, unescaped markdown
+// (the exact bypass this comment now documents; see the regression test below
+// for the reproduction). Stripping — not backslash-escaping — is deliberate:
+// escaping would require also pre-doubling any literal backslash already in the
+// value to avoid the escape being absorbed by it, and a bullet's severity/file/
+// disposition fields already drop backticks outright with no loss of meaning
+// (backticks are never semantically load-bearing in an enum label, path, or
+// summary sentence). Collapse whitespace after stripping (LLM text often
+// carries embedded newlines, which would split a bullet across lines, and
+// backtick removal can itself leave a double space to collapse), neutralize
+// HTML-comment delimiters so a finding field cannot smuggle a hidden marker
+// into the rendered body, and neutralize the markdown image-embed form
+// (`![...]`) so a finding field cannot silently embed a remote image (a
 // read-receipt/IP-leak vector when the comment is rendered by a client that
-// auto-loads images). Mirrors post-gate-findings.mjs.
+// auto-loads images). Mirrors post-gate-findings.mjs's HTML-comment/whitespace
+// handling; that sibling copy does not yet carry the backtick-strip or
+// image-embed neutralization added here (tracked separately — this file's
+// renderer is the one that wraps enum fields in a code span and so is the one
+// exposed to the pairing-shift bypass).
 function sanitizeStructuredInline(value) {
   return String(value)
+    .replace(/`/gu, "")
     .replace(/\s+/gu, " ")
     .replace(/<!--/gu, "&lt;!--")
     .replace(/-->/gu, "--&gt;")
@@ -520,10 +534,14 @@ function sanitizeStructuredInline(value) {
     .trim();
 }
 // Sanitize text rendered inside an inline backtick code span (angle labels,
-// file refs): additionally strip backticks so an embedded backtick cannot close
-// the span and break out into raw markdown.
+// file refs, severity/verdict/disposition). Backtick-stripping now lives in
+// sanitizeStructuredInline itself (above) so it applies uniformly to every
+// field, not only the ones already wrapped in a span; this wrapper is kept as
+// a distinct name to document call-site intent (value is placed inside
+// `` `...` ``, so it must never itself carry a backtick that could close the
+// span early), not because it does any additional work.
 function sanitizeStructuredCodeSpan(value) {
-  return sanitizeStructuredInline(String(value).replace(/`/gu, ""));
+  return sanitizeStructuredInline(value);
 }
 // Normalize a single finding object into a deterministic render entry, or null
 // when it carries no usable summary.
@@ -558,13 +576,13 @@ function normalizeStructuredFinding(f) {
   return entry;
 }
 // Map a severity to its sort rank. Known severities follow
-// STRUCTURED_FINDINGS_SEVERITY_ORDER (must-fix → worth-fixing-now → defer);
+// SEVERITY_ORDER (must-fix → worth-fixing-now → defer);
 // unknown/missing severities map to a LARGE rank so they sort LAST, never
 // before must-fix. (indexOf alone would give an unknown severity rank -1,
 // floating it ABOVE must-fix and hiding the highest-priority items below it.)
 function severitySortRank(severity) {
-  const idx = STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(severity);
-  return idx === -1 ? STRUCTURED_FINDINGS_SEVERITY_ORDER.length : idx;
+  const idx = SEVERITY_ORDER.indexOf(severity);
+  return idx === -1 ? SEVERITY_ORDER.length : idx;
 }
 // Sort findings by severity (must-fix first, unknown/missing last) for
 // deterministic output, preserving input order within a severity.
@@ -781,7 +799,7 @@ export function renderStructuredFindings(angles) {
 function buildStructuredFindingsDigest(angles, severityCounts) {
   const angleTotal = angles.reduce((sum, a) => sum + a.findings.length, 0);
   const countedTotal = severityCounts && typeof severityCounts === "object" && !Array.isArray(severityCounts)
-    ? STRUCTURED_FINDINGS_SEVERITY_ORDER.reduce((sum, sev) => {
+    ? SEVERITY_ORDER.reduce((sum, sev) => {
         const n = severityCounts[sev];
         return sum + (Number.isFinite(n) ? n : 0);
       }, 0)
@@ -1321,7 +1339,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && activeGateConfig.blockCleanOnFindingSeverities
     && activeGateConfig.blockCleanOnFindingSeverities.length > 0
   ) {
-    const observedCounts = Object.fromEntries(STRUCTURED_FINDINGS_SEVERITY_ORDER.map((sev) => [sev, 0]));
+    const observedCounts = Object.fromEntries(SEVERITY_ORDER.map((sev) => [sev, 0]));
     for (const angle of structuredFindings) {
       for (const f of angle.findings) {
         if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
