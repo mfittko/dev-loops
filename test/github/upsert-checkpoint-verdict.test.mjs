@@ -1934,8 +1934,9 @@ test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-s
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot set verdict "clean"/);
     // draft_gate blocks on must-fix only (worth-fixing-now is recorded but
-    // non-blocking here); a must-fix count above zero is enough to reject.
-    assert.match(payload.error, /must-fix/);
+    // non-blocking here); assert the exact bracketed list so this fails if
+    // worth-fixing-now ever becomes blocking again for draft_gate.
+    assert.match(payload.error, /blocking severities \[must-fix\]\./);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1963,7 +1964,7 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-summary", "no issues found",
+      "--findings-summary", "0 must-fix; 1 worth-fixing-now recorded (non-blocking), 1 defer",
       "--next-action", "mark ready for review",
       // draft_gate blocks on must-fix only: a non-zero worth-fixing-now count
       // (like the non-zero defer count) must not block a clean verdict.

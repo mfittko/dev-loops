@@ -2638,7 +2638,7 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
   const sortedSet = (arr) => [...new Set(arr)].sort();
 
   for (const gate of /** @type {const} */ (["draft", "preApproval", "spike"])) {
-    test(`${gate} gate: resolved angle set and mandatory set match pre-#1404; blockCleanOnFindingSeverities matches the current baseline`, async () => {
+    test(`${gate} gate: resolved angle set and mandatory set match pre-#1404; blockCleanOnFindingSeverities matches the pinned baseline (see CURRENT_BLOCK_CLEAN comment above for which gate tracks which)`, async () => {
       const { loadDevLoopConfig, resolveGateAngles, resolveGateConfig } = await import("../src/config/config.mjs");
       const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
       assert.deepEqual(errors, []);
@@ -3205,6 +3205,34 @@ test("resolveGateDispatchMode: under threshold + only non-blocking finding → i
   });
   assert.equal(result.mode, "inline");
   assert.equal(result.reason, "under_threshold");
+});
+
+test("resolveGateDispatchMode: draft gate under threshold + worth-fixing-now-only inline finding → stays inline (must-fix-only blocking set)", () => {
+  const config = {
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix"] } },
+  };
+  const result = resolveGateDispatchMode(config, "draft", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["worth-fixing-now"],
+  });
+  assert.equal(result.mode, "inline");
+  assert.equal(result.reason, "under_threshold");
+});
+
+test("resolveGateDispatchMode: draft gate under threshold + must-fix inline finding → escalated", () => {
+  const config = {
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix"] } },
+  };
+  const result = resolveGateDispatchMode(config, "draft", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["must-fix"],
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "escalated");
 });
 
 test("GATE_FULL_LABEL is gate:full", () => {
