@@ -282,7 +282,7 @@ Do not treat `fix applied locally` as the end of the loop when the workflow also
 
 Per `COPILOT-FOLLOWUP-GATE-COMMENT-CANONICAL` above, run:
 
-For a gate that ran via the fan-out/fan-in sub-loop, pass the structured per-angle review results via `--findings-json` (NOT the wall-of-text `--findings-summary`). That JSON file comes from the sanctioned fan-in CLI — `dev-loops gate consolidate-fanin --findings-dir <dir> --gate <gate> --out <path>` — which consolidates the per-angle artifacts the fan-out reviewers wrote (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) into exactly the nested shape `--findings-json` accepts; never hand-author or mutate it with an inline interpreter. The helper renders a readable per-angle breakdown and derives the single-line `**Findings summary:**` digest itself:
+For a gate that ran via the fan-out/fan-in sub-loop, pass the structured per-angle review results via `--findings-json` (NOT the wall-of-text `--findings-summary`). That JSON file comes from the sanctioned fan-in CLI — `dev-loops gate consolidate-fanin --findings-dir <dir> --gate <gate> --out <path> --ledger-out <ledger-path>` — which consolidates the per-angle artifacts the fan-out reviewers wrote (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) into exactly the nested shape `--findings-json` accepts; never hand-author or mutate it with an inline interpreter. The helper renders a readable per-angle breakdown and derives the single-line `**Findings summary:**` digest itself:
 
 ```sh
 node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \

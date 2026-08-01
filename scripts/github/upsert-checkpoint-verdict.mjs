@@ -69,6 +69,15 @@ Required:
                                             --findings-summary/--findings-file for
                                             the rendered body. Intended for
                                             --execution-mode fanout_fanin.
+                                            --verdict clean is REJECTED when these
+                                            per-angle findings themselves carry an
+                                            unresolved (disposition missing or
+                                            "accepted-for-fix") finding at a severity
+                                            in the gate's blockCleanOnFindingSeverities
+                                            — regardless of --findings-severity-counts;
+                                            a "disputed"/"operator_acknowledged"
+                                            disposition on that same finding does not
+                                            trip this check.
   --next-action <text>
 Optional:
   --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
@@ -1255,7 +1264,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // parsed findings themselves: a marker-collapsed round can only UNDERcount
   // its own findings (a marker never invents a finding), so tallying
   // structuredFindings and failing when EITHER source shows a blocking
-  // severity is equivalent to failing on max(supplied, observed).
+  // severity is equivalent to failing on max(supplied, observed). Only tally
+  // findings whose disposition is UNRESOLVED (missing, or the derived
+  // "accepted-for-fix") — the sub-loop contract's clean criterion is "no
+  // findings with a blocking severity REMAIN", and "disputed"/
+  // "operator_acknowledged" are the sanctioned vocabulary for a blocking
+  // finding the fix cycle/operator has already closed out without changing
+  // its severity (write-gate-findings-log.mjs's VALID_DISPOSITIONS); counting
+  // those here would re-block a verdict the operator already resolved.
   if (
     structuredFindings
     && options.verdict === "clean"
@@ -1265,6 +1281,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const observedCounts = Object.fromEntries(STRUCTURED_FINDINGS_SEVERITY_ORDER.map((sev) => [sev, 0]));
     for (const angle of structuredFindings) {
       for (const f of angle.findings) {
+        if (f.disposition && f.disposition !== "accepted-for-fix") continue;
         if (Object.hasOwn(observedCounts, f.severity)) observedCounts[f.severity] += 1;
       }
     }
