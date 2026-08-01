@@ -499,49 +499,52 @@ for (const disposition of RESOLVED_DISPOSITIONS) {
     throw new Error(`RESOLVED_DISPOSITIONS contains "${disposition}", which is not in write-gate-findings-log.mjs's VALID_DISPOSITIONS`);
   }
 }
-// Sanitize free text for a single-line markdown bullet. Strip backticks FIRST
-// (before every other transform) so NO field rendered through this sanitizer —
-// summary included, not only the fields already wrapped in a code span — can
-// carry a stray backtick onto the rendered line: a lone backtick in one field
-// (e.g. summary) would otherwise shift CommonMark's left-to-right backtick
-// pairing and prevent a LATER field's own code span (severity/file/disposition)
-// from ever forming, silently unwrapping it back to raw, unescaped markdown
-// (the exact bypass this comment now documents; see the regression test below
-// for the reproduction). Stripping — not backslash-escaping — is deliberate:
-// escaping would require also pre-doubling any literal backslash already in the
-// value to avoid the escape being absorbed by it, and a bullet's severity/file/
-// disposition fields already drop backticks outright with no loss of meaning
-// (backticks are never semantically load-bearing in an enum label, path, or
-// summary sentence). Collapse whitespace after stripping (LLM text often
-// carries embedded newlines, which would split a bullet across lines, and
-// backtick removal can itself leave a double space to collapse), neutralize
-// HTML-comment delimiters so a finding field cannot smuggle a hidden marker
-// into the rendered body, and neutralize the markdown image-embed form
-// (`![...]`) so a finding field cannot silently embed a remote image (a
-// read-receipt/IP-leak vector when the comment is rendered by a client that
-// auto-loads images). Mirrors post-gate-findings.mjs's HTML-comment/whitespace
-// handling; that sibling copy does not yet carry the backtick-strip or
-// image-embed neutralization added here (tracked separately — this file's
-// renderer is the one that wraps enum fields in a code span and so is the one
-// exposed to the pairing-shift bypass).
-function sanitizeStructuredInline(value) {
+// Sanitize text rendered inside an inline backtick code span (angle labels,
+// file refs, severity/verdict/disposition). Strip backticks FIRST (before
+// collapsing whitespace) so NO field rendered through this sanitizer can carry
+// a stray backtick onto the rendered line: a lone backtick in one field would
+// otherwise shift CommonMark's left-to-right backtick pairing and prevent a
+// LATER field's own code span from ever forming, silently unwrapping it back
+// to raw, unescaped markdown (see the pairing-shift regression test below).
+// Stripping — not backslash-escaping — is deliberate: escaping would require
+// also pre-doubling any literal backslash already in the value to avoid the
+// escape being absorbed by it, and these fields never carry semantically
+// load-bearing backticks (enum labels, paths). Beyond backtick-stripping and
+// whitespace-collapsing, this sanitizer does NOT need to neutralize markdown
+// link/image/HTML syntax: the value is placed inside a backtick code span,
+// which CommonMark parses before link/image/HTML syntax, so the whole value —
+// including any embedded `](url)` — renders as inert literal text regardless.
+function sanitizeStructuredCodeSpan(value) {
   return String(value)
     .replace(/`/gu, "")
     .replace(/\s+/gu, " ")
-    .replace(/<!--/gu, "&lt;!--")
-    .replace(/-->/gu, "--&gt;")
-    .replace(/!\[/gu, "!\\[")
     .trim();
 }
-// Sanitize text rendered inside an inline backtick code span (angle labels,
-// file refs, severity/verdict/disposition). Backtick-stripping now lives in
-// sanitizeStructuredInline itself (above) so it applies uniformly to every
-// field, not only the ones already wrapped in a span; this wrapper is kept as
-// a distinct name to document call-site intent (value is placed inside
-// `` `...` ``, so it must never itself carry a backtick that could close the
-// span early), not because it does any additional work.
-function sanitizeStructuredCodeSpan(value) {
-  return sanitizeStructuredInline(value);
+// Sanitize free text for a single-line markdown bullet's summary field. This
+// value is NOT wrapped in a code span (it renders as free prose), so unlike
+// sanitizeStructuredCodeSpan it must also neutralize markdown/HTML syntax the
+// value could otherwise smuggle in: HTML-comment delimiters (a finding field
+// could otherwise inject a hidden marker into the rendered body), the markdown
+// image-embed form `![...](url)` (a read-receipt/IP-leak vector via an
+// auto-loaded remote image), the plain markdown link form `[text](url)` (a
+// live clickable link a reviewer never asked for), and raw HTML tags (which a
+// markdown-to-HTML renderer would otherwise pass through live). Mirrors
+// post-gate-findings.mjs's HTML-comment/whitespace handling; that sibling copy
+// does not yet carry the backtick-strip or link/image/HTML neutralization
+// added here (tracked separately — this file's renderer is the one exposed to
+// the pairing-shift bypass and to arbitrary --findings-json producer input).
+function sanitizeStructuredInline(value) {
+  return sanitizeStructuredCodeSpan(value)
+    .replace(/<!--/gu, "&lt;!--")
+    .replace(/-->/gu, "--&gt;")
+    .replace(/</gu, "&lt;")
+    // Escape a plain link's opening bracket (any `[` NOT already part of an
+    // image's `![`, handled next) so `[text](url)` can never open a live
+    // link. Order matters: this runs BEFORE the image-form escape below so
+    // it can tell an image's `[` (still preceded by a literal `!` here) apart
+    // from a plain link's `[`.
+    .replace(/(?<!!)\[/gu, "\\[")
+    .replace(/!\[/gu, "!\\[");
 }
 // Normalize a single finding object into a deterministic render entry, or null
 // when it carries no usable summary.
