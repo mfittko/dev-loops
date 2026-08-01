@@ -36,9 +36,23 @@ gates:
       - name: renderer-security
         enabled: false
     requireCi: true
+    # Draft gate blocks on must-fix only. With worth-fixing-now also blocking,
+    # this gate did not converge on a non-trivial change: correctness settled
+    # while worth-fixing-now renewed itself every round, because each fix round
+    # creates fresh surface for the next round to review. Measured over eight
+    # rounds on one PR (72 reviewer dispatches), must-fix per round ran
+    # 1,1,7,0,1,3,3,0 while worth-fixing-now ran 6,11,17,14,16,9,12,7.
+    #
+    # worth-fixing-now findings are still recorded in the ledger and the
+    # findings comment; they just stop blocking the draft-to-ready transition.
+    # preApproval below still blocks on both — that is the last bar before
+    # merge, and a finding that survives the draft gate is caught there.
+    #
+    # Interim: the better shape is the full severity set with a round cap, so
+    # the first rounds still block and only a demonstrated plateau softens.
+    # Revisit this once that lands.
     blockCleanOnFindingSeverities:
       - must-fix
-      - worth-fixing-now
   preApproval:
     dynamic:
       subtractive: true

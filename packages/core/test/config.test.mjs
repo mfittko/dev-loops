@@ -2622,8 +2622,14 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     preApproval: ["pr-checklist-matrix", "acceptance-criteria", "yagni", "contradiction-lens"],
     spike: [],
   };
-  const PRE_1404_BLOCK_CLEAN = {
-    draft: ["must-fix", "worth-fixing-now"],
+  // draft's blocking set is NOT the pre-#1404 baseline: it was deliberately
+  // narrowed to must-fix only (see .devloops gates.draft comment / issue
+  // #1527) because worth-fixing-now churns every draft-gate round on a
+  // non-trivial change and never converges. preApproval and spike are still
+  // pinned to their pre-#1404 values — only draft's entry here tracks the
+  // current shipped baseline rather than the pre-#1404 one.
+  const CURRENT_BLOCK_CLEAN = {
+    draft: ["must-fix"],
     preApproval: ["must-fix", "worth-fixing-now"],
     spike: ["must-fix"],
   };
@@ -2639,7 +2645,7 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       const gateConfig = resolveGateConfig(config, gate);
       assert.deepEqual(sortedSet(angles), sortedSet(PRE_1404_ANGLE_SETS[gate]), `${gate} angle set`);
       assert.deepEqual(sortedSet(gateConfig.mandatoryAngles), sortedSet(PRE_1404_MANDATORY_SETS[gate]), `${gate} mandatory set`);
-      assert.deepEqual(sortedSet(gateConfig.blockCleanOnFindingSeverities), sortedSet(PRE_1404_BLOCK_CLEAN[gate]), `${gate} blockCleanOnFindingSeverities`);
+      assert.deepEqual(sortedSet(gateConfig.blockCleanOnFindingSeverities), sortedSet(CURRENT_BLOCK_CLEAN[gate]), `${gate} blockCleanOnFindingSeverities`);
     });
   }
 
