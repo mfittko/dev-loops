@@ -17,6 +17,7 @@ import {
   buildGateContextPath,
   buildGateDiffPath,
   captureDiffFromBase,
+  ISSUE_BODY_ABSENT_SENTINEL,
   main,
   mapGateToConfigKey,
   parseChangedFiles,
@@ -380,6 +381,15 @@ test("parseWriteGateContextCliArgs rejects invalid gate", () => {
   assert.throws(() => parseWriteGateContextCliArgs([
     "--repo", "a/b", "--pr", "1", "--gate", "bad", "--head-sha", "abc1234", "--angles", "[]",
   ]), /gate/);
+});
+
+test("parseWriteGateContextCliArgs rejects a malformed --repo before any network call could happen", () => {
+  assert.throws(() => parseWriteGateContextCliArgs([
+    "--repo", "not-a-slug", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", "[]",
+  ]), /owner\/name/);
+  assert.throws(() => parseWriteGateContextCliArgs([
+    "--repo", "owner/name/extra", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", "[]",
+  ]), /owner\/name/);
 });
 
 test("parseWriteGateContextCliArgs rejects invalid head-sha", () => {
@@ -1768,6 +1778,20 @@ test("buildGateContext with an empty diffOutput leaves diffPath null but still b
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("buildGateContext (programmatic) never stamps scope.acceptanceCriteriaSource — that resolution is CLI-only", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-ac-source-"));
+  try {
+    const config = draftConfig({ dynamicAngles: false });
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff: null, repo: "owner/repo", pr: 47, headSha: "abc1234567890", acceptanceCriteria: "#1" },
+      { repoRoot },
+    );
+    assert.equal(Object.hasOwn(result.artifact.scope, "acceptanceCriteriaSource"), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
 // ---------------------------------------------------------------------------
 // renderBriefingPrefix (Phase 1, #1220) — invariant briefing prefix content
 // ---------------------------------------------------------------------------
@@ -2197,12 +2221,48 @@ test("dogfood: an orchestrator-supplied --prefix-file record verifies clean via 
   }
 });
 
+test("main: --prefix-file never touches GitHub for spec resolution, even with no --pr-body/--issue-body/--acceptance-criteria flags", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await mkdir(path.join(repoRoot, "tmp"), { recursive: true });
+    const prefixPath = path.join(repoRoot, "tmp", "orchestrator-prefix.txt");
+    await writeFile(prefixPath, "# Orchestrator briefing\n\nbytes.\n", "utf8");
+
+    const run = async () => { throw new Error("must not call gh under --prefix-file"); };
+    await main([
+      "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+      "--prefix-file", prefixPath,
+    ], { repoRoot, run });
+
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 91, gate: "draft_gate", headSha }, { repoRoot });
+    assert.ok(artifact, "artifact written without ever resolving a PR/issue spec");
+    assert.equal(artifact.prefixMode, "file");
+    assert.equal(Object.hasOwn(artifact.scope, "acceptanceCriteriaSource"), false, "spec resolution never ran, so the field is never stamped");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Spec-of-record resolution (#1496 / #1511) — the briefing prefix must never
 // state that a PR has no description just because the caller passed no flag.
 // ---------------------------------------------------------------------------
 
-function specStubRun({ prBody = "live PR body", closing = [], issueBody = "live issue body", prFails = false, issueFails = false } = {}) {
+// `issueBodies` (optional) keys per-issue stub bodies by `<repo>#<number>` —
+// e.g. `{ "owner/repo#42": "...", "owner/other#7": "..." }` — so a single stub
+// can answer a multi-issue or cross-repo `closingIssuesReferences` fixture
+// with distinct bodies per issue while `run` still asserts the EXACT repo/
+// number gh was asked for (a wrong-target read is a hard failure, not a
+// silently-accepted stub answer).
+function specStubRun({
+  prBody = "live PR body",
+  closing = [],
+  issueBody = "live issue body",
+  issueBodies = null,
+  prFails = false,
+  issueFails = false,
+} = {}) {
   return async (_command, args) => {
     if (args[0] === "pr" && args[1] === "view") {
       if (prFails) return { code: 1, stdout: "", stderr: "gh: could not resolve PR" };
@@ -2210,22 +2270,32 @@ function specStubRun({ prBody = "live PR body", closing = [], issueBody = "live 
     }
     if (args[0] === "issue" && args[1] === "view") {
       if (issueFails) return { code: 1, stdout: "", stderr: "gh: could not resolve issue" };
-      return { code: 0, stdout: JSON.stringify({ body: issueBody }), stderr: "" };
+      const key = `${args[4]}#${args[2]}`;
+      const body = issueBodies && Object.hasOwn(issueBodies, key) ? issueBodies[key] : issueBody;
+      return { code: 0, stdout: JSON.stringify({ body }), stderr: "" };
     }
     return { code: 1, stdout: "", stderr: `unexpected: ${args.join(" ")}` };
   };
 }
 
-test("resolvePrSpecContext fetches the live PR body and the closing issue's body+ref when no flags are given", async () => {
+test("resolvePrSpecContext fetches the live PR body and the closing issue's body+ref when no flags are given (prose-only issue -> linked-issue-unrefined)", async () => {
   const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
   await resolvePrSpecContext(options, { run: specStubRun({ closing: [{ number: 42 }] }) });
   assert.equal(options.prBody, "live PR body");
   assert.equal(options.issueBody, "live issue body");
   assert.equal(options.acceptanceCriteria, "#42");
+  assert.equal(options.acceptanceCriteriaSource, "linked-issue-unrefined", "the stub issue body is prose-only: no AC/DoD section");
+});
+
+test("resolvePrSpecContext: a linked issue with a real Acceptance criteria section records acceptanceCriteriaSource=linked-issue (AC4 of #1496)", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, {
+    run: specStubRun({ closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n\n- [ ] does the thing\n" }),
+  });
   assert.equal(options.acceptanceCriteriaSource, "linked-issue");
 });
 
-test("resolvePrSpecContext: explicit flags win and never hit the network", async () => {
+test("resolvePrSpecContext: all three spec flags provided short-circuits before any gh call", async () => {
   const options = { repo: "owner/repo", pr: 7, prBody: "flag body", issueBody: "flag issue", acceptanceCriteria: "docs/plan.md" };
   const run = async () => { throw new Error("must not call gh"); };
   await resolvePrSpecContext(options, { run });
@@ -2233,6 +2303,62 @@ test("resolvePrSpecContext: explicit flags win and never hit the network", async
   assert.equal(options.issueBody, "flag issue");
   assert.equal(options.acceptanceCriteria, "docs/plan.md");
   assert.equal(options.acceptanceCriteriaSource, "provided");
+});
+
+test("resolvePrSpecContext: --acceptance-criteria provided without --issue-body never fetches an issue body and keeps source=provided", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: "flag body", issueBody: null, acceptanceCriteria: "docs/plan.md" };
+  const run = async (_command, args) => {
+    if (args[0] === "issue") throw new Error("must not fetch an issue body when the AC pointer was caller-provided");
+    return { code: 0, stdout: JSON.stringify({ body: "unused", closingIssuesReferences: [{ number: 42 }] }), stderr: "" };
+  };
+  await resolvePrSpecContext(options, { run });
+  assert.equal(options.acceptanceCriteria, "docs/plan.md", "caller pointer is never overwritten");
+  assert.equal(options.issueBody, null, "no issue body attached under an unrelated pointer");
+  assert.equal(options.acceptanceCriteriaSource, "provided");
+});
+
+test("resolvePrSpecContext: an umbrella PR closing multiple issues resolves ALL of them, not just the first", async () => {
+  const options = { repo: "owner/repo", pr: 1515, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, {
+    run: specStubRun({
+      closing: [{ number: 1496 }, { number: 1511 }],
+      issueBodies: {
+        "owner/repo#1496": "## Acceptance criteria\n\n- [ ] a\n",
+        "owner/repo#1511": "## Acceptance criteria\n\n- [ ] b\n",
+      },
+    }),
+  });
+  assert.equal(options.acceptanceCriteria, "#1496, #1511");
+  assert.match(options.issueBody, /### #1496[\s\S]*a[\s\S]*### #1511[\s\S]*b/);
+  assert.equal(options.acceptanceCriteriaSource, "linked-issue");
+});
+
+test("resolvePrSpecContext: a cross-repo closing reference resolves the issue in ITS OWN repository, not the PR's", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, {
+    run: specStubRun({
+      closing: [{ number: 12, repository: { owner: { login: "owner" }, name: "other" } }],
+      issueBodies: { "owner/other#12": "## Acceptance criteria\n\n- [ ] x\n" },
+    }),
+  });
+  assert.equal(options.acceptanceCriteria, "owner/other#12");
+  assert.match(options.issueBody, /Acceptance criteria/);
+});
+
+test("resolvePrSpecContext: a resolved linked issue with a genuinely empty body renders a distinguishable sentinel, not an absent section", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, { run: specStubRun({ closing: [{ number: 42 }], issueBody: "" }) });
+  assert.equal(options.issueBody, ISSUE_BODY_ABSENT_SENTINEL);
+  assert.equal(options.acceptanceCriteriaSource, "linked-issue-unrefined");
+});
+
+test("resolvePrSpecContext: a PR whose closing links never registered on GitHub falls back to a Closes/Fixes/Resolves #N body keyword (same detector as the enqueue gate)", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, {
+    run: specStubRun({ prBody: "Closes #99", closing: [], issueBodies: { "owner/repo#99": "## Acceptance criteria\n\n- [ ] a\n" } }),
+  });
+  assert.equal(options.acceptanceCriteria, "#99");
+  assert.equal(options.acceptanceCriteriaSource, "linked-issue");
 });
 
 test("resolvePrSpecContext: a PR that closes no issue records acceptanceCriteriaSource=none (absent, not unfetched)", async () => {
@@ -2284,19 +2410,33 @@ test("CLI: a PR with a body renders that body in the prefix and never the absent
 
 test("CLI: an unresolvable PR read writes NO artifact rather than a bundle asserting the PR has no description", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  // Save/restore discipline mirrors every other fail-closed CLI test (see the
+  // HEAD/worktree/empty-base-diff tests above): a bare hard-assign of 0 outside
+  // try/finally would leak exitCode=1 on a thrown assertion and discard a
+  // genuine failure signal set earlier in the process.
+  const priorExitCode = process.exitCode;
+  process.exitCode = undefined;
   try {
     await main([
       "--repo", "owner/repo", "--pr", "78", "--gate", "draft_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
     ], { repoRoot, run: specStubRun({ prFails: true }) });
-    assert.equal(process.exitCode, 1);
-    process.exitCode = 0;
+    assert.equal(process.exitCode, 1, "fails closed on an unresolvable PR body/spec read");
 
     const artifact = await readGateContext({ repo: "owner/repo", pr: 78, gate: "draft_gate", headSha }, { repoRoot });
     assert.equal(artifact, null, "no artifact written on a fail-closed spec resolution");
   } finally {
+    process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("resolvePrSpecContext: --pr-body provided but the PR is still unreadable (needed for closing-issue resolution) fails closed with wording naming the acceptance-criteria read, not a false 'no description' claim", async () => {
+  const options = { repo: "owner/repo", pr: 7, prBody: "flag body", issueBody: null, acceptanceCriteria: null };
+  await assert.rejects(
+    () => resolvePrSpecContext(options, { run: specStubRun({ prFails: true }) }),
+    /the PR has no acceptance criteria/,
+  );
 });
 
 test("CLI: a PR whose description is genuinely empty renders the truthful absent sentinel", async () => {
@@ -2310,6 +2450,37 @@ test("CLI: a PR whose description is genuinely empty renders the truthful absent
     const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 79, gate: "draft_gate", headSha });
     const text = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
     assert.ok(text.includes(PR_BODY_ABSENT_SENTINEL));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI: a rebuild at the SAME head reuses the already-rendered prefix verbatim instead of re-resolving from GitHub (idempotent rebuild, no split fan-out)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "81", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], { repoRoot, run: specStubRun({ prBody: "first-build body" }) });
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha });
+    const firstText = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.ok(firstText.includes("first-build body"));
+
+    // Second build at the SAME head: the stub PR body has "changed" (as if the
+    // description were edited mid-fan-out) AND the run throws on any gh call —
+    // proving the rebuild neither re-resolves nor picks up the new text.
+    const throwingRun = async () => { throw new Error("must not call gh on an idempotent rebuild"); };
+    await main([
+      "--repo", "owner/repo", "--pr", "81", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], { repoRoot, run: throwingRun });
+
+    const secondText = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.equal(secondText, firstText, "rebuild reuses the exact same prefix bytes");
+    assert.ok(!secondText.includes("second-build body"));
+
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(artifact.prefixMode, "file", "the reused-verbatim path records via the same mechanism as --prefix-file");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

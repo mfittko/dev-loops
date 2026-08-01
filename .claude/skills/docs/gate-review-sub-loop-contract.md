@@ -141,6 +141,30 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     `diffSource` distinguishes a base-derived bundle (`"base"`) from a thin briefing
     (`"none"`), while `diffPath` independently signals whether the persisted full diff is
     available.
+  - **`scope.acceptanceCriteriaSource` posture (CLI-only spec resolution, #1496/#1511).**
+    `write-gate-context.mjs` resolves the PR body, the PR's closing issue reference(s), and
+    each closed issue's body from GitHub itself when the caller omits `--pr-body`/
+    `--issue-body`/`--acceptance-criteria` — a caller that simply forgets a flag can no longer
+    seed every fan-out reviewer with the false claim that a PR has no description or no
+    acceptance criteria. An unresolvable read (PR or a linked issue) FAILS CLOSED: a named
+    error, no artifact written — the bundle must never assert absence when resolution merely
+    failed. `scope.acceptanceCriteriaSource` records how `scope.acceptanceCriteria` came to
+    be: `"provided"` (caller flag, regardless of whether an issue body was independently
+    supplied too), `"linked-issue"` (resolved from the closing reference(s), and at least one
+    resolved issue carries a real Acceptance-criteria/DoD section or linked refinement doc),
+    `"linked-issue-unrefined"` (resolved, but every linked issue is prose-only — distinguishes
+    "linked, no refinement artifact" from "not fetched"), or `"none"` (the PR closes no
+    issue). The field is CLI-only: programmatic `buildGateContext`/`writeGateContext` callers
+    omit it entirely, so a null `acceptanceCriteria` WITHOUT this field means "never
+    resolved" and one WITH it means "genuinely absent" or "genuinely unrefined". An umbrella
+    PR closing several issues resolves ALL of them (not just the first), concatenated under
+    one `## Linked issue <ref1>, <ref2>` section with a `### <ref>` sub-heading per issue; a
+    cross-repo closing reference (`Closes owner/other#N`) resolves against ITS OWN
+    repository, not the PR's. `--prefix-file` (an orchestrator recording its own
+    already-rendered prefix) skips this resolution entirely — those fields could never reach
+    the recorded bytes. Because the resolved PR/issue text is embedded in the rendered
+    prefix, a same-head rebuild after a live description edit yields different prefix bytes;
+    this does not affect the frozen artifact of an already-completed gate pass.
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
