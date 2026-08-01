@@ -412,7 +412,11 @@ offending angles) when any per-angle artifact is malformed or itself blocked
 — a blocked fan-in never yields a publishable findings shape; fix or re-run
 the offending reviewer first. (An angle whose artifact was never written is
 invisible to the CLI — mandatory-angle coverage is enforced downstream by
-`upsert-checkpoint-verdict.mjs`.)
+`upsert-checkpoint-verdict.mjs`.) `--out`/`--ledger-out` are also rejected at
+parse time (exit 1) when they resolve to the same path as each other, or when
+either resolves to a direct top-level sibling of the artifacts inside
+`--findings-dir` (a subdirectory of `--findings-dir` is fine — artifact
+discovery is top-level-only).
 
 The render budget applies ONLY to the visible-comment shape (`--out`) — never
 to the ledger (`--ledger-out`, always written in FULL, never budgeted). Fit is
@@ -421,7 +425,11 @@ measured by actually rendering a candidate `--out` shape through
 length-exceeded throw, not an approximated size, so a shape this CLI accepts
 never later throws when `upsert-checkpoint-verdict.mjs` posts it. A round too
 large to render even at minimum summary length exits 0 with
-`commentBudgetExceeded: true` and degrades `--out` through four tiers. Which
+`commentBudgetExceeded: true` and degrades `--out` through four tiers, PROVIDED
+`--ledger-out` was also given; without `--ledger-out` the same over-budget
+round instead FAILS CLOSED (exit 1) at the point it would degrade, since a
+degraded round's only durable, unbudgeted record is the ledger and there would
+be nowhere left to keep the findings. Which
 tier an angle lands on is NOT decided by whether that angle's own marker fits
 in isolation: angles are upgraded one at a time, in order of each angle's
 most blocking severity (ties by artifact index), and an upgrade is kept only
@@ -464,13 +472,17 @@ obligation on the agent, not a machine-enforced one by default:
 `write-gate-findings-log.mjs` only runs its provenance/mandatory-angle check
 when `--provenance` is actually supplied at write time,
 `gates.requireFanoutProvenance` (which would make that flag required) defaults
-to `false`, and the CI gate-evidence verifier calls
-`detect-checkpoint-evidence.mjs` with `--skip-fanout-ledger-check`, skipping
-the whole ledger/provenance layer. A tier-4 round therefore has ZERO
-machine-checked mandatory-angle coverage unless the repo has opted into
-`gates.requireFanoutProvenance` — pass `--provenance` on the tier-4 ledger
-write regardless, since it is the only record of mandatory-angle coverage this
-round can have, enforced or not. `commentBudgetExceeded: true` is set on every degraded round
+to `false`. That opt-in is NOT the only check, though: for any `fanout_fanin`
+verdict where the gate configures mandatory angles,
+`detect-checkpoint-evidence.mjs` enforces mandatory-angle coverage from the
+ledger's recorded provenance BY DEFAULT — a ledger with absent or invalid
+provenance fails closed there regardless of `requireFanoutProvenance`. Only
+the CI gate-evidence verifier bypasses this, by calling
+`detect-checkpoint-evidence.mjs` with `--skip-fanout-ledger-check`; the
+sanctioned pre-merge invocation runs without that flag, so the check is live
+on the merge path by default. Pass `--provenance` on the tier-4 ledger write
+regardless, since it is the only record of mandatory-angle coverage this round
+can have, and a missing one fails the merge-evidence check closed. `commentBudgetExceeded: true` is set on every degraded round
 (tiers 1-4 alike), so it does NOT distinguish tier 4 from tiers 1-3 — `--out`'s
 existence is the only correct discriminator. On a marker-collapsed round, the
 posted `**Findings summary:**` digest counts the real totals (not the marker

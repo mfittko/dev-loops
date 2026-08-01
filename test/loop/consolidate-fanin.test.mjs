@@ -98,30 +98,41 @@ test("parseConsolidateFaninCliArgs allows distinct --out/--ledger-out paths", ()
   );
 });
 
-// --out/--ledger-out must not resolve INSIDE --findings-dir: the withheld
-// tier rm()s --out outright (deleting a real artifact if it were aliased in),
-// and a .json write under --findings-dir would be picked up as a per-angle
-// findings artifact by the NEXT consolidation of that same directory.
-test("parseConsolidateFaninCliArgs rejects --out resolving inside --findings-dir", () => {
+// --out/--ledger-out must not resolve to a direct TOP-LEVEL sibling of
+// --findings-dir's own artifacts: the withheld tier rm()s --out outright
+// (deleting a real artifact if it were aliased in), and a .json write
+// directly under --findings-dir would be picked up as a per-angle findings
+// artifact by the NEXT consolidation of that same directory.
+test("parseConsolidateFaninCliArgs rejects --out resolving to a direct top-level sibling inside --findings-dir", () => {
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/x/out.json"]),
-    /--out must not resolve inside --findings-dir/,
+    /--out must not resolve to a direct sibling of the artifacts inside --findings-dir/,
   );
 });
 
-test("parseConsolidateFaninCliArgs rejects --ledger-out resolving inside --findings-dir", () => {
+test("parseConsolidateFaninCliArgs rejects --ledger-out resolving to a direct top-level sibling inside --findings-dir", () => {
   assert.throws(
-    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--ledger-out", "/tmp/x/sub/ledger.json"]),
-    /--ledger-out must not resolve inside --findings-dir/,
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--ledger-out", "/tmp/x/ledger.json"]),
+    /--ledger-out must not resolve to a direct sibling of the artifacts inside --findings-dir/,
   );
 });
 
 // A same-named SIBLING directory ("/tmp/x-2") must not be mistaken for a
-// path inside "/tmp/x" — the containment check needs the trailing separator,
-// not a bare string-prefix match.
+// path inside "/tmp/x" — the containment check compares the resolved parent
+// directory exactly, not a bare string-prefix match.
 test("parseConsolidateFaninCliArgs allows --out in a sibling directory that merely shares --findings-dir's name as a prefix", () => {
   assert.doesNotThrow(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/x-2/out.json"]),
+  );
+});
+
+// Artifact discovery only reads TOP-LEVEL *.json entries in --findings-dir
+// (never recursive), so a path in a SUBdirectory of --findings-dir can never
+// be re-read as a per-angle artifact and must stay allowed — this is exactly
+// the shape this module's own tests use for --out/--ledger-out.
+test("parseConsolidateFaninCliArgs allows --out/--ledger-out in a subdirectory of --findings-dir", () => {
+  assert.doesNotThrow(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/x/out/findings.json", "--ledger-out", "/tmp/x/out/ledger.json"]),
   );
 });
 
@@ -1020,6 +1031,22 @@ test("a fan-in too large to render at minimum summary length still writes a comp
         assert.equal(section.findings[0].severity, "worth-fixing-now");
         assert.equal(section.findings[0].disposition, "deferred");
       }
+    }
+
+    // result.angles is the compact per-angle envelope surfaced on stdout
+    // (never marker-collapsed) — it must keep reporting each angle's REAL
+    // pre-marking findingCount even though --out/--ledger-out's own
+    // findingsJson has collapsed every angle to one marker finding. A
+    // regression that derived `angles` from the marked findingsJson instead
+    // of the raw pre-marking artifacts would silently report findingCount: 1
+    // for every angle here.
+    const anglesByName = new Map(result.angles.map((a) => [a.angle, a]));
+    assert.deepEqual(anglesByName.get("pr-description"), { angle: "pr-description", verdict: "clean", findingCount: 0 });
+    for (const angle of angleNames) {
+      assert.deepEqual(
+        anglesByName.get(angle),
+        { angle, verdict: "findings_present", findingCount: FINDINGS_PER_ANGLE },
+      );
     }
 
     // Run the REAL upsert-checkpoint-verdict.mjs validation/render functions
