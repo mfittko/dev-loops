@@ -683,11 +683,77 @@ test("large fan-ins are budgeted so upsert-verdict's whole-block render bound ac
 // "commentBudgetExceeded" says must match what the real renderer accepts.
 // Reverting to an estimate-based check (even a well-tuned one) risks
 // silently reintroducing this exact false negative.
-test("many small file/line/disposition-bearing findings are measured by rendering, so commentBudgetExceeded always matches what actually renders", async () => {
+// Regression for the estimate-vs-render false-negative defect class itself
+// (not just "is the final shape renderable" — a fixture that resolves to the
+// marker tier under BOTH an arithmetic estimate and the real renderer never
+// exercises the discriminating branch). This fixture is a proven false
+// negative under the PRIOR arithmetic estimator (estimateRenderSize, 1800
+// budget from 068bc979): 34 must-fix findings with a trivial 3-char summary
+// ("aaa"), short file ("src/a.mjs") and line (100+j) estimate at 1799 chars
+// (fits comfortably under 1800) but the REAL renderer's structured-findings
+// block is 2002 chars (per-finding decoration — severity/file/line/
+// disposition prefixes — not summary length, pushes it over) and throws.
+// The prior estimator would therefore have shipped this round's 34 RAW
+// findings unmarked with ok:true and no commentBudgetExceeded — exactly the
+// defect this render-based rewrite exists to eliminate. Reverting
+// fitsRenderBudget to that estimate fails the first assertion below (it
+// would report commentBudgetExceeded as falsy).
+test("a false-negative-under-estimation fixture is correctly flagged over budget by the real renderer", async () => {
+  const FINDINGS_PER_ANGLE = 34;
   const files = { "angle-a.json": {
     angle: "angle-a",
     verdict: "findings_present",
-    findings: Array.from({ length: 48 }, (_, j) => ({
+    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "must-fix",
+      summary: "aaa",
+      file: "src/a.mjs",
+      line: 100 + j,
+    })),
+  } };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    assert.equal(result.commentBudgetExceeded, true);
+    // The marked shape this CLI actually emits must render.
+    assertRendersWithoutThrowing(result.findingsJson);
+    // Prove the RAW (unmarked) shape — what an arithmetic estimate would have
+    // shipped unmarked, since it estimates this fixture as under budget —
+    // really is unrenderable, pinning the false-negative reproduction itself.
+    const rawFindingsJson = [{
+      angle: "angle-a",
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "must-fix",
+        summary: "aaa",
+        disposition: "accepted-for-fix",
+        file: "src/a.mjs",
+        line: 100 + j,
+      })),
+    }];
+    assert.throws(
+      () => renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: "0123456789abcdef0123456789abcdef01234567",
+        verdict: "findings_present",
+        findingsSummary: "digest",
+        nextAction: "fix",
+        blockCleanOnFindingSeverities: ["must-fix"],
+        structuredFindings: rawFindingsJson,
+      }),
+      /exceeds \d+ chars/,
+    );
+  });
+});
+
+// Near-boundary UNDER-budget companion: a round that really does fit must
+// stay raw/unmarked (commentBudgetExceeded absent) and render as-is —
+// unconditionally, not only "if the marker path wasn't taken" — so a
+// reversion that starts marking everything (or estimating too
+// conservatively) fails this half of the pair too.
+test("a near-boundary under-budget round stays raw/unmarked and renders", async () => {
+  const files = { "angle-a.json": {
+    angle: "angle-a",
+    verdict: "findings_present",
+    findings: Array.from({ length: 10 }, (_, j) => ({
       severity: "must-fix",
       summary: `tiny finding ${j}`,
       file: `src/module/nested/path/file${j}.mjs`,
@@ -696,15 +762,9 @@ test("many small file/line/disposition-bearing findings are measured by renderin
   } };
   await withFindingsDir(files, async (dir) => {
     const result = await consolidateGateFanin({ findingsDir: dir });
-    // Whichever way it resolved, it must be renderable — this is the actual
-    // contract violated by an under-counting estimate (ok: true shipped with
-    // a shape the real renderer would reject).
+    assert.equal(result.commentBudgetExceeded, undefined);
+    assert.equal(result.findingsJson[0].findings.length, 10);
     assertRendersWithoutThrowing(result.findingsJson);
-    if (!result.commentBudgetExceeded) {
-      // If flagged as fitting, the RAW (unmarked) per-finding shape — not
-      // just a collapsed marker — must be what actually renders under budget.
-      assert.equal(result.findingsJson[0].findings.length, 48);
-    }
   });
 });
 
@@ -921,6 +981,62 @@ test("a fan-in with enough angles that none can afford the verbose marker uses b
   });
 });
 
+// Budget-allocation-by-severity regression: when not every angle can afford
+// the verbose marker, the scarce budget must go to the must-fix-carrying
+// angle first, regardless of filename/artifact-index order. All 13 "defer"
+// angles sort alphabetically BEFORE the one must-fix-carrying angle
+// ("z-mustfix"), so an index/filename-ordered upgrade walk (the prior,
+// reverted behavior) would spend the verbose budget on defer-only angles and
+// leave the must-fix angle bare. Reverting the severity-first ordering back
+// to plain index order fails this test.
+test("the must-fix-carrying angle wins the scarce verbose-marker budget over defer-only angles regardless of file/name order", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const DEFER_ANGLE_COUNT = 13;
+  const files = {};
+  for (let i = 0; i < DEFER_ANGLE_COUNT; i++) {
+    files[`d${String(i).padStart(2, "0")}.json`] = {
+      angle: `defer-angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "defer",
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  files["z-mustfix.json"] = {
+    angle: "mustfix-angle",
+    verdict: "findings_present",
+    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "must-fix",
+      summary: `finding mustfix-${j} ${"z".repeat(150)}`,
+      file: "src/fmustfix.mjs",
+      line: j + 1,
+    })),
+  };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+
+    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
+    const mustFixSummary = byAngle.get("mustfix-angle").findings[0].summary;
+    assert.match(
+      mustFixSummary,
+      new RegExp(`^${FINDINGS_PER_ANGLE} finding\\(s\\) omitted`),
+      "the must-fix-carrying angle must keep the verbose breakdown",
+    );
+
+    // Sanity: this fixture really does force at least one angle to bare —
+    // otherwise the test would pass even with the old, unfixed ordering.
+    const bareCount = [...byAngle.values()].filter(
+      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — see ledger`,
+    ).length;
+    assert.ok(bareCount > 0, "fixture must force at least one angle to bare to actually exercise the allocation choice");
+  });
+});
+
 // Structural-floor regression: a round with far more real angles than the
 // default fan-out cap, wide enough that even ONE bare "N omitted" line per
 // angle cannot fit the render budget — no per-angle shape can, no matter how
@@ -993,5 +1109,77 @@ test("a withheld round removes a stale --out left on disk from a prior round", a
     assert.deepEqual(result.findingsJson, []); // withheld tier
 
     await assert.rejects(() => readFile(outPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Ledger-durability regression: --ledger-out must land on disk even when the
+// --out path itself is unwritable, on BOTH the withheld-tier rm() path and
+// the normal mkdir/writeFile path — the ledger is documented as "ALWAYS
+// complete (never budgeted)" and must never be reachable only through the
+// comment-output path. Reverting to writing --out before --ledger-out fails
+// both of these (the throw from --out aborts the function before the ledger
+// write runs).
+test("a withheld-tier round still writes a complete ledger when --out is an existing directory (rm EISDIR)", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 25;
+  const files = {};
+  for (let i = 0; i < ANGLE_COUNT; i++) {
+    files[`angle${i}.json`] = {
+      angle: `angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "worth-fixing-now",
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  await withFindingsDir(files, async (dir) => {
+    const outPath = path.join(dir, "out-is-a-dir"); // a directory, not a file
+    await mkdir(outPath, { recursive: true });
+    const ledgerPath = path.join(dir, "ledger.json");
+
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath }),
+      { code: "ERR_FS_EISDIR" },
+    );
+
+    // The ledger must still be complete on disk despite the --out failure.
+    const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+  });
+});
+
+test("a marker-tier round still writes a complete ledger when --out's parent directory is blocked by a regular file (mkdir EEXIST)", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 14;
+  const files = {};
+  for (let i = 0; i < ANGLE_COUNT; i++) {
+    files[`angle${i}.json`] = {
+      angle: `angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "worth-fixing-now",
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  await withFindingsDir(files, async (dir) => {
+    const blockingFile = path.join(dir, "blocking-file");
+    await writeFile(blockingFile, "not a directory", "utf8");
+    const outPath = path.join(blockingFile, "findings.json"); // parent is a regular file
+    const ledgerPath = path.join(dir, "ledger.json");
+
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath }),
+      { code: "EEXIST" },
+    );
+
+    // The ledger must still be complete on disk despite the --out failure.
+    const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
   });
 });

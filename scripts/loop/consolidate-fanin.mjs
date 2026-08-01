@@ -259,6 +259,19 @@ function buildAngleMarker(a, verbose) {
 // one at a time, keeping each upgrade only while the WHOLE round still
 // renders — the verbose-vs-bare choice is decided PER ANGLE, not once for
 // the whole round. Returns { commentFindingsJson, withheldOut }.
+// The angle's own worst (most blocking) severity among its real findings, as
+// a SEVERITY_RANK index (0 = must-fix, lower is more severe); a clean angle
+// (no findings) ranks last. Used only to ORDER the greedy upgrade below by
+// decision value, never to change which findings a marker represents.
+function angleWorstSeverityRank(a) {
+  let best = SEVERITY_RANK.length;
+  for (const f of a.findings) {
+    const idx = SEVERITY_RANK.indexOf(f.severity);
+    if (idx !== -1 && idx < best) best = idx;
+  }
+  return best;
+}
+
 function buildBudgetMarkedFindingsJson(findingsJson) {
   const marked = findingsJson.map((a) => buildAngleMarker(a, false));
   if (!fitsRenderBudget(marked)) {
@@ -267,8 +280,17 @@ function buildBudgetMarkedFindingsJson(findingsJson) {
     // fit — no per-angle shape can, no matter how short the text gets.
     return { commentFindingsJson: [], withheldOut: true };
   }
-  for (let i = 0; i < marked.length; i++) {
-    if (findingsJson[i].findings.length === 0) continue; // clean angle, untouched
+  // Upgrade angles to the verbose breakdown in order of blocking severity
+  // (must-fix carriers first), not artifact-index/filename order — the
+  // scarce comment budget must land on the angles whose omitted findings
+  // carry the most decision weight, not on whichever angle happens to sort
+  // first alphabetically. Ties break by index, so the order stays
+  // deterministic.
+  const upgradeOrder = findingsJson
+    .map((_, i) => i)
+    .filter((i) => findingsJson[i].findings.length > 0)
+    .sort((i, j) => angleWorstSeverityRank(findingsJson[i]) - angleWorstSeverityRank(findingsJson[j]) || i - j);
+  for (const i of upgradeOrder) {
     const bare = marked[i];
     marked[i] = buildAngleMarker(findingsJson[i], true);
     if (!fitsRenderBudget(marked)) {
@@ -614,6 +636,15 @@ export async function consolidateGateFanin(options) {
     ...(wholeRoundFits ? {} : { commentBudgetExceeded: true }),
   };
 
+  // --ledger-out is the durable, always-complete audit trail and must land on
+  // disk before any --out I/O runs: --out's directory/rm can throw on a bad
+  // caller-supplied path (EISDIR, EEXIST, EACCES, ...), and that throw must
+  // never suppress the ledger this CLI exists to guarantee (see the
+  // --ledger-out doc above: "ALWAYS complete (never budgeted)").
+  if (options.ledgerOut !== undefined) {
+    await mkdir(path.dirname(options.ledgerOut), { recursive: true });
+    await writeFile(options.ledgerOut, `${JSON.stringify(findings, null, 2)}\n`, "utf8");
+  }
   if (options.out !== undefined) {
     if (withheldOut) {
       // Never leave a stale --out from an earlier round on disk: a caller
@@ -625,10 +656,6 @@ export async function consolidateGateFanin(options) {
       await mkdir(path.dirname(options.out), { recursive: true });
       await writeFile(options.out, `${JSON.stringify(commentFindingsJson, null, 2)}\n`, "utf8");
     }
-  }
-  if (options.ledgerOut !== undefined) {
-    await mkdir(path.dirname(options.ledgerOut), { recursive: true });
-    await writeFile(options.ledgerOut, `${JSON.stringify(findings, null, 2)}\n`, "utf8");
   }
 
   return result;
