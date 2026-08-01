@@ -1983,6 +1983,86 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
 
 
 
+// The clean-verdict guard trusts --findings-severity-counts alone, so a
+// hand-typed all-zero counts object — the exact placeholder the docs warn
+// against — must not unblock a clean verdict when --findings-json's own
+// per-angle findings carry a blocking severity. Cross-checked directly
+// against the parsed findings, independent of what --findings-severity-counts
+// claims.
+test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json carries must-fix findings even when --findings-severity-counts is all-zero", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-mismatch-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "off-by-one" }] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /Cannot set verdict "clean"/);
+    assert.match(payload.error, /findings-json.*own per-angle findings show unresolved findings/);
+    assert.match(payload.error, /must-fix/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is genuinely all-clean, matching an all-zero --findings-severity-counts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-match-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "clean", findings: [] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts is missing and blocking severities are configured", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-counts-"));
 
@@ -3457,6 +3537,41 @@ test("upsert-checkpoint-verdict does NOT enforce angle coverage for an inline_si
   }
 });
 
+// A degraded (marker-collapsed) fan-in round can undercount by an order of
+// magnitude if the caller forgets --findings-severity-counts, and nothing
+// used to fail closed on a findings_present/blocked round (only --verdict
+// clean required the flag). Require it for every fanout_fanin verdict that
+// supplies structured findings — a fan-in always emits severityCounts, so
+// the flag is always available.
+test("upsert-checkpoint-verdict rejects a fanout_fanin verdict with structured findings but no --findings-severity-counts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-severity-counts-required-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "off-by-one" }] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /requires --findings-severity-counts/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict --findings-json renders structured per-angle findings end-to-end (#898)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-"));
   try {
@@ -3493,6 +3608,7 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":1,"worth-fixing-now":0,"defer":0}',
       "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
     ], { env });
     assert.equal(result.code, 0, result.stderr);
@@ -3604,6 +3720,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present",
       "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":1,"defer":0}',
       "--next-action", "address findings then re-gate",
       "--execution-mode", "fanout_fanin",
     ], { env });
@@ -3642,6 +3759,77 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
     assert.equal(parsed.gate, "pre_approval_gate");
     assert.equal(parsed.verdict, "findings_present");
     assert.equal(parsed.findingsSummary, expectedSummaryLine);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// upsertCheckpointVerdict computes effectiveFindingsSummary (the noop
+// short-circuit's comparison value) via a SEPARATE buildStructuredFindingsDigest
+// call from the one renderGateReviewCommentBody uses to render the posted
+// "**Findings summary:**" line. If those two call sites ever drift apart (e.g.
+// the second argument at the effectiveFindingsSummary call site is dropped),
+// the posted body's digest still shows the raised true total while the noop
+// comparison keeps the marker-collapsed undercount, so `existing.findingsSummary`
+// (parsed back from the posted body) never equals `effectiveFindingsSummary`
+// and every re-invocation on the same head re-edits the gate comment forever.
+// Driving upsertCheckpointVerdict end-to-end with a marker-collapsed round
+// whose --findings-severity-counts raises the total, then presenting an
+// "existing comment" whose body is exactly what a first invocation would have
+// posted, pins both call sites to the same digest.
+test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted digest for a marker-collapsed round with --findings-severity-counts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-digest-noop-"));
+  try {
+    const structuredFindings = [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: "20 finding(s) omitted from this comment (must-fix: 5, worth-fixing-now: 10, defer: 5) — see the disposition ledger", disposition: "accepted-for-fix" }],
+      },
+      { angle: "coverage", verdict: "clean", findings: [] },
+      // draft_gate's configured mandatory angle: must be present for a
+      // fanout_fanin verdict's angle-coverage check to pass.
+      { angle: "pr-description", verdict: "clean", findings: [] },
+    ];
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify(structuredFindings), "utf8");
+    const findingsSeverityCounts = { "must-fix": 5, "worth-fixing-now": 10, defer: 5 };
+
+    // The exact body a first invocation would post — the same
+    // renderGateReviewCommentBody call upsertCheckpointVerdict drives
+    // internally, with the same digest inputs.
+    const desiredBody = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "findings_present",
+      findingsSummary: "ignored in structured mode",
+      nextAction: "fix",
+      executionMode: "fanout_fanin",
+      structuredFindings,
+      findingsSeverityCounts,
+    });
+
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      issueComments: [[{
+        id: 101,
+        body: desiredBody,
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
+        updated_at: "2026-05-31T20:00:00Z",
+      }]],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--findings-severity-counts", JSON.stringify(findingsSeverityCounts),
+      "--next-action", "fix", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.action, "noop", `expected noop (digest call sites coupled), got: ${JSON.stringify(payload)}`);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

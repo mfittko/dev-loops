@@ -229,6 +229,50 @@ test("consolidateGateFanin writes --ledger-out as the flat findings shape (the -
   );
 });
 
+// parseConsolidateFaninCliArgs's --out/--ledger-out same-path guard is a
+// STRING comparison over the CLI's own argv, so it protects only callers that
+// go through the parser. consolidateGateFanin is exported and called directly
+// (as this test file does throughout), so the shared function needs its own
+// identity check right before the destructive --out rm/writeFile — otherwise
+// a programmatic caller, or a same-file ALIAS (case-only spelling on a
+// case-insensitive filesystem, or a symlink) that the parser's string compare
+// cannot catch, still writes the ledger and then destroys it.
+test("consolidateGateFanin rejects --out === --ledger-out even when the CLI parser is bypassed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const samePath = path.join(dir, "out", "same.json");
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, out: samePath, ledgerOut: samePath }),
+        /resolve to the same file/,
+      );
+      // The ledger must still be intact on disk, not deleted by the rm() the
+      // guard exists to prevent from ever running against it.
+      const written = JSON.parse(await readFile(samePath, "utf8"));
+      assert.equal(written.length, 1);
+    },
+  );
+});
+
+test("consolidateGateFanin rejects a --out that is a symlink alias of --ledger-out (same file, different spelling)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const ledgerPath = path.join(dir, "out", "ledger.json");
+      const outAlias = path.join(dir, "aliases", "out-alias.json");
+      await mkdir(path.dirname(ledgerPath), { recursive: true });
+      await mkdir(path.dirname(outAlias), { recursive: true });
+      await symlink(ledgerPath, outAlias);
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, out: outAlias, ledgerOut: ledgerPath }),
+        /resolve to the same file/,
+      );
+      const written = JSON.parse(await readFile(ledgerPath, "utf8"));
+      assert.equal(written.length, 1);
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // recommendation passthrough + length cap
 // ---------------------------------------------------------------------------
@@ -676,8 +720,8 @@ test("--out rejects a whitespace-only value at parse time", () => {
 // items, mixed nested+flat) is a different failure class entirely and must
 // propagate, not be silently reported as an over-budget round — which would
 // otherwise degrade a malformed-input defect to a withheld/marker-collapsed
-// round that still exits 0 (see buildBudgetMarkedFindingsJson's tier-3 --out
-// deletion).
+// round that still exits 0 (see buildBudgetMarkedFindingsJson's tier-4
+// (withheld) --out deletion).
 test("fitsRenderBudget rethrows a non-length-bound error instead of misreporting it as over budget", () => {
   const shapeInvalid = [
     { angle: "correctness", verdict: "findings_present", findings: [] },
@@ -1007,7 +1051,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
     // Full, UN-shrunk text — not just a startsWith prefix, which a
     // whole-round-shrunk-to-the-31-char-floor stub would also satisfy (both
     // start with the same first 25 chars). The pre-shrink snapshot must be
-    // offered as the tier-1 candidate, not the already-crushed array
+    // offered as the tier-1 (real) candidate first, not the already-crushed array
     // fitFindingsToRenderBudget mutated in place while chasing the whole
     // round's budget.
     assert.equal(correctnessFinding.summary, "null deref at foo.mjs:12 when x is undefined", `expected the ORIGINAL, un-shrunk summary to survive, got: ${correctnessFinding.summary}`);
@@ -1080,7 +1124,8 @@ test("a fan-in with enough angles that not all can afford the verbose marker kee
 
 // All-bare tier regression: enough angles that NONE can afford the verbose
 // marker (not even one), so every angle degrades to the bare form — proves
-// tier 2 still functions on its own, independent of the per-angle mix above.
+// tier 3 (bare) still functions on its own, independent of the per-angle mix
+// above.
 test("a fan-in with enough angles that none can afford the verbose marker uses bare everywhere and still renders", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const ANGLE_COUNT = 21;

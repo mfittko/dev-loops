@@ -82,8 +82,11 @@ Optional:
   --findings-severity-counts <json>         JSON object mapping severity to count
                                              (e.g. '{"must-fix":0,"worth-fixing-now":0}').
                                              Required for --verdict clean when
-                                             blockCleanOnFindingSeverities is configured.
-                                             Also, when given alongside --findings-json, its
+                                             blockCleanOnFindingSeverities is configured, and
+                                             for EVERY --execution-mode fanout_fanin verdict
+                                             that also passes --findings-json (a fan-in always
+                                             emits this field, so it is always available).
+                                             When given alongside --findings-json, its
                                              known-severity (must-fix/worth-fixing-now/defer)
                                              values are SUMMED and used as the posted
                                              "Findings summary:" total whenever that sum is
@@ -1248,6 +1251,35 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
     }
   }
+  // The clean-verdict guard above trusts --findings-severity-counts alone, so a
+  // caller can hand-type an all-zero counts object (the exact placeholder the
+  // docs warn against) and pass it even when --findings-json's own per-angle
+  // findings carry a blocking severity. Cross-check directly against the
+  // parsed findings themselves: a marker-collapsed round can only UNDERcount
+  // its own findings (a marker never invents a finding), so tallying
+  // structuredFindings and failing when EITHER source shows a blocking
+  // severity is equivalent to failing on max(supplied, observed).
+  if (
+    structuredFindings
+    && options.verdict === "clean"
+    && activeGateConfig.blockCleanOnFindingSeverities
+    && activeGateConfig.blockCleanOnFindingSeverities.length > 0
+  ) {
+    const observedCounts = Object.fromEntries(STRUCTURED_FINDINGS_SEVERITY_ORDER.map((sev) => [sev, 0]));
+    for (const angle of structuredFindings) {
+      for (const f of angle.findings) {
+        if (Object.hasOwn(observedCounts, f.severity)) observedCounts[f.severity] += 1;
+      }
+    }
+    const blockingObserved = activeGateConfig.blockCleanOnFindingSeverities.filter(
+      (sev) => (observedCounts[sev] ?? 0) > 0,
+    );
+    if (blockingObserved.length > 0) {
+      throw new Error(
+        `Cannot set verdict "clean" for ${options.gate}: --findings-json's own per-angle findings show unresolved findings at blocking severities [${blockingObserved.join(", ")}], regardless of --findings-severity-counts. Fix these findings and re-gate before declaring clean.`,
+      );
+    }
+  }
   // Fan-out angle-coverage enforcement (fail closed): a fanout_fanin verdict's
   // structured per-angle results must cover every configured mandatory angle,
   // and (default) must not name an angle outside the gate's configured pool.
@@ -1288,6 +1320,22 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       if (!options.silent) {
         process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
       }
+    }
+    // The posted "Findings summary:" digest (buildStructuredFindingsDigest) is
+    // CORRECT only when the caller also passes --findings-severity-counts: a
+    // marker-collapsed round (consolidate-fanin's commentBudgetExceeded) replaces
+    // an angle's real findings with ONE synthetic marker finding, so counting
+    // findingsJson.length alone can undercount by an order of magnitude with
+    // nothing failing closed. Previously this flag was required only for a
+    // `--verdict clean` round (blockCleanOnFindingSeverities); a degraded
+    // findings_present/blocked round relied purely on the operator remembering
+    // it. consolidate-fanin always emits "severityCounts" (tiers 1-4 alike), so
+    // the flag is always available whenever --findings-json came from that CLI —
+    // require it for every fanout_fanin verdict that supplies structured findings.
+    if (!options.findingsSeverityCounts) {
+      throw new Error(
+        `--findings-json for ${options.gate} (execution-mode fanout_fanin) requires --findings-severity-counts: the posted "Findings summary:" digest undercounts on a marker-collapsed round otherwise. Pass consolidate-fanin's own "severityCounts" field (always the true, unbudgeted totals).`,
+      );
     }
   }
   // --findings-json takes precedence; when structured findings are present, do not

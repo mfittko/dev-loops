@@ -288,12 +288,13 @@ function buildAngleMarker(a, verbose) {
 // the bare marker (the smallest possible per-angle shape) so an early,
 // single render check tells us whether ANY per-angle shape can fit at all
 // (tier 4 below). If bare-everywhere fits, greedily upgrade angles one at a
-// time in blocking-severity order, trying that angle's REAL (already
-// minimum-shrunk) findings before its verbose marker — a marker is a
-// compression and must never replace real content with something bigger
-// (a narrow angle's real findings are often shorter than either marker); the
-// bare form from the initial pass is the fallback whenever neither real nor
-// verbose fits alongside every other angle's current marker. Every upgrade
+// time in blocking-severity order, trying that angle's REAL findings (the
+// pre-shrink original first, then the whole-round-shrunk form) before its
+// verbose marker — a marker is a compression and must never replace real
+// content with something bigger (a narrow angle's real findings are often
+// shorter than either marker); the bare form from the initial pass is the
+// fallback whenever neither real form nor the verbose marker fits alongside
+// every other angle's current marker. Every upgrade
 // is kept only while the WHOLE round still renders. Returns
 // { commentFindingsJson, withheldOut }.
 // The angle's own worst (most blocking) severity among its real findings, as
@@ -713,6 +714,25 @@ export async function consolidateGateFanin(options) {
   if (options.ledgerOut !== undefined) {
     await mkdir(path.dirname(options.ledgerOut), { recursive: true });
     await writeFile(options.ledgerOut, `${JSON.stringify(findings, null, 2)}\n`, "utf8");
+  }
+  // parseConsolidateFaninCliArgs already rejects an --out/--ledger-out pair
+  // that resolves to the identical STRING, but a programmatic caller of this
+  // function (e.g. a test, or another script) can skip that parser entirely,
+  // and even a CLI caller can defeat a string comparison with a same-file
+  // ALIAS: a case-only spelling difference on a case-insensitive filesystem
+  // (APFS/NTFS default), or a symlink/hardlink. Re-check by file IDENTITY
+  // here, right before the destructive --out rm/writeFile, so every caller of
+  // this shared function is protected regardless of how it got here. Both
+  // paths must already exist (the ledger write above just created --ledger-out)
+  // for dev+ino to be comparable; a nonexistent --out is never the same file.
+  if (options.out !== undefined && options.ledgerOut !== undefined) {
+    const [outStat, ledgerStat] = await Promise.all([
+      stat(options.out).catch(() => null),
+      stat(options.ledgerOut).catch(() => null),
+    ]);
+    if (outStat && ledgerStat && outStat.dev === ledgerStat.dev && outStat.ino === ledgerStat.ino) {
+      throw new Error(`--out ${JSON.stringify(options.out)} and --ledger-out ${JSON.stringify(options.ledgerOut)} resolve to the same file on disk`);
+    }
   }
   if (options.out !== undefined) {
     if (withheldOut) {
