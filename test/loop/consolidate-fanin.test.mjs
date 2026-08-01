@@ -34,6 +34,30 @@ function assertRendersWithoutThrowing(findingsJson) {
   assert.ok(typeof body === "string" && body.length > 0);
 }
 
+// Shared wide-angle fixture: `angleCount` angles, each carrying
+// `findingsPerAngle` findings whose summary is padded well past the
+// render-budget shrink floor — used by every test below that needs a round
+// large enough to force some degree of budget degradation. The exact
+// generated shape (padding length, filename pattern) is calibrated against
+// the real renderer (see fitsRenderBudget); retune HERE (once) if the
+// marker/renderer text changes, rather than in each call site.
+function wideAngleFiles({ angleCount, findingsPerAngle = 30, severity = "worth-fixing-now" }) {
+  const files = {};
+  for (let i = 0; i < angleCount; i++) {
+    files[`angle${i}.json`] = {
+      angle: `angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: findingsPerAngle }, (_, j) => ({
+        severity,
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  return files;
+}
+
 async function withFindingsDir(files, fn) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-"));
   try {
@@ -355,6 +379,34 @@ test("a finding summary/recommendation over 2000 chars is truncated with a plain
       const nested = result.findingsJson.find((a) => a.angle === "scope").findings[0];
       assert.equal(nested.recommendation.length, 2000);
       assert.ok(nested.recommendation.endsWith(" …"));
+    },
+  );
+});
+
+// Regression (renderer-security, PR#1513 gate review): unlike summary/
+// recommendation, `file` was previously copied through verbatim with no
+// length bound — a path reference never legitimately needs anywhere near
+// MAX_FINDING_TEXT_LENGTH, and fitFindingsToRenderBudget only shrinks
+// summary, so an oversized `file` could not be compressed and would force
+// even a short, real finding into the marker/withheld tiers.
+test("a finding's oversized file reference is truncated with a plain ellipsis suffix, never left unbounded", async () => {
+  const longFile = "f".repeat(400);
+  await withFindingsDir(
+    {
+      "scope.json": {
+        angle: "scope",
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: "short", file: longFile }],
+      },
+    },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      const flat = result.findings[0];
+      assert.equal(flat.files[0].length, 300);
+      assert.ok(flat.files[0].endsWith(" …"));
+      const nested = result.findingsJson.find((a) => a.angle === "scope").findings[0];
+      assert.equal(nested.file.length, 300);
+      assert.ok(nested.file.endsWith(" …"));
     },
   );
 });
@@ -830,7 +882,7 @@ test("large fan-ins are budgeted so upsert-verdict's whole-block render bound ac
 // budget from 068bc979): 34 must-fix findings with a trivial 3-char summary
 // ("aaa"), short file ("src/a.mjs") and line (100+j) estimate at 1799 chars
 // (fits comfortably under 1800) but the REAL renderer's structured-findings
-// block is 2002 chars (per-finding decoration — severity/file/line/
+// block is over 2000 chars (per-finding decoration — severity/file/line/
 // disposition prefixes — not summary length, pushes it over) and throws.
 // The prior estimator would therefore have shipped this round's 34 RAW
 // findings unmarked with ok:true and no commentBudgetExceeded — exactly the
@@ -904,16 +956,17 @@ test("a comfortably under-budget round stays raw/unmarked and renders", async ()
   });
 });
 
-// Near-boundary UNDER-budget companion to the false-negative fixture above: 33
+// Near-boundary UNDER-budget companion to the false-negative fixture above: 31
 // of the SAME shape (must-fix, 3-char summary, "src/a.mjs", 3-digit line)
-// renders at 1944 chars — just 56 chars of headroom, since the 34th (the
-// false-negative fixture) is exactly what tips it to 2002 and throws. A round
-// that really does fit this close to the bound must still stay raw/unmarked
-// (commentBudgetExceeded absent) and render as-is — unconditionally, not only
-// "if the marker path wasn't taken" — so a reversion that starts marking
-// everything, or an over-conservative estimate, fails this half of the pair.
+// renders at 1954 chars — just 46 chars of headroom, since one more (32)
+// is exactly what tips it to 2016 and throws (measured against the real
+// renderer; see fitsRenderBudget). A round that really does fit this close to
+// the bound must still stay raw/unmarked (commentBudgetExceeded absent) and
+// render as-is — unconditionally, not only "if the marker path wasn't taken"
+// — so a reversion that starts marking everything, or an over-conservative
+// estimate, fails this half of the pair.
 test("a near-boundary under-budget round (one finding short of the false-negative fixture's throw) stays raw/unmarked and renders", async () => {
-  const FINDINGS_PER_ANGLE = 33;
+  const FINDINGS_PER_ANGLE = 31;
   const files = { "angle-a.json": {
     angle: "angle-a",
     verdict: "findings_present",
@@ -1245,19 +1298,7 @@ test("an angle whose original text is too long but whose whole-round-shrunk form
 test("a fan-in with enough angles that not all can afford the verbose marker keeps it on the ones that fit and uses bare only where it doesn't", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const ANGLE_COUNT = 14;
-  const files = {};
-  for (let i = 0; i < ANGLE_COUNT; i++) {
-    files[`angle${i}.json`] = {
-      angle: `angle-${i}`,
-      verdict: "findings_present",
-      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "worth-fixing-now",
-        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
-        file: `src/f${i}.mjs`,
-        line: j + 1,
-      })),
-    };
-  }
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
     assert.equal(result.ok, true);
@@ -1295,20 +1336,8 @@ test("a fan-in with enough angles that not all can afford the verbose marker kee
 // above.
 test("a fan-in with enough angles that none can afford the verbose marker uses bare everywhere and still renders", async () => {
   const FINDINGS_PER_ANGLE = 30;
-  const ANGLE_COUNT = 21;
-  const files = {};
-  for (let i = 0; i < ANGLE_COUNT; i++) {
-    files[`angle${i}.json`] = {
-      angle: `angle-${i}`,
-      verdict: "findings_present",
-      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "worth-fixing-now",
-        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
-        file: `src/f${i}.mjs`,
-        line: j + 1,
-      })),
-    };
-  }
+  const ANGLE_COUNT = 20;
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
     assert.equal(result.ok, true);
@@ -1392,19 +1421,7 @@ test("the must-fix-carrying angle wins the scarce verbose-marker budget over def
 test("a fan-in with far more angles than even bare markers can fit withholds --out instead of emitting an unrenderable shape", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const ANGLE_COUNT = 25;
-  const files = {};
-  for (let i = 0; i < ANGLE_COUNT; i++) {
-    files[`angle${i}.json`] = {
-      angle: `angle-${i}`,
-      verdict: "findings_present",
-      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "worth-fixing-now",
-        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
-        file: `src/f${i}.mjs`,
-        line: j + 1,
-      })),
-    };
-  }
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const outPath = path.join(dir, "out", "findings.json");
     const ledgerPath = path.join(dir, "out", "ledger.json");
@@ -1436,19 +1453,7 @@ test("a fan-in with far more angles than even bare markers can fit withholds --o
 test("an over-budget round with no --ledger-out fails closed instead of returning ok:true over zero durable evidence", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const ANGLE_COUNT = 25;
-  const files = {};
-  for (let i = 0; i < ANGLE_COUNT; i++) {
-    files[`angle${i}.json`] = {
-      angle: `angle-${i}`,
-      verdict: "findings_present",
-      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "worth-fixing-now",
-        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
-        file: `src/f${i}.mjs`,
-        line: j + 1,
-      })),
-    };
-  }
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const outPath = path.join(dir, "out", "findings.json");
     await assert.rejects(
@@ -1468,19 +1473,7 @@ test("an over-budget round with no --ledger-out fails closed instead of returnin
 test("a withheld round removes a stale --out left on disk from a prior round", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const ANGLE_COUNT = 25;
-  const files = {};
-  for (let i = 0; i < ANGLE_COUNT; i++) {
-    files[`angle${i}.json`] = {
-      angle: `angle-${i}`,
-      verdict: "findings_present",
-      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "worth-fixing-now",
-        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
-        file: `src/f${i}.mjs`,
-        line: j + 1,
-      })),
-    };
-  }
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const outPath = path.join(dir, "out", "findings.json");
     await mkdir(path.dirname(outPath), { recursive: true });
@@ -1506,19 +1499,7 @@ test("a withheld round removes a stale --out left on disk from a prior round", a
 test("a withheld-tier round still writes a complete ledger when --out is an existing directory (rm EISDIR)", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const ANGLE_COUNT = 25;
-  const files = {};
-  for (let i = 0; i < ANGLE_COUNT; i++) {
-    files[`angle${i}.json`] = {
-      angle: `angle-${i}`,
-      verdict: "findings_present",
-      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "worth-fixing-now",
-        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
-        file: `src/f${i}.mjs`,
-        line: j + 1,
-      })),
-    };
-  }
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const outPath = path.join(dir, "out-is-a-dir"); // a directory, not a file
     await mkdir(outPath, { recursive: true });
@@ -1538,19 +1519,7 @@ test("a withheld-tier round still writes a complete ledger when --out is an exis
 test("a marker-tier round still writes a complete ledger when --out's parent directory is blocked by a regular file (mkdir EEXIST)", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const ANGLE_COUNT = 14;
-  const files = {};
-  for (let i = 0; i < ANGLE_COUNT; i++) {
-    files[`angle${i}.json`] = {
-      angle: `angle-${i}`,
-      verdict: "findings_present",
-      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "worth-fixing-now",
-        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
-        file: `src/f${i}.mjs`,
-        line: j + 1,
-      })),
-    };
-  }
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const blockingFile = path.join(dir, "blocking-file");
     await writeFile(blockingFile, "not a directory", "utf8");

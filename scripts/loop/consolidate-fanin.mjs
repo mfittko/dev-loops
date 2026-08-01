@@ -55,7 +55,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
-import { VALID_SEVERITIES, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { SEVERITY_ORDER, VALID_SEVERITIES, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--repo-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
@@ -76,14 +76,16 @@ Optional:
                                  rather than silently falling back to the shipped default severities.
   --out <path>                  Write the nested per-angle "findingsJson" shape (below) to this
                                  path as JSON — the exact input upsert-checkpoint-verdict.mjs's
-                                 --findings-json accepts. Once the whole round is over the
-                                 gate-comment render budget, this file degrades through the four
-                                 tiers documented in the Gate Review Sub-Loop Contract's Phase 3
-                                 (skills/docs/gate-review-sub-loop-contract.md) — REMOVED (deleted,
-                                 not skipped) in the rare tier-4/withheld case. --ledger-out is
-                                 unaffected either way. A round over the render budget FAILS CLOSED
-                                 (exit 1) when --ledger-out was not also given — a degraded round
-                                 otherwise has no durable record of its findings anywhere.
+                                 --findings-json accepts. Once the whole round is still over the
+                                 gate-comment render budget AT MINIMUM SUMMARY LENGTH (a round that
+                                 fits once its summaries are shrunk never degrades), this file
+                                 degrades through the four tiers documented in the Gate Review
+                                 Sub-Loop Contract's Phase 3 (skills/docs/gate-review-sub-loop-contract.md)
+                                 — REMOVED (deleted, not skipped) in the rare tier-4/withheld case.
+                                 --ledger-out is unaffected either way. A round still over the render
+                                 budget at minimum summary length FAILS CLOSED (exit 1) when
+                                 --ledger-out was not also given — a degraded round otherwise has no
+                                 durable record of its findings anywhere.
   --ledger-out <path>            Write the flat "findings" shape (below) to this path as JSON — the
                                  exact --findings-file input write-gate-findings-log.mjs and
                                  post-gate-findings.mjs accept. Rejected at parse time (exit 1) when
@@ -116,8 +118,9 @@ Output (stdout, JSON):
   below. Every output finding's "disposition" is DERIVED from severity (accepted-for-fix for a
   blocking severity, deferred otherwise) — an input finding's own "disposition" is never honored,
   including on a budget-marker finding (below). A reviewer-provided "recommendation" is carried
-  through to both shapes unchanged. A finding "summary" or "recommendation" longer than 2000 chars
-  is truncated with a plain " …" suffix (never a "[truncated N chars]" marker), and "findingsJson"
+  through to both shapes unchanged. A finding "summary" or "recommendation" longer than 2000 chars,
+  or "file" longer than 300 chars, is truncated with a plain " …" suffix (never a "[truncated N
+  chars]" marker), and "findingsJson"
   (--out) alone is bounded against upsert-checkpoint-verdict.mjs's OWN rendered-block limit — fit is
   measured by actually rendering a candidate through that CLI's normalizeStructuredFindings/
   renderStructuredFindings and catching the throw, not an approximated size. A round over that
@@ -136,7 +139,8 @@ Exit codes:
   1  Argument error, missing/empty --findings-dir, unparseable artifact, schema
      violation, duplicate angle name across artifacts, blocked fan-in (a malformed or
      blocked per-angle artifact), (with --gate) an unloadable/invalid worktree config,
-     or a round over the render budget with --ledger-out not given
+     or a round still over the render budget at minimum summary length with --ledger-out
+     not given
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -151,22 +155,24 @@ const VALID_GATES = new Set(GATE_NAMES);
 // per-field cap alone is not enough — see fitsRenderBudget below, which
 // measures that bound directly rather than duplicating its number here.
 const MAX_FINDING_TEXT_LENGTH = 2000;
+// A finding's "file" is a path reference, not prose — no legitimate path
+// approaches even a fraction of MAX_FINDING_TEXT_LENGTH. Unlike summary/
+// recommendation, "file" was previously copied through unbounded (gate-fanin's
+// consolidateFanin only .trim()s it), so an oversized value could not be
+// compressed by fitFindingsToRenderBudget (which only shrinks summary) and
+// would force a real, short finding into the marker/withheld tiers instead.
+const MAX_FINDING_FILE_LENGTH = 300;
 function truncateFindingText(value, limit = MAX_FINDING_TEXT_LENGTH) {
   if (typeof value !== "string" || value.length <= limit) return value;
   return `${value.slice(0, Math.max(0, limit - 2))} …`;
 }
 
-// VALID_SEVERITIES (imported) is a membership vocabulary only — its Set
-// iteration order is an implementation detail, not a contract; relying on it
-// to mean "most blocking first" would let a future reordering there silently
-// turn a must-fix angle's marker into "defer". This local, explicitly ordered
-// list IS that contract, used only for picking a marker's representative
-// severity and for the severity-count buckets below. Asserted at load time
-// against VALID_SEVERITIES so the two can never silently drift apart.
-const SEVERITY_RANK = ["must-fix", "worth-fixing-now", "defer"];
-if (SEVERITY_RANK.length !== VALID_SEVERITIES.size || SEVERITY_RANK.some((s) => !VALID_SEVERITIES.has(s))) {
-  throw new Error("consolidate-fanin.mjs: SEVERITY_RANK has drifted from @dev-loops/core/loop/gate-fanin's VALID_SEVERITIES");
-}
+// SEVERITY_RANK is gate-fanin's own SEVERITY_ORDER (imported), used only for
+// picking a marker's representative severity and for the severity-count
+// buckets below — most blocking first. Importing the single ordered copy
+// (rather than hand-copying it here) means a future reordering there is
+// automatically reflected here too, instead of silently drifting apart.
+const SEVERITY_RANK = SEVERITY_ORDER;
 
 // Does a candidate findingsJson shape actually fit upsert-checkpoint-verdict.mjs's
 // posted-comment render bound? Measured by RENDERING it through that CLI's own
@@ -645,6 +651,7 @@ export async function consolidateGateFanin(options) {
   for (const f of consolidated.findings) {
     f.summary = truncateFindingText(f.summary);
     if (f.recommendation) f.recommendation = truncateFindingText(f.recommendation);
+    if (f.file) f.file = truncateFindingText(f.file, MAX_FINDING_FILE_LENGTH);
   }
   // toFindingsLogShape's output ({ severity, angle, summary, disposition?, files? })
   // is exactly both write-gate-findings-log.mjs's --findings shape and the flat

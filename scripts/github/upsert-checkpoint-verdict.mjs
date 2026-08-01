@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { checkFanoutAngleCoverage, VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
+import { SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -484,18 +484,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   }
   return options;
 }
-// This local, explicitly ordered list IS the "most blocking first" contract
-// (VALID_SEVERITIES' Set iteration order is an implementation detail, not
-// one) — used for sort order, the digest tally, and the clean-verdict
-// cross-check below. Asserted at load time against @dev-loops/core/loop/
-// gate-fanin's VALID_SEVERITIES (consolidate-fanin.mjs's SEVERITY_RANK gets
-// the same guard) so a severity added there can never silently drop out of
-// this file's digest total or clean-verdict cross-check.
-const STRUCTURED_FINDINGS_SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
-if (STRUCTURED_FINDINGS_SEVERITY_ORDER.length !== VALID_SEVERITIES.size
-    || STRUCTURED_FINDINGS_SEVERITY_ORDER.some((s) => !VALID_SEVERITIES.has(s))) {
-  throw new Error("upsert-checkpoint-verdict.mjs: STRUCTURED_FINDINGS_SEVERITY_ORDER has drifted from @dev-loops/core/loop/gate-fanin's VALID_SEVERITIES");
-}
+// gate-fanin's own SEVERITY_ORDER (imported) IS the "most blocking first"
+// contract (VALID_SEVERITIES' Set iteration order is an implementation
+// detail, not one) — used for sort order, the digest tally, and the
+// clean-verdict cross-check below. Importing the single ordered copy
+// (rather than hand-copying it here, as consolidate-fanin.mjs's SEVERITY_RANK
+// used to) means a severity added or reordered there is reflected here too,
+// instead of silently drifting apart.
+const STRUCTURED_FINDINGS_SEVERITY_ORDER = SEVERITY_ORDER;
 // The closed set of disposition values that mark a blocking finding as already
 // resolved without changing its severity: write-gate-findings-log.mjs's
 // VALID_DISPOSITIONS minus "accepted-for-fix"/"deferred", which are NOT
@@ -510,13 +506,17 @@ const RESOLVED_DISPOSITIONS = new Set(
 );
 // Sanitize free text for a single-line markdown bullet. Collapse whitespace
 // (LLM text often carries embedded newlines, which would split a bullet across
-// lines) and neutralize HTML-comment delimiters so a finding field cannot smuggle
-// a hidden marker into the rendered body. Mirrors post-gate-findings.mjs.
+// lines), neutralize HTML-comment delimiters so a finding field cannot smuggle
+// a hidden marker into the rendered body, and neutralize the markdown image-embed
+// form (`![...]`) so a finding field cannot silently embed a remote image (a
+// read-receipt/IP-leak vector when the comment is rendered by a client that
+// auto-loads images). Mirrors post-gate-findings.mjs.
 function sanitizeStructuredInline(value) {
   return String(value)
     .replace(/\s+/gu, " ")
     .replace(/<!--/gu, "&lt;!--")
     .replace(/-->/gu, "--&gt;")
+    .replace(/!\[/gu, "!\\[")
     .trim();
 }
 // Sanitize text rendered inside an inline backtick code span (angle labels,
@@ -727,10 +727,17 @@ export function normalizeStructuredFindings(input) {
 export function renderStructuredFindings(angles) {
   const lines = [];
   for (const { angle, verdict, findings } of angles) {
+    // severity/verdict/disposition are enum labels, never prose — rendered
+    // inside a backtick code span (like the angle label and file ref already
+    // are) rather than bare, so a reviewer-supplied value crafted to look like
+    // markdown link/image syntax (e.g. a severity of `must-fix](url)`) cannot
+    // break out of its literal `[...]`/`_..._` position: sanitizeStructuredCodeSpan
+    // strips any backtick from the value first, so the span it is wrapped in
+    // below can never be prematurely closed by the value's own content.
     const angleLabel = sanitizeStructuredCodeSpan(angle);
-    lines.push(`- \`${angleLabel}\` → ${sanitizeStructuredInline(verdict)}`);
+    lines.push(`- \`${angleLabel}\` → \`${sanitizeStructuredCodeSpan(verdict)}\``);
     for (const finding of findings) {
-      const severity = sanitizeStructuredInline(finding.severity) || "finding";
+      const severity = sanitizeStructuredCodeSpan(finding.severity) || "finding";
       const summary = sanitizeStructuredInline(finding.summary);
       let location = "";
       if (finding.file) {
@@ -741,9 +748,9 @@ export function renderStructuredFindings(angles) {
         }
       }
       const dispositionSuffix = finding.disposition
-        ? ` — _${sanitizeStructuredInline(finding.disposition)}_`
+        ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
         : "";
-      lines.push(`  - [${severity}] ${summary}${location}${dispositionSuffix}`);
+      lines.push(`  - [\`${severity}\`] ${summary}${location}${dispositionSuffix}`);
     }
   }
   return enforcePostedCommentLimit(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-json structured findings render");
