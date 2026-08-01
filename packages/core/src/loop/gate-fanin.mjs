@@ -262,6 +262,16 @@ export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [],
  */
 export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
 
+// Every sanctioned angle name is a short, hand-authored slug (e.g.
+// "contradiction-lens", "pr-checklist-matrix"); nothing legitimate ever
+// approaches this length. Bounding it here, at the trust boundary this
+// function already owns, fails a pathological artifact closed as malformed —
+// the same place every other angle-result defect is caught — instead of
+// leaving an unbounded reviewer-supplied string to reach the render path,
+// where consolidate-fanin.mjs's per-angle budget marking cannot compress it
+// and a single oversized angle header can consume the whole comment budget.
+const MAX_ANGLE_NAME_LENGTH = 200;
+
 /**
  * Validate a single per-angle review result. Returns an error string when the
  * result is malformed, or null when it is well-formed.
@@ -276,6 +286,9 @@ function validateAngleResult(result) {
   const r = /** @type {Record<string, unknown>} */ (result);
   if (typeof r.angle !== "string" || r.angle.trim().length === 0) {
     return "angle result is missing a non-empty 'angle'";
+  }
+  if (r.angle.trim().length > MAX_ANGLE_NAME_LENGTH) {
+    return `angle result's 'angle' exceeds ${MAX_ANGLE_NAME_LENGTH} chars`;
   }
   if (typeof r.verdict !== "string" || !VALID_VERDICTS.has(r.verdict)) {
     return `angle '${r.angle}' has invalid verdict (expected clean|findings_present)`;

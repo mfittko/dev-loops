@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { checkFanoutAngleCoverage, VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -16,6 +16,7 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
+import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
@@ -70,14 +71,15 @@ Required:
                                             the rendered body. Intended for
                                             --execution-mode fanout_fanin.
                                             --verdict clean is REJECTED when these
-                                            per-angle findings themselves carry an
-                                            unresolved (disposition missing or
-                                            "accepted-for-fix") finding at a severity
-                                            in the gate's blockCleanOnFindingSeverities
-                                            — regardless of --findings-severity-counts;
-                                            a "disputed"/"operator_acknowledged"
-                                            disposition on that same finding does not
-                                            trip this check.
+                                            per-angle findings carry a finding at a
+                                            severity in the gate's
+                                            blockCleanOnFindingSeverities — regardless
+                                            of --findings-severity-counts — UNLESS that
+                                            finding's disposition is "disputed" or
+                                            "operator_acknowledged"; every other
+                                            disposition (missing, "accepted-for-fix",
+                                            "deferred", or an unrecognized string)
+                                            still trips this check.
   --next-action <text>
 Optional:
   --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
@@ -174,13 +176,24 @@ function collapseWhitespace(value) {
 // corruption. Render in full up to a generous limit; beyond it, fail closed with
 // an actionable error naming the over-long field and its limit, so the caller
 // shortens the text before retrying.
+// Stable machine-checkable tag on the length-bound throw below — consumers
+// (e.g. consolidate-fanin.mjs's fitsRenderBudget/angleRenderCost) discriminate
+// "over budget" from a shape/producer defect via this code, never by
+// pattern-matching the human-readable message, which can be reworded freely.
+export const POSTED_COMMENT_LIMIT_EXCEEDED_CODE = "GATE_COMMENT_LIMIT_EXCEEDED";
+export function isPostedCommentLimitError(err) {
+  return err instanceof Error && err.code === POSTED_COMMENT_LIMIT_EXCEEDED_CODE;
+}
 function enforcePostedCommentLimit(value, limit, fieldLabel) {
   const text = String(value);
   if (text.length > limit) {
     // parseError (not a bare Error) so the JSON envelope carries `usage`, like
     // every other arg-validation failure in this CLI.
-    throw parseError(
-      `${fieldLabel} exceeds ${limit} chars (${text.length} chars); a posted gate comment is never truncated — shorten ${fieldLabel} and retry.`,
+    throw Object.assign(
+      parseError(
+        `${fieldLabel} exceeds ${limit} chars (${text.length} chars); a posted gate comment is never truncated — shorten ${fieldLabel} and retry.`,
+      ),
+      { code: POSTED_COMMENT_LIMIT_EXCEEDED_CODE },
     );
   }
   return text;
@@ -471,13 +484,30 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   }
   return options;
 }
+// This local, explicitly ordered list IS the "most blocking first" contract
+// (VALID_SEVERITIES' Set iteration order is an implementation detail, not
+// one) — used for sort order, the digest tally, and the clean-verdict
+// cross-check below. Asserted at load time against @dev-loops/core/loop/
+// gate-fanin's VALID_SEVERITIES (consolidate-fanin.mjs's SEVERITY_RANK gets
+// the same guard) so a severity added there can never silently drop out of
+// this file's digest total or clean-verdict cross-check.
 const STRUCTURED_FINDINGS_SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
+if (STRUCTURED_FINDINGS_SEVERITY_ORDER.length !== VALID_SEVERITIES.size
+    || STRUCTURED_FINDINGS_SEVERITY_ORDER.some((s) => !VALID_SEVERITIES.has(s))) {
+  throw new Error("upsert-checkpoint-verdict.mjs: STRUCTURED_FINDINGS_SEVERITY_ORDER has drifted from @dev-loops/core/loop/gate-fanin's VALID_SEVERITIES");
+}
 // The closed set of disposition values that mark a blocking finding as already
-// resolved without changing its severity (write-gate-findings-log.mjs's
+// resolved without changing its severity: write-gate-findings-log.mjs's
 // VALID_DISPOSITIONS minus "accepted-for-fix"/"deferred", which are NOT
-// resolutions). Anything outside this set — missing, "accepted-for-fix",
-// "deferred", or an unrecognized/typo'd string — must still count as blocking.
-const RESOLVED_DISPOSITIONS = new Set(["disputed", "operator_acknowledged"]);
+// resolutions. Derived by subtraction (not hand-copied) so a disposition added
+// to VALID_DISPOSITIONS there is automatically treated as still-blocking here
+// unless explicitly added to NON_RESOLVING_DISPOSITIONS too. Anything outside
+// this set — missing, "accepted-for-fix", "deferred", or an unrecognized/
+// typo'd string — must still count as blocking.
+const NON_RESOLVING_DISPOSITIONS = new Set(["accepted-for-fix", "deferred"]);
+const RESOLVED_DISPOSITIONS = new Set(
+  [...VALID_DISPOSITIONS].filter((d) => !NON_RESOLVING_DISPOSITIONS.has(d)),
+);
 // Sanitize free text for a single-line markdown bullet. Collapse whitespace
 // (LLM text often carries embedded newlines, which would split a bullet across
 // lines) and neutralize HTML-comment delimiters so a finding field cannot smuggle

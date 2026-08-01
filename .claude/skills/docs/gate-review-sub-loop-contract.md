@@ -428,8 +428,9 @@ large to render even at minimum summary length exits 0 with
 `commentBudgetExceeded: true` and degrades `--out` through four tiers, PROVIDED
 `--ledger-out` was also given; without `--ledger-out` the same over-budget
 round instead FAILS CLOSED (exit 1) at the point it would degrade, since a
-degraded round's only durable, unbudgeted record is the ledger and there would
-be nowhere left to keep the findings. Which
+degraded round's only durable, unbudgeted record is the ledger and nothing
+would land on disk (the findings would exist only on that process's stdout,
+which the sanctioned ledger/post path cannot consume). Which
 tier an angle lands on is NOT decided by whether that angle's own marker fits
 in isolation: angles are upgraded one at a time, in order of each angle's
 most blocking severity (ties by artifact index), and an upgrade is kept only
@@ -463,7 +464,11 @@ MUST check for `--out`'s existence before passing `--findings-json <path>` —
 passing a path that was never written fails closed with ENOENT; fall back to
 that command's `--findings-summary` instead, naming the round size and
 pointing at the ledger (`--ledger-out`), which is always complete regardless
-of tier. A `--findings-summary` fanout_fanin verdict bypasses
+of tier. Dropping `--findings-json` does NOT also drop
+`--findings-severity-counts` — that flag's requirement is scoped to
+`verdict === "clean"` under a gate with `blockCleanOnFindingSeverities`
+configured, independent of execution mode, so a clean tier-4 round must still
+pass it. A `--findings-summary` fanout_fanin verdict bypasses
 `upsert-checkpoint-verdict.mjs`'s mandatory-angle/foreign-angle check entirely
 (that check only runs when `--findings-json` was supplied), so a tier-4 round
 MUST still write its findings-log ledger via `write-gate-findings-log.mjs

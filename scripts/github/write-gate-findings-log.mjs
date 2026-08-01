@@ -44,7 +44,10 @@ function normalizeVerdict(value) {
   return verdicts.has(normalized) ? normalized : null;
 }
 const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
-const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "disputed", "operator_acknowledged"]);
+// Exported so other tools (e.g. upsert-checkpoint-verdict.mjs's
+// RESOLVED_DISPOSITIONS) derive their own subset from this single copy of the
+// disposition vocabulary instead of hand-copying it out of sync.
+export const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "disputed", "operator_acknowledged"]);
 // Validate + normalize a parsed --findings / --findings-file JSON array. Shared
 // by both flags so they carry identical validation — flagLabel only changes the
 // error-message prefix (--findings vs --findings-file).
