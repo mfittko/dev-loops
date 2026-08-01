@@ -472,6 +472,12 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   return options;
 }
 const STRUCTURED_FINDINGS_SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
+// The closed set of disposition values that mark a blocking finding as already
+// resolved without changing its severity (write-gate-findings-log.mjs's
+// VALID_DISPOSITIONS minus "accepted-for-fix"/"deferred", which are NOT
+// resolutions). Anything outside this set — missing, "accepted-for-fix",
+// "deferred", or an unrecognized/typo'd string — must still count as blocking.
+const RESOLVED_DISPOSITIONS = new Set(["disputed", "operator_acknowledged"]);
 // Sanitize free text for a single-line markdown bullet. Collapse whitespace
 // (LLM text often carries embedded newlines, which would split a bullet across
 // lines) and neutralize HTML-comment delimiters so a finding field cannot smuggle
@@ -1264,14 +1270,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // parsed findings themselves: a marker-collapsed round can only UNDERcount
   // its own findings (a marker never invents a finding), so tallying
   // structuredFindings and failing when EITHER source shows a blocking
-  // severity is equivalent to failing on max(supplied, observed). Only tally
-  // findings whose disposition is UNRESOLVED (missing, or the derived
-  // "accepted-for-fix") — the sub-loop contract's clean criterion is "no
-  // findings with a blocking severity REMAIN", and "disputed"/
-  // "operator_acknowledged" are the sanctioned vocabulary for a blocking
-  // finding the fix cycle/operator has already closed out without changing
-  // its severity (write-gate-findings-log.mjs's VALID_DISPOSITIONS); counting
-  // those here would re-block a verdict the operator already resolved.
+  // severity is equivalent to failing on max(supplied, observed). Only skip a
+  // finding whose disposition is in the closed RESOLVED_DISPOSITIONS set below
+  // ("disputed"/"operator_acknowledged", write-gate-findings-log.mjs's
+  // sanctioned vocabulary for a blocking finding the fix cycle/operator has
+  // already closed out without changing its severity). Every other value —
+  // missing, "accepted-for-fix", "deferred", or an unrecognized/typo'd string
+  // — counts as still unresolved, so an arbitrary disposition can never
+  // silently exempt a blocking finding.
   if (
     structuredFindings
     && options.verdict === "clean"
@@ -1281,7 +1287,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const observedCounts = Object.fromEntries(STRUCTURED_FINDINGS_SEVERITY_ORDER.map((sev) => [sev, 0]));
     for (const angle of structuredFindings) {
       for (const f of angle.findings) {
-        if (f.disposition && f.disposition !== "accepted-for-fix") continue;
+        if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
         if (Object.hasOwn(observedCounts, f.severity)) observedCounts[f.severity] += 1;
       }
     }

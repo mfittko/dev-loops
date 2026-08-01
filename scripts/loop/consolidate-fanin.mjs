@@ -123,12 +123,15 @@ Optional:
                                  exact --findings-file input write-gate-findings-log.mjs and
                                  post-gate-findings.mjs accept. Rejected at parse time (exit 1) when
                                  it resolves to the same path as --out — one write would otherwise
-                                 destroy the other. Neither --out nor --ledger-out may resolve INSIDE
-                                 --findings-dir (also rejected at parse time, exit 1) — the withheld
-                                 tier deletes --out outright (so an --out aliased into --findings-dir
-                                 would delete a real artifact), and a .json write under --findings-dir
-                                 would be picked up as a per-angle findings artifact by the NEXT
-                                 consolidation of that same directory.
+                                 destroy the other. Neither --out nor --ledger-out may resolve to a
+                                 DIRECT TOP-LEVEL sibling of --findings-dir's own artifacts (also
+                                 rejected at parse time, exit 1) — the withheld tier deletes --out
+                                 outright (so an --out aliased to a reviewer artifact would delete it),
+                                 and a .json write there would be picked up as a per-angle findings
+                                 artifact by the NEXT consolidation of that same directory. A path in a
+                                 SUBdirectory of --findings-dir (e.g. <findings-dir>/out/findings.json)
+                                 is unaffected — artifact discovery is top-level-only, so it can never
+                                 be re-read as an artifact.
   --pr-checklist-matrix clean    When no pr-checklist-matrix angle artifact was found, upsert
                                  { angle: "pr-checklist-matrix", verdict: "clean", findings: [] }
   --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
@@ -243,8 +246,11 @@ export function fitsRenderBudget(findingsJson) {
 // Shrink the longest summaries evenly until the candidate actually renders —
 // deterministic. Returns whether the (mutated in place) findingsJson now fits;
 // the caller decides what to do when the floor is reached and it still does
-// not (see buildAngleMarker below) — this function never throws, so a round
-// too large to render never blocks the durable ledger write.
+// not (see buildAngleMarker below). A round too large to render never blocks
+// the durable ledger write, but that guarantee comes from the ledger being
+// written BEFORE this function runs (see the write ordering below), not from
+// this function itself: it still propagates any non-length-bound error that
+// fitsRenderBudget rethrows (a real shape/producer defect).
 function fitFindingsToRenderBudget(findingsJson) {
   let cap = MAX_FINDING_TEXT_LENGTH;
   while (!fitsRenderBudget(findingsJson) && cap > 40) {
@@ -335,8 +341,11 @@ function angleWorstSeverityRank(a) {
 function angleRenderCost(a) {
   try {
     return renderStructuredFindings(normalizeStructuredFindings([a])).length;
-  } catch {
-    return Infinity;
+  } catch (err) {
+    // Same length-vs-shape discrimination as fitsRenderBudget above: only a
+    // length-bound throw means "too expensive", never a shape/producer defect.
+    if (err instanceof Error && RENDER_BUDGET_EXCEEDED_MESSAGE.test(err.message)) return Infinity;
+    throw err;
   }
 }
 
@@ -492,20 +501,21 @@ export function parseConsolidateFaninCliArgs(argv) {
       && path.resolve(options.out) === path.resolve(options.ledgerOut)) {
     throw parseError("--out and --ledger-out must not resolve to the same path");
   }
-  // Neither --out nor --ledger-out may resolve INSIDE --findings-dir: the
-  // withheld tier rm()s --out outright (so an --out aliased to a reviewer
-  // artifact under --findings-dir would be deleted, not merely overwritten),
-  // and a plain --out/--ledger-out write under --findings-dir with a .json
-  // name poisons the NEXT consolidation of the same directory (it gets picked
-  // up as a per-angle findings artifact, failing with a misleading "artifact
-  // must be a JSON object" — it's a findings array, not one). Prefix-compare
-  // the resolved paths with a trailing separator so a same-named sibling
-  // directory (e.g. --findings-dir "out" vs --out "out-2/x.json") is not a
-  // false positive.
-  const resolvedFindingsDir = path.resolve(options.findingsDir) + path.sep;
+  // Neither --out nor --ledger-out may resolve to a DIRECT TOP-LEVEL sibling
+  // of --findings-dir's own artifacts: the withheld tier rm()s --out outright
+  // (so an --out aliased to a reviewer artifact would be deleted, not merely
+  // overwritten), and a plain --out/--ledger-out write there with a .json name
+  // poisons the NEXT consolidation of the same directory (it gets picked up as
+  // a per-angle findings artifact, failing with a misleading "artifact must be
+  // a JSON object" — it's a findings array, not one). Artifact discovery is
+  // top-level-only (readdir above is not recursive), so only the exact parent
+  // directory is the hazard — a path in a SUBdirectory of --findings-dir can
+  // never be re-read as an artifact and must stay allowed (this module's own
+  // tests write --out to `<findingsDir>/out/findings.json`).
+  const resolvedFindingsDir = path.resolve(options.findingsDir);
   for (const [flag, value] of [["--out", options.out], ["--ledger-out", options.ledgerOut]]) {
-    if (value !== undefined && (path.resolve(value) + path.sep).startsWith(resolvedFindingsDir)) {
-      throw parseError(`${flag} must not resolve inside --findings-dir "${options.findingsDir}"`);
+    if (value !== undefined && path.dirname(path.resolve(value)) === resolvedFindingsDir) {
+      throw parseError(`${flag} must not resolve to a direct sibling of the artifacts inside --findings-dir "${options.findingsDir}"`);
     }
   }
   return options;
