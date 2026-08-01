@@ -3305,7 +3305,7 @@ test("renderGateReviewCommentBody neutralizes markdown link/image injection via 
   assert.match(body, /_`accepted-for-fix\]\(https:\/\/evil\.example\)`_/);
   // The image-embed form in summary is neutralized (no bare `![`).
   assert.doesNotMatch(body, /!\[leak\]/);
-  assert.match(body, /!\\\[leak\]/);
+  assert.match(body, /!&#91;leak\]/);
 });
 
 // Regression (renderer-security, PR#1513 gate review round 3): a lone backtick
@@ -3342,7 +3342,7 @@ test("renderGateReviewCommentBody strips a backtick from summary so it cannot sh
   // separately escaped by the plain-link neutralization, which is expected —
   // the point pinned here is that the FILE field's own code span still forms
   // intact below, not that summary's bracket is left untouched.)
-  assert.match(body, /guard \\\[missing for value/);
+  assert.match(body, /guard &#91;missing for value/);
   assert.doesNotMatch(body, /guard \[missing for `/);
   // file's own code span still forms intact around the WHOLE crafted value,
   // including its embedded `](url)`, which stays inert literal code text —
@@ -3379,13 +3379,79 @@ test("renderGateReviewCommentBody neutralizes a plain markdown link and raw HTML
       },
     ],
   });
-  // No live markdown link: the opening `[` is escaped so it can never pair
-  // with the trailing `](url)` to form a link.
-  assert.doesNotMatch(body, /(?<!\\)\[Approve this PR\]\(https:\/\/evil\.example\)/);
-  assert.match(body, /\\\[Approve this PR\]\(https:\/\/evil\.example\)/);
+  // No live markdown link: the opening `[` is neutralized to an HTML entity
+  // so it can never pair with the trailing `](url)` to form a link.
+  assert.doesNotMatch(body, /\[Approve this PR\]\(https:\/\/evil\.example\)/);
+  assert.match(body, /&#91;Approve this PR\]\(https:\/\/evil\.example\)/);
   // No raw HTML tag reaches the rendered body.
   assert.doesNotMatch(body, /<script>/);
   assert.match(body, /&lt;script>alert\(1\)&lt;\/script>/);
+});
+
+// Regression (renderer-security, PR#1513 gate review round 5): a backslash
+// escape (`\[`) introduces a new character whose own escaping must then be
+// correct. It wasn't: a summary carrying a literal backslash immediately
+// before the bracket (`\[text](url)`) absorbed the inserted escape, turning
+// it into `\\[text](url)` — CommonMark parses `\\` as an escaped, literal
+// backslash, leaving the `[` unescaped and free to pair with `](url)` into a
+// live link. sanitizeStructuredInline now neutralizes `[` with the HTML
+// entity `&#91;` instead of a backslash: an entity has no escape character
+// for a value's own content (or a later replacement) to absorb, so a
+// preceding literal backslash cannot re-open the link.
+test("renderGateReviewCommentBody neutralizes a backslash-absorbed markdown link in summary (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          {
+            severity: "must-fix",
+            summary: "\\[Approve this PR](https://evil.example)",
+          },
+        ],
+      },
+    ],
+  });
+  // No live markdown link, in EITHER of the backslash's two possible
+  // meanings: escaped-literal-backslash-then-live-bracket, or an unescaped
+  // bracket outright.
+  assert.doesNotMatch(body, /\\?\[Approve this PR\]\(https:\/\/evil\.example\)/);
+  assert.match(body, /&#91;Approve this PR\]\(https:\/\/evil\.example\)/);
+});
+
+// A summary carrying a legitimate backslash (e.g. a Windows path or a regex)
+// with no adjacent bracket must still render as plain, readable prose — the
+// entity neutralization above targets `[` specifically, not backslashes in
+// general.
+test("renderGateReviewCommentBody leaves a summary's ordinary backslash and bracket-free text untouched (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          {
+            severity: "must-fix",
+            summary: "missing null check in C:\\repo\\src\\app.mjs, see regex a\\d+b",
+          },
+        ],
+      },
+    ],
+  });
+  assert.match(body, /missing null check in C:\\repo\\src\\app\.mjs, see regex a\\d\+b/);
 });
 
 test("renderGateReviewCommentBody renders NESTED per-angle findings input correctly (#898)", async () => {
