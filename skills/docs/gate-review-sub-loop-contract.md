@@ -421,7 +421,7 @@ measured by actually rendering a candidate `--out` shape through
 length-exceeded throw, not an approximated size, so a shape this CLI accepts
 never later throws when `upsert-checkpoint-verdict.mjs` posts it. A round too
 large to render even at minimum summary length exits 0 with
-`commentBudgetExceeded: true` and degrades `--out` through three tiers. Which
+`commentBudgetExceeded: true` and degrades `--out` through four tiers. Which
 tier an angle lands on is NOT decided by whether that angle's own marker fits
 in isolation: angles are upgraded one at a time, in order of each angle's
 most blocking severity (ties by artifact index), and an upgrade is kept only

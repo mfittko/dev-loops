@@ -83,13 +83,16 @@ Optional:
                                              (e.g. '{"must-fix":0,"worth-fixing-now":0}').
                                              Required for --verdict clean when
                                              blockCleanOnFindingSeverities is configured.
-                                             Also, when given alongside --findings-json,
-                                             its values are SUMMED and used as the posted
-                                             "Findings summary:" total instead of counting
-                                             --findings-json's own (possibly budget-marked)
-                                             entries — pass a fan-in's true, unbudgeted
-                                             "severityCounts" here so the digest never
-                                             undercounts a marker-collapsed round.
+                                             Also, when given alongside --findings-json, its
+                                             known-severity (must-fix/worth-fixing-now/defer)
+                                             values are SUMMED and used as the posted
+                                             "Findings summary:" total whenever that sum is
+                                             HIGHER than --findings-json's own (possibly
+                                             budget-marked) count — pass a fan-in's true,
+                                             unbudgeted "severityCounts" here so the digest
+                                             never undercounts a marker-collapsed round. A
+                                             zero or partial counts object never lowers the
+                                             digest below --findings-json's own real count.
   --execution-mode <fanout_fanin|inline_single_agent>
                                             How the gate review was executed.
                                             Defaults to inline_single_agent. Inline
@@ -714,11 +717,24 @@ export function renderStructuredFindings(angles) {
 // gate-review fan-in always emits alongside its possibly-marked
 // "findingsJson"), sum that instead so the posted digest matches the ledger
 // rather than the rendered marker count.
+//
+// A marker collapse can only ever UNDERcount the rendered content, never
+// over-count it, so `severityCounts` may only RAISE the total, never lower
+// it: 0 is not nullish, so a zeroed or partial counts object (e.g. the
+// mandatory gate-comment template's placeholder, or the clean-verdict
+// guard's own required all-blocking-severities-zero shape) must not silently
+// replace a real per-angle count with "no findings" while the per-angle
+// breakdown below it still lists real findings. Only known severity keys are
+// summed — an unrecognized/typo'd key must not inflate the posted total.
 function buildStructuredFindingsDigest(angles, severityCounts) {
+  const angleTotal = angles.reduce((sum, a) => sum + a.findings.length, 0);
   const countedTotal = severityCounts && typeof severityCounts === "object" && !Array.isArray(severityCounts)
-    ? Object.values(severityCounts).reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0)
+    ? STRUCTURED_FINDINGS_SEVERITY_ORDER.reduce((sum, sev) => {
+        const n = severityCounts[sev];
+        return sum + (Number.isFinite(n) ? n : 0);
+      }, 0)
     : null;
-  const totalFindings = countedTotal ?? angles.reduce((sum, a) => sum + a.findings.length, 0);
+  const totalFindings = Math.max(countedTotal ?? 0, angleTotal);
   const angleWord = angles.length === 1 ? "angle" : "angles";
   if (totalFindings === 0) {
     return `${angles.length} ${angleWord} reviewed; no findings (see per-angle breakdown below).`;

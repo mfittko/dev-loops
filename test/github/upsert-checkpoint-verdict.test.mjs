@@ -3060,6 +3060,66 @@ test("renderGateReviewCommentBody's Findings summary counts the true totals from
   assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 20 findings \(see per-angle breakdown below\)\./);
 });
 
+// findingsSeverityCounts is a CORRECTION for a marker-collapsed undercount, not
+// a replacement: a marker collapse can only ever make findingsJson's own count
+// LOWER than the truth, never higher, so the supplied counts must only be
+// allowed to RAISE the digest, never lower it. An all-zero or partial counts
+// object (e.g. the mandatory gate-comment template's own documented example,
+// or a caller that forgot the `defer` key) must not silently replace a real
+// per-angle count with "no findings" while the rendered per-angle breakdown
+// still lists real findings.
+test("renderGateReviewCommentBody's Findings summary keeps the real count when findingsSeverityCounts is all-zero (#1513)", async () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "off-by-one" }] },
+      { angle: "tests", verdict: "findings_present", findings: [{ severity: "defer", summary: "naming nit" }] },
+    ],
+    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, defer: 0 },
+  });
+  assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 2 findings \(see per-angle breakdown below\)\./);
+});
+
+test("renderGateReviewCommentBody's Findings summary keeps the real count when findingsSeverityCounts omits a severity that has real findings (#1513)", async () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      { angle: "tests", verdict: "findings_present", findings: [{ severity: "defer", summary: "a" }, { severity: "defer", summary: "b" }] },
+    ],
+    // Documented two-key example from --help; carries no "defer" key at all.
+    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
+  });
+  assert.match(body, /\*\*Findings summary:\*\* 1 angle reviewed; 2 findings \(see per-angle breakdown below\)\./);
+});
+
+test("renderGateReviewCommentBody's Findings summary ignores unrecognized severity keys in findingsSeverityCounts (#1513)", async () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "off-by-one" }] },
+    ],
+    // A typo'd key ("mustfix") and a non-severity key ("total") must not
+    // inflate the posted total beyond the true, known-severity sum (1).
+    findingsSeverityCounts: { "must-fix": 1, mustfix: 1, total: 2 },
+  });
+  assert.match(body, /\*\*Findings summary:\*\* 1 angle reviewed; 1 finding \(see per-angle breakdown below\)\./);
+});
+
 test("renderGateReviewCommentBody groups FLAT per-finding input by angle without dropping findings (#898)", async () => {
   const { parseGateReviewCommentMarkerBody } = await import("../../scripts/_core-helpers.mjs");
   // This is consolidateFanin's OUTPUT / toFindingsLogShape: a FLAT array where
