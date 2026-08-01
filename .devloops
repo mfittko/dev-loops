@@ -43,8 +43,12 @@ gates:
     # rounds on one PR (72 reviewer dispatches), must-fix per round ran
     # 1,1,7,0,1,1,3,0 while worth-fixing-now ran 6,11,17,14,16,9,12,7.
     #
-    # worth-fixing-now findings are still recorded in the ledger and the
-    # findings comment; they just stop blocking the draft-to-ready transition.
+    # worth-fixing-now findings still go through the normal fan-in flow
+    # (ledger + findings comment) as long as that flow is followed; this key
+    # does not itself force a count or a ledger entry for worth-fixing-now
+    # (upsert-checkpoint-verdict only requires explicit counts for the
+    # severities listed here). They just stop blocking the draft-to-ready
+    # transition.
     # preApproval blocks on both, but it re-reviews through its own, mostly
     # disjoint angle pool (draft and preApproval share only contradiction-lens)
     # and does not carry a specific unblocked draft-gate finding forward — the
