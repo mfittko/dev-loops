@@ -110,19 +110,25 @@ async function readMarkerAt(filePath, identity) {
  *
  * With an explicit `checkpointDir` (tests; a future CLI override), reads
  * exactly that path. Otherwise searches every checkout `resolveLedgerCheckouts`
- * enumerates (this checkout + every git worktree, main included) and returns
- * the first valid marker found, so a marker written from a different checkout
- * than the one this reader runs in is still found.
+ * enumerates (this checkout + every git worktree, main included), so a marker
+ * written from a different checkout than the one this reader runs in is still
+ * found. When the caller passes the current `headSha`, a marker recorded for
+ * that exact head wins over any other valid marker — a stale marker in the
+ * first-enumerated checkout must not shadow a fresh head-matching one written
+ * elsewhere. Without `headSha`, the first valid marker is returned as before.
  *
  * @returns {Promise<{ repo, pr, headSha, lastReviewedHeadSha, reason, operatorReason, withdrawnAt }|null>}
  */
-export async function readSuppressionMarker({ repo, pr }, { checkpointDir } = {}) {
+export async function readSuppressionMarker({ repo, pr, headSha }, { checkpointDir } = {}) {
   if (checkpointDir) {
     return readMarkerAt(buildSuppressionMarkerPath(repo, pr, { checkpointDir }), { repo, pr });
   }
+  let fallback = null;
   for (const repoRoot of resolveLedgerCheckouts(process.cwd())) {
     const marker = await readMarkerAt(buildSuppressionMarkerPath(repo, pr, { repoRoot }), { repo, pr });
-    if (marker) return marker;
+    if (!marker) continue;
+    if (typeof headSha !== "string" || marker.headSha === headSha) return marker;
+    fallback ??= marker;
   }
-  return null;
+  return fallback;
 }

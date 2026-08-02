@@ -536,7 +536,7 @@ export async function resolvePostConvergenceReviewSuppressed({ repo, pr, current
   if (snapshot.copilotReviewRequestStatus !== "none" || snapshot.unresolvedThreadCount !== 0) {
     return false;
   }
-  const marker = await readSuppressionMarker({ repo, pr }, runtime);
+  const marker = await readSuppressionMarker({ repo, pr, headSha: currentHeadSha }, runtime);
   if (!marker || marker.headSha !== currentHeadSha) {
     return false;
   }

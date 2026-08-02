@@ -597,7 +597,7 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
       : null;
     if (currentHeadSha) {
       const marker = await readSuppressionMarker(
-        { repo: options.repo, pr: options.pr },
+        { repo: options.repo, pr: options.pr, headSha: currentHeadSha },
         { checkpointDir: options.checkpointDir },
       );
       // Re-derive the compare BASE live too, not just the classification —
