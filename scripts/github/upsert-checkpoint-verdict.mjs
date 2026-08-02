@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -16,6 +16,7 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
+import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
@@ -69,6 +70,16 @@ Required:
                                             --findings-summary/--findings-file for
                                             the rendered body. Intended for
                                             --execution-mode fanout_fanin.
+                                            --verdict clean is REJECTED when these
+                                            per-angle findings carry a finding at a
+                                            severity in the gate's
+                                            blockCleanOnFindingSeverities — regardless
+                                            of --findings-severity-counts — UNLESS that
+                                            finding's disposition is "disputed" or
+                                            "operator_acknowledged"; every other
+                                            disposition (missing, "accepted-for-fix",
+                                            "deferred", or an unrecognized string)
+                                            still trips this check.
   --next-action <text>
 Optional:
   --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
@@ -83,6 +94,16 @@ Optional:
                                              (e.g. '{"must-fix":0,"worth-fixing-now":0}').
                                              Required for --verdict clean when
                                              blockCleanOnFindingSeverities is configured.
+                                             Also, when given alongside --findings-json, its
+                                             known-severity (must-fix/worth-fixing-now/defer)
+                                             values are SUMMED and used as the posted
+                                             "Findings summary:" total whenever that sum is
+                                             HIGHER than --findings-json's own (possibly
+                                             budget-marked) count — pass a fan-in's true,
+                                             unbudgeted "severityCounts" here so the digest
+                                             never undercounts a marker-collapsed round. A
+                                             zero or partial counts object never lowers the
+                                             digest below --findings-json's own real count.
   --execution-mode <fanout_fanin|inline_single_agent>
                                             How the gate review was executed.
                                             Defaults to inline_single_agent. Inline
@@ -155,13 +176,24 @@ function collapseWhitespace(value) {
 // corruption. Render in full up to a generous limit; beyond it, fail closed with
 // an actionable error naming the over-long field and its limit, so the caller
 // shortens the text before retrying.
+// Stable machine-checkable tag on the length-bound throw below — consumers
+// (e.g. consolidate-fanin.mjs's fitsRenderBudget/angleRenderCost) discriminate
+// "over budget" from a shape/producer defect via this code, never by
+// pattern-matching the human-readable message, which can be reworded freely.
+const POSTED_COMMENT_LIMIT_EXCEEDED_CODE = "GATE_COMMENT_LIMIT_EXCEEDED";
+export function isPostedCommentLimitError(err) {
+  return err instanceof Error && err.code === POSTED_COMMENT_LIMIT_EXCEEDED_CODE;
+}
 function enforcePostedCommentLimit(value, limit, fieldLabel) {
   const text = String(value);
   if (text.length > limit) {
     // parseError (not a bare Error) so the JSON envelope carries `usage`, like
     // every other arg-validation failure in this CLI.
-    throw parseError(
-      `${fieldLabel} exceeds ${limit} chars (${text.length} chars); a posted gate comment is never truncated — shorten ${fieldLabel} and retry.`,
+    throw Object.assign(
+      parseError(
+        `${fieldLabel} exceeds ${limit} chars (${text.length} chars); a posted gate comment is never truncated — shorten ${fieldLabel} and retry.`,
+      ),
+      { code: POSTED_COMMENT_LIMIT_EXCEEDED_CODE },
     );
   }
   return text;
@@ -452,23 +484,80 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   }
   return options;
 }
-const STRUCTURED_FINDINGS_SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
-// Sanitize free text for a single-line markdown bullet. Collapse whitespace
-// (LLM text often carries embedded newlines, which would split a bullet across
-// lines) and neutralize HTML-comment delimiters so a finding field cannot smuggle
-// a hidden marker into the rendered body. Mirrors post-gate-findings.mjs.
-function sanitizeStructuredInline(value) {
-  return String(value)
-    .replace(/\s+/gu, " ")
-    .replace(/<!--/gu, "&lt;!--")
-    .replace(/-->/gu, "--&gt;")
-    .trim();
+// The closed set of disposition values that mark a blocking finding as already
+// resolved without changing its severity. Declared as a literal (not derived
+// from VALID_DISPOSITIONS by subtraction) so a disposition added there later
+// defaults to still-blocking by construction, rather than silently landing in
+// this set the moment it is added upstream. The assertion below fails loudly
+// if this set ever drifts to include a value VALID_DISPOSITIONS does not (a
+// typo here), rather than drifting the other way (fail-open) as a derived set
+// would. Anything outside this set — missing, "accepted-for-fix", "deferred",
+// or an unrecognized/typo'd string — must still count as blocking.
+const RESOLVED_DISPOSITIONS = new Set(["disputed", "operator_acknowledged"]);
+for (const disposition of RESOLVED_DISPOSITIONS) {
+  if (!VALID_DISPOSITIONS.has(disposition)) {
+    throw new Error(`RESOLVED_DISPOSITIONS contains "${disposition}", which is not in write-gate-findings-log.mjs's VALID_DISPOSITIONS`);
+  }
 }
 // Sanitize text rendered inside an inline backtick code span (angle labels,
-// file refs): additionally strip backticks so an embedded backtick cannot close
-// the span and break out into raw markdown.
+// file refs, severity/verdict/disposition). Strip backticks FIRST (before
+// collapsing whitespace) so NO field rendered through this sanitizer can carry
+// a stray backtick onto the rendered line: a lone backtick in one field would
+// otherwise shift CommonMark's left-to-right backtick pairing and prevent a
+// LATER field's own code span from ever forming, silently unwrapping it back
+// to raw, unescaped markdown (see the pairing-shift regression test below).
+// Stripping — not backslash-escaping — is deliberate: escaping would require
+// also pre-doubling any literal backslash already in the value to avoid the
+// escape being absorbed by it, and these fields never carry semantically
+// load-bearing backticks (enum labels, paths). Beyond backtick-stripping and
+// whitespace-collapsing, this sanitizer does NOT need to neutralize markdown
+// link/image/HTML syntax: the value is placed inside a backtick code span,
+// which CommonMark parses before link/image/HTML syntax, so the whole value —
+// including any embedded `](url)` — renders as inert literal text regardless.
 function sanitizeStructuredCodeSpan(value) {
-  return sanitizeStructuredInline(String(value).replace(/`/gu, ""));
+  return String(value)
+    .replace(/`/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+// Sanitize free text for a single-line markdown bullet's summary field. This
+// value is NOT wrapped in a code span (it renders as free prose), so unlike
+// sanitizeStructuredCodeSpan it must also neutralize markdown/HTML syntax the
+// value could otherwise smuggle in: HTML-comment delimiters (a finding field
+// could otherwise inject a hidden marker into the rendered body), the markdown
+// image-embed form `![...](url)` (a read-receipt/IP-leak vector via an
+// auto-loaded remote image), the plain markdown link form `[text](url)` (a
+// live clickable link a reviewer never asked for), and raw HTML tags (which a
+// markdown-to-HTML renderer would otherwise pass through live). Mirrors
+// post-gate-findings.mjs's HTML-comment/whitespace handling; that sibling copy
+// does not yet carry the backtick-strip or link/image/HTML neutralization
+// added here (tracked separately — this file's renderer is the one exposed to
+// the pairing-shift bypass and to arbitrary --findings-json producer input).
+//
+// The bracket neutralization below uses an HTML entity (`&#91;`), not a
+// backslash escape. A backslash escape (`\[`) introduces a NEW character
+// (`\`) whose own escaping must then be correct — and it isn't: a
+// value-supplied literal backslash immediately before `[` (e.g.
+// `\[text](url)`) absorbs the inserted escape, turning it into `\\[`, which
+// CommonMark parses as an escaped-literal-backslash followed by a live,
+// unescaped `[`. An entity has no such failure mode: the parser's
+// link/image bracket-matching scans the raw source for the literal `[`
+// character, and `&#91;` never contains one — it only decodes to the
+// bracket glyph as opaque text once rendering is done, after link/image
+// syntax has already been resolved. There is no escape character for a
+// later replacement (or a value's own content) to absorb.
+function sanitizeStructuredInline(value) {
+  return sanitizeStructuredCodeSpan(value)
+    .replace(/<!--/gu, "&lt;!--")
+    .replace(/-->/gu, "--&gt;")
+    .replace(/</gu, "&lt;")
+    // Neutralize a plain link's opening bracket (any `[` NOT already part of
+    // an image's `![`, handled next) so `[text](url)` can never open a live
+    // link. Order matters: this runs BEFORE the image-form neutralization
+    // below so it can tell an image's `[` (still preceded by a literal `!`
+    // here) apart from a plain link's `[`.
+    .replace(/(?<!!)\[/gu, "&#91;")
+    .replace(/!\[/gu, "!&#91;");
 }
 // Normalize a single finding object into a deterministic render entry, or null
 // when it carries no usable summary.
@@ -503,13 +592,13 @@ function normalizeStructuredFinding(f) {
   return entry;
 }
 // Map a severity to its sort rank. Known severities follow
-// STRUCTURED_FINDINGS_SEVERITY_ORDER (must-fix → worth-fixing-now → defer);
+// SEVERITY_ORDER (must-fix → worth-fixing-now → defer);
 // unknown/missing severities map to a LARGE rank so they sort LAST, never
 // before must-fix. (indexOf alone would give an unknown severity rank -1,
 // floating it ABOVE must-fix and hiding the highest-priority items below it.)
 function severitySortRank(severity) {
-  const idx = STRUCTURED_FINDINGS_SEVERITY_ORDER.indexOf(severity);
-  return idx === -1 ? STRUCTURED_FINDINGS_SEVERITY_ORDER.length : idx;
+  const idx = SEVERITY_ORDER.indexOf(severity);
+  return idx === -1 ? SEVERITY_ORDER.length : idx;
 }
 // Sort findings by severity (must-fix first, unknown/missing last) for
 // deterministic output, preserving input order within a severity.
@@ -660,17 +749,29 @@ export function normalizeStructuredFindings(input) {
 // nested findings carrying severity and an optional file:line reference. Newlines
 // are intentionally PRESERVED — this block is NOT run through collapseWhitespace /
 // summarizeCheckpointVerdictText. The whole block is bounded by
-// MAX_GATE_COMMENT_TEXT_LENGTH. The leading single-line digest is what the marker
-// parser captures for the `**Findings summary:**` field; the structured body is
-// nested below it and is deliberately written so no nested line matches a gate
-// field regex (no `verdict:` / `next action:` / `execution mode:` line starts).
-function renderStructuredFindings(angles) {
+// MAX_GATE_COMMENT_TEXT_LENGTH and THROWS above it (enforcePostedCommentLimit).
+// The leading single-line digest is what the marker parser captures for the
+// `**Findings summary:**` field; the structured body is nested below it and is
+// deliberately written so no nested line matches a gate field regex (no
+// `verdict:` / `next action:` / `execution mode:` line starts). Exported so
+// consolidate-fanin.mjs can measure whether a candidate findingsJson shape
+// actually renders (catching this throw) instead of approximating its
+// rendered size — the exact bound this function enforces, not an estimate of
+// it (see consolidate-fanin.mjs's fitsRenderBudget).
+export function renderStructuredFindings(angles) {
   const lines = [];
   for (const { angle, verdict, findings } of angles) {
+    // severity/verdict/disposition are enum labels, never prose — rendered
+    // inside a backtick code span (like the angle label and file ref already
+    // are) rather than bare, so a reviewer-supplied value crafted to look like
+    // markdown link/image syntax (e.g. a severity of `must-fix](url)`) cannot
+    // break out of its literal `[...]`/`_..._` position: sanitizeStructuredCodeSpan
+    // strips any backtick from the value first, so the span it is wrapped in
+    // below can never be prematurely closed by the value's own content.
     const angleLabel = sanitizeStructuredCodeSpan(angle);
-    lines.push(`- \`${angleLabel}\` → ${sanitizeStructuredInline(verdict)}`);
+    lines.push(`- \`${angleLabel}\` → \`${sanitizeStructuredCodeSpan(verdict)}\``);
     for (const finding of findings) {
-      const severity = sanitizeStructuredInline(finding.severity) || "finding";
+      const severity = sanitizeStructuredCodeSpan(finding.severity) || "finding";
       const summary = sanitizeStructuredInline(finding.summary);
       let location = "";
       if (finding.file) {
@@ -681,9 +782,9 @@ function renderStructuredFindings(angles) {
         }
       }
       const dispositionSuffix = finding.disposition
-        ? ` — _${sanitizeStructuredInline(finding.disposition)}_`
+        ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
         : "";
-      lines.push(`  - [${severity}] ${summary}${location}${dispositionSuffix}`);
+      lines.push(`  - [\`${severity}\`] ${summary}${location}${dispositionSuffix}`);
     }
   }
   return enforcePostedCommentLimit(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-json structured findings render");
@@ -693,8 +794,33 @@ function renderStructuredFindings(angles) {
 // line to carry non-empty, single-line content (parseGateReviewCommentFields
 // captures only the remainder of this one line), so the structured block below it
 // is purely presentational.
-function buildStructuredFindingsDigest(angles) {
-  const totalFindings = angles.reduce((sum, a) => sum + a.findings.length, 0);
+//
+// `angles[].findings.length` undercounts whenever a fan-in's over-budget
+// degradation has collapsed an angle's real findings into one marker finding
+// (consolidate-fanin.mjs) — the digest would then report e.g. "14 findings"
+// for a round that actually carries hundreds. When the caller supplies
+// `severityCounts` (--findings-severity-counts, the TRUE unbudgeted totals a
+// gate-review fan-in always emits alongside its possibly-marked
+// "findingsJson"), sum that instead so the posted digest matches the ledger
+// rather than the rendered marker count.
+//
+// A marker collapse can only ever UNDERcount the rendered content, never
+// over-count it, so `severityCounts` may only RAISE the total, never lower
+// it: 0 is not nullish, so a zeroed or partial counts object (e.g. the
+// mandatory gate-comment template's placeholder, or the clean-verdict
+// guard's own required all-blocking-severities-zero shape) must not silently
+// replace a real per-angle count with "no findings" while the per-angle
+// breakdown below it still lists real findings. Only known severity keys are
+// summed — an unrecognized/typo'd key must not inflate the posted total.
+function buildStructuredFindingsDigest(angles, severityCounts) {
+  const angleTotal = angles.reduce((sum, a) => sum + a.findings.length, 0);
+  const countedTotal = severityCounts && typeof severityCounts === "object" && !Array.isArray(severityCounts)
+    ? SEVERITY_ORDER.reduce((sum, sev) => {
+        const n = severityCounts[sev];
+        return sum + (Number.isFinite(n) ? n : 0);
+      }, 0)
+    : null;
+  const totalFindings = Math.max(countedTotal ?? 0, angleTotal);
   const angleWord = angles.length === 1 ? "angle" : "angles";
   if (totalFindings === 0) {
     return `${angles.length} ${angleWord} reviewed; no findings (see per-angle breakdown below).`;
@@ -712,7 +838,7 @@ function renderExecutionModeLine(executionMode, inlineReason) {
   }
   return `**Execution mode:** ${mode}`;
 }
-export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, gateEvidenceNote }) {
+export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, findingsSeverityCounts, gateEvidenceNote }) {
   const lines = [
     `### Gate review: \`${gate}\``,
     "",
@@ -733,7 +859,7 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
   if (angles) {
     lines.push(
       "",
-      `**Findings summary:** ${buildStructuredFindingsDigest(angles)}`,
+      `**Findings summary:** ${buildStructuredFindingsDigest(angles, findingsSeverityCounts)}`,
       "",
       renderStructuredFindings(angles),
     );
@@ -1212,6 +1338,43 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
     }
   }
+  // The clean-verdict guard above trusts --findings-severity-counts alone, so a
+  // caller can hand-type an all-zero counts object (the exact placeholder the
+  // docs warn against) and pass it even when --findings-json's own per-angle
+  // findings carry a blocking severity. Cross-check directly against the
+  // parsed findings themselves: a marker-collapsed round can only UNDERcount
+  // its own findings (a marker never invents a finding), so tallying
+  // structuredFindings and failing when EITHER source shows a blocking
+  // severity is equivalent to failing on max(supplied, observed). Only skip a
+  // finding whose disposition is in the closed RESOLVED_DISPOSITIONS set below
+  // ("disputed"/"operator_acknowledged", write-gate-findings-log.mjs's
+  // sanctioned vocabulary for a blocking finding the fix cycle/operator has
+  // already closed out without changing its severity). Every other value —
+  // missing, "accepted-for-fix", "deferred", or an unrecognized/typo'd string
+  // — counts as still unresolved, so an arbitrary disposition can never
+  // silently exempt a blocking finding.
+  if (
+    structuredFindings
+    && options.verdict === "clean"
+    && activeGateConfig.blockCleanOnFindingSeverities
+    && activeGateConfig.blockCleanOnFindingSeverities.length > 0
+  ) {
+    const observedCounts = Object.fromEntries(SEVERITY_ORDER.map((sev) => [sev, 0]));
+    for (const angle of structuredFindings) {
+      for (const f of angle.findings) {
+        if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
+        if (Object.hasOwn(observedCounts, f.severity)) observedCounts[f.severity] += 1;
+      }
+    }
+    const blockingObserved = activeGateConfig.blockCleanOnFindingSeverities.filter(
+      (sev) => (observedCounts[sev] ?? 0) > 0,
+    );
+    if (blockingObserved.length > 0) {
+      throw new Error(
+        `Cannot set verdict "clean" for ${options.gate}: --findings-json's own per-angle findings show unresolved findings at blocking severities [${blockingObserved.join(", ")}], regardless of --findings-severity-counts. Fix these findings and re-gate before declaring clean.`,
+      );
+    }
+  }
   // Fan-out angle-coverage enforcement (fail closed): a fanout_fanin verdict's
   // structured per-angle results must cover every configured mandatory angle,
   // and (default) must not name an angle outside the gate's configured pool.
@@ -1286,7 +1449,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // force a re-post — a known, narrow ceiling of the current parser contract,
   // which this fix does not extend.
   const effectiveFindingsSummary = structuredFindings
-    ? buildStructuredFindingsDigest(structuredFindings)
+    ? buildStructuredFindingsDigest(structuredFindings, options.findingsSeverityCounts)
     : options.findingsSummary;
   const desiredBody = renderGateReviewCommentBody({
     ...options,
