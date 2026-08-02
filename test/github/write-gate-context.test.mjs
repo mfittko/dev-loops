@@ -2271,7 +2271,12 @@ function specStubRun({
     if (args[0] === "issue" && args[1] === "view") {
       if (issueFails) return { code: 1, stdout: "", stderr: "gh: could not resolve issue" };
       const key = `${args[4]}#${args[2]}`;
-      const body = issueBodies && Object.hasOwn(issueBodies, key) ? issueBodies[key] : issueBody;
+      // Strict: once a test names bodies per target, an unlisted target is a
+      // wrong-repo or duplicate fetch, not a case to paper over with a default.
+      if (issueBodies && !Object.hasOwn(issueBodies, key)) {
+        return { code: 1, stdout: "", stderr: `unexpected issue fetch: ${key}` };
+      }
+      const body = issueBodies ? issueBodies[key] : issueBody;
       return { code: 0, stdout: JSON.stringify({ body }), stderr: "" };
     }
     return { code: 1, stdout: "", stderr: `unexpected: ${args.join(" ")}` };
@@ -2478,6 +2483,57 @@ test("CLI: a rebuild at the SAME head re-resolves the spec-of-record, so the art
     assert.equal(artifact.scope.acceptanceCriteria, "#42");
     assert.equal(artifact.scope.acceptanceCriteriaSource, "linked-issue");
     assert.notEqual(artifact.prefixMode, "file");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolvePrSpecContext: two same-numbered issues in different repos both survive", async () => {
+  const options = { repo: "owner/repo", pr: 91, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, {
+    run: specStubRun({
+      closing: [
+        { number: 5 },
+        { number: 5, repository: { owner: { login: "owner" }, name: "other" } },
+      ],
+      issueBodies: { "owner/repo#5": "## Acceptance criteria\n- a", "owner/other#5": "other-repo body" },
+    }),
+  });
+  assert.equal(options.acceptanceCriteria, "#5, owner/other#5");
+  assert.ok(options.issueBody.includes("other-repo body"), "the cross-repo issue's body is not dropped");
+});
+
+test("resolvePrSpecContext: --repo Owner/Repo still labels a same-repo issue bare", async () => {
+  const options = { repo: "Owner/Repo", pr: 92, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, {
+    run: specStubRun({
+      closing: [{ number: 42, repository: { owner: { login: "owner" }, name: "repo" } }],
+      issueBodies: { "owner/repo#42": "## Acceptance criteria\n- a" },
+    }),
+  });
+  assert.equal(options.acceptanceCriteria, "#42");
+});
+
+test("resolvePrSpecContext: a caller-supplied --issue-body still gets the resolved closing refs as its pointer", async () => {
+  const options = { repo: "owner/repo", pr: 93, prBody: null, issueBody: "caller-supplied body", acceptanceCriteria: null };
+  await resolvePrSpecContext(options, { run: specStubRun({ closing: [{ number: 42 }] }) });
+  assert.equal(options.acceptanceCriteria, "#42");
+  assert.equal(options.issueBody, "caller-supplied body", "the caller's body is kept, not refetched");
+  assert.equal(options.acceptanceCriteriaSource, "linked-issue-unrefined", "classified from the body the caller gave");
+});
+
+test("CLI: a linked issue with a genuinely empty body renders the sentinel in the prefix, not an absent section", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "94", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], { repoRoot, run: specStubRun({ closing: [{ number: 42 }], issueBody: "   " }) });
+    const text = await readFile(
+      path.resolve(repoRoot, buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 94, gate: "draft_gate", headSha })),
+      "utf8",
+    );
+    assert.ok(text.includes(ISSUE_BODY_ABSENT_SENTINEL));
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

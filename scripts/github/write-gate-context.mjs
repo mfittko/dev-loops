@@ -128,7 +128,7 @@ Optional:
   --validation-posture <text>    Short description of the validation posture
   --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less.
   --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference; omitted from the prefix entirely when the PR closes no issue.
-  --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them; the CLI never touches GitHub in this mode unless --base is also given. Omit for the default self-rendered prefix (prefixMode inline|pointer).
+  --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -1148,26 +1148,6 @@ function formatLinkedIssueSection(label, body) {
 }
 
 /**
- * Resolve the slug (`owner/name`) a closing-reference entry's issue actually
- * lives in. `closingIssuesReferences` entries carry their OWN `repository`
- * (GitHub supports cross-repo closing keywords, e.g. "Closes owner/other#12"),
- * so a same-repo assumption silently fetches the WRONG issue when it differs.
- * Falls back to `fallbackRepo` for a number the GraphQL entry didn't cover
- * (e.g. one recovered only via `resolveLinkedIssuesFromPr`'s body-keyword
- * fallback, which carries no repository of its own).
- * @param {number} number
- * @param {Map<number, object>} byNumber
- * @param {string} fallbackRepo
- * @returns {string}
- */
-function repoForClosingRef(number, byNumber, fallbackRepo) {
-  const entry = byNumber.get(number);
-  return entry?.repository?.owner?.login && entry?.repository?.name
-    ? `${entry.repository.owner.login}/${entry.repository.name}`
-    : fallbackRepo;
-}
-
-/**
  * Resolve the spec-of-record text the briefing prefix states as fact — the PR
  * description, every issue the PR closes, and each issue's body — from
  * GitHub, so a caller that simply omits the flags can never seed every
@@ -1249,15 +1229,29 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     return options;
   }
 
-  const byNumber = new Map();
-  for (const entry of Array.isArray(pr.closingIssuesReferences) ? pr.closingIssuesReferences : []) {
-    if (Number.isInteger(entry?.number)) byNumber.set(entry.number, entry);
+  // Identity is (repository, number), never the number alone: a PR closing
+  // owner/repo#5 and owner/other#5 references two different issues, and keying
+  // by number would silently drop one from the spec-of-record. GraphQL's
+  // closingIssuesReferences carries the repository, so it is the source of
+  // truth whenever present; the bare numbers from resolveLinkedIssuesFromPr are
+  // the body-keyword fallback and can only mean this PR's own repo.
+  const graphqlRefs = (Array.isArray(pr.closingIssuesReferences) ? pr.closingIssuesReferences : [])
+    .filter((entry) => Number.isInteger(entry?.number));
+  const seen = new Set();
+  const targets = [];
+  for (const entry of graphqlRefs.length > 0 ? graphqlRefs : closingNumbers.map((number) => ({ number }))) {
+    const repo = entry.repository?.owner?.login && entry.repository?.name
+      ? `${entry.repository.owner.login}/${entry.repository.name}`
+      : options.repo;
+    const key = `${repo.toLowerCase()}#${entry.number}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // Same-repo refs render bare (`#42`). The comparison is case-insensitive
+    // because `--repo Owner/Repo` and the API's `owner/repo` name one repo.
+    const sameRepo = repo.toLowerCase() === options.repo.toLowerCase();
+    targets.push({ repo, number: entry.number, label: sameRepo ? `#${entry.number}` : `${repo}#${entry.number}` });
   }
-  const refs = closingNumbers.map((number) => {
-    const repo = repoForClosingRef(number, byNumber, options.repo);
-    return repo === options.repo ? `#${number}` : `${repo}#${number}`;
-  });
-  options.acceptanceCriteria = refs.join(", ");
+  options.acceptanceCriteria = targets.map((t) => t.label).join(", ");
 
   if (options.issueBody === null) {
     const bodies = [];
@@ -1265,10 +1259,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     // prose-only. One refined issue among several still gives a reviewer real
     // criteria to read, so a mixed set is "linked-issue".
     let anyRefined = false;
-    for (let i = 0; i < closingNumbers.length; i += 1) {
-      const number = closingNumbers[i];
-      const label = refs[i];
-      const repo = repoForClosingRef(number, byNumber, options.repo);
+    for (const { repo, number, label } of targets) {
       let issue;
       try {
         ({ issue } = await viewIssue({ repo, issue: number, fields: "body" }, { env, ghCommand, run }));
