@@ -127,7 +127,7 @@ Optional:
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted it resolves to the PR's closing issue reference.
   --validation-posture <text>    Short description of the validation posture
   --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less.
-  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference; omitted from the prefix entirely when the PR closes no issue.
+  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference, but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. Omitted from the prefix entirely when the PR closes no issue.
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
@@ -521,6 +521,21 @@ export const PR_BODY_ABSENT_SENTINEL = "(this PR has an empty description on Git
 export const ISSUE_BODY_ABSENT_SENTINEL = "(this issue has an empty body on GitHub)";
 
 /**
+ * Pick a fenced-code-block delimiter that cannot be prematurely closed by the
+ * content it will wrap: CommonMark closes a fence at the first line that is a
+ * run of backticks at least as long as the opening run, so a delimiter longer
+ * than every backtick run already inside `text` always stays open until the
+ * delimiter we emit ourselves. Minimum length 3 (the shortest valid fence).
+ * @param {string} text
+ * @returns {string}
+ */
+function pickFence(text) {
+  const runs = String(text).match(/`+/g);
+  const longest = runs ? Math.max(...runs.map((run) => run.length)) : 0;
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+/**
  * Render the invariant briefing-prefix text (GATE-EXEC-BRIEFING-PREFIX):
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
  * instruction), PR body, linked-issue body (when present), the full diff at the
@@ -529,6 +544,14 @@ export const ISSUE_BODY_ABSENT_SENTINEL = "(this issue has an empty body on GitH
  * deterministic: identical input always renders identical bytes, so two builds
  * at the same head produce a byte-identical prefix (the fan-out's shared-prefix
  * requirement).
+ *
+ * prBody/issueBody/diffOutput are untrusted GitHub text (PR author or linked-issue
+ * author controlled) and are each wrapped in their own fenced code block, sized
+ * per pickFence(). A fenced block renders as inert literal text, so a hostile
+ * body cannot forge a `##` heading (e.g. a second "## Diff at reviewed head" or
+ * "## Changed files" section ahead of the real one) or emit either ABSENT_SENTINEL
+ * string as if it were the renderer's own statement, and an unbalanced fence
+ * inside the body text cannot leak out to swallow a later section.
  *
  * @param {object} input
  * @param {string} input.repo
@@ -574,13 +597,25 @@ export function renderBriefingPrefix({
   lines.push("");
   lines.push("## PR body");
   lines.push("");
-  lines.push(typeof prBody === "string" && prBody.trim().length > 0 ? prBody.trim() : PR_BODY_ABSENT_SENTINEL);
+  const trimmedPrBody = typeof prBody === "string" ? prBody.trim() : "";
+  if (trimmedPrBody.length > 0) {
+    const prBodyFence = pickFence(trimmedPrBody);
+    lines.push(prBodyFence);
+    lines.push(trimmedPrBody);
+    lines.push(prBodyFence);
+  } else {
+    lines.push(PR_BODY_ABSENT_SENTINEL);
+  }
   lines.push("");
   const hasIssueBody = typeof issueBody === "string" && issueBody.trim().length > 0;
   if (hasIssueBody) {
+    const trimmedIssueBody = issueBody.trim();
+    const issueBodyFence = pickFence(trimmedIssueBody);
     lines.push(`## Linked issue${issueRef ? ` ${issueRef}` : ""}`);
     lines.push("");
-    lines.push(issueBody.trim());
+    lines.push(issueBodyFence);
+    lines.push(trimmedIssueBody);
+    lines.push(issueBodyFence);
     lines.push("");
   }
   lines.push(`## Diff at reviewed head (${headSha})`);
@@ -588,9 +623,10 @@ export function renderBriefingPrefix({
   if (!hasDiffText) {
     lines.push("(no diff text captured for this bundle)");
   } else if (prefixMode === "inline") {
-    lines.push("```diff");
+    const diffFence = pickFence(diffOutput);
+    lines.push(`${diffFence}diff`);
     lines.push(diffOutput.endsWith("\n") ? diffOutput.slice(0, -1) : diffOutput);
-    lines.push("```");
+    lines.push(diffFence);
   } else {
     lines.push(
       `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the full diff from:`,

@@ -148,7 +148,11 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     seed every fan-out reviewer with the false claim that a PR has no description or no
     acceptance criteria. An unresolvable read (PR or a linked issue) FAILS CLOSED: a named
     error, no artifact written — the bundle must never assert absence when resolution merely
-    failed. `scope.acceptanceCriteriaSource` records how `scope.acceptanceCriteria` came to
+    failed. Supplying `--acceptance-criteria` suppresses the automatic issue-body fetch
+    entirely (it overrides the pointer the fetch would otherwise resolve), so a caller who
+    passes only `--acceptance-criteria` gets no linked-issue body and no `## Linked issue`
+    section; pass `--issue-body` too if the prefix should still carry issue text.
+    `scope.acceptanceCriteriaSource` records how `scope.acceptanceCriteria` came to
     be: `"provided"` (caller flag, regardless of whether an issue body was independently
     supplied too), `"linked-issue"` (resolved from the closing reference(s), and at least one
     resolved issue carries a real Acceptance-criteria/DoD section or linked refinement doc),
@@ -159,8 +163,11 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     resolved" and one WITH it means "genuinely absent" or "genuinely unrefined". An umbrella
     PR closing several issues resolves ALL of them (not just the first), concatenated under
     one `## Linked issue <ref1>, <ref2>` section with a `### <ref>` sub-heading per issue; a
-    cross-repo closing reference (`Closes owner/other#N`) resolves against ITS OWN
-    repository, not the PR's. `--prefix-file` (an orchestrator recording its own
+    cross-repo closing reference registered by GitHub (`closingIssuesReferences`, which
+    carries the repository alongside the number) resolves against ITS OWN repository, not the
+    PR's — the `Closes #N` body-keyword fallback used when GitHub reports no closing
+    references is same-repo only and cannot capture an `owner/repo` prefix. `--prefix-file`
+    (an orchestrator recording its own
     already-rendered prefix) skips this resolution entirely — those fields could never reach
     the recorded bytes. Because the resolved PR/issue text is embedded in the rendered
     prefix, a same-head rebuild after a live description edit yields different prefix bytes,
