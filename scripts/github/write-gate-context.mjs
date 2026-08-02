@@ -1261,7 +1261,10 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
 
   if (options.issueBody === null) {
     const bodies = [];
-    let anyUnrefined = false;
+    // "unrefined" means the pointer leads nowhere: EVERY linked issue is
+    // prose-only. One refined issue among several still gives a reviewer real
+    // criteria to read, so a mixed set is "linked-issue".
+    let anyRefined = false;
     for (let i = 0; i < closingNumbers.length; i += 1) {
       const number = closingNumbers[i];
       const label = refs[i];
@@ -1275,7 +1278,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
         );
       }
       const body = typeof issue.body === "string" ? issue.body : "";
-      if (!detectIssueRefinementArtifact({ body, issueNumber: number }).hasACs) anyUnrefined = true;
+      if (detectIssueRefinementArtifact({ body, issueNumber: number }).hasACs) anyRefined = true;
       bodies.push({ label, body });
     }
     // A single linked issue renders exactly as before (no redundant `### #N`
@@ -1285,7 +1288,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     options.issueBody = bodies.length === 1
       ? (bodies[0].body.trim().length > 0 ? bodies[0].body.trim() : ISSUE_BODY_ABSENT_SENTINEL)
       : bodies.map(({ label, body }) => formatLinkedIssueSection(label, body)).join("\n\n");
-    options.acceptanceCriteriaSource = anyUnrefined ? "linked-issue-unrefined" : "linked-issue";
+    options.acceptanceCriteriaSource = anyRefined ? "linked-issue" : "linked-issue-unrefined";
   } else {
     // Caller supplied the issue body text directly (without also supplying
     // --acceptance-criteria) — classify it as given rather than making a
@@ -1319,43 +1322,14 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
-    // Idempotent rebuild guard: a gate-context artifact already on disk for
-    // this EXACT (repo, pr, gate, headSha) means a previous CLI run already
-    // resolved + rendered the spec-of-record for this head (the JSON artifact
-    // is written LAST, after its sibling prefix — see writeGateContext — so its
-    // presence is the completion marker). Re-resolving from GitHub on a
-    // rebuild would embed whatever the PR/issue look like NOW, which can
-    // differ from the first build if the description was edited mid-fan-out —
-    // silently splitting the fan-out across two different prefix hashes that
-    // verify-briefing-prefixes.mjs would then fail closed on. A rebuild
-    // therefore reuses the already-rendered prefix bytes verbatim (the same
-    // mechanism --prefix-file uses to record an existing file) instead of
-    // re-resolving. This only short-circuits spec resolution + the prefix
-    // record; the JSON artifact (angles, diff, adjacentCode) is still rebuilt
-    // fresh below, so a later --angles change for the same head still lands.
-    if (!options.prefixFile) {
-      const existing = await readGateContext(
-        { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot },
-        { repoRoot },
-      );
-      if (existing) {
-        options.prefixFile = buildGateBriefingPrefixPath({
-          repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot,
-        });
-        process.stderr.write(
-          "[write-gate-context] a gate-context artifact already exists for this (gate, head SHA); reusing its already-rendered briefing prefix verbatim instead of re-resolving the spec-of-record from GitHub (idempotent rebuild).\n",
-        );
-      }
-    }
     // Resolve the spec-of-record (PR body, linked issue(s) + their bodies)
     // BEFORE any diff work: a bundle that cannot state the spec truthfully must
     // not be written at all, and failing here costs nothing (#1496/#1511).
-    // Skipped under --prefix-file (including the idempotent-rebuild case just
-    // above): the recorded prefix bytes are the supplied file's EXACT bytes
-    // (writeGateContext never renders prBody/issueBody into them in that
-    // mode), so a GitHub read here would be spent resolving text that can
-    // never reach the record — an orchestrator that already rendered its own
-    // prefix must not gain a new hard GitHub dependency for that.
+    // Skipped under --prefix-file: the recorded prefix bytes are the supplied
+    // file's EXACT bytes (writeGateContext never renders prBody/issueBody into
+    // them in that mode), so a GitHub read here would be spent resolving text
+    // that can never reach the record — an orchestrator that already rendered
+    // its own prefix must not gain a new hard GitHub dependency for that.
     if (!options.prefixFile) {
       await resolvePrSpecContext(options, { run });
     }

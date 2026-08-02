@@ -2455,33 +2455,49 @@ test("CLI: a PR whose description is genuinely empty renders the truthful absent
   }
 });
 
-test("CLI: a rebuild at the SAME head reuses the already-rendered prefix verbatim instead of re-resolving from GitHub (idempotent rebuild, no split fan-out)", async () => {
+test("CLI: a rebuild at the SAME head re-resolves the spec-of-record, so the artifact never regresses to a null AC", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
-    await main([
+    const build = (prBody) => main([
       "--repo", "owner/repo", "--pr", "81", "--gate", "draft_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
-    ], { repoRoot, run: specStubRun({ prBody: "first-build body" }) });
+    ], { repoRoot, run: specStubRun({ prBody, closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a\n\n## Definition of done\n- b" }) });
+
+    await build("first-build body");
     const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha });
-    const firstText = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
-    assert.ok(firstText.includes("first-build body"));
+    assert.ok((await readFile(path.resolve(repoRoot, prefixPath), "utf8")).includes("first-build body"));
 
-    // Second build at the SAME head: the stub PR body has "changed" (as if the
-    // description were edited mid-fan-out) AND the run throws on any gh call —
-    // proving the rebuild neither re-resolves nor picks up the new text.
-    const throwingRun = async () => { throw new Error("must not call gh on an idempotent rebuild"); };
-    await main([
-      "--repo", "owner/repo", "--pr", "81", "--gate", "draft_gate",
-      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
-    ], { repoRoot, run: throwingRun });
+    // Rebuild at the same head. The spec fields must still be resolved: a
+    // rebuild that reused a prior prefix without re-resolving would write the
+    // artifact back with acceptanceCriteria null and no source, which is the
+    // "never resolved" state this change exists to remove.
+    await build("second-build body");
 
-    const secondText = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
-    assert.equal(secondText, firstText, "rebuild reuses the exact same prefix bytes");
-    assert.ok(!secondText.includes("second-build body"));
-
+    assert.ok((await readFile(path.resolve(repoRoot, prefixPath), "utf8")).includes("second-build body"));
     const artifact = await readGateContext({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha }, { repoRoot });
-    assert.equal(artifact.prefixMode, "file", "the reused-verbatim path records via the same mechanism as --prefix-file");
+    assert.equal(artifact.scope.acceptanceCriteria, "#42");
+    assert.equal(artifact.scope.acceptanceCriteriaSource, "linked-issue");
+    assert.notEqual(artifact.prefixMode, "file");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("resolvePrSpecContext: a refined issue mixed with a prose-only one still classifies as linked-issue", async () => {
+  const options = { repo: "owner/repo", pr: 90, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, {
+    run: specStubRun({
+      closing: [{ number: 7 }, { number: 8 }],
+      issueBodies: {
+        "owner/repo#7": "## Acceptance criteria\n- a\n\n## Definition of done\n- b",
+        "owner/repo#8": "just some prose, no sections at all",
+      },
+    }),
+  });
+  assert.equal(options.acceptanceCriteria, "#7, #8");
+  assert.equal(
+    options.acceptanceCriteriaSource,
+    "linked-issue",
+    "one refined issue is enough: the pointer leads somewhere with real criteria",
+  );
 });

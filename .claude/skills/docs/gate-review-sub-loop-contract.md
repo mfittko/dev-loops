@@ -163,8 +163,10 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     repository, not the PR's. `--prefix-file` (an orchestrator recording its own
     already-rendered prefix) skips this resolution entirely — those fields could never reach
     the recorded bytes. Because the resolved PR/issue text is embedded in the rendered
-    prefix, a same-head rebuild after a live description edit yields different prefix bytes;
-    this does not affect the frozen artifact of an already-completed gate pass.
+    prefix, a same-head rebuild after a live description edit yields different prefix bytes,
+    which would split one fan-out across two prefix hashes — so a conductor MUST NOT rebuild
+    the context while reviewers for that head are still running. This does not affect the
+    frozen artifact of an already-completed gate pass.
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
