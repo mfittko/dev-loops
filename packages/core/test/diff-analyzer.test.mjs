@@ -237,6 +237,54 @@ test("analyzeT1: tracks line stats", () => {
   assert.equal(result.lineStats.added, 2);
   assert.equal(result.lineStats.deleted, 1);
 });
+test("analyzeT1: counts changed lines whose content starts with -- or ++", () => {
+  const t0 = { files: ["docs/usage.md"], extensions: [".md"], directories: ["docs"], renameOnly: false, allDocs: true };
+  // A removed line reading "--repo <owner/name>" renders as "---repo ..." in
+  // the diff; a prefix-based file-header exclusion would drop it from the
+  // deleted count (and the symmetric "+++..." case from the added count).
+  const diff = [
+    "diff --git a/docs/usage.md b/docs/usage.md",
+    "index 1111111..2222222 100644",
+    "--- a/docs/usage.md",
+    "+++ b/docs/usage.md",
+    "@@ -1,5 +1,2 @@",
+    "---repo <owner/name>",
+    "---pr <number>",
+    "---",
+    "-plain removed",
+    "+++keep <flag>",
+    "+plain added",
+    "",
+  ].join("\n");
+  const result = analyzeT1(diff, t0);
+  assert.equal(result.lineStats.deleted, 4);
+  assert.equal(result.lineStats.added, 2);
+});
+
+test("analyzeT1: file header lines between two files' hunks are not counted", () => {
+  const t0 = { files: ["a.md", "b.md"], extensions: [".md"], directories: ["."], renameOnly: false, allDocs: true };
+  const diff = [
+    "diff --git a/a.md b/a.md",
+    "index 1111111..2222222 100644",
+    "--- a/a.md",
+    "+++ b/a.md",
+    "@@ -1 +1 @@",
+    "-old-a",
+    "+new-a",
+    "diff --git a/b.md b/b.md",
+    "index 3333333..4444444 100644",
+    "--- a/b.md",
+    "+++ b/b.md",
+    "@@ -1 +1 @@",
+    "-old-b",
+    "+new-b",
+    "",
+  ].join("\n");
+  const result = analyzeT1(diff, t0);
+  assert.equal(result.lineStats.deleted, 2);
+  assert.equal(result.lineStats.added, 2);
+});
+
 test("analyzeT1: detects COMMENT_ONLY from comment-only diff", () => {
   const t0 = { files: ["src/foo.mjs"], extensions: [".mjs"], directories: ["src"], renameOnly: false, allDocs: false };
   const diff = "@@ -1,3 +1,3 @@\n-// old comment\n+// new comment\n";

@@ -281,6 +281,16 @@ export function analyzeT1(diffOutput, t0) {
   let allChangedLinesAreNonLogic = true;
 
   for (const line of lines) {
+    // A new file's header block (diff --git, index, --- a/..., +++ b/...) ends
+    // the previous file's hunk run. Resetting here is what lets the counting
+    // below treat EVERY +/- line inside a hunk as content: a removed line whose
+    // content itself starts with "--" (a CLI flag, a YAML document separator)
+    // renders as "---…" in the diff, and a prefix-based header exclusion would
+    // silently drop it from the counts.
+    if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      continue;
+    }
     // Track hunk headers
     if (line.startsWith("@@")) {
       hunkCount++;
@@ -291,7 +301,7 @@ export function analyzeT1(diffOutput, t0) {
     if (!inHunk) continue;
 
     // Track line stats and classify
-    if (line.startsWith("+") && !line.startsWith("+++")) {
+    if (line.startsWith("+")) {
       added++;
       hasAnyChangedLine = true;
       const content = line.slice(1).trim();
@@ -299,7 +309,7 @@ export function analyzeT1(diffOutput, t0) {
         hasLogicChange = true;
         allChangedLinesAreNonLogic = false;
       }
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
+    } else if (line.startsWith("-")) {
       deleted++;
       hasAnyChangedLine = true;
       const content = line.slice(1).trim();

@@ -178,6 +178,7 @@ async function writeDraftDevLoops(repoRoot, overrides = {}) {
     mandatoryAngles = ["gate-evidence"],
     excludeAngles = [],
     dynamicAngles = true,
+    tiers = [],
   } = overrides;
   const entries = buildAngleEntries({ angles, mandatoryAngles, excludeAngles });
   const lines = ["version: 1", "gates:", "  draft:", "    dynamic:", `      subtractive: ${dynamicAngles}`, "    angles:"];
@@ -190,7 +191,38 @@ async function writeDraftDevLoops(repoRoot, overrides = {}) {
     if (entry.mandatory) lines.push("        mandatory: true");
     if (entry.enabled === false) lines.push("        enabled: false");
   }
+  if (tiers.length > 0) {
+    lines.push("    tiers:");
+    for (const tier of tiers) {
+      lines.push(`      - name: ${tier.name}`);
+      lines.push(`        match: { kinds: [${(tier.match.kinds ?? []).join(", ")}] }`);
+      lines.push(`        angles: [${tier.angles.join(", ")}]`);
+    }
+  }
   await writeFile(path.join(repoRoot, ".devloops"), `${lines.join("\n")}\n`, "utf8");
+}
+
+const DOCS_TIER = [{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["link-check"] }];
+
+// gh stub whose `pr view --json labels` answer is injectable, for the
+// derive-gate:full-from-live-labels CLI path.
+function stubGhRunWithLabels(labelsAnswer) {
+  return async function run(_command, args) {
+    if (args[0] === "pr" && args[1] === "view") {
+      const jsonFields = args[args.indexOf("--json") + 1] ?? "";
+      if (jsonFields.includes("labels")) {
+        if (labelsAnswer instanceof Error) {
+          return { code: 1, stdout: "", stderr: labelsAnswer.message };
+        }
+        return { code: 0, stdout: JSON.stringify({ labels: labelsAnswer }), stderr: "" };
+      }
+      return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [] }), stderr: "" };
+    }
+    if (args[0] === "issue" && args[1] === "view") {
+      return { code: 0, stdout: JSON.stringify({ body: "stub issue body" }), stderr: "" };
+    }
+    return { code: 1, stdout: "", stderr: `stubGhRunWithLabels: unexpected gh call: ${args.join(" ")}` };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,6 +1172,51 @@ test("CLI without --base emits an explicit thin-briefing posture, not a silent f
     assert.equal(artifact.scope.diffPath, null);
     assert.deepEqual(artifact.scope.changedFiles, []);
     assert.equal(Object.prototype.hasOwnProperty.call(artifact, "adjacentCode"), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI derives gate:full from live PR labels: unlabelled PR applies the tier, labelled PR gets the untriered set", async () => {
+  for (const [labels, expectTier] of [[[], true], [[{ name: "gate:full" }], false]]) {
+    const { repoRoot, baseSha, headSha } = await makeDocsOnlyDiffRepo();
+    try {
+      await writeDraftDevLoops(repoRoot, { tiers: DOCS_TIER });
+      await main([
+        "--repo", "owner/repo", "--pr", "60", "--gate", "draft_gate",
+        "--head-sha", headSha, "--base", baseSha,
+      ], { repoRoot, run: stubGhRunWithLabels(labels) });
+
+      const artifact = await readGateContext({
+        repo: "owner/repo", pr: 60, gate: "draft_gate", headSha,
+      }, { repoRoot });
+
+      if (expectTier) {
+        // Tier angles plus BOTH mandatory floors: gate-evidence from the fixture
+        // .devloops, pr-description from the shipped defaults (merged by name).
+        assert.deepEqual([...artifact.resolvedAngles].sort(), ["gate-evidence", "link-check", "pr-description"]);
+      } else {
+        assert.ok(artifact.resolvedAngles.length > 2, "gate:full label yields the untriered set");
+      }
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("CLI fails closed to the untriered set when the labels read errors", async () => {
+  const { repoRoot, baseSha, headSha } = await makeDocsOnlyDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot, { tiers: DOCS_TIER });
+    await main([
+      "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+    ], { repoRoot, run: stubGhRunWithLabels(new Error("labels read boom")) });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 61, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assert.ok(artifact.resolvedAngles.length > 2, "failed labels read must not grant the reduced tier");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
