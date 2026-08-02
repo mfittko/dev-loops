@@ -767,7 +767,8 @@ if (q.includes("fields(first")) data({ node: { fields: { nodes: [{ name: "Status
 if (argv[0] === "api" && argv[1] === "user") { process.stdout.write(JSON.stringify({ login: "shim-viewer" })); process.exit(0); }
 if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "view") { process.stdout.write(JSON.stringify({ assignees: [] })); process.exit(0); }
 if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "edit") { process.stdout.write("{}"); process.exit(0); }
-data({ node: { items: { nodes: [{ id: "I_NU_9", fieldValues: { nodes: [{ field: { name: "Status" }, name: "Next Up" }] }, content: { __typename: "Issue", number: 9, title: "Head", url: "https://example.test", id: "C_9" } }], pageInfo: { hasNextPage: false, endCursor: null } } } });
+if (q.includes("items(first") || q.includes("fieldValues")) data({ node: { items: { nodes: [{ id: "I_NU_9", fieldValues: { nodes: [{ field: { name: "Status" }, name: "Next Up" }] }, content: { __typename: "Issue", number: 9, title: "Head", url: "https://example.test", id: "C_9" } }], pageInfo: { hasNextPage: false, endCursor: null } } } });
+process.stderr.write("shim: unexpected gh argv: " + JSON.stringify(argv)); process.exit(1);
 `;
       const ghPath = nodePath.join(binDir, "gh");
       writeFileSync(ghPath, shim);
