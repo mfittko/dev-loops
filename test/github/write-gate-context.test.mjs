@@ -2488,6 +2488,18 @@ test("CLI: a rebuild at the SAME head re-resolves the spec-of-record, so the art
   }
 });
 
+test("resolvePrSpecContext: a programmatic caller that OMITS the spec fields still gets them resolved", async () => {
+  // Only the CLI defaults these to null. An exported-API caller omitting them
+  // leaves undefined, which must not read as "the caller provided this".
+  const options = { repo: "owner/repo", pr: 95 };
+  await resolvePrSpecContext(options, {
+    run: specStubRun({ prBody: "live body", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a" }),
+  });
+  assert.equal(options.prBody, "live body");
+  assert.equal(options.acceptanceCriteria, "#42");
+  assert.equal(options.acceptanceCriteriaSource, "linked-issue");
+});
+
 test("resolvePrSpecContext: two same-numbered issues in different repos both survive", async () => {
   const options = { repo: "owner/repo", pr: 91, prBody: null, issueBody: null, acceptanceCriteria: null };
   await resolvePrSpecContext(options, {

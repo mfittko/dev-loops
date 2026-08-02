@@ -111,7 +111,7 @@ export function rationaleFromResolver(resolverResult) {
   return { resolvedAngles: [...recommended], rationale };
 }
 
-const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--validation-posture <text>] [--tmp-root <path>]
+const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
 Write a deterministic gate-review context-builder handoff artifact under tmp/ paths.
 Required:
   --repo <owner/name>
@@ -1186,8 +1186,12 @@ function formatLinkedIssueSection(label, body) {
  * @returns {Promise<object>} the same options object
  */
 export async function resolvePrSpecContext(options, { run = runChild, env = process.env, ghCommand = "gh" } = {}) {
-  const needsBody = options.prBody === null;
-  const acProvided = options.acceptanceCriteria !== null;
+  // `== null` on purpose: an omitted field (undefined) means the caller
+  // supplied nothing just as much as an explicit null does. Treating undefined
+  // as "provided" would skip resolution and stamp the artifact `provided`
+  // anyway — the false-spec claim this whole path exists to prevent.
+  const needsBody = options.prBody == null;
+  const acProvided = options.acceptanceCriteria != null;
   const needsIssue = !acProvided;
   if (!needsBody && !needsIssue) {
     options.acceptanceCriteriaSource = "provided";
@@ -1253,7 +1257,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   }
   options.acceptanceCriteria = targets.map((t) => t.label).join(", ");
 
-  if (options.issueBody === null) {
+  if (options.issueBody == null) {
     const bodies = [];
     // "unrefined" means the pointer leads nowhere: EVERY linked issue is
     // prose-only. One refined issue among several still gives a reviewer real
