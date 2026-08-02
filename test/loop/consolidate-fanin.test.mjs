@@ -463,14 +463,42 @@ test("consolidateGateFanin does not upsert pr-checklist-matrix when an artifact 
 // Phase 2 artifact and would otherwise be invisible to findingsJson/
 // checkFanoutAngleCoverage/the posted verdict comment — indistinguishable
 // from a truncated fan-out.
+//
+// must-fix (gate-evidence): --carried-angles is proof-carrying, not a bare
+// trust-me list — it REQUIRES --gate and --carry-forward-plan
+// (resolve-angle-carry-forward.mjs's own "carried" evidence) and is checked
+// against BOTH the gate's configured mandatory angles and the proven plan
+// before it is allowed to mint a clean entry. See the fail-closed tests below.
 // ---------------------------------------------------------------------------
 
-test("parseConsolidateFaninCliArgs parses --carried-angles as a string array", () => {
+// Isolated repoRoot with a minimal .devloops: this repo's shipped
+// extension-defaults.yaml always contributes the draft gate's own mandatory
+// angle ("pr-description") regardless of repoRoot (D3 name-merge across
+// config layers), so an empty/minimal override here is enough to get a real,
+// known mandatoryAngles set without hand-writing angle entries.
+async function withMinimalConfigRepoRoot(fn) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-cfgroot-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "version: 1\n", "utf8");
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function carryForwardPlanJson(angles, { carriedFromHead = "a".repeat(40) } = {}) {
+  return JSON.stringify({ carried: angles.map((angle) => ({ angle, carriedFromHead, reason: "test fixture" })) });
+}
+
+test("parseConsolidateFaninCliArgs parses --carried-angles + --carry-forward-plan together", () => {
   const result = parseConsolidateFaninCliArgs([
     "--findings-dir", "/tmp/x",
+    "--gate", "draft_gate",
     "--carried-angles", '["correctness","docs"]',
+    "--carry-forward-plan", carryForwardPlanJson(["correctness", "docs"]),
   ]);
   assert.deepEqual(result.carriedAngles, ["correctness", "docs"]);
+  assert.deepEqual(result.carryForwardPlan.map((e) => e.angle), ["correctness", "docs"]);
 });
 
 test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --carried-angles", () => {
@@ -488,53 +516,236 @@ test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --
   );
 });
 
-test("consolidateGateFanin upserts a clean entry for every carried angle with no real artifact", async () => {
-  await withFindingsDir(
-    { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
-    async (dir) => {
-      const result = await consolidateGateFanin({ findingsDir: dir, carriedAngles: ["correctness", "coverage"] });
-      assert.deepEqual(
-        result.angles.map((a) => a.angle).sort(),
-        ["correctness", "coverage", "docs"],
-      );
-      assert.deepEqual(
-        result.findingsJson.find((a) => a.angle === "correctness"),
-        { angle: "correctness", verdict: "clean", findings: [] },
-      );
-      assert.equal(result.overallVerdict, "clean");
-    },
+test("parseConsolidateFaninCliArgs rejects a malformed --carry-forward-plan", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", "not json"]),
+    /--carry-forward-plan must be JSON/,
   );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '["docs"]']),
+    /--carry-forward-plan must be a JSON object with a "carried" array/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '{"notCarried":[]}']),
+    /--carry-forward-plan must have a "carried" array/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '{"carried":[{"angle":"docs"}]}']),
+    /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+  );
+});
+
+test("parseConsolidateFaninCliArgs rejects --carried-angles / --carry-forward-plan / --gate given without each other", () => {
+  const plan = carryForwardPlanJson(["docs"]);
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["docs"]']),
+    /--carried-angles requires --carry-forward-plan/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carry-forward-plan", plan]),
+    /--carry-forward-plan was given without --carried-angles/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", '["docs"]', "--carry-forward-plan", plan]),
+    /--carried-angles requires --gate/,
+  );
+});
+
+test("consolidateGateFanin upserts a carriedFromHead-marked clean entry for every carried angle with no real artifact", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness", "coverage"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["correctness", "coverage"], { carriedFromHead: "b".repeat(40) })).carried,
+        });
+        assert.deepEqual(
+          result.angles.map((a) => a.angle).sort(),
+          ["correctness", "coverage", "docs"],
+        );
+        // Carried entries are marked; the freshly reviewed "docs" entry is not.
+        assert.deepEqual(
+          result.findingsJson.find((a) => a.angle === "correctness"),
+          { angle: "correctness", verdict: "clean", findings: [], carriedFromHead: "b".repeat(40) },
+        );
+        assert.equal(result.angles.find((a) => a.angle === "correctness").carriedFromHead, "b".repeat(40));
+        assert.equal(result.angles.find((a) => a.angle === "docs").carriedFromHead, undefined);
+        assert.equal(result.overallVerdict, "clean");
+      },
+    );
+  });
 });
 
 test("consolidateGateFanin never overrides a REAL artifact with a --carried-angles upsert for the same angle", async () => {
-  await withFindingsDir(
-    {
-      "correctness.json": {
-        angle: "correctness",
-        verdict: "findings_present",
-        findings: [{ severity: "must-fix", summary: "real finding, not carried" }],
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "correctness.json": {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "real finding, not carried" }],
+        },
       },
-    },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["correctness"])).carried,
+        });
+        assert.equal(result.angles.length, 1);
+        assert.equal(result.angles[0].findingCount, 1, "the real artifact's finding must survive, not be replaced by the synthetic clean upsert");
+        assert.equal(result.angles[0].carriedFromHead, undefined, "a REAL artifact's entry is never marked carried");
+      },
+    );
+  });
+});
+
+// A real artifact whose angle collides with a carried name only by case or by
+// a `-delta-at-...` suffix must still suppress the synthetic upsert (base-name
+// + case-insensitive match, same rule resolve-angle-carry-forward.mjs's own
+// attribution uses) — an exact-string check would duplicate the angle.
+test("consolidateGateFanin suppresses the carried upsert for a case-drifted/delta-suffixed real artifact", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "coverage.json": {
+          angle: "Coverage-delta-at-abc123",
+          verdict: "findings_present",
+          findings: [{ severity: "worth-fixing-now", summary: "real, case/delta-drifted" }],
+        },
+      },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["coverage"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"])).carried,
+        });
+        assert.equal(result.angles.length, 1, "the real (case/delta-drifted) artifact must not get a duplicate synthetic clean row");
+        assert.equal(result.angles[0].angle, "Coverage-delta-at-abc123");
+        assert.equal(result.angles[0].findingCount, 1);
+      },
+    );
+  });
+});
+
+// must-fix (gate-evidence, consolidate-fanin.mjs:641): a gate's configured
+// MANDATORY angle can never legitimately appear in a carry-forward plan
+// (resolve-angle-carry-forward.mjs always forces it into mustRerun), so
+// naming one in --carried-angles can only be a fabricated or stale list —
+// refuse it even when a (necessarily fabricated) plan entry claims it.
+test("consolidateGateFanin refuses a --carried-angles entry that is the gate's configured MANDATORY angle", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["pr-description"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["pr-description"])).carried,
+          }),
+          /MANDATORY angles.*pr-description|pr-description.*MANDATORY/s,
+        );
+      },
+    );
+  });
+});
+
+// must-fix (gate-evidence, consolidate-fanin.mjs:641): a carried name absent
+// from the proven carry-forward plan is refused — the plan is the evidence
+// that an angle was actually resolved as carried, not just typed in.
+test("consolidateGateFanin refuses a --carried-angles entry absent from --carry-forward-plan's carried list", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"])).carried, // plan proves "coverage", not "correctness"
+          }),
+          /not present in --carry-forward-plan/,
+        );
+      },
+    );
+  });
+});
+
+test("consolidateGateFanin fails closed when --carried-angles is given without --gate or --carry-forward-plan (parser bypassed)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
     async (dir) => {
-      const result = await consolidateGateFanin({ findingsDir: dir, carriedAngles: ["correctness"] });
-      assert.equal(result.angles.length, 1);
-      assert.equal(result.angles[0].findingCount, 1, "the real artifact's finding must survive, not be replaced by the synthetic clean upsert");
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, carriedAngles: ["correctness"] }),
+        /--carried-angles requires --gate/,
+      );
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, gate: "draft_gate", carriedAngles: ["correctness"] }),
+        /--carried-angles requires --carry-forward-plan/,
+      );
     },
   );
 });
 
-test("e2e: carried angles fill a gate's mandatory/pool coverage check, matching a real fan-out", async () => {
-  await withFindingsDir(
-    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
-    async (dir) => {
-      const result = await consolidateGateFanin({ findingsDir: dir, carriedAngles: ["dry", "pr-checklist-matrix"] });
-      const coverage = checkFanoutAngleCoverage(result.findingsJson, {
-        mandatoryAngles: ["pr-checklist-matrix"],
-        pool: ["scope", "dry", "pr-checklist-matrix"],
+// coverage (consolidate-fanin.mjs:587): an all-angles-carried round — Phase 2
+// dispatched nothing because Phase 1.2 carried every resolved angle — has a
+// legitimately empty --findings-dir; it must consolidate the carried entries
+// instead of throwing "contains no *.json findings artifacts".
+test("consolidateGateFanin consolidates an all-carried round even with an empty --findings-dir", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    const emptyDir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-allcarried-"));
+    try {
+      const result = await consolidateGateFanin({
+        findingsDir: emptyDir,
+        gate: "draft_gate",
+        repoRoot,
+        carriedAngles: ["correctness", "coverage"],
+        carryForwardPlan: JSON.parse(carryForwardPlanJson(["correctness", "coverage"])).carried,
       });
-      assert.deepEqual(coverage, { missingMandatory: [], foreignAngles: [] });
-    },
-  );
+      assert.deepEqual(result.angles.map((a) => a.angle).sort(), ["coverage", "correctness"].sort());
+      assert.equal(result.overallVerdict, "clean");
+    } finally {
+      await rm(emptyDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("e2e: a legitimately carried, non-mandatory angle fills a gate's pool coverage check alongside a real artifact", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "scope.json": { angle: "scope", verdict: "clean", findings: [] },
+        "pr-description.json": { angle: "pr-description", verdict: "clean", findings: [] },
+      },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["dry"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["dry"])).carried,
+        });
+        const coverage = checkFanoutAngleCoverage(result.findingsJson, {
+          mandatoryAngles: ["pr-description"],
+          pool: ["scope", "dry", "pr-description"],
+        });
+        assert.deepEqual(coverage, { missingMandatory: [], foreignAngles: [] });
+      },
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
