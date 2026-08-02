@@ -545,13 +545,20 @@ function pickFence(text) {
  * at the same head produce a byte-identical prefix (the fan-out's shared-prefix
  * requirement).
  *
- * prBody/issueBody/diffOutput are untrusted GitHub text (PR author or linked-issue
- * author controlled) and are each wrapped in their own fenced code block, sized
- * per pickFence(). A fenced block renders as inert literal text, so a hostile
- * body cannot forge a `##` heading (e.g. a second "## Diff at reviewed head" or
- * "## Changed files" section ahead of the real one) or emit either ABSENT_SENTINEL
- * string as if it were the renderer's own statement, and an unbalanced fence
- * inside the body text cannot leak out to swallow a later section.
+ * prBody/issueBody/issueSections/diffOutput are untrusted GitHub text (PR
+ * author or linked-issue author controlled) and are each wrapped in their own
+ * fenced code block, sized per pickFence(). A fenced block renders as inert
+ * literal text, so a hostile body cannot forge a `##` heading (e.g. a second
+ * "## Diff at reviewed head" or "## Changed files" section ahead of the real
+ * one) or emit either ABSENT_SENTINEL string as if it were the renderer's own
+ * statement, and an unbalanced fence inside the body text cannot leak out to
+ * swallow a later section. This holds for the multi-issue case too: each
+ * issue's `### <label>` heading is emitted by THIS function as a plain line
+ * OUTSIDE any fence, immediately followed by that issue's OWN fenced block —
+ * never inside another issue's fence — so a hostile issue body cannot forge a
+ * `### <label>` heading for a DIFFERENT linked issue (issueSections is
+ * structured data, not a pre-joined string carrying the delimiter inside the
+ * untrusted region).
  *
  * @param {object} input
  * @param {string} input.repo
@@ -562,8 +569,9 @@ function pickFence(text) {
  * @param {string} input.contextPath — the sibling JSON artifact path
  * @param {string} input.briefingPrefixPath — this rendered file's own path
  * @param {string|null} [input.prBody]
- * @param {string|null} [input.issueRef] — label for the linked-issue section (e.g. "#877")
- * @param {string|null} [input.issueBody] — omit the whole section when null/empty
+ * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. "#877" or "#1496, #1511")
+ * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
+ * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — full diff text, when captured
  * @param {string|null} [input.diffPath] — persisted `.diff` pointer (pointer-mode fallback)
  * @param {string[]} [input.changedFiles]
@@ -573,7 +581,7 @@ function pickFence(text) {
  */
 export function renderBriefingPrefix({
   repo, pr, gate, headSha, worktreeRoot, contextPath, briefingPrefixPath,
-  prBody = null, issueRef = null, issueBody = null,
+  prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null, changedFiles = [], adjacentCode = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
@@ -607,8 +615,31 @@ export function renderBriefingPrefix({
     lines.push(PR_BODY_ABSENT_SENTINEL);
   }
   lines.push("");
-  const hasIssueBody = typeof issueBody === "string" && issueBody.trim().length > 0;
-  if (hasIssueBody) {
+  const hasIssueSections = Array.isArray(issueSections) && issueSections.length > 0;
+  const hasIssueBody = !hasIssueSections && typeof issueBody === "string" && issueBody.trim().length > 0;
+  if (hasIssueSections) {
+    // Structured per-issue data, not a pre-joined string: each `### <label>`
+    // heading below is emitted by THIS renderer as a plain line outside any
+    // fence, and each issue's body gets its OWN pickFence-sized block — so a
+    // hostile body in issue A's fence cannot forge issue B's `### <label>`
+    // heading (the delimiter never lives inside the untrusted region it
+    // wraps).
+    lines.push(`## Linked issue${issueRef ? ` ${issueRef}` : ""}`);
+    lines.push("");
+    for (const section of issueSections) {
+      const label = section?.label;
+      const text = typeof section?.body === "string" && section.body.trim().length > 0
+        ? section.body.trim()
+        : ISSUE_BODY_ABSENT_SENTINEL;
+      const fence = pickFence(text);
+      lines.push(`### ${label}`);
+      lines.push("");
+      lines.push(fence);
+      lines.push(text);
+      lines.push(fence);
+      lines.push("");
+    }
+  } else if (hasIssueBody) {
     const trimmedIssueBody = issueBody.trim();
     const issueBodyFence = pickFence(trimmedIssueBody);
     lines.push(`## Linked issue${issueRef ? ` ${issueRef}` : ""}`);
@@ -927,10 +958,11 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  * recorded on the JSON artifact so both files stay in sync.
  *
  * @param {object} options — parsed CLI options shape, optionally carrying
- *   `diffOutput`, `prBody`, `issueBody` (all null-safe; a caller with none of
- *   these still gets a valid — if thin — prefix), and `prefixFile` (a path to
- *   an ALREADY-rendered prefix whose exact bytes are recorded verbatim instead
- *   of self-rendering — see the CLI's `--prefix-file` doc above).
+ *   `diffOutput`, `prBody`, `issueBody`/`issueSections` (all null-safe; a
+ *   caller with none of these still gets a valid — if thin — prefix), and
+ *   `prefixFile` (a path to an ALREADY-rendered prefix whose exact bytes are
+ *   recorded verbatim instead of self-rendering — see the CLI's
+ *   `--prefix-file` doc above).
  * @param {{ repoRoot?: string }} [runtime]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file" }>}
  */
@@ -982,6 +1014,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       prBody: options.prBody ?? null,
       issueRef: options.acceptanceCriteria ?? null,
       issueBody: options.issueBody ?? null,
+      issueSections: options.issueSections ?? null,
       diffOutput: options.diffOutput ?? null,
       diffPath: options.diffPath ?? null,
       changedFiles: options.changedFiles ?? [],
@@ -1170,20 +1203,6 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
 }
 
 /**
- * Format one resolved closing issue's body for the invariant prefix's combined
- * `## Linked issue <refs>` block: a `### <label>` sub-heading (so a multi-issue
- * PR's reviewers can tell which body belongs to which issue), followed by the
- * body text or ISSUE_BODY_ABSENT_SENTINEL when it is genuinely empty.
- * @param {string} label — e.g. "#42" or "owner/other#42" (cross-repo)
- * @param {string} body
- * @returns {string}
- */
-function formatLinkedIssueSection(label, body) {
-  const text = typeof body === "string" && body.trim().length > 0 ? body.trim() : ISSUE_BODY_ABSENT_SENTINEL;
-  return `### ${label}\n\n${text}`;
-}
-
-/**
  * Resolve the spec-of-record text the briefing prefix states as fact — the PR
  * description, every issue the PR closes, and each issue's body — from
  * GitHub, so a caller that simply omits the flags can never seed every
@@ -1313,12 +1332,17 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
       bodies.push({ label, body });
     }
     // A single linked issue renders exactly as before (no redundant `### #N`
-    // sub-heading duplicating the `## Linked issue #N` heading above it); a
-    // multi-issue PR concatenates each issue's own sub-section so reviewers can
-    // tell which body belongs to which issue.
-    options.issueBody = bodies.length === 1
-      ? (bodies[0].body.trim().length > 0 ? bodies[0].body.trim() : ISSUE_BODY_ABSENT_SENTINEL)
-      : bodies.map(({ label, body }) => formatLinkedIssueSection(label, body)).join("\n\n");
+    // sub-heading duplicating the `## Linked issue #N` heading above it,
+    // via options.issueBody). A multi-issue PR instead hands the renderer
+    // structured per-issue data (options.issueSections) rather than a
+    // pre-joined string: renderBriefingPrefix — not this resolver — owns
+    // emitting each `### <label>` heading OUTSIDE any fence, so one issue's
+    // hostile body can never forge another issue's label (renderer-security).
+    if (bodies.length === 1) {
+      options.issueBody = bodies[0].body.trim().length > 0 ? bodies[0].body.trim() : ISSUE_BODY_ABSENT_SENTINEL;
+    } else {
+      options.issueSections = bodies;
+    }
     options.acceptanceCriteriaSource = anyRefined ? "linked-issue" : "linked-issue-unrefined";
   } else {
     // Caller supplied the issue body text directly (without also supplying

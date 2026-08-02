@@ -303,11 +303,23 @@ construction and the shared-prefix prompt-cache opportunity is destroyed byte on
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
 fixed section order: header (repo/PR/head/gate/worktree + the verify-fresh instruction),
 PR body, linked-issue body (when present), the full diff at the reviewed head, and a
-changed-files/adjacent-code summary. The diff SHOULD be inlined up to a size cap
+changed-files/adjacent-code summary. The PR body and each linked-issue body are
+author-controlled GitHub text (PR author or linked-issue author), so each is carried in
+its OWN fenced markdown block, never inlined unframed — a fence renders as inert literal
+text, so a hostile body cannot forge a `##`/`###` section heading (e.g. a fake linked-issue
+label, or a second `## Diff at reviewed head`/`## Changed files` section ahead of the real
+one) or emit `PR_BODY_ABSENT_SENTINEL`/`ISSUE_BODY_ABSENT_SENTINEL` as if it were the
+renderer's own statement. A multi-issue PR's per-issue bodies are passed through as
+structured data (label + body pairs), never pre-joined into one string, so the renderer
+itself — not any one issue's body — owns emitting each `### <label>` heading, outside every
+fence. Every fence delimiter (`pickFence`) is sized one backtick longer than the longest
+backtick run already inside the text it wraps, so the wrapped content can never close the
+fence early and leak into a later section. The diff SHOULD be inlined up to a size cap
 (`BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES`, a fixed constant), carried inside a fenced
-markdown block — the fence and surrounding framing are part of the rendered prefix bytes,
-so "inline" means the diff content travels in the prefix, not that its raw bytes appear
-unframed. Over the cap the prefix falls back to pointer mode: it references
+markdown block sized by the same `pickFence` rule — the fence and surrounding framing are
+part of the rendered prefix bytes, so "inline" means the diff content travels in the
+prefix, not that its raw bytes appear unframed. Over the cap the prefix falls back to
+pointer mode: it references
 `scope.diffPath` when the persisted `.diff` is present, and otherwise discloses that the
 diff pointer is unavailable (reviewers re-derive via `git diff`). Either way the mode is
 disclosed in both the artifact (`prefixMode: "inline"|"pointer"`) and the prefix text
